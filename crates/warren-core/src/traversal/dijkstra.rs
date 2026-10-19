@@ -55,7 +55,7 @@ pub fn dijkstra(
             return Ok(progress.traversed(Some(WeightedPath { path, cost })));
         }
         for (next, weight) in adjacency.weighted_neighbours(node) {
-            progress.edge_traversed();
+            progress.edge_traversed()?;
             if weight.is_nan() || weight < 0.0 {
                 return Err(TraversalError::InvalidWeight { from: node, to: next, weight });
             }

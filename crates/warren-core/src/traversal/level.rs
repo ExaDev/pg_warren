@@ -107,7 +107,7 @@ impl<'a, 'g> LevelSearch<'a, 'g> {
         let frontier = std::mem::take(&mut self.frontier);
         for &via in &frontier {
             for node in self.adjacency.neighbours(via) {
-                progress.edge_traversed();
+                progress.edge_traversed()?;
                 if self.visited.contains(node) || self.filter.is_some_and(|f| !f.contains(node)) {
                     continue;
                 }

@@ -102,7 +102,7 @@ impl<'a, 'g> Side<'a, 'g> {
         let mut best: Option<(u32, DenseId)> = None;
         for &via in &self.frontier {
             for node in adjacency.neighbours(via) {
-                progress.edge_traversed();
+                progress.edge_traversed()?;
                 if self.labels.get(node).is_some() {
                     continue;
                 }

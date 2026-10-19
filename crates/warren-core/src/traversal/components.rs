@@ -28,7 +28,7 @@ pub fn components(
     for source in 0..id_space {
         progress.node_visited()?;
         for target in forward.neighbours(source) {
-            progress.edge_traversed();
+            progress.edge_traversed()?;
             unite(&mut parents, source, target);
         }
     }
