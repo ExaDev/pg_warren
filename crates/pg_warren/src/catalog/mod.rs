@@ -8,5 +8,5 @@ mod graph;
 mod identity;
 
 pub(crate) use error::CatalogError;
-pub(crate) use graph::NewGraph;
-pub(crate) use identity::{as_extension_owner, current_user};
+pub(crate) use graph::{GraphDefinition, NewGraph};
+pub(crate) use identity::{as_extension_owner, as_role, current_user};
