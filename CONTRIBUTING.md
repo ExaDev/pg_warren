@@ -117,6 +117,41 @@ Feature flags `pg15`, `pg16` (default), `pg17`, `pg18` select the major.
 `cargo pgrx test pgNN` switches features for you. CI runs the pgrx tests on all
 four majors; locally, one is usually enough.
 
+## Integration tests, fixtures and benchmarks (`test/`, `bench/`)
+
+The out-of-crate harness is Python 3 (DESIGN.md §12). Set it up once, in a
+virtualenv if you like:
+
+```sh
+pip install -r bench/requirements.txt      # numpy, networkx, scipy, pytest (pinned)
+```
+
+```sh
+# Generator, harness and oracle unit tests (no Postgres needed)
+pytest
+
+# SQL tests in test/sql/: installs pg_warren (cargo pgrx install, debug) and
+# runs each file in a fresh database of a scratch, socket-only cluster.
+# Holds /tmp/pgrx-test.lock for the whole run. As root, the cluster runs as
+# --runas (default postgres) via sudo.
+test/run.py --pg-config "$(command -v pg_config)"
+test/run.py --no-install test/sql/staged_build_rollback.sql   # one test, current install
+
+# A fixture on its own (Appendix A scales by default; see --help per kind)
+bench/generate.py sbm --communities 4 --community-size 50 --out /tmp/sbm
+(cd /tmp/sbm && psql -v ON_ERROR_STOP=1 -f load.sql)
+
+# Benchmarks: every graph in bench/matrix.json (installs a release build);
+# results in bench/results/<pg_warren version>/<graph>.json
+bench/run.sh
+bench/run.sh smoke --no-install --results bench/tmp   # quick check, as CI does
+```
+
+To add a SQL test, write `test/sql/<name>.sql` with `assert.*` calls and
+optional `-- fixture:` / `-- oracle:` directives; `test/README.md` has the
+format. To benchmark a new function, add a workload with `requires` to
+`bench/matrix.json`.
+
 ## Docker
 
 `docker/Dockerfile` builds the extension against one major and installs it into
