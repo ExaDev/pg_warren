@@ -38,7 +38,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{failure, small};
+    use crate::fixture::{failure, refresh, ring, small, versions};
 
     #[pg_test]
     fn a_dropped_vector_is_gone_with_its_chunks() -> Result<(), Error> {
@@ -65,6 +65,22 @@ mod tests {
             refused.as_deref(),
             Some("42501: must be a member of role \"t_owner\" to drop vectors of graph \"t\"")
         );
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_version_with_vectors_outlives_retention_until_dropped() -> Result<(), Error> {
+        ring("kept", 4, 1)?;
+        let first = refresh("kept", true)?;
+        Spi::run("SELECT warren.vector_const('kept', 'score', 1)")?;
+        refresh("kept", true)?;
+        let third = refresh("kept", true)?;
+        assert_eq!(versions("kept")?, Some(format!("{first}:false {third}:false")));
+        Spi::run(&format!("SELECT warren.drop_version('kept', {first})"))?;
+        let left = Spi::get_one::<i64>(
+            "SELECT (SELECT count(*) FROM warren.vectors) + (SELECT count(*) FROM warren.vector_chunks)",
+        )?;
+        assert_eq!(left, Some(0));
         Ok(())
     }
 }
