@@ -35,8 +35,9 @@ pub use step::{HopRange, Step};
 
 use super::scratch::Rows;
 use super::stats::Progress;
-use super::{Interrupts, TraversalError, Traversed};
+use super::{TraversalError, Traversed};
 use crate::graph::{DenseId, GraphCsr};
+use crate::interrupts::Interrupts;
 
 /// What a walk returns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

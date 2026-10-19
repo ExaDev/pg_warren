@@ -7,10 +7,10 @@ use std::ops::ControlFlow;
 use proptest::prelude::*;
 
 use super::super::reference::{scenarios, Scenario};
-use super::super::Uninterrupted;
 use super::reference::{matches, naive_steps, NaivePath, NaiveStep};
 use super::{walk, walk_ends_each, Step, WalkMode, WalkOptions, WalkPath, WalkResult};
 use crate::graph::{DenseId, GraphCsr};
+use crate::interrupts::Uninterrupted;
 
 /// A scenario, a walk over it, and its starts.
 fn walks() -> impl Strategy<Value = (Scenario, Vec<NaiveStep>, Vec<DenseId>)> {

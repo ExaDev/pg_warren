@@ -12,8 +12,9 @@
 
 use super::scratch::NodeMap;
 use super::stats::Progress;
-use super::{Adjacency, Interrupts, TraversalError, Traversed};
+use super::{Adjacency, TraversalError, Traversed};
 use crate::graph::{memory, DenseId, GraphError};
+use crate::interrupts::Interrupts;
 
 /// The shortest path from `start` to `target` along `adjacency`, of at
 /// most `max_depth` edges (unbounded if `None`), as the dense ids along it
@@ -142,9 +143,10 @@ fn join(
 mod tests {
     use super::*;
     use crate::graph::GraphCsr;
+    use crate::graph::RelationSelection;
+    use crate::interrupts::Uninterrupted;
     use crate::traversal::example::{directed, graph, relations};
-    use crate::traversal::Uninterrupted;
-    use crate::traversal::{Direction, RelationSelection};
+    use crate::traversal::Direction;
 
     // 0 → 1 → 2 → 3 → 4, 0 → 5 → 4, 6 isolated
     fn example() -> GraphCsr {
@@ -225,8 +227,8 @@ mod properties {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::interrupts::Uninterrupted;
     use crate::traversal::reference::{directions, scenarios, selections, Scenario};
-    use crate::traversal::Uninterrupted;
 
     proptest! {
         #[test]

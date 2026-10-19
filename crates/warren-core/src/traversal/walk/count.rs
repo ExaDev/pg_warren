@@ -4,10 +4,11 @@
 use std::ops::ControlFlow;
 
 use super::super::stats::Progress;
-use super::super::{Interrupts, TraversalError, Traversed};
+use super::super::{TraversalError, Traversed};
 use super::plan::WalkPlan;
 use super::reach::{reach, Level, Observer, Unlabelled};
 use super::tally::tally;
+use crate::interrupts::Interrupts;
 
 /// The number of distinct ends of `plan` if `distinct_ends`, else the
 /// number of walks. Counting walks fails with
@@ -54,8 +55,9 @@ mod tests {
     use super::super::example::{knowledge_graph, step, AUTHORED_BY, CITES};
     use super::super::{walk, walk_ends_each, HopRange, Step, WalkMode, WalkOptions, WalkResult};
     use crate::graph::{DenseId, GraphCsr};
+    use crate::interrupts::Uninterrupted;
     use crate::traversal::example::{directed, graph};
-    use crate::traversal::{Direction, TraversalError, Uninterrupted};
+    use crate::traversal::{Direction, TraversalError};
 
     fn count(graph: &GraphCsr, starts: &[DenseId], steps: &[Step], options: WalkOptions) -> u64 {
         match walk(graph, starts, steps, WalkMode::Count, options, &mut Uninterrupted) {

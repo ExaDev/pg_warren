@@ -316,7 +316,7 @@ Tier 1 covers the linear-algebra family: PageRank, components, label propagation
 
 Two engine-level decisions keep the tiers open and are **non-negotiable from M1**:
 
-- `warren-core` message buffers are generic over a `Message` trait, with fixed-width numeric as the fast path and variable-width `(offsets, bytes)` as the general path. An `f64`-only core would force a rewrite to reach tiers 2 and 3.
+- `warren-core` message buffers are generic over a `Message` trait, with fixed-width numeric as the fast path and variable-width `(offsets, bytes)` as the general path. An `f64`-only core would force a rewrite to reach tiers 2 and 3. **Implemented (M4):** `compute::Message` is implemented by every vector element type (stored as a plain array) and by `Bytes` (packed as end offsets plus bytes); `MessageBuffer<M>` is append-only and charges each message to the compute memory budget before reserving room for it.
 - The gather kernel accepts messages from, and returns results to, SQL relations as well as named vectors. Named vectors are an optimisation for tier 1, not the only interface.
 
 ### 6.2 Vectors and matrices
@@ -349,6 +349,10 @@ warren.drop_vector(graph text, name text, version bigint DEFAULT NULL) RETURNS v
 ```
 
 Vectors are persisted in `warren.vectors` / `vector_chunks` so results survive the session and can be materialised into user tables with ordinary `INSERT ... SELECT`. Storage cost: 8 bytes × id_space per f64 vector; 80 MB for 10M nodes.
+
+Decisions made in M4 (`warren-core::compute`):
+- `dtype` is `f32 | f64 | i64 | bool` (SQL `real`, `double precision`, `bigint`, `boolean`). A vector holds `id_space × width` elements, row-major, `width ≥ 1`.
+- Every vector and kernel work buffer of graph size is charged to a `ComputeMemory` budget (the domain side of `warren.max_compute_memory`) before it is reserved with `try_reserve`; a charge past the limit is an error and charges nothing. Per-task scratch bounded by the expression size or the vector width (at most a few thousand elements per thread) is not charged.
 
 ### 6.3 Tier 1 — semiring operations and `vector_map`
 
@@ -385,7 +389,18 @@ warren.vector_norm_diff(graph text, a text, b text, norm text DEFAULT 'l2') RETU
 - A mask is a value mask with GraphBLAS semantics: an entry is selected when it casts to boolean true, meaning any non-zero value. NaN is non-zero, so it is selected. pg_warren vectors are dense, so `replace` (the "no entry" state outside the mask) is represented as the ⊕ identity of the semiring: 0 for `plus`, +∞ for `min`, −∞ for `max`, false for `lor`. `mask_complement` and `replace` correspond to GraphBLAS descriptors `c` and `r`; `transpose` corresponds to `t0`.
 - An unweighted graph acts as if every weight were 1.
 
-Semirings are implemented generically in `warren-core` over `(⊕, ⊗, identity)` for f64, i64, and bool element types. SpMV over CSR with a transpose flag means reverse CSR gives pull-based (gather) computation and forward CSR gives push-based (scatter); the pull form parallelises by rows with no write conflicts, which is why `build_reverse` defaults to true.
+Semirings are implemented generically in `warren-core` over `(⊕, ⊗, identity)` for f64, i64, and bool element types, and for f32 too, so `aggregate_neighbours` works on f32 embeddings (A.5). With `A[i][j]` the weight of the edge `i → j`, `transpose = false` computes `y = A ⊗ x` (`y_i` combines the out-neighbours' values), pulled row by row over the forward CSR; `transpose = true` computes `y = Aᵀ ⊗ x` (`y_i` gathers from the in-neighbours, as PageRank does), pulled over the reverse CSR. Without a reverse CSR, `transpose = true` scatters (pushes) over the forward CSR instead: one thread, plus an `id_space × width` scratch charged to the memory budget. The pull form parallelises by rows with no write conflicts, which is why `build_reverse` defaults to true. Both forms fold each row's entries in ascending dense-ID order, so they agree bit for bit.
+
+Decisions made in M4 (`warren-core::compute`):
+- A relation selection makes `A[i][j]` the sum of the edge's weights over the selected relations (1 when unweighted), which is what the merged CSR holds for all relations. `weighted := true` on an unweighted graph uses weight 1.
+- Edge weights are cast to the element type as SQL casts `double precision`: `i64` rounds half to even and fails out of range, `f32` fails on overflow or underflow, `bool` is `weight ≠ 0`. A weight is cast only if `⊗` reads it (`second` and `pair` do not).
+- `min` and `max` use SQL order (`NaN` above every number, `-0 = 0`, ties keep the first operand), like `LEAST`/`GREATEST`. `any` takes the row's first entry, so results are deterministic. Float kernels otherwise use IEEE arithmetic (infinities are values, not errors); `i64` overflow is an error (`bigint out of range`).
+- Accumulation follows GraphBLAS: a row of `A` with no entry leaves `y_i` unchanged under `accumulate`, and without it writes the `⊕` identity. `accumulate` accepts any GraphBLAS binary operator name (`first | second | pair | plus | times | min | max | lor | land | any`; `first` keeps `y`, `second` takes the result). The mask is a width-1 vector of any element type, also for `spmm`, where it selects whole rows.
+- `vector_map`'s compiled subset is a typed IR (`compute::Expr<T>` for each element type, built by the adapter from Postgres's analysed tree with every implicit cast made explicit). It is evaluated in parallel chunks, column at a time, under a mask of the elements SQL would evaluate: `CASE`, `COALESCE`, `AND` and `OR` evaluate an argument only where Postgres's executor would, so `CASE WHEN x = 0 THEN 0 ELSE 1/x END` does not fail. Operators, functions and casts follow Postgres's `float.c` and `int8.c`, including their errors (division by zero, overflow, underflow, `sqrt`/`ln`/`power` domain errors), so the compiled path raises the executor fallback's error. When several elements fail, the error is the first failing element's in row-major order. Postgres has no `boolean`↔`real`/`double precision` casts; the IR defines them as for `bigint`.
+- Vectors hold no NULL. Where an expression is NULL, a float vector stores `NaN` (so `pr / NULLIF(deg, 0)` works), and an `i64` or `bool` vector raises `null value cannot be stored in a … vector` (22004); the executor fallback applies the same rule (`compute::Value::NULL`). `NaN` read back is `NaN`, never NULL.
+- Broadcasting: the result's width is the widest operand's; literals and width-1 vectors repeat across each row (`emb / deg` normalises rows); any other width is an error.
+- Throughput (`benches/compute.rs`, 100K nodes, 1M edges, `plus_times`, 4-vCPU Xeon): pull over the forward or reverse CSR 0.38–0.42 G edges/s on one thread and 1.2 G edges/s on four; push without a reverse CSR 0.22 G edges/s (single-threaded). The §12 PageRank row is measured in M5.
+- `vector_reduce` reads elements as `double precision` (`bool` as 0/1); `max` and `min` of no elements are NULL; `nnz` counts `NaN`. Reductions and `vector_norm_diff` combine fixed-size chunks in order, so results do not depend on `warren.threads`.
 
 A tier-1 program is a PL/pgSQL function over these primitives. The canonical shape:
 
@@ -512,7 +527,7 @@ For state that must be per-vertex and bytes-shaped with logic that neither SQL n
 ### 6.9 Parallelism
 
 - A Postgres backend is single-threaded and **no thread other than the main one may call any Postgres function** (palloc, elog, SPI, catalog access, …). Pure compute over extension-owned buffers (CSR, vectors, message buffers) is safe on worker threads. `warren-core` therefore takes plain slices and a thread count, and uses `rayon` with a dedicated pool sized by the `warren.threads` GUC (default: half the cores, min 1). The binding layer does all Postgres interaction before and after each kernel call — including, for `gather`, reading the message relation through SPI on the main thread before fan-out and emitting result rows after.
-- Interrupt handling: the main thread polls `CHECK_FOR_INTERRUPTS()` between kernel calls and sets a cancellation flag that worker loops check every ~64K vertices. Use `pgrx::check_for_interrupts!()`. pgrx's `pg_sys` FFI is `#[pg_guard]`ed, so an ERROR raised inside it unwinds the Rust frames (destructors run, `RefCell` borrows release). Never call unguarded FFI.
+- Interrupt handling: the main thread polls `CHECK_FOR_INTERRUPTS()` between kernel calls and sets a cancellation flag that worker loops check every ~64K vertices. **Implemented (M4):** `compute::Workers::run` runs a kernel as a job on the pool while the calling (main) thread waits, polling the `interrupts::Interrupts` hook (shared with traversal) every millisecond. When a poll says stop, or unwinds (pgrx raising the ERROR), a drop guard raises the job's `Cancellation` flag and the rayon scope waits for the job to stop before the error propagates. Worker tasks check the flag at the start of each task of at most 4,096 rows (4,096 elements for `vector_map`, 65,536 for reductions); the push scatter checks it every 65,536 rows. Use `pgrx::check_for_interrupts!()`. pgrx's `pg_sys` FFI is `#[pg_guard]`ed, so an ERROR raised inside it unwinds the Rust frames (destructors run, `RefCell` borrows release). Never call unguarded FFI.
 - Errors are raised only through pgrx (`ErrorReport` with a standard SQLSTATE; detail and hint as needed), never by calling `pg_sys` error functions directly. Nothing in `pg_warren` uses `catch_unwind` around SPI; pgrx already installs the boundary at each `#[pg_extern]`.
 - Memory for vectors, message buffers and work buffers is allocated with the Rust allocator, not `palloc`, and accounted against a `warren.max_compute_memory` GUC; exceeding it raises an error rather than OOMing the server. Graph-sized buffers are reserved with `try_reserve`, so allocator failure is also an error (`53200`), not an abort.
 - v1.1: a **compute background worker** that owns the DSM-resident graph and runs jobs submitted by backends via a shared queue, so compute does not compete with query backends and large jobs can outlive a client session. Results land in `warren.vectors`; `warren.job_status()` reports progress.
@@ -851,8 +866,8 @@ Post-v0.3: contraction/project/lift and Louvain (§6.6), DSM cache + compute wor
 6. **Undirected weighted**: duplicate weight both directions. **Decided (M1): yes**, both directions carry the same weight.
 7. **Default `max_depth`** on `reachable_set`: unbounded vs. cap. Lean: unbounded, documented. **Decided (M3): unbounded** (`max_depth DEFAULT NULL`); the visited set bounds the work at O(N + M), and SQL `LIMIT` in the select list stops it early (§9.3).
 8. **Lanczos precision default**: f32 vectors/f64 accumulate vs. all f64. Lean: f32 by default with an option.
-9. **Native kernels vs. SuiteSparse:GraphBLAS** (§6.10). Lean: native for v1; revisit after M6.
-10. **Compute threads inside the backend vs. requiring the background worker from day one.** Lean: in-backend threads for v1 (simpler lifecycle), worker in v1.1.
+9. **Native kernels vs. SuiteSparse:GraphBLAS** (§6.10). Lean: native for v1; revisit after M6. M4 implements the kernels natively in `warren-core` (§6.3).
+10. **Compute threads inside the backend vs. requiring the background worker from day one.** Lean: in-backend threads for v1 (simpler lifecycle), worker in v1.1. M4 implements in-backend threads: a dedicated `rayon` pool per `compute::Workers` (§6.9).
 11. **`distance` summary statistics**: which scalar(s) each method returns by default. Lean: return a `jsonb` with several and let users pick.
 12. **`vector_map` executor fallback.** Build it in v1 or raise "not in compiled subset" until v1.1? Lean: build it in v1 — the one-language guarantee is the point.
 13. **`gather` message source.** Accept only a SQL string, or also a relation name / vector name? Lean: all three, dispatched on the argument's form.

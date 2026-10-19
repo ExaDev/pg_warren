@@ -1,6 +1,6 @@
 //! The `Interrupts` poll on the Postgres main thread (DESIGN.md §6.9).
 
-use warren_core::traversal::{Cancelled, Interrupts};
+use warren_core::interrupts::{Cancelled, Interrupts};
 
 /// Polls Postgres for a pending cancel or termination. A pending interrupt
 /// raises its `ERROR` (for example `query_canceled` on `statement_timeout`)
@@ -21,7 +21,8 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
     use warren_core::graph::{EdgeList, GraphCsr};
-    use warren_core::traversal::{components, Interrupts};
+    use warren_core::interrupts::Interrupts;
+    use warren_core::traversal::components;
 
     use super::PostgresInterrupts;
 

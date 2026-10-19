@@ -23,7 +23,7 @@ pub use csr::{AnyCsr, Csr, GraphCsr, Neighbours, RelationCsr, Target, TargetWidt
 pub use edge_list::{EdgeIntake, EdgeList};
 pub use error::GraphError;
 pub use id_map::{ExternalId, IdMap};
-pub use relation::{RelationDictionary, RelationIndex};
+pub use relation::{RelationDictionary, RelationIndex, RelationSelection};
 pub use segment::CsrSegments;
 pub use tombstones::Tombstones;
 

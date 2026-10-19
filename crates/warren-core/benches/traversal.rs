@@ -3,9 +3,9 @@
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use warren_core::graph::GraphCsr;
-use warren_core::traversal::{
-    bfs, components, Adjacency, Direction, Limits, RelationSelection, Uninterrupted,
-};
+use warren_core::graph::RelationSelection;
+use warren_core::interrupts::Uninterrupted;
+use warren_core::traversal::{bfs, components, Adjacency, Direction, Limits};
 
 mod random_graph;
 

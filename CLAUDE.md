@@ -29,8 +29,10 @@ before changing code. Commands, toolchain setup and environment gotchas are in
 3. **Package by feature, named in the domain language.** Modules are domain
    concepts, not technical layers. No `utils`, `helpers`, `common`, `models`,
    `types` or `misc` modules.
-   - `warren-core/src/`: `graph/` (csr, id_map, tombstones), `traversal/`,
-     `compute/` (semiring, kernels, message), `spectral/`, `version/` (diff, compaction across versions).
+   - `warren-core/src/`: `graph/` (csr, id_map, tombstones, relation
+     selection), `interrupts` (the cancellation poll shared by traversal and
+     compute), `traversal/`, `compute/` (semiring, kernels, message),
+     `spectral/`, `version/` (diff, compaction across versions).
    - `pg_warren/src/`: `extension` (schema + `warren.version()`, SQL
      errors), `access/` (identity switches, privilege checks), `source/`
      (node/edge query columns and read-only cursors), `catalog/`,

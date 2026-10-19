@@ -3,8 +3,9 @@
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use warren_core::graph::{EdgeList, GraphCsr, GraphError, RelationDictionary, RelationIndex};
+use warren_core::interrupts::Uninterrupted;
 use warren_core::traversal::{
-    walk, Direction, HopRange, NodeSet, Step, TraversalError, Uninterrupted, WalkMode, WalkOptions,
+    walk, Direction, HopRange, NodeSet, Step, TraversalError, WalkMode, WalkOptions,
 };
 
 mod random_graph;

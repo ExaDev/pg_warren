@@ -3,6 +3,7 @@
 use thiserror::Error;
 
 use crate::graph::{DenseId, GraphError};
+use crate::interrupts::Cancelled;
 
 /// Why a traversal could not run to completion.
 #[derive(Debug, Clone, PartialEq, Error)]
@@ -52,10 +53,26 @@ pub enum TraversalError {
     /// A walk has more walks than a `u64` can count.
     #[error("the walk has more than 2^64 - 1 walks")]
     WalkCountOverflow,
-    /// The traversal's [`Interrupts`](super::Interrupts) poll asked it to stop.
+    /// The traversal's [`Interrupts`](crate::interrupts::Interrupts) poll asked it to stop.
     #[error("traversal cancelled")]
     Cancelled,
     /// A graph-sized scratch buffer could not be allocated.
     #[error(transparent)]
     Graph(#[from] GraphError),
+}
+
+impl From<Cancelled> for TraversalError {
+    fn from(_: Cancelled) -> Self {
+        Self::Cancelled
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cancelled_poll_is_a_cancelled_traversal() {
+        assert_eq!(TraversalError::from(Cancelled), TraversalError::Cancelled);
+    }
 }

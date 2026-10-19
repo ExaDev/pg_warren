@@ -5,7 +5,8 @@
 use pgrx::prelude::*;
 use pgrx::AnyElement;
 use warren_core::graph::DenseId;
-use warren_core::traversal::{Adjacency, Direction, RelationSelection};
+use warren_core::graph::RelationSelection;
+use warren_core::traversal::{Adjacency, Direction};
 
 use super::args::{direction, relations};
 use super::ids::{element, external};

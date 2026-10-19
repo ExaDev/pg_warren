@@ -7,8 +7,9 @@ use std::ops::ControlFlow;
 use super::level::{Admission, Edges, LevelSearch};
 use super::scratch::Rows;
 use super::stats::Progress;
-use super::{Adjacency, Interrupts, Limits, NodeSet, TraversalError, TraversalStats, Traversed};
+use super::{Adjacency, Limits, NodeSet, TraversalError, TraversalStats, Traversed};
 use crate::graph::DenseId;
+use crate::interrupts::Interrupts;
 
 /// A node reached by a BFS.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,9 +108,10 @@ impl Results {
 mod tests {
     use super::*;
     use crate::graph::GraphCsr;
+    use crate::graph::RelationSelection;
+    use crate::interrupts::{Cancellation, Uninterrupted};
     use crate::traversal::example::directed;
-    use crate::traversal::{Cancellation, Uninterrupted};
-    use crate::traversal::{Direction, RelationSelection, TraversalStats};
+    use crate::traversal::{Direction, TraversalStats};
 
     // 0 → 1 → 2 → 3, 0 → 4 → 3, 2 → 2, 5 isolated
     fn example() -> GraphCsr {
@@ -270,9 +272,10 @@ mod properties {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::graph::RelationSelection;
+    use crate::interrupts::Uninterrupted;
     use crate::traversal::reference::{directions, scenarios, selections, Scenario};
-    use crate::traversal::Uninterrupted;
-    use crate::traversal::{Direction, RelationSelection};
+    use crate::traversal::Direction;
 
     proptest! {
         #[test]
