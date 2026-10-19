@@ -21,6 +21,7 @@ mod version_sql;
 #[pgrx::pg_guard]
 pub extern "C-unwind" fn _PG_init() {
     build::define_max_build_memory();
+    traversal_sql::define_max_walk_paths();
 }
 
 /// Required by `cargo pgrx test`; must be visible at the crate root.

@@ -38,6 +38,23 @@ pub(crate) enum TraversalSqlError {
     /// A depth or count argument is negative.
     #[error("{0} must not be negative")]
     Negative(&'static str),
+    /// A `warren.step` could not be made or read.
+    #[error("invalid warren.step: {0}")]
+    Step(String),
+    /// `mode` is not `ends`, `count` or `paths`.
+    #[error("mode must be 'ends', 'count' or 'paths', not '{0}'")]
+    Mode(String),
+    /// `max_results` is above the `warren.max_walk_paths` ceiling.
+    #[error(
+        "max_results {requested} is above warren.max_walk_paths ({ceiling}) for a walk that \
+         reports a row per walk"
+    )]
+    WalkRowCeiling {
+        /// The `max_results` asked for.
+        requested: i64,
+        /// The ceiling.
+        ceiling: i64,
+    },
     /// The graph or version could not be opened.
     #[error(transparent)]
     Cache(#[from] CacheError),
@@ -57,7 +74,8 @@ impl SqlError for TraversalSqlError {
         match self {
             Self::NullArgument(_) => PgSqlErrorCode::ERRCODE_NULL_VALUE_NOT_ALLOWED,
             Self::IdType { .. } => PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
-            Self::Direction(_) | Self::Negative(_) => {
+            Self::WalkRowCeiling { .. } => PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+            Self::Direction(_) | Self::Negative(_) | Self::Step(_) | Self::Mode(_) => {
                 PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE
             }
             Self::Cache(error) => error.sqlstate(),
@@ -72,6 +90,8 @@ fn traversal_sqlstate(error: &TraversalError) -> PgSqlErrorCode {
             PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE
         }
         TraversalError::InvalidWeight { .. } => PgSqlErrorCode::ERRCODE_DATA_EXCEPTION,
+        TraversalError::InvalidHopRange { .. } => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+        TraversalError::WalkCountOverflow => PgSqlErrorCode::ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE,
         TraversalError::Cancelled => PgSqlErrorCode::ERRCODE_QUERY_CANCELED,
         TraversalError::Graph(error) => graph_sqlstate(error),
         _ => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,

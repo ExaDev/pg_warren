@@ -204,8 +204,11 @@ mod tests {
         ("reachable_set", "warren.reachable_set('victim', ARRAY[1::bigint])"),
         ("refresh", "warren.refresh('victim')"),
         ("revoke", "warren.revoke('victim', 'eve')"),
+        ("s", "warren.s(NULL)"),
         ("shortest_path", "warren.shortest_path('victim', 1::bigint, 2::bigint)"),
+        ("steps", "warren.steps('[]')"),
         ("version", "warren.version()"),
+        ("walk", "warren.walk('victim', ARRAY[1::bigint], ARRAY[warren.s(NULL)])"),
     ];
 
     #[pg_test]
