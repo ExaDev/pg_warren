@@ -145,4 +145,31 @@ pub enum GraphError {
     /// Relation names must be unique.
     #[error("duplicate relation name")]
     DuplicateRelationName,
+    /// Two CSRs of one graph version cover different id spaces.
+    #[error("CSR id space is {found}, expected {expected}")]
+    IdSpaceMismatch {
+        /// The graph version's id space.
+        expected: u64,
+        /// The CSR's id space.
+        found: u64,
+    },
+    /// The CSRs of one graph version must share the target width that the
+    /// id space implies.
+    #[error("CSR target width does not match the graph version")]
+    TargetWidthMismatch,
+    /// The CSRs of one graph version are all weighted or all unweighted.
+    #[error("CSRs of one graph version disagree on weights")]
+    WeightednessMismatch,
+    /// Reverse CSRs exist for every relation and the merged CSR, or none.
+    #[error("reverse CSRs are present for some CSRs only")]
+    ReversePresenceMismatch,
+    /// A reverse CSR must be the transpose of its forward CSR.
+    #[error("reverse CSR is not the transpose of its forward CSR")]
+    ReverseNotTranspose,
+    /// A merged CSR is stored exactly when there is not one relation.
+    #[error("merged CSR presence is wrong for {relations} relations")]
+    MergedCsrMismatch {
+        /// The number of relations.
+        relations: usize,
+    },
 }

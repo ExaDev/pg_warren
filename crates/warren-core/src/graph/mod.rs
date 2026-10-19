@@ -7,7 +7,8 @@
 //! A build runs: [`IdMap::rebuild`] over the node ids → an [`EdgeIntake`]
 //! over the edge rows (dropping and counting dangling edges) →
 //! [`GraphCsr::build`] → `encode` on each part. Loading runs the matching
-//! `decode`s, which validate everything before the structure is used.
+//! `decode`s, which validate each segment, then [`RelationCsr::new`] and
+//! [`GraphCsr::from_parts`], which validate the segments against each other.
 
 mod csr;
 mod edge_list;
