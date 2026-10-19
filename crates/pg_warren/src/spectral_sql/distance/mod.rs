@@ -80,8 +80,9 @@ fn count(k: Option<i32>) -> Result<usize, SpectralSqlError> {
 ///
 /// - `edit` and `degree` need nothing more.
 /// - `spectral` compares the eigenvalues of `<vectors_prefix>_1..k` under
-///   `matrix` (Rayleigh quotients), or without a prefix solves the `k`
-///   eigenpairs of `matrix` at the `which` end on each version.
+///   `matrix`, which must then be given (Rayleigh quotients), or without a
+///   prefix solves the `k` eigenpairs of `matrix` (default `adjacency`) at
+///   the `which` end on each version.
 /// - `subspace` compares the spans of `<vectors_prefix>_1..k`.
 /// - `embedding` compares matrix `x` of `v1` with matrix `y` (default `x`)
 ///   of `v2`.
@@ -103,7 +104,7 @@ fn distance(
     x: default!(Option<&str>, "NULL"),
     y: default!(Option<&str>, "NULL"),
     compared_rows: default!(Option<&str>, "'shared'"),
-    matrix: default!(Option<&str>, "'adjacency'"),
+    matrix: default!(Option<&str>, "NULL"),
     which: default!(Option<&str>, "'largest'"),
     rels: default!(Option<Vec<Option<String>>>, "NULL"),
     weighted: default!(Option<bool>, "NULL"),
@@ -127,8 +128,21 @@ fn distance(
             "edit" => Method::Edit,
             "degree" => Method::Degree,
             "spectral" => {
+                // Stored eigenvectors carry no record of their operator, so
+                // their Rayleigh quotients need it named; a fresh solve
+                // defaults to the adjacency, as eigen does.
+                let matrix = match (matrix, vectors_prefix) {
+                    (Some(matrix), _) => matrix,
+                    (None, None) => "adjacency",
+                    (None, Some(_)) => {
+                        return Err(SpectralSqlError::InvalidArgument(
+                            "spectral with vectors_prefix needs the matrix the eigenvectors are of"
+                                .to_owned(),
+                        ))
+                    }
+                };
                 let operator = OperatorArguments {
-                    matrix: matrix.ok_or(SpectralSqlError::NullArgument("matrix"))?.to_owned(),
+                    matrix: matrix.to_owned(),
                     rels,
                     weighted,
                     symmetrize: symmetrize.ok_or(SpectralSqlError::NullArgument("symmetrize"))?,
@@ -392,6 +406,10 @@ mod tests {
         let u = refreshed("u")?;
         let cases = [
             (format!("'g', {v}, {v}, 'cosine'"), "22023: unknown method \"cosine\""),
+            (
+                format!("'g', {v}, {v}, 'spectral', vectors_prefix := 'lap', k := 1"),
+                "22023: spectral with vectors_prefix needs the matrix",
+            ),
             (
                 format!("'g', {v}, {v}, 'subspace', k := 2"),
                 "22004: vectors_prefix must not be NULL",
