@@ -80,7 +80,7 @@ fn walk<'a>(
         let resolved = resolve(graph, version, "read")?;
         let mut recorder = Recorder::start("walk", graph, resolved.version);
         let rows = with_id_type!(resolved.graph.id_type, E => {
-            let loaded = cached::<E>(resolved.graph.graph_id, resolved.version)?;
+            let loaded = cached::<E>(&resolved)?;
             let starts = match start {
                 Some(start) => dense_ids(&loaded.id_map, &elements::<E>(graph, "start", start)?),
                 None => Vec::new(),
@@ -169,13 +169,12 @@ impl<E: IdDatum> Walked<'_, E> {
                     &mut PostgresInterrupts,
                 )?;
                 if let WalkResult::Count(count) = counted.result {
+                    let Ok(count) = i64::try_from(count) else {
+                        recorder.record(counted.stats);
+                        return Err(TraversalSqlError::CountOutOfRange(count));
+                    };
                     // A failed push is reported by `finish`.
-                    let _ = rows.push((
-                        None,
-                        None,
-                        None,
-                        Some(i64::try_from(count).unwrap_or(i64::MAX)),
-                    ));
+                    let _ = rows.push((None, None, None, Some(count)));
                 }
                 counted.stats
             }
@@ -267,7 +266,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{rows, small};
+    use crate::fixture::{failure, rows, small};
 
     // small: 1 → 2 (a), 2 → 3 (a), 3 → 4 (b), 1 → 4 (b), 4 → 1 (a), 5 → 5 (b).
 
@@ -362,5 +361,71 @@ mod tests {
             "SELECT * FROM warren.walk('t', ARRAY[1::bigint],
                                        ARRAY[warren.s(NULL, 'out', ARRAY['x'])])",
         )
+    }
+
+    /// Two nodes, each with an edge to itself and to the other: 2^k walks
+    /// of k hops from either.
+    fn doubling() -> Result<(), Error> {
+        Spi::run(
+            "CREATE TABLE dbl_nodes AS SELECT generate_series(1, 2)::bigint AS id;
+             CREATE TABLE dbl_edges AS SELECT a.id AS src, b.id AS dst FROM dbl_nodes a, dbl_nodes b;
+             SELECT warren.create_graph('dbl', 'SELECT id FROM dbl_nodes',
+                                        'SELECT src, dst FROM dbl_edges');
+             SELECT warren.refresh('dbl')",
+        )
+    }
+
+    fn walk_count(hops: u32) -> String {
+        format!(
+            "(SELECT count FROM warren.walk('dbl', ARRAY[1::bigint],
+                 ARRAY[warren.s(NULL, 'out', NULL, {hops}, {hops})], 'count',
+                 distinct_ends := false))"
+        )
+    }
+
+    #[pg_test]
+    fn a_walk_count_beyond_bigint_is_an_error_not_a_clamp() -> Result<(), Error> {
+        doubling()?;
+        let count = Spi::get_one::<i64>(&format!("SELECT {}", walk_count(62)))?;
+        assert_eq!(count, Some(1 << 62));
+        assert_eq!(
+            failure(&walk_count(63))?.as_deref(),
+            Some("22003: walk count 9223372036854775808 exceeds the range of bigint")
+        );
+        Ok(())
+    }
+
+    #[pg_test]
+    fn the_jsonb_cast_refuses_malformed_steps() -> Result<(), Error> {
+        let cases = [
+            ("'[{\"rels\": \"b\"}]'", "22023: step 1: rels must be an array or null, not string"),
+            ("'[{\"filter\": 5}]'", "22023: step 1: filter must be an array or null, not number"),
+            ("'[{\"relations\": [\"b\"]}]'", "22023: step 1 has an unknown key \"relations\""),
+            ("'[{}, 5]'", "22023: step 2 must be an object, not number"),
+            ("'{}'", "22023: steps must be a JSON array of step objects, not object"),
+        ];
+        for (json, expected) in cases {
+            let found = failure(&format!("{json}::jsonb::warren.step[]"))?;
+            assert_eq!(found.as_deref(), Some(expected), "{json}");
+        }
+        let fine = Spi::get_one::<String>(
+            "SELECT ('[{\"rels\": null, \"filter\": null, \"direction\": \"in\"}]'::jsonb
+                     ::warren.step[])::text",
+        )?;
+        assert_eq!(fine.as_deref(), Some("{\"(,in,,1,)\"}"));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_step_filter_must_be_an_array() -> Result<(), Error> {
+        for (filter, found) in [("5::bigint", "bigint"), ("'{1,2}'", "unknown")] {
+            assert_eq!(
+                failure(&format!("warren.s(NULL, 'out', {filter})"))?,
+                Some(format!(
+                    "42804: filter must be an array (e.g. ARRAY[...]::bigint[]), not {found}"
+                ))
+            );
+        }
+        Ok(())
     }
 }

@@ -56,6 +56,10 @@ pub(crate) trait IdDatum: ExternalId + Send + Sync + 'static {
 
     /// The SQL value of an external id.
     fn to_sql(self) -> Self::Sql;
+
+    /// The external id an integer of a narrower SQL type widens to, if
+    /// this is an integer id type it fits.
+    fn from_integer(value: i64) -> Option<Self>;
 }
 
 impl IdDatum for i32 {
@@ -67,6 +71,10 @@ impl IdDatum for i32 {
 
     fn to_sql(self) -> i32 {
         self
+    }
+
+    fn from_integer(value: i64) -> Option<Self> {
+        i32::try_from(value).ok()
     }
 }
 
@@ -80,6 +88,10 @@ impl IdDatum for i64 {
     fn to_sql(self) -> i64 {
         self
     }
+
+    fn from_integer(value: i64) -> Option<Self> {
+        Some(value)
+    }
 }
 
 impl IdDatum for [u8; 16] {
@@ -91,6 +103,10 @@ impl IdDatum for [u8; 16] {
 
     fn to_sql(self) -> Uuid {
         Uuid::from_bytes(self)
+    }
+
+    fn from_integer(_: i64) -> Option<Self> {
+        None
     }
 }
 
@@ -134,6 +150,14 @@ mod tests {
         assert_eq!(i32::from_sql(7_i32.to_sql()), 7);
         assert_eq!(i64::from_sql((-7_i64).to_sql()), -7);
         assert_eq!(<[u8; 16]>::from_sql([9; 16].to_sql()), [9; 16]);
+    }
+
+    #[test]
+    fn narrower_integers_widen_only_to_integer_id_types_they_fit() {
+        assert_eq!(i64::from_integer(-5), Some(-5));
+        assert_eq!(i32::from_integer(7), Some(7));
+        assert_eq!(i32::from_integer(i64::from(i32::MAX) + 1), None);
+        assert_eq!(<[u8; 16]>::from_integer(1), None);
     }
 
     #[test]

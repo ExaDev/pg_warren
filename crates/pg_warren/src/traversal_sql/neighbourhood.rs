@@ -1,6 +1,8 @@
 //! `warren.neighbours`, `warren.degree` and `warren.has_edge`: one node's
 //! adjacency, read straight from the CSR (DESIGN.md §9.3). They record no
-//! stats, so they are `PARALLEL SAFE`.
+//! stats, but are `PARALLEL RESTRICTED` until the cache is shared (v1.1
+//! DSM): a parallel worker starts with an empty backend-local cache, so
+//! under a parallel scan every worker would load the whole version.
 
 use pgrx::prelude::*;
 use pgrx::AnyElement;
@@ -9,7 +11,7 @@ use warren_core::graph::RelationSelection;
 use warren_core::traversal::{Adjacency, Direction};
 
 use super::args::{direction, relations};
-use super::ids::{element, external};
+use super::ids::{element, element_widened, external};
 use super::{entry, TraversalSqlError};
 use crate::cache::{cached, resolve, LoadedVersion, Resolved};
 use crate::source::{with_id_type, IdDatum};
@@ -23,7 +25,7 @@ use crate::source::{with_id_type, IdDatum};
 CREATE FUNCTION warren.neighbours(graph text, node anyelement, direction text DEFAULT 'out',
                                   rels text[] DEFAULT NULL, version bigint DEFAULT NULL)
 RETURNS SETOF anyelement
-STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'neighbours_wrapper';
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'neighbours_wrapper';
 "#
 )]
 fn neighbours(
@@ -52,7 +54,7 @@ fn neighbours(
 CREATE FUNCTION warren.degree(graph text, node anyelement, direction text DEFAULT 'out',
                               rels text[] DEFAULT NULL, version bigint DEFAULT NULL)
 RETURNS bigint
-STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'degree_wrapper';
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'degree_wrapper';
 "#
 )]
 fn degree(
@@ -63,7 +65,8 @@ fn degree(
     version: Option<i64>,
 ) -> Option<i64> {
     entry(|| {
-        let query = NodeQuery::new(graph, node, direction, rels, version)?;
+        let query =
+            NodeQuery { widen: true, ..NodeQuery::new(graph, node, direction, rels, version)? };
         let degree = with_id_type!(query.resolved.graph.id_type, E => {
             query.adjacent::<E, _>(|_, adjacency, node| adjacency.degree(node))?
         });
@@ -80,7 +83,7 @@ fn degree(
 CREATE FUNCTION warren.has_edge(graph text, src anyelement, dst anyelement,
                                 rel text DEFAULT NULL, version bigint DEFAULT NULL)
 RETURNS boolean
-STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'has_edge_wrapper';
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'has_edge_wrapper';
 "#
 )]
 fn has_edge(
@@ -97,9 +100,9 @@ fn has_edge(
             return Ok(None);
         };
         with_id_type!(resolved.graph.id_type, E => {
-            let loaded = cached::<E>(resolved.graph.graph_id, resolved.version)?;
-            let src = element::<E>(graph, "src", src)?;
-            let dst = element::<E>(graph, "dst", dst)?;
+            let loaded = cached::<E>(&resolved)?;
+            let src = element_widened::<E>(graph, "src", src)?;
+            let dst = element_widened::<E>(graph, "dst", dst)?;
             let (Some(src), Some(dst)) = (loaded.id_map.dense_id(&src), loaded.id_map.dense_id(&dst))
             else {
                 return Ok(Some(false));
@@ -120,6 +123,9 @@ struct NodeQuery<'a> {
     node: Option<AnyElement>,
     direction: Direction,
     rels: Option<Vec<Option<String>>>,
+    /// Whether a narrower integer node id is widened (for results that
+    /// hold no ids).
+    widen: bool,
 }
 
 impl<'a> NodeQuery<'a> {
@@ -132,7 +138,14 @@ impl<'a> NodeQuery<'a> {
     ) -> Result<Self, TraversalSqlError> {
         let graph = graph.ok_or(TraversalSqlError::NullArgument("graph"))?;
         let resolved = resolve(graph, version, "read")?;
-        Ok(Self { graph, resolved, node, direction: direction(direction_text)?, rels })
+        Ok(Self {
+            graph,
+            resolved,
+            node,
+            direction: direction(direction_text)?,
+            rels,
+            widen: false,
+        })
     }
 
     /// Runs `f` on the loaded version, the adjacency the query selects and
@@ -145,8 +158,11 @@ impl<'a> NodeQuery<'a> {
         let Some(node) = self.node else {
             return Ok(None);
         };
-        let node = element::<E>(self.graph, "node", node)?;
-        let loaded = cached::<E>(self.resolved.graph.graph_id, self.resolved.version)?;
+        let node = match self.widen {
+            true => element_widened::<E>(self.graph, "node", node)?,
+            false => element::<E>(self.graph, "node", node)?,
+        };
+        let loaded = cached::<E>(&self.resolved)?;
         let selected = relations(&loaded.relations, self.rels.as_deref());
         let selection = selected.as_deref().map_or(RelationSelection::All, RelationSelection::Only);
         let adjacency = Adjacency::new(&loaded.graph, self.direction, selection)?;
@@ -209,7 +225,18 @@ mod tests {
     }
 
     #[pg_test]
-    fn neighbours_are_parallel_safe_and_record_nothing() -> Result<(), Error> {
+    fn lookups_returning_no_ids_widen_smaller_integer_ids() -> Result<(), Error> {
+        small("t")?;
+        let found = Spi::get_one::<String>(
+            "SELECT concat_ws(' ', warren.degree('t', 1), warren.degree('t', 1::int2),
+                              warren.has_edge('t', 1, 2), warren.reachable('t', 1, 3))",
+        )?;
+        assert_eq!(found.as_deref(), Some("2 2 t t"));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn traversal_functions_are_stable_and_parallel_restricted() -> Result<(), Error> {
         let labels = Spi::get_one::<String>(
             "SELECT string_agg(proname || ':' || provolatile::text || proparallel::text, ' '
                               ORDER BY proname)
@@ -221,8 +248,8 @@ mod tests {
         assert_eq!(
             labels.as_deref(),
             Some(
-                "bfs:sr components:sr degree:ss dijkstra:sr has_edge:ss last_stats:vr \
-                 neighbours:ss reachable:sr reachable_set:sr shortest_path:sr"
+                "bfs:sr components:sr degree:sr dijkstra:sr has_edge:sr last_stats:vr \
+                 neighbours:sr reachable:sr reachable_set:sr shortest_path:sr"
             )
         );
         Ok(())

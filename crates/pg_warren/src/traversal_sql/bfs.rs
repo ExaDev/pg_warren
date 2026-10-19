@@ -70,7 +70,7 @@ fn bfs(
         };
         let resolved = resolve(request.graph, version, "read")?;
         let rows: Box<dyn Iterator<Item = BfsRow>> = with_id_type!(resolved.graph.id_type, E => {
-            let loaded = cached::<E>(resolved.graph.graph_id, resolved.version)?;
+            let loaded = cached::<E>(&resolved)?;
             Box::new(LevelRows::new(&request, resolved.version, loaded, bfs_row::<E>)?)
         });
         Ok(TableIterator::new(rows))
@@ -110,7 +110,7 @@ fn reachable_set(
         };
         let resolved = resolve(request.graph, version, "read")?;
         let rows: Box<dyn Iterator<Item = AnyElement>> = with_id_type!(resolved.graph.id_type, E => {
-            let loaded = cached::<E>(resolved.graph.graph_id, resolved.version)?;
+            let loaded = cached::<E>(&resolved)?;
             Box::new(LevelRows::new(&request, resolved.version, loaded, node_row::<E>)?)
         });
         Ok(SetOfIterator::new(rows))
@@ -396,6 +396,12 @@ mod tests {
     fn the_node_filter_must_have_the_graphs_id_type() -> Result<(), Error> {
         small("t")?;
         Spi::run("SELECT * FROM warren.bfs('t', ARRAY[1::bigint], 2, node_filter := ARRAY[1])")
+    }
+
+    #[pg_test(error = "node_filter must be an array (e.g. ARRAY[...]::bigint[]), not bigint")]
+    fn a_node_filter_that_is_not_an_array_is_an_error() -> Result<(), Error> {
+        small("t")?;
+        Spi::run("SELECT * FROM warren.bfs('t', ARRAY[1::bigint], 2, node_filter := 5::bigint)")
     }
 
     #[pg_test(error = "direction must be 'out', 'in' or 'both', not 'up'")]

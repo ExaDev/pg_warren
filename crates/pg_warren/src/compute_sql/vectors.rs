@@ -54,7 +54,7 @@ pub(super) struct Vectors<E> {
 impl<E: IdDatum> Vectors<E> {
     /// Opens `resolved`'s version and lists its vectors.
     pub(super) fn open(resolved: Resolved) -> Result<Self, ComputeSqlError> {
-        let loaded = cached::<E>(resolved.graph.graph_id, resolved.version)?;
+        let loaded = cached::<E>(&resolved)?;
         let records = SpiVectorStore.bound(resolved.version)?;
         Ok(Self {
             graph: resolved.graph,

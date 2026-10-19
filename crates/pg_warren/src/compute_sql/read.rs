@@ -150,7 +150,7 @@ fn id_map(
             // SAFETY: fcinfo is this call's, and argument 1 exists.
             let oid = unsafe { pgrx::fcinfo::pg_getarg_type(fcinfo, 1) };
             check_type::<E>(graph, "id_type", oid, false)?;
-            let loaded = crate::cache::cached::<E>(resolved.graph.graph_id, resolved.version)?;
+            let loaded = crate::cache::cached::<E>(&resolved)?;
             Box::new((0..loaded.id_map.id_space()).filter_map(move |node| {
                 let live = !loaded.id_map.tombstones().contains(node);
                 let dense = i64::try_from(node).unwrap_or(i64::MAX);
