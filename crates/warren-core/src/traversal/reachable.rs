@@ -7,10 +7,9 @@ use std::ops::ControlFlow;
 use super::level::{Admission, LevelSearch};
 use super::scratch::Rows;
 use super::stats::Progress;
-use super::{
-    bfs_each, Adjacency, Interrupts, Limits, TraversalError, TraversalStats, Traversed, Visit,
-};
+use super::{bfs_each, Adjacency, Limits, TraversalError, TraversalStats, Traversed, Visit};
 use crate::graph::DenseId;
+use crate::interrupts::Interrupts;
 
 /// Whether `target` is within `max_depth` edges of `start` along
 /// `adjacency` (unbounded if `None`). A node reaches itself. The search
@@ -68,9 +67,10 @@ pub fn reachable_set_each(
 mod tests {
     use super::*;
     use crate::graph::GraphCsr;
+    use crate::graph::RelationSelection;
+    use crate::interrupts::Uninterrupted;
     use crate::traversal::example::directed;
-    use crate::traversal::Uninterrupted;
-    use crate::traversal::{Direction, RelationSelection};
+    use crate::traversal::Direction;
 
     // 0 → 1 → 2 → 3, 4 → 3, 5 isolated
     fn example() -> GraphCsr {
@@ -146,8 +146,8 @@ mod properties {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::interrupts::Uninterrupted;
     use crate::traversal::reference::{directions, scenarios, selections, Scenario};
-    use crate::traversal::Uninterrupted;
 
     proptest! {
         #[test]

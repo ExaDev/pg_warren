@@ -10,7 +10,7 @@ use crate::compute::{
     AnyVector, ArithmeticError, BinaryOp, ComputeError, Element, Semiring, SemiringElement, Vector,
 };
 use crate::graph::DenseId;
-use crate::traversal::{Cancellation, Cancelled};
+use crate::interrupts::{Cancellation, Cancelled};
 
 /// The rows one task computes; a task checks the cancellation flag first.
 /// Small under test, so tests cross task boundaries.

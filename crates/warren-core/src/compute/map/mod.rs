@@ -30,7 +30,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use rayon::prelude::*;
 
 use super::{AnyVector, ComputeError, ComputeMemory, Vector, Workers};
-use crate::traversal::{Cancelled, Interrupts};
+use crate::interrupts::{Cancelled, Interrupts};
 use column::Column;
 use eval::{eval, eval_any, Chunk, Eval};
 

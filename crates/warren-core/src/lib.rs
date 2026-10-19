@@ -12,6 +12,7 @@ compile_error!("warren-core requires a 64-bit target");
 
 pub mod compute;
 pub mod graph;
+pub mod interrupts;
 pub mod spectral;
 pub mod traversal;
 

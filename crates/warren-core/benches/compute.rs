@@ -7,7 +7,7 @@ use std::thread::available_parallelism;
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use warren_core::compute::{spmv, AnyVector, ComputeMemory, Product, Semiring, Vector, Workers};
 use warren_core::graph::GraphCsr;
-use warren_core::traversal::Uninterrupted;
+use warren_core::interrupts::Uninterrupted;
 
 mod random_graph;
 

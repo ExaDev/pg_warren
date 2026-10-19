@@ -1,7 +1,8 @@
 //! What a traversal did: nodes visited, edges traversed, whether a limit cut
 //! it short (DESIGN.md §9.3, `warren.last_stats()`).
 
-use super::{Interrupts, TraversalError};
+use super::TraversalError;
+use crate::interrupts::Interrupts;
 
 /// How often, in units of work (nodes visited plus edges traversed), a
 /// traversal polls for interrupts.
@@ -83,7 +84,8 @@ impl<'c> Progress<'c> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::traversal::{Cancellation, TraversalError, Uninterrupted};
+    use crate::interrupts::{Cancellation, Uninterrupted};
+    use crate::traversal::TraversalError;
 
     #[test]
     fn progress_counts_nodes_and_edges() {

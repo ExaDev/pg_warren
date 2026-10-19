@@ -5,7 +5,7 @@ use proptest::prelude::*;
 use super::*;
 use crate::compute::reference::{self, Edges, Write};
 use crate::compute::{Dtype, Element, SemiringElement, Vector};
-use crate::traversal::{Cancelled, Uninterrupted};
+use crate::interrupts::{Cancelled, Uninterrupted};
 
 fn workers() -> &'static Workers {
     static WORKERS: OnceLock<Workers> = OnceLock::new();

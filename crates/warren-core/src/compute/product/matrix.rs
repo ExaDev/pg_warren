@@ -3,8 +3,8 @@
 //! relations.
 
 use super::super::ComputeError;
+use crate::graph::RelationSelection;
 use crate::graph::{AnyCsr, Csr, DenseId, GraphCsr, RelationCsr, Target};
-use crate::traversal::RelationSelection;
 
 /// How a product walks the matrix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

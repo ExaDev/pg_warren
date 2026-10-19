@@ -21,7 +21,8 @@ use super::{
     AnyVector, BinaryOp, ComputeError, ComputeMemory, Semiring, SemiringElement, Vector, Workers,
 };
 use crate::graph::GraphCsr;
-use crate::traversal::{Interrupts, RelationSelection};
+use crate::graph::RelationSelection;
+use crate::interrupts::Interrupts;
 
 /// A value mask (GraphBLAS semantics): row `i` is selected when the mask's
 /// value there is non-zero (`NaN` included), or, with `complement`, when it

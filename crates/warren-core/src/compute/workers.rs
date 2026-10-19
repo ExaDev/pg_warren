@@ -15,7 +15,7 @@ use std::time::Duration;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 
 use super::ComputeError;
-use crate::traversal::{Cancellation, Interrupts};
+use crate::interrupts::{Cancellation, Interrupts};
 
 /// How often the caller polls its interrupts while a job runs.
 const POLL_INTERVAL: Duration = Duration::from_millis(1);
@@ -101,7 +101,7 @@ impl Drop for RaiseOnDrop<'_> {
 #[cfg(not(miri))]
 mod tests {
     use super::*;
-    use crate::traversal::{Cancelled, Uninterrupted};
+    use crate::interrupts::{Cancelled, Uninterrupted};
     use std::panic::{catch_unwind, AssertUnwindSafe};
     use std::time::Instant;
 

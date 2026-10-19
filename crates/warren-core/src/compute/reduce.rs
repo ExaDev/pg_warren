@@ -12,7 +12,7 @@ use std::str::FromStr;
 use rayon::prelude::*;
 
 use super::{AnyVector, ComputeError, Element, Workers};
-use crate::traversal::{Cancelled, Interrupts};
+use crate::interrupts::{Cancelled, Interrupts};
 
 /// The elements each parallel task reduces; small under test, so tests
 /// combine several partial results.
@@ -247,7 +247,7 @@ fn combine(partials: Vec<Option<f64>>, reduction: Reduction) -> Option<f64> {
 mod tests {
     use super::*;
     use crate::compute::{ComputeMemory, Element, Vector};
-    use crate::traversal::Uninterrupted;
+    use crate::interrupts::Uninterrupted;
     use proptest::prelude::*;
     use std::sync::OnceLock;
 
@@ -347,8 +347,8 @@ mod tests {
     fn an_interrupt_cancels_a_reduction() {
         struct Stop;
         impl Interrupts for Stop {
-            fn check(&mut self) -> Result<(), crate::traversal::Cancelled> {
-                Err(crate::traversal::Cancelled)
+            fn check(&mut self) -> Result<(), crate::interrupts::Cancelled> {
+                Err(crate::interrupts::Cancelled)
             }
         }
         let x = vector(1, vec![1.0; 4]);

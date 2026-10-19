@@ -6,8 +6,9 @@
 //! dense id of its component and every node's parent is at most the node.
 
 use super::stats::Progress;
-use super::{Interrupts, TraversalError, Traversed};
+use super::{TraversalError, Traversed};
 use crate::graph::{memory, DenseId, GraphCsr};
+use crate::interrupts::Interrupts;
 
 /// The component id of every dense id in the id space, indexed by dense
 /// id: the smallest dense id in its weakly connected component, so labels
@@ -58,9 +59,9 @@ fn root(parents: &mut [DenseId], mut node: DenseId) -> DenseId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::interrupts::{Cancellation, Uninterrupted};
     use crate::traversal::example::{directed, graph};
     use crate::traversal::TraversalStats;
-    use crate::traversal::{Cancellation, Uninterrupted};
 
     #[test]
     fn each_node_is_labelled_with_the_smallest_dense_id_in_its_component() {
@@ -94,9 +95,9 @@ mod properties {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::interrupts::Uninterrupted;
     use crate::traversal::reference::{scenarios, Scenario};
     use crate::traversal::Direction;
-    use crate::traversal::Uninterrupted;
 
     proptest! {
         #[test]

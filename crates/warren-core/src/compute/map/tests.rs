@@ -5,7 +5,7 @@ use proptest::prelude::*;
 use super::arithmetic;
 use super::*;
 use crate::compute::{ArithmeticError, Dtype, Element, Vector};
-use crate::traversal::{Cancelled, Uninterrupted};
+use crate::interrupts::{Cancelled, Uninterrupted};
 
 fn workers() -> &'static Workers {
     static WORKERS: OnceLock<Workers> = OnceLock::new();

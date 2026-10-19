@@ -3,7 +3,7 @@
 use thiserror::Error;
 
 use super::Dtype;
-use crate::traversal::Cancelled;
+use crate::interrupts::Cancelled;
 
 /// Why a compute kernel could not run to completion.
 #[derive(Debug, Clone, PartialEq, Error)]
