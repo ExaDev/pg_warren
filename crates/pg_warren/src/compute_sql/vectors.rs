@@ -1,6 +1,7 @@
-//! The vectors bound to one version, as one compute call sees them: read
-//! through the backend's vector cache, charged to the call's compute
-//! memory budget, and written back with tombstoned rows cleared.
+//! The vectors bound to one version, as one compute call sees them: the
+//! session's transient vectors of the version first, then its persisted
+//! ones, read through the backend's vector cache and charged to the call's
+//! compute memory budget, and written back with tombstoned rows cleared.
 
 use std::collections::HashMap;
 use std::mem::size_of;
@@ -17,8 +18,8 @@ use crate::catalog::{GraphDefinition, VersionId};
 use crate::segment::CHUNK_SIZE;
 use crate::source::IdDatum;
 use crate::vector::{
-    forget, load, remember, write_vector, Binding, SpiVectorStore, VectorId, VectorRecord,
-    VectorStore,
+    drop_transient, forget, keep_transient, load, remember, transient, transients, write_vector,
+    Binding, SpiVectorStore, VectorId, VectorRecord, VectorStore,
 };
 
 /// The budget cached vectors are charged to while cached: unlimited, since
@@ -29,14 +30,43 @@ fn cache_memory() -> &'static ComputeMemory {
     CACHE_MEMORY.get_or_init(|| ComputeMemory::new(u64::MAX))
 }
 
-/// The bytes of a vector of `record`'s shape.
-fn bytes(record: &VectorRecord) -> u64 {
-    let element = match record.dtype {
+/// The bytes of a vector of `dtype` with `length` rows of `width`.
+fn bytes(dtype: Dtype, width: usize, length: u64) -> u64 {
+    let element = match dtype {
         Dtype::F32 => size_of::<f32>(),
         Dtype::F64 | Dtype::I64 => size_of::<f64>(),
         Dtype::Bool => size_of::<bool>(),
     };
-    record.length.saturating_mul(record.width as u64).saturating_mul(element as u64)
+    length.saturating_mul(width as u64).saturating_mul(element as u64)
+}
+
+/// A vector name bound to a version, and its element type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct BoundName {
+    /// The name.
+    pub(super) name: String,
+    /// Its dtype.
+    pub(super) dtype: Dtype,
+}
+
+/// The names of the vectors bound to `version` of graph `graph_id` that a
+/// call sees: the session's transient vectors, then the persisted vectors
+/// of other names, by name.
+pub(super) fn bound_names(
+    graph_id: i32,
+    version: VersionId,
+) -> Result<Vec<BoundName>, ComputeSqlError> {
+    let mut names: Vec<BoundName> = transients(graph_id, version)
+        .into_iter()
+        .map(|(name, vector)| BoundName { name, dtype: vector.dtype() })
+        .collect();
+    for record in SpiVectorStore.bound(version)? {
+        if !names.iter().any(|bound| bound.name == record.name) {
+            names.push(BoundName { name: record.name, dtype: record.dtype });
+        }
+    }
+    names.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(names)
 }
 
 /// A version, the vectors bound to it, and the call's compute memory.
@@ -50,7 +80,7 @@ pub(super) struct Vectors<E> {
     /// The call's compute memory budget.
     pub(super) memory: ComputeMemory,
     records: Vec<VectorRecord>,
-    held: HashMap<VectorId, MemoryCharge>,
+    held: HashMap<String, MemoryCharge>,
 }
 
 impl<E: IdDatum> Vectors<E> {
@@ -88,12 +118,12 @@ impl<E: IdDatum> Vectors<E> {
         self.loaded.id_map.tombstones()
     }
 
-    /// The vectors bound to the version, by name.
-    pub(super) fn records(&self) -> &[VectorRecord] {
-        &self.records
+    /// The names of the vectors bound to the version that this call sees.
+    pub(super) fn names(&self) -> Result<Vec<BoundName>, ComputeSqlError> {
+        bound_names(self.graph.graph_id, self.version)
     }
 
-    /// The record of vector `name`, if bound.
+    /// The record of persisted vector `name`, if bound.
     fn record(&self, name: &str) -> Option<&VectorRecord> {
         self.records.iter().find(|record| record.name == name)
     }
@@ -107,37 +137,62 @@ impl<E: IdDatum> Vectors<E> {
         })
     }
 
-    /// Vector `name`, if bound. Its bytes are charged to the call's budget
-    /// (once per call) before it is read.
+    /// Charges `name`'s bytes to the call's budget, once per call.
+    fn charge(&mut self, name: &str, bytes: u64) -> Result<(), ComputeSqlError> {
+        if !self.held.contains_key(name) {
+            let charge = self.memory.charge(bytes)?;
+            self.held.insert(name.to_owned(), charge);
+        }
+        Ok(())
+    }
+
+    /// Vector `name`, if bound: the session's transient vector of that
+    /// name, else the persisted one. Its bytes are charged to the call's
+    /// budget (once per call) before it is read.
     pub(super) fn find(&mut self, name: &str) -> Result<Option<Arc<AnyVector>>, ComputeSqlError> {
+        let graph_id = self.graph.graph_id;
+        if let Some(vector) = transient(graph_id, self.version, name) {
+            self.charge(name, bytes(vector.dtype(), vector.width(), vector.id_space()))?;
+            return Ok(Some(vector));
+        }
         let Some(record) = self.record(name).cloned() else {
             return Ok(None);
         };
-        if !self.held.contains_key(&record.vector) {
-            let charge = self.memory.charge(bytes(&record))?;
-            self.held.insert(record.vector, charge);
-        }
-        let graph_id = self.graph.graph_id;
+        self.charge(name, bytes(record.dtype, record.width, record.length))?;
         Ok(Some(load(&mut SpiVectorStore, cache_memory(), graph_id, &record)?))
     }
 
-    /// Stores `vector` as `name`, replacing any vector of that name (which
-    /// the caller must have written, or own the graph), after clearing its
-    /// tombstoned rows; returns its vector id.
+    /// Stores `vector` as `name` after clearing its tombstoned rows:
+    /// persisted (returning its vector id) or, if not `persist`, as a
+    /// transient vector of this session (returning `None`). Either replaces
+    /// any vector of that name of either kind; a persisted one replaced
+    /// must have been written by the caller, or the caller must own the
+    /// graph.
     pub(super) fn save(
         &mut self,
         name: &str,
         mut vector: AnyVector,
-    ) -> Result<VectorId, ComputeSqlError> {
+        persist: bool,
+    ) -> Result<Option<VectorId>, ComputeSqlError> {
         if name.is_empty() {
             return Err(ComputeSqlError::EmptyName);
         }
+        let graph_id = self.graph.graph_id;
         if let Some(old) = self.record(name) {
             require_creator_or_owner(old.created_by, self.graph.owner, &self.graph.name, name)?;
             forget(old.vector);
         }
         vector.clear_tombstoned(self.tombstones());
-        let graph_id = self.graph.graph_id;
+        drop_transient(graph_id, self.version, name);
+        self.held.remove(name);
+        if !persist {
+            if self.record(name).is_some() {
+                SpiVectorStore.delete(self.version, name)?;
+                self.records.retain(|bound| bound.name != name);
+            }
+            keep_transient(graph_id, self.version, name, Arc::new(vector));
+            return Ok(None);
+        }
         // SAFETY: reads the backend's current user id: the caller's role.
         let caller = unsafe { pgrx::pg_sys::GetUserId() };
         let binding = Binding::new(graph_id, self.version, name, caller);
@@ -146,6 +201,6 @@ impl<E: IdDatum> Vectors<E> {
         remember(graph_id, id, Arc::new(vector));
         self.records.retain(|bound| bound.name != name);
         self.records.push(record);
-        Ok(id)
+        Ok(Some(id))
     }
 }

@@ -28,6 +28,8 @@ mod read;
 mod reduce;
 mod settings;
 mod summary;
+#[cfg(any(test, feature = "pg_test"))]
+mod transient;
 mod vectors;
 
 pub(crate) use error::{entry, ComputeSqlError};

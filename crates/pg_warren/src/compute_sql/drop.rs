@@ -6,16 +6,20 @@ use pgrx::prelude::*;
 use super::{entry, ComputeSqlError};
 use crate::access::require_creator_or_owner;
 use crate::cache::resolve;
-use crate::vector::{forget, SpiVectorStore, VectorStore};
+use crate::vector::{drop_transient, forget, SpiVectorStore, VectorStore};
 
 /// `warren.drop_vector`: deletes vector `name` bound to `version` (the
-/// current version if NULL).
+/// current version if NULL): the session's transient vector of that name
+/// if there is one, else the persisted one.
 #[pg_extern(schema = "warren", volatile, parallel_unsafe)]
 fn drop_vector(graph: Option<&str>, name: Option<&str>, version: default!(Option<i64>, "NULL")) {
     entry(|_| {
         let graph = graph.ok_or(ComputeSqlError::NullArgument("graph"))?;
         let name = name.ok_or(ComputeSqlError::NullArgument("name"))?;
         let resolved = resolve(graph, version, "write vectors of")?;
+        if drop_transient(resolved.graph.graph_id, resolved.version, name) {
+            return Ok(());
+        }
         let mut store = SpiVectorStore;
         let bound = store.bound(resolved.version)?;
         let record = bound.iter().find(|record| record.name == name).ok_or_else(|| {

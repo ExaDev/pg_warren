@@ -32,22 +32,25 @@ pub(super) fn dtype(text: Option<&str>) -> Result<Dtype, ComputeSqlError> {
 
 /// `warren.vector_const`: vector `name` of `dtype`, `value` (cast as SQL
 /// casts `double precision`) at every live node, bound to `version` (the
-/// current version if NULL). Returns its vector id.
+/// current version if NULL). Returns its vector id (NULL if not
+/// `persist`: a transient vector, §6.2).
 #[pg_extern(schema = "warren", volatile, parallel_unsafe)]
 fn vector_const(
     graph: Option<&str>,
     name: Option<&str>,
     value: Option<f64>,
     dtype: default!(Option<&str>, "'f64'"),
+    persist: default!(Option<bool>, "true"),
     version: default!(Option<i64>, "NULL"),
-) -> i64 {
+) -> Option<i64> {
     entry(|_| {
         let graph = graph.ok_or(ComputeSqlError::NullArgument("graph"))?;
         let name = name.ok_or(ComputeSqlError::NullArgument("name"))?;
+        let persist = persist.ok_or(ComputeSqlError::NullArgument("persist"))?;
         let value = value.ok_or(ComputeSqlError::NullArgument("value"))?;
         let expr = literal(value, self::dtype(dtype)?);
         let resolved = resolve(graph, version, "write vectors of")?;
-        with_id_type!(resolved.graph.id_type, E => constant::<E>(Vectors::open(resolved)?, name, &expr))
+        with_id_type!(resolved.graph.id_type, E => constant::<E>(Vectors::open(resolved)?, name, &expr, persist))
     })
 }
 
@@ -55,10 +58,11 @@ fn constant<E: IdDatum>(
     mut vectors: Vectors<E>,
     name: &str,
     expr: &AnyExpr,
-) -> Result<i64, ComputeSqlError> {
+    persist: bool,
+) -> Result<Option<i64>, ComputeSqlError> {
     let filled =
         map(&*workers()?, &vectors.memory, &mut PostgresInterrupts, vectors.id_space(), expr, &[])?;
-    vectors.save(name, filled)
+    vectors.save(name, filled, persist)
 }
 
 /// Nodes between interrupt checks while counting degrees.
@@ -84,7 +88,7 @@ fn cast<E: IdDatum>(
 /// `warren.vector_degree`: vector `name` of `dtype` holding each node's
 /// degree in `direction` (`out`, `in` or `both`) over the relations `rels`
 /// (all if NULL): its distinct neighbours, as `warren.degree` counts them.
-/// Returns its vector id.
+/// Returns its vector id (NULL if not `persist`: a transient vector).
 #[pg_extern(schema = "warren", volatile, parallel_unsafe)]
 fn vector_degree(
     graph: Option<&str>,
@@ -92,11 +96,13 @@ fn vector_degree(
     direction: default!(Option<&str>, "'out'"),
     rels: default!(Option<Vec<Option<String>>>, "NULL"),
     dtype: default!(Option<&str>, "'f64'"),
+    persist: default!(Option<bool>, "true"),
     version: default!(Option<i64>, "NULL"),
-) -> i64 {
+) -> Option<i64> {
     entry(|_| {
         let graph = graph.ok_or(ComputeSqlError::NullArgument("graph"))?;
         let name = name.ok_or(ComputeSqlError::NullArgument("name"))?;
+        let persist = persist.ok_or(ComputeSqlError::NullArgument("persist"))?;
         let direction = self::direction(direction)?;
         let dtype = self::dtype(dtype)?;
         let resolved = resolve(graph, version, "write vectors of")?;
@@ -114,24 +120,26 @@ fn vector_degree(
                 *degree = i64::try_from(adjacency.degree(node)).unwrap_or(i64::MAX);
             }
             let degrees = cast(&vectors, degrees.into(), dtype)?;
-            vectors.save(name, degrees)
+            vectors.save(name, degrees, persist)
         })
     })
 }
 
 /// `warren.vector_dense_id`: vector `name` of `dtype` holding each node's
 /// own dense id, cast as SQL casts `bigint` (seeds label propagation).
-/// Returns its vector id.
+/// Returns its vector id (NULL if not `persist`: a transient vector).
 #[pg_extern(schema = "warren", volatile, parallel_unsafe)]
 fn vector_dense_id(
     graph: Option<&str>,
     name: Option<&str>,
     dtype: default!(Option<&str>, "'i64'"),
+    persist: default!(Option<bool>, "true"),
     version: default!(Option<i64>, "NULL"),
-) -> i64 {
+) -> Option<i64> {
     entry(|_| {
         let graph = graph.ok_or(ComputeSqlError::NullArgument("graph"))?;
         let name = name.ok_or(ComputeSqlError::NullArgument("name"))?;
+        let persist = persist.ok_or(ComputeSqlError::NullArgument("persist"))?;
         let dtype = self::dtype(dtype)?;
         let resolved = resolve(graph, version, "write vectors of")?;
         with_id_type!(resolved.graph.id_type, E => {
@@ -141,7 +149,7 @@ fn vector_dense_id(
                 *id = node;
             }
             let ids = cast(&vectors, ids.into(), dtype)?;
-            vectors.save(name, ids)
+            vectors.save(name, ids, persist)
         })
     })
 }

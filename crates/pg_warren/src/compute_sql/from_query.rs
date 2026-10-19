@@ -38,7 +38,8 @@ fn sql_type(dtype: Dtype) -> &'static str {
 
 /// `warren.vector_from_query`: vector `name` of `dtype` from `query`'s
 /// `(id, value)` rows (`value` an array for a matrix), bound to `version`
-/// (the current version if NULL). Returns its vector id.
+/// (the current version if NULL). Returns its vector id (NULL if not
+/// `persist`: a transient vector).
 #[pg_extern(schema = "warren", volatile, parallel_unsafe)]
 fn vector_from_query(
     graph: Option<&str>,
@@ -46,11 +47,13 @@ fn vector_from_query(
     query: Option<&str>,
     dtype: default!(Option<&str>, "'f64'"),
     fill: default!(Option<f64>, "0"),
+    persist: default!(Option<bool>, "true"),
     version: default!(Option<i64>, "NULL"),
-) -> i64 {
+) -> Option<i64> {
     entry(|caller| {
         let graph = graph.ok_or(ComputeSqlError::NullArgument("graph"))?;
         let name = name.ok_or(ComputeSqlError::NullArgument("name"))?;
+        let persist = persist.ok_or(ComputeSqlError::NullArgument("persist"))?;
         let query = query.ok_or(ComputeSqlError::NullArgument("query"))?;
         let dtype = parse_dtype(dtype)?;
         let fill = fill.ok_or(ComputeSqlError::NullArgument("fill"))?;
@@ -64,7 +67,7 @@ fn vector_from_query(
                 Dtype::I64 => read.vector::<E, i64>(&vectors)?,
                 Dtype::Bool => read.vector::<E, bool>(&vectors)?,
             };
-            vectors.save(name, vector)
+            vectors.save(name, vector, persist)
         })
     })
 }
