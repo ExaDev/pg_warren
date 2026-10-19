@@ -117,6 +117,37 @@ mod tests {
         Ok(())
     }
 
+    #[pg_test]
+    fn transient_vectors_are_per_role_within_a_session() -> Result<(), Error> {
+        small("t")?;
+        Spi::run(
+            "CREATE ROLE reader_a; CREATE ROLE reader_b;
+             SELECT warren.grant('t', 'reader_a'); SELECT warren.grant('t', 'reader_b');
+             CREATE TEMP TABLE failure (what text); GRANT ALL ON failure TO PUBLIC;
+             SET ROLE reader_a; SELECT warren.vector_const('t', 'x', 1, persist := false); RESET ROLE",
+        )?;
+        Spi::run("SET ROLE reader_b")?;
+        // reader_b neither sees, shadows nor drops reader_a's transient x.
+        let unseen = failure("warren.vector_values('t', 'x', NULL::bigint)")?;
+        let undropped = failure("warren.drop_vector('t', 'x')")?;
+        Spi::run("SELECT warren.vector_const('t', 'x', 2, persist := false)")?;
+        let own = values("t", "x")?;
+        let evicted = Spi::get_one::<i64>("SELECT warren.evict('t')")?;
+        Spi::run("RESET ROLE; SET ROLE reader_a")?;
+        let theirs = values("t", "x")?;
+        Spi::run("RESET ROLE")?;
+        assert!(unseen.unwrap_or_default().starts_with("42704"), "reader_b saw reader_a's x");
+        assert!(
+            undropped.unwrap_or_default().starts_with("42704"),
+            "reader_b dropped reader_a's x"
+        );
+        assert_eq!(own.as_deref(), Some("1:2 2:2 3:2 4:2 5:2 6:2"));
+        // The loaded version and reader_b's own transient x only.
+        assert_eq!(evicted, Some(2));
+        assert_eq!(theirs.as_deref(), Some("1:1 2:1 3:1 4:1 5:1 6:1"));
+        Ok(())
+    }
+
     #[pg_test(error = "persist must not be NULL")]
     fn persist_must_not_be_null() -> Result<(), Error> {
         small("t")?;
