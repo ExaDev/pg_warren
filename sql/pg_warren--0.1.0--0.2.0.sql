@@ -183,3 +183,53 @@ CREATE FUNCTION warren.vector_values(graph text, name text, id_type anyelement,
                                      version bigint DEFAULT NULL)
 RETURNS TABLE (node_id anyelement, value float8)
 STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'vector_values_wrapper';
+
+-- The spectral functions (M6, DESIGN.md §6.5, §8), as pgrx generates them
+-- for 0.2.0.
+
+CREATE  FUNCTION warren."distance"(
+	"graph" TEXT, /* Option < & str > */
+	"v1" bigint, /* Option < i64 > */
+	"v2" bigint, /* Option < i64 > */
+	"method" TEXT, /* Option < & str > */
+	"vectors_prefix" TEXT DEFAULT NULL, /* Option < & str > */
+	"k" INT DEFAULT NULL, /* Option < i32 > */
+	"x" TEXT DEFAULT NULL, /* Option < & str > */
+	"y" TEXT DEFAULT NULL, /* Option < & str > */
+	"compared_rows" TEXT DEFAULT 'shared', /* Option < & str > */
+	"matrix" TEXT DEFAULT 'adjacency', /* Option < & str > */
+	"which" TEXT DEFAULT 'largest', /* Option < & str > */
+	"rels" TEXT[] DEFAULT NULL, /* :: std :: option :: Option < Vec < Option < String > > > */
+	"weighted" bool DEFAULT NULL, /* Option < bool > */
+	"symmetrize" bool DEFAULT true, /* Option < bool > */
+	"tol" double precision DEFAULT 1e-8, /* Option < f64 > */
+	"max_iter" INT DEFAULT NULL, /* Option < i32 > */
+	"dtype" TEXT DEFAULT 'f32', /* Option < & str > */
+	"graph2" TEXT DEFAULT NULL /* Option < & str > */
+) RETURNS jsonb /* JsonB */
+VOLATILE PARALLEL UNSAFE 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'distance_wrapper';
+
+CREATE  FUNCTION warren."eigen"(
+	"graph" TEXT, /* Option < & str > */
+	"k" INT, /* Option < i32 > */
+	"matrix" TEXT DEFAULT 'adjacency', /* Option < & str > */
+	"which" TEXT DEFAULT 'largest', /* Option < & str > */
+	"rels" TEXT[] DEFAULT NULL, /* :: std :: option :: Option < Vec < Option < String > > > */
+	"weighted" bool DEFAULT NULL, /* Option < bool > */
+	"symmetrize" bool DEFAULT true, /* Option < bool > */
+	"tol" double precision DEFAULT 1e-8, /* Option < f64 > */
+	"max_iter" INT DEFAULT NULL, /* Option < i32 > */
+	"vectors_prefix" TEXT DEFAULT NULL, /* Option < & str > */
+	"version" bigint DEFAULT NULL, /* Option < i64 > */
+	"dtype" TEXT DEFAULT 'f32', /* Option < & str > */
+	"persist" bool DEFAULT true /* Option < bool > */
+) RETURNS TABLE (
+	"i" INT,  /* i32 */
+	"eigenvalue" double precision,  /* f64 */
+	"residual" double precision  /* f64 */
+)
+VOLATILE PARALLEL UNSAFE 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'eigen_wrapper';

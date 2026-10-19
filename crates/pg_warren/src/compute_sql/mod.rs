@@ -10,7 +10,8 @@
 //! and runs `warren_core::compute` kernels on the compute pool with a
 //! main-thread interrupt poll, within a fresh `warren.max_compute_memory`
 //! budget. Depends on `access`, `cache`, `catalog`, `external_ids`,
-//! `interrupts`, `selection`, `source` and `vector`; nothing depends on it.
+//! `interrupts`, `selection`, `source` and `vector`; `spectral_sql` uses its
+//! vectors, compute pool and memory budget.
 
 mod constructors;
 mod drop;
@@ -32,5 +33,6 @@ mod summary;
 mod transient;
 mod vectors;
 
-pub(crate) use error::{entry, ComputeSqlError};
-pub(crate) use settings::define_compute_settings;
+pub(crate) use error::{compute_sqlstate, entry, ComputeSqlError};
+pub(crate) use settings::{compute_memory, define_compute_settings, workers};
+pub(crate) use vectors::Vectors;
