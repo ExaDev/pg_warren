@@ -47,6 +47,29 @@ impl Tombstones {
         }
     }
 
+    /// The bitmap's words, least significant bit first.
+    pub(crate) fn words(&self) -> &[u64] {
+        &self.words
+    }
+
+    /// A bitmap from its words, which must cover exactly `id_space` bits.
+    pub(crate) fn from_words(id_space: u64, words: Vec<u64>) -> Result<Self, GraphError> {
+        if words.len() != word_count(id_space) {
+            return Err(GraphError::SegmentLength {
+                expected: word_count(id_space) as u64,
+                found: words.len() as u64,
+            });
+        }
+        let spare_bits = words.len() as u64 * WORD_BITS - id_space;
+        let spare = words
+            .last()
+            .map_or(0, |last| last.checked_shr((WORD_BITS - spare_bits) as u32).unwrap_or(0));
+        if spare != 0 {
+            return Err(GraphError::TombstoneOutsideIdSpace);
+        }
+        Ok(Self { id_space, words })
+    }
+
     /// Extends the id space to `id_space`; the new ids are live.
     pub fn grow_to(&mut self, id_space: u64) -> Result<(), GraphError> {
         if id_space <= self.id_space {

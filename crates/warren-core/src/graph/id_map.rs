@@ -9,14 +9,54 @@ use super::{memory, DenseId, GraphError, Tombstones};
 /// An external id type: the type of a graph's node ids in its user tables
 /// (`id_type`). Dense ids follow this type's order, which must match the
 /// Postgres sort order of the column type.
-pub trait ExternalId: Copy + Ord + Debug {}
+pub trait ExternalId: Copy + Ord + Debug {
+    /// The encoded width in bytes.
+    const WIDTH: usize;
 
-/// `int4`.
-impl ExternalId for i32 {}
-/// `int8`.
-impl ExternalId for i64 {}
-/// `uuid`: Postgres compares uuids bytewise, as `[u8; 16]` does.
-impl ExternalId for [u8; 16] {}
+    /// Appends the segment encoding of `self` (little-endian for integers).
+    fn write_le(&self, out: &mut Vec<u8>);
+
+    /// Decodes an id from exactly [`Self::WIDTH`] bytes.
+    fn read_le(bytes: &[u8]) -> Self;
+}
+
+macro_rules! integer_external_id {
+    ($type:ty, $doc:literal) => {
+        #[doc = $doc]
+        impl ExternalId for $type {
+            const WIDTH: usize = std::mem::size_of::<$type>();
+
+            fn write_le(&self, out: &mut Vec<u8>) {
+                out.extend_from_slice(&self.to_le_bytes());
+            }
+
+            fn read_le(bytes: &[u8]) -> Self {
+                let mut array = [0; std::mem::size_of::<$type>()];
+                array.copy_from_slice(bytes);
+                <$type>::from_le_bytes(array)
+            }
+        }
+    };
+}
+
+integer_external_id!(i32, "`int4`.");
+integer_external_id!(i64, "`int8`.");
+
+/// `uuid`, in its 16 bytes: Postgres compares uuids bytewise, as `[u8; 16]`
+/// does.
+impl ExternalId for [u8; 16] {
+    const WIDTH: usize = 16;
+
+    fn write_le(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(self);
+    }
+
+    fn read_le(bytes: &[u8]) -> Self {
+        let mut uuid = [0; 16];
+        uuid.copy_from_slice(bytes);
+        uuid
+    }
+}
 
 /// The id map of one graph version: (external id, dense id) pairs sorted by
 /// external id, an inverse array from dense id to external id, and the
@@ -89,6 +129,43 @@ impl<E: ExternalId> IdMap<E> {
         by_dense.extend(fresh);
         tombstones.grow_to(next_dense)?;
         Ok(Self { by_external, by_dense, tombstones })
+    }
+
+    /// An id map from its (external id, dense id) pairs and tombstones,
+    /// checking that the pairs are strictly sorted by external id, that the
+    /// dense ids are exactly `0..id_space`, and that the tombstones cover
+    /// the same id space.
+    pub(crate) fn from_parts(
+        by_external: Vec<(E, DenseId)>,
+        tombstones: Tombstones,
+    ) -> Result<Self, GraphError> {
+        let id_space = by_external.len() as u64;
+        if tombstones.id_space() != id_space {
+            return Err(GraphError::TombstonesLength {
+                expected: id_space,
+                found: tombstones.id_space(),
+            });
+        }
+        if by_external.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
+            return Err(GraphError::IdMapNotSorted);
+        }
+        let mut by_dense = memory::filled(by_external.len(), None)?;
+        for &(external, dense) in &by_external {
+            match usize::try_from(dense).ok().and_then(|d| by_dense.get_mut(d)) {
+                Some(slot @ None) => *slot = Some(external),
+                _ => return Err(GraphError::IdMapNotPermutation),
+            }
+        }
+        let by_dense = by_dense
+            .into_iter()
+            .collect::<Option<Vec<E>>>()
+            .ok_or(GraphError::IdMapNotPermutation)?;
+        Ok(Self { by_external, by_dense, tombstones })
+    }
+
+    /// The (external id, dense id) pairs, sorted by external id.
+    pub(crate) fn pairs(&self) -> &[(E, DenseId)] {
+        &self.by_external
     }
 
     /// The dense id of a live node, by binary search.
