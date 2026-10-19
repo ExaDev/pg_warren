@@ -8,8 +8,8 @@
 //! Each call opens its version through `cache` (reader check, current
 //! version re-read), maps external ids to dense ids, delegates to
 //! `warren_core::traversal` with a main-thread interrupt poll, and maps the
-//! result back. Depends on `cache`, `catalog` and `source`; nothing depends
-//! on it.
+//! result back. Depends on `cache`, `catalog`, `interrupts` and `source`;
+//! `compute_sql` reuses its id and argument helpers.
 
 mod args;
 mod bfs;
