@@ -251,7 +251,16 @@ Per relation *r* (a single implicit relation if `has_relations = false`):
 
 `u32` targets when `id_space < 2³²`, else `u64`; width recorded in `versions.target_width`. Sorted targets allow `has_edge` by binary search and make set-intersection algorithms (triangles, Jaccard) straightforward.
 
-Per-relation CSRs are stored separately so a traversal or SpMV can be restricted to a relation mask without filtering; a "merged" all-relations CSR is built additionally if `has_relations` (it is the common case for global computation). An M1 benchmark checks this choice against the alternative of a single merged CSR with a parallel adaptive-width (`u8`/`u16`/`u32`) relation array, which pgGraph uses and which needs about half the storage when `has_relations`. The result is recorded here. Alignment: every segment starts on a 64-byte boundary when loaded.
+Per-relation CSRs are stored separately so a traversal or SpMV can be restricted to a relation mask without filtering; a "merged" all-relations CSR is built additionally if `has_relations` (it is the common case for global computation). An M1 benchmark checks this choice against the alternative of a single merged CSR with a parallel adaptive-width (`u8`/`u16`/`u32`) relation array, which pgGraph uses and which needs about half the storage when `has_relations`. **Decided (M1): keep per-relation CSRs plus the merged CSR.** `benches/relation_layout.rs` (100K nodes, 1M weighted edges, 5 relations, single thread, 4-vCPU Xeon) measured:
+
+| | per-relation + merged | one CSR + `u8` relation array |
+|---|---|---|
+| forward bytes | 28.8 MB (16.0 MB without merged) | 13.8 MB |
+| build, forward + reverse | 104 ms | 40 ms |
+| BFS, 1 / 2 / 3 / 5 of 5 relations | 2.0 / 4.9 / 7.2 / 5.3 ms | 5.4 / 8.7 / 9.3 / 6.0 ms |
+| weighted row sums, 1 / 2 / 3 / 5 of 5 | 0.88 / 1.8 / 2.7 / 1.7 ms | 3.0 / 5.0 / 4.4 / 2.2 ms |
+
+Masked traversal and SpMV are 1.1–3.4× faster per relation, which is the hot path; the cost is about 2× storage and a build that stays well inside the §12 `refresh()` budget. Revisit if the memory cap (not speed) becomes the binding constraint; dropping the stored merged CSR is the first lever. Alignment: every segment starts on a 64-byte boundary when loaded.
 
 Every segment is validated on load, before any unchecked slice is formed: alignment and lengths, `offsets[0] = 0`, offsets monotonic, `offsets[id_space] = M`, every target `< id_space`, and `id_map` sorted. The check is O(N + M), which is cheap next to the detoast. The segment decoder has a fuzz target (§12). Each segment is encoded as a 16-byte little-endian header (magic `WRSG`, format, kind, element width, element count) followed by its payload, so a decoder can reject a segment of the wrong kind or width before reading it.
 
