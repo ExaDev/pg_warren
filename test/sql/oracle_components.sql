@@ -1,6 +1,6 @@
 -- Self-check of the NetworkX oracle (§12 oracle tests): its components
--- equal those of a recursive CTE over the same sparse random graph. When
--- warren.components lands (M3), compare it against oracle_components too.
+-- equal those of a recursive CTE over the same sparse random graph; then
+-- warren.components must equal the oracle (§12).
 -- fixture: random --nodes 300 --edges 220 --seed 2
 -- oracle: components
 CREATE TABLE cte_components AS
@@ -19,3 +19,15 @@ SELECT assert.that((SELECT max(c) FROM (SELECT count(*) AS c FROM oracle_compone
 SELECT assert.equal((SELECT count(*) FROM ((TABLE cte_components EXCEPT TABLE oracle_components)
                                            UNION ALL (TABLE oracle_components EXCEPT TABLE cte_components)) d),
                     0::bigint, 'the oracle and the recursive CTE agree');
+
+-- warren.components labels a component by its smallest dense id; relabel
+-- by the smallest external id to compare partitions with the oracle.
+SELECT warren.create_graph('g', 'SELECT id FROM nodes', 'SELECT src, dst FROM edges', directed := false);
+SELECT warren.refresh('g');
+CREATE TABLE warren_components AS
+SELECT node_id, min(node_id) OVER (PARTITION BY component_id) AS component
+FROM warren.components('g', NULL::bigint);
+SELECT assert.equal((SELECT count(*) FROM ((TABLE warren_components EXCEPT TABLE oracle_components)
+                                           UNION ALL (TABLE oracle_components EXCEPT TABLE warren_components)) d),
+                    0::bigint, 'warren.components agrees with the oracle');
+SELECT assert.equal((SELECT count(*) FROM warren_components), 300::bigint, 'warren.components labels every node');
