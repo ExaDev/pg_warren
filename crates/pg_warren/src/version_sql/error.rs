@@ -10,6 +10,7 @@ use crate::build::BuildError;
 use crate::cache::LoadError;
 use crate::catalog::{CatalogError, VersionId};
 use crate::segment::SegmentError;
+use crate::vector::VectorError;
 
 /// Why `compact` or `diff` could not run.
 #[derive(Debug, Error)]
@@ -49,6 +50,9 @@ pub(crate) enum VersionOperationError {
     /// The compacted version could not be recorded.
     #[error(transparent)]
     Build(#[from] BuildError),
+    /// A vector could not be carried into the compaction.
+    #[error(transparent)]
+    Vector(#[from] VectorError),
     /// `warren-core` refused the operation.
     #[error(transparent)]
     Version(#[from] VersionError),
@@ -65,6 +69,7 @@ impl SqlError for VersionOperationError {
             Self::Access(error) => error.sqlstate(),
             Self::Load(error) => error.sqlstate(),
             Self::Segment(error) => error.sqlstate(),
+            Self::Vector(error) => error.sqlstate(),
             Self::Build(error) => error.sqlstate(),
         }
     }
