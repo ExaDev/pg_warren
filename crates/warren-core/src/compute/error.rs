@@ -88,6 +88,31 @@ pub enum ComputeError {
     /// A norm name is not one of `l1|l2|linf`.
     #[error("unknown norm \"{0}\": expected l1, l2 or linf")]
     UnknownNorm(String),
+    /// An expression refers to an operand vector that was not given.
+    #[error("expression refers to operand {index}, but {operands} were given")]
+    UnknownOperand {
+        /// The operand index the expression refers to.
+        index: usize,
+        /// The number of operands given.
+        operands: usize,
+    },
+    /// An expression reads an operand vector as the wrong element type.
+    #[error("expression reads operand {index} as {expected}, but it is {found}")]
+    OperandType {
+        /// The operand index.
+        index: usize,
+        /// The type the expression reads.
+        expected: Dtype,
+        /// The operand's element type.
+        found: Dtype,
+    },
+    /// An expression is NULL for an element of a vector type that has no
+    /// NULL representation (SQLSTATE 22004).
+    #[error("null value cannot be stored in a {dtype} vector")]
+    NullResult {
+        /// The vector's element type.
+        dtype: Dtype,
+    },
     /// Arithmetic failed as the same SQL arithmetic would.
     #[error(transparent)]
     Arithmetic(#[from] ArithmeticError),
@@ -115,4 +140,22 @@ pub enum ArithmeticError {
     /// A non-zero float result that underflows to zero (SQLSTATE 22003).
     #[error("value out of range: underflow")]
     FloatUnderflow,
+    /// Division or modulo by zero (SQLSTATE 22012).
+    #[error("division by zero")]
+    DivisionByZero,
+    /// `sqrt` of a negative number (SQLSTATE 2201F).
+    #[error("cannot take square root of a negative number")]
+    SqrtOfNegative,
+    /// `ln` or `log` of zero (SQLSTATE 2201E).
+    #[error("cannot take logarithm of zero")]
+    LogOfZero,
+    /// `ln` or `log` of a negative number (SQLSTATE 2201E).
+    #[error("cannot take logarithm of a negative number")]
+    LogOfNegative,
+    /// `power(0, b)` with `b < 0` (SQLSTATE 2201F).
+    #[error("zero raised to a negative power is undefined")]
+    ZeroToNegativePower,
+    /// `power(a, b)` with `a < 0` and `b` not an integer (SQLSTATE 2201F).
+    #[error("a negative number raised to a non-integer power yields a complex result")]
+    ComplexPower,
 }

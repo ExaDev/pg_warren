@@ -8,6 +8,7 @@
 mod cast;
 mod dtype;
 mod error;
+mod map;
 mod memory;
 mod message;
 mod product;
@@ -20,6 +21,10 @@ mod workers;
 
 pub use dtype::{Dtype, Element};
 pub use error::{ArithmeticError, ComputeError};
+pub use map::{
+    map, AnyExpr, Arithmetic, BoolOp, Comparands, Comparison, Expr, F32Op, F64Op, Function, I64Op,
+    Value,
+};
 pub use memory::{ComputeMemory, MemoryCharge};
 pub use message::{Bytes, Message, MessageBuffer, PackedBytes};
 pub use product::{spmm, spmv, Mask, Product};
