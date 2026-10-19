@@ -132,9 +132,9 @@ impl<M: Combine> Part<M> {
         })
     }
 
-    /// Appends `message`, charging it first.
+    /// Appends `message`, charging the capacity it reserves first.
     fn push(&mut self, message: M::View<'_>) -> Result<(), ComputeError> {
-        let bytes = M::size(message);
+        let bytes = M::growth(&self.messages, message);
         self.allowance.take(bytes)?;
         M::push(&mut self.messages, message).map_err(|_| ComputeError::OutOfMemory { bytes })
     }

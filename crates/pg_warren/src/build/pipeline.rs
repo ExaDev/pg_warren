@@ -1,0 +1,519 @@
+//! The build pipeline (DESIGN.md §5.4 steps 2–6), over the build's ports:
+//! stable-id merge against the base version's id map, edge intake, CSR
+//! build, chunked segment write, version row and optional promotion. Graph
+//! logic is `warren_core::graph`'s; this module only sequences it.
+
+use warren_core::graph::{
+    EdgeIntake, ExternalId, GraphCsr, IdMap, RelationDictionary, RelationIndex,
+};
+
+use super::error::BuildError;
+use super::source::{EdgeRow, EdgeSink, SourceReader};
+use super::version::Catalog;
+use crate::cache::load_identity;
+use crate::catalog::{GraphDefinition, NewVersion, VersionId, VersionStats};
+use crate::segment::{write_version, SegmentStore};
+
+/// The name of the one relation of a graph without relations.
+const IMPLICIT_RELATION: &str = "";
+
+/// What a refresh asks for, beyond the graph itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RefreshRequest<'a> {
+    /// Whether to make the new version current.
+    pub(crate) promote: bool,
+    /// The version's label.
+    pub(crate) label: Option<&'a str>,
+    /// The segment chunk size in bytes.
+    pub(crate) chunk_size: usize,
+    /// The most bytes the CSR offsets may take (`warren.max_build_memory`).
+    pub(crate) memory_budget: u64,
+}
+
+/// Builds a new version of `graph` from its sources and returns its id.
+/// Dense ids continue from the graph's current version, if it has one.
+pub(crate) fn build<E: ExternalId>(
+    graph: &GraphDefinition,
+    request: &RefreshRequest<'_>,
+    source: &mut impl SourceReader<E>,
+    segments: &mut impl SegmentStore,
+    catalog: &mut impl Catalog,
+) -> Result<VersionId, BuildError> {
+    let (base, mut relations) = match graph.current_version {
+        Some(version) => load_identity(segments, version)?,
+        None => (IdMap::new(), RelationDictionary::new()),
+    };
+    let id_map = base.rebuild(source.node_ids()?)?;
+    drop(base);
+    let (csr, dropped_edges) =
+        adjacency(graph, &id_map, &mut relations, source, request.memory_budget)?;
+    let stats = VersionStats::measure(&id_map, &csr, dropped_edges, csr.deduplicated_edges());
+    let version = catalog.insert_version(&NewVersion {
+        graph_id: graph.graph_id,
+        stats,
+        label: request.label,
+        compacted_from: None,
+    })?;
+    let bytes = write_version(segments, version, &id_map, &relations, &csr, request.chunk_size)?;
+    catalog.record_bytes(version, bytes)?;
+    if request.promote {
+        catalog.promote(graph, version)?;
+    }
+    Ok(version)
+}
+
+/// Reads the edge rows into the CSRs, interning new relations. Returns the
+/// CSRs and the number of dropped edges: rows with a NULL relation or
+/// weight the graph needs, or a NULL, unknown or tombstoned endpoint.
+fn adjacency<E: ExternalId>(
+    graph: &GraphDefinition,
+    id_map: &IdMap<E>,
+    relations: &mut RelationDictionary,
+    source: &mut impl SourceReader<E>,
+    memory_budget: u64,
+) -> Result<(GraphCsr, u64), BuildError> {
+    let implicit = match graph.has_relations {
+        true => None,
+        false => Some(relations.intern(IMPLICIT_RELATION)?),
+    };
+    let intake = match graph.directed {
+        true => EdgeIntake::directed(id_map, graph.weighted),
+        false => EdgeIntake::undirected(id_map, graph.weighted),
+    };
+    let mut collector = EdgeCollector { graph, implicit, relations, intake, incomplete_rows: 0 };
+    source.edges(&mut collector)?;
+    let EdgeCollector { intake, incomplete_rows, relations, .. } = collector;
+    let (edges, dropped_endpoints) = intake.finish();
+    let csr = GraphCsr::build_within(
+        edges,
+        relations.len(),
+        id_map.id_space(),
+        graph.build_reverse,
+        memory_budget,
+    )?;
+    Ok((csr, dropped_endpoints + incomplete_rows))
+}
+
+/// The edge sink of a build: remaps rows through the edge intake.
+struct EdgeCollector<'b, 'm, E> {
+    graph: &'b GraphDefinition,
+    /// The one relation of a graph without relations.
+    implicit: Option<RelationIndex>,
+    relations: &'b mut RelationDictionary,
+    intake: EdgeIntake<'m, E>,
+    /// Rows dropped for a NULL relation or weight.
+    incomplete_rows: u64,
+}
+
+impl<E: ExternalId> EdgeSink<E> for EdgeCollector<'_, '_, E> {
+    /// Reserves the edge list for `rows` up front, so that it is not grown
+    /// geometrically past its final size. A reservation that fails (an
+    /// overestimate) is ignored: the list then grows as rows arrive.
+    fn expect_rows(&mut self, rows: u64) {
+        if let Ok(rows) = usize::try_from(rows) {
+            let _ = self.intake.reserve(rows);
+        }
+    }
+
+    fn row(&mut self, row: EdgeRow<'_, E>) -> Result<(), BuildError> {
+        let Some((relation, weight)) =
+            relation_and_weight(self.graph, self.implicit, self.relations, &row)?
+        else {
+            self.incomplete_rows += 1;
+            return Ok(());
+        };
+        Ok(self.intake.push(relation, row.source.as_ref(), row.target.as_ref(), weight)?)
+    }
+}
+
+/// The relation and weight of an edge row, or `None` if a field the graph
+/// needs is NULL.
+fn relation_and_weight<E>(
+    graph: &GraphDefinition,
+    implicit: Option<RelationIndex>,
+    relations: &mut RelationDictionary,
+    row: &EdgeRow<'_, E>,
+) -> Result<Option<(RelationIndex, f64)>, BuildError> {
+    let relation = match (implicit, row.relation) {
+        (Some(relation), _) => relation,
+        (None, Some(name)) => relations.intern(name)?,
+        (None, None) => return Ok(None),
+    };
+    let weight = match (graph.weighted, row.weight) {
+        (false, _) => 1.0,
+        (true, Some(weight)) => weight,
+        (true, None) => return Ok(None),
+    };
+    Ok(Some((relation, weight)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::build::source::tests::{MemorySource, OwnedEdgeRow};
+    use crate::build::version::tests::MemoryCatalog;
+    use crate::catalog::GraphDefinition;
+    use crate::catalog::VersionId;
+    use crate::segment::{read_segment, MemorySegmentStore};
+    use pgrx::pg_sys;
+    use warren_core::graph::{
+        AnyCsr, EdgeIntake, GraphCsr, GraphError, IdMap, RelationDictionary, Tombstones,
+    };
+
+    fn graph() -> GraphDefinition {
+        GraphDefinition {
+            graph_id: 1,
+            name: "g".to_owned(),
+            owner: pg_sys::Oid::INVALID,
+            readers: Vec::new(),
+            id_type: crate::source::IdType::Int8,
+            node_query: String::new(),
+            edge_query: String::new(),
+            search_path: String::new(),
+            directed: true,
+            weighted: false,
+            has_relations: false,
+            build_reverse: true,
+            retain_versions: 2,
+            current_version: None,
+        }
+    }
+
+    fn edge(source: i64, target: i64) -> OwnedEdgeRow {
+        (Some(source), Some(target), None, None)
+    }
+
+    fn typed_edge(source: i64, target: i64, relation: &str, weight: f64) -> OwnedEdgeRow {
+        (Some(source), Some(target), Some(relation.to_owned()), Some(weight))
+    }
+
+    /// A graph, its segment store and its catalog of versions.
+    #[derive(Default)]
+    struct World {
+        store: MemorySegmentStore,
+        catalog: MemoryCatalog,
+        memory_budget: Option<u64>,
+    }
+
+    impl World {
+        fn refresh(
+            &mut self,
+            graph: &GraphDefinition,
+            source: &MemorySource,
+            promote: bool,
+        ) -> VersionId {
+            let request = RefreshRequest {
+                promote,
+                label: Some("l"),
+                chunk_size: 16,
+                memory_budget: self.memory_budget.unwrap_or(u64::MAX),
+            };
+            let graph =
+                GraphDefinition { current_version: self.catalog.current_version, ..graph.clone() };
+            self.try_refresh(&graph, &request, source).unwrap()
+        }
+
+        fn try_refresh(
+            &mut self,
+            graph: &GraphDefinition,
+            request: &RefreshRequest<'_>,
+            source: &MemorySource,
+        ) -> Result<VersionId, BuildError> {
+            build(graph, request, &mut source.clone(), &mut self.store, &mut self.catalog)
+        }
+
+        fn segment(&mut self, version: VersionId, name: &str) -> Vec<u8> {
+            read_segment(&mut self.store, version, name).unwrap()
+        }
+
+        fn has_segment(&mut self, version: VersionId, name: &str) -> bool {
+            read_segment(&mut self.store, version, name).is_ok()
+        }
+
+        fn id_map(&mut self, version: VersionId) -> IdMap<i64> {
+            let tombstones = Tombstones::decode(&self.segment(version, "tombstones")).unwrap();
+            IdMap::decode(&self.segment(version, "id_map"), tombstones).unwrap()
+        }
+
+        fn relations(&mut self, version: VersionId) -> RelationDictionary {
+            RelationDictionary::decode(&self.segment(version, "rel_dict")).unwrap()
+        }
+
+        /// The CSR stored under `prefix` (`""` or `"rev_"`) and `scope`.
+        fn csr(&mut self, version: VersionId, prefix: &str, scope: &str) -> AnyCsr {
+            let id_space = self.catalog.version(version).stats.id_space;
+            let offsets = self.segment(version, &format!("{prefix}offsets:{scope}"));
+            let targets = self.segment(version, &format!("{prefix}targets:{scope}"));
+            let weights_name = format!("{prefix}weights:{scope}");
+            let weights = self
+                .has_segment(version, &weights_name)
+                .then(|| self.segment(version, &weights_name));
+            AnyCsr::decode(id_space, &offsets, &targets, weights.as_deref()).unwrap()
+        }
+
+        fn stored_bytes(&self, version: VersionId) -> u64 {
+            self.store
+                .chunks
+                .iter()
+                .filter(|((v, _, _), _)| *v == version)
+                .map(|(_, data)| data.len() as u64)
+                .sum()
+        }
+    }
+
+    fn neighbours(csr: &AnyCsr, id_map: &IdMap<i64>, external: i64) -> Vec<i64> {
+        let dense = id_map.dense_id(&external).unwrap();
+        csr.neighbours(dense).map(|d| id_map.external_id(d).unwrap()).collect()
+    }
+
+    #[test]
+    fn a_first_build_records_a_promoted_version_with_its_stats() {
+        let mut world = World::default();
+        let source = MemorySource {
+            nodes: vec![4, 1, 3, 2, 3],
+            edges: vec![
+                edge(1, 2),
+                edge(2, 3),
+                edge(2, 3),
+                edge(3, 99),
+                (None, Some(1), None, None),
+            ],
+            ..MemorySource::default()
+        };
+        let version = world.refresh(&graph(), &source, true);
+        let row = world.catalog.version(version).clone();
+        assert_eq!(
+            row.stats,
+            VersionStats {
+                node_count: 4,
+                id_space: 4,
+                edge_count: 2,
+                dropped_edges: 2,
+                deduplicated_edges: 1,
+                target_width: 4,
+            }
+        );
+        assert_eq!(row.graph_id, 1);
+        assert_eq!(row.label.as_deref(), Some("l"));
+        assert!(!row.staged);
+        assert_eq!(world.catalog.current_version, Some(version));
+        assert_eq!(row.bytes, world.stored_bytes(version));
+    }
+
+    #[test]
+    fn a_staged_build_leaves_the_current_version_alone() {
+        let mut world = World::default();
+        let source = MemorySource { nodes: vec![1], ..MemorySource::default() };
+        let first = world.refresh(&graph(), &source, true);
+        let staged = world.refresh(&graph(), &source, false);
+        assert!(world.catalog.version(staged).staged);
+        assert_eq!(world.catalog.current_version, Some(first));
+    }
+
+    #[test]
+    fn segments_span_several_chunks_and_decode_to_the_graph_built_directly() {
+        let mut world = World::default();
+        let nodes: Vec<i64> = (0..40).map(|n| n * 10).collect();
+        let edges: Vec<(i64, i64)> = (0..40).map(|n| (n * 10, (n * 70) % 400)).collect();
+        let source = MemorySource {
+            nodes: nodes.clone(),
+            edges: edges.iter().map(|&(s, t)| edge(s, t)).collect(),
+            ..MemorySource::default()
+        };
+        let version = world.refresh(&graph(), &source, true);
+        assert!(world.store.chunks.contains_key(&(version, "id_map".to_owned(), 2)));
+
+        let id_map = IdMap::new().rebuild(nodes).unwrap();
+        let mut relations = RelationDictionary::new();
+        let relation = relations.intern("").unwrap();
+        let mut intake = EdgeIntake::directed(&id_map, false);
+        for (s, t) in &edges {
+            intake.push(relation, Some(s), Some(t), 1.0).unwrap();
+        }
+        let expected = GraphCsr::build(intake.finish().0, 1, id_map.id_space(), true).unwrap();
+
+        assert_eq!(world.id_map(version), id_map);
+        assert_eq!(world.relations(version), relations);
+        let only = &expected.relations()[0];
+        assert_eq!(&world.csr(version, "", "0"), only.forward());
+        assert_eq!(Some(&world.csr(version, "rev_", "0")), only.reverse());
+        assert!(!world.has_segment(version, "offsets:merged"));
+    }
+
+    #[test]
+    fn dense_ids_are_stable_across_builds() {
+        let mut world = World::default();
+        let first = MemorySource {
+            nodes: vec![10, 20, 30],
+            edges: vec![edge(10, 20), edge(20, 30)],
+            ..MemorySource::default()
+        };
+        let v1 = world.refresh(&graph(), &first, true);
+        let second = MemorySource {
+            nodes: vec![5, 10, 30, 40],
+            edges: vec![edge(10, 20), edge(10, 30), edge(40, 5)],
+            ..MemorySource::default()
+        };
+        let v2 = world.refresh(&graph(), &second, true);
+
+        let (before, after) = (world.id_map(v1), world.id_map(v2));
+        for survivor in [10, 30] {
+            assert_eq!(after.dense_id(&survivor), before.dense_id(&survivor));
+        }
+        assert_eq!(after.dense_id(&20), None);
+        assert!(after.tombstones().contains(1));
+        assert_eq!(after.external_id(1), Some(20));
+        assert_eq!(after.dense_id(&5), Some(3));
+        assert_eq!(after.dense_id(&40), Some(4));
+
+        let stats = world.catalog.version(v2).stats;
+        assert_eq!((stats.node_count, stats.id_space, stats.edge_count), (4, 5, 2));
+        assert_eq!(stats.dropped_edges, 1, "the edge to the tombstoned node is dropped");
+        let forward = world.csr(v2, "", "0");
+        assert_eq!(neighbours(&forward, &after, 10), [30]);
+        assert_eq!(neighbours(&forward, &after, 40), [5]);
+        assert_eq!(forward.degree(1), 0, "a tombstoned node's row is empty");
+    }
+
+    #[test]
+    fn a_build_starts_from_the_current_version_not_a_staged_one() {
+        let mut world = World::default();
+        let v1 = world.refresh(
+            &graph(),
+            &MemorySource { nodes: vec![10], ..MemorySource::default() },
+            true,
+        );
+        world.refresh(
+            &graph(),
+            &MemorySource { nodes: vec![30], ..MemorySource::default() },
+            false,
+        );
+        let v3 = world.refresh(
+            &graph(),
+            &MemorySource { nodes: vec![10, 20], ..MemorySource::default() },
+            true,
+        );
+        assert_eq!(world.id_map(v1).dense_id(&10), Some(0));
+        assert_eq!(world.id_map(v3).dense_id(&20), Some(1));
+        assert_eq!(world.catalog.version(v3).stats.id_space, 2);
+    }
+
+    #[test]
+    fn relations_get_a_csr_each_plus_the_merged_csr_with_weights() {
+        let mut world = World::default();
+        let graph = GraphDefinition { weighted: true, has_relations: true, ..graph() };
+        let source = MemorySource {
+            nodes: vec![1, 2, 3],
+            edges: vec![
+                typed_edge(1, 2, "b", 1.5),
+                typed_edge(1, 2, "a", 2.0),
+                typed_edge(1, 3, "a", 1.0),
+                typed_edge(1, 3, "a", 4.0),
+                (Some(2), Some(3), None, Some(1.0)),
+                (Some(2), Some(3), Some("a".to_owned()), None),
+            ],
+            ..MemorySource::default()
+        };
+        let version = world.refresh(&graph, &source, true);
+        let stats = world.catalog.version(version).stats;
+        assert_eq!((stats.edge_count, stats.dropped_edges, stats.deduplicated_edges), (3, 2, 1));
+        assert_eq!(world.relations(version).names(), ["b", "a"]);
+
+        let id_map = world.id_map(version);
+        let a = world.csr(version, "", "1");
+        assert_eq!(neighbours(&a, &id_map, 1), [2, 3]);
+        assert_eq!(a.neighbour_weights(0), Some(&[2.0, 5.0][..]));
+        let merged = world.csr(version, "", "merged");
+        assert_eq!(merged.neighbour_weights(0), Some(&[3.5, 5.0][..]));
+        let reverse_b = world.csr(version, "rev_", "0");
+        assert_eq!(neighbours(&reverse_b, &id_map, 2), [1]);
+        assert!(world.has_segment(version, "rev_weights:merged"));
+    }
+
+    #[test]
+    fn a_later_build_keeps_the_relation_indexes() {
+        let mut world = World::default();
+        let graph = GraphDefinition { has_relations: true, ..graph() };
+        let row = |relation: &str| typed_edge(1, 2, relation, 0.0);
+        world.refresh(
+            &graph,
+            &MemorySource {
+                nodes: vec![1, 2],
+                edges: vec![row("b"), row("a")],
+                ..MemorySource::default()
+            },
+            true,
+        );
+        let v2 = world.refresh(
+            &graph,
+            &MemorySource {
+                nodes: vec![1, 2],
+                edges: vec![row("c"), row("a")],
+                ..MemorySource::default()
+            },
+            true,
+        );
+        assert_eq!(world.relations(v2).names(), ["b", "a", "c"]);
+        assert_eq!(world.csr(v2, "", "0").edge_count(), 0);
+    }
+
+    #[test]
+    fn undirected_edges_are_stored_in_both_directions_without_reverse_segments() {
+        let mut world = World::default();
+        let graph = GraphDefinition { directed: false, build_reverse: false, ..graph() };
+        let source = MemorySource {
+            nodes: vec![1, 2],
+            edges: vec![edge(1, 2), edge(2, 2)],
+            ..MemorySource::default()
+        };
+        let version = world.refresh(&graph, &source, true);
+        let id_map = world.id_map(version);
+        let forward = world.csr(version, "", "0");
+        assert_eq!(neighbours(&forward, &id_map, 1), [2]);
+        assert_eq!(neighbours(&forward, &id_map, 2), [1, 2]);
+        assert_eq!(world.catalog.version(version).stats.edge_count, 3);
+        assert!(!world.has_segment(version, "rev_offsets:0"));
+    }
+
+    #[test]
+    fn a_graph_with_relations_but_no_edges_stores_only_the_merged_csr() {
+        let mut world = World::default();
+        let graph = GraphDefinition { has_relations: true, ..graph() };
+        let version = world.refresh(
+            &graph,
+            &MemorySource { nodes: vec![1], ..MemorySource::default() },
+            true,
+        );
+        assert!(world.relations(version).is_empty());
+        assert_eq!(world.csr(version, "", "merged").id_space(), 1);
+    }
+
+    #[test]
+    fn a_build_whose_offsets_exceed_the_memory_budget_is_refused() {
+        let mut world = World { memory_budget: Some(64), ..World::default() };
+        let source = MemorySource { nodes: (0..10).collect(), ..MemorySource::default() };
+        let request =
+            RefreshRequest { promote: true, label: None, chunk_size: 16, memory_budget: 64 };
+        let refused = world.try_refresh(&graph(), &request, &source);
+        assert!(matches!(
+            refused,
+            Err(BuildError::Graph(GraphError::OffsetsOverBudget { required: 176, budget: 64 }))
+        ));
+        assert!(world.catalog.versions.is_empty());
+        assert!(world.store.chunks.is_empty());
+    }
+
+    #[test]
+    fn a_wildly_wrong_row_estimate_does_not_fail_the_build() {
+        let mut world = World::default();
+        for estimate in [0, u64::MAX] {
+            let source = MemorySource {
+                nodes: vec![1, 2],
+                edges: vec![edge(1, 2)],
+                estimated_rows: Some(estimate),
+            };
+            let version = world.refresh(&graph(), &source, true);
+            assert_eq!(world.catalog.version(version).stats.edge_count, 1);
+        }
+    }
+}

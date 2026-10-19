@@ -99,7 +99,8 @@ pub trait Combine: Message + Sized {
     ) -> Result<Self::View<'a>, ComputeError>;
 
     /// Appends the concatenation of `parts` to `storage` as one message,
-    /// unless there are no parts, calling `charge` with its size first;
+    /// unless there are no parts, calling `charge` first with the capacity
+    /// it reserves;
     /// returns whether there were any parts.
     fn concat<'a>(
         storage: &mut Self::Storage,
@@ -149,7 +150,7 @@ impl Combine for Bytes {
         if count == 0 {
             return Ok(false);
         }
-        let size = Bytes::size(&[]) + len as u64;
+        let size = storage.concatenation_growth(len);
         charge(size)?;
         storage
             .push_concatenation(parts, len)

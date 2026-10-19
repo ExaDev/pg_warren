@@ -1,3 +1,33 @@
-//! SQL bindings for compute: vectors, `spmv`, `vector_map`, `gather`, `eigen`,
-//! `distance` (DESIGN.md §6, §8). Delegates kernels to `warren_core::compute`
-//! and `warren_core::spectral`. Arrives in M4–M6.
+//! SQL bindings for compute (DESIGN.md §6.2, §6.3, §6.9): named vectors
+//! (`vector_from_query`, `vector_const`, `vector_degree`,
+//! `vector_dense_id`, `vector_values`, `matrix_rows`, `vector_topk`,
+//! `vector_stats`, `id_map`, `drop_vector`), semiring products (`spmv`,
+//! `spmm`), `vector_map` with `explain_map`, `vector_reduce` and
+//! `vector_norm_diff`, and the compute GUCs.
+//!
+//! Each call opens a version through `cache` (reader check, current version
+//! re-read), reads and writes the vectors bound to it through `vector`,
+//! and runs `warren_core::compute` kernels on the compute pool with a
+//! main-thread interrupt poll, within a fresh `warren.max_compute_memory`
+//! budget. Depends on `access`, `cache`, `catalog`, `interrupts`, `vector`,
+//! `source` and the id and argument helpers of `traversal_sql`; nothing
+//! depends on it.
+
+mod constructors;
+mod drop;
+mod error;
+mod from_query;
+#[cfg(any(test, feature = "pg_test"))]
+mod limits;
+mod map;
+#[cfg(any(test, feature = "pg_test"))]
+mod oracle;
+mod product;
+mod read;
+mod reduce;
+mod settings;
+mod summary;
+mod vectors;
+
+pub(crate) use error::{entry, ComputeSqlError};
+pub(crate) use settings::define_compute_settings;

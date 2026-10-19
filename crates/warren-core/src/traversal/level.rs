@@ -20,18 +20,17 @@ pub(crate) enum Admission {
     Stop,
 }
 
-/// A level-synchronous search over one adjacency.
-pub(crate) struct LevelSearch<'a, 'g> {
+/// What a search follows: an adjacency, and the node filter that admits
+/// the nodes it reaches.
+#[derive(Clone, Copy)]
+pub(crate) struct Edges<'a, 'g> {
     adjacency: &'a Adjacency<'g>,
     filter: Option<&'a NodeSet>,
-    visited: Visited,
-    frontier: Vec<DenseId>,
-    next: Vec<DenseId>,
-    depth: u32,
 }
 
-impl<'a, 'g> LevelSearch<'a, 'g> {
-    /// A search that admits only nodes in `filter`, if given.
+impl<'a, 'g> Edges<'a, 'g> {
+    /// `adjacency`, admitting only nodes in `filter` if given, which must
+    /// cover the adjacency's id space.
     pub(crate) fn new(
         adjacency: &'a Adjacency<'g>,
         filter: Option<&'a NodeSet>,
@@ -44,14 +43,24 @@ impl<'a, 'g> LevelSearch<'a, 'g> {
                 });
             }
         }
-        Ok(Self {
-            adjacency,
-            filter,
-            visited: Visited::new(adjacency.id_space()),
-            frontier: Vec::new(),
-            next: Vec::new(),
-            depth: 0,
-        })
+        Ok(Self { adjacency, filter })
+    }
+}
+
+/// A level-synchronous search. It owns its frontiers and visited set but
+/// not the edges it follows, which each call passes in (always the same
+/// ones), so a caller can suspend it between levels.
+pub(crate) struct LevelSearch {
+    visited: Visited,
+    frontier: Vec<DenseId>,
+    next: Vec<DenseId>,
+    depth: u32,
+}
+
+impl LevelSearch {
+    /// A search over `id_space` dense ids that has visited nothing.
+    pub(crate) fn new(id_space: u64) -> Self {
+        Self { visited: Visited::new(id_space), frontier: Vec::new(), next: Vec::new(), depth: 0 }
     }
 
     /// Seeds the search with `starts`, then expands it level by level
@@ -59,31 +68,36 @@ impl<'a, 'g> LevelSearch<'a, 'g> {
     /// `max_depth` (unbounded if `None`).
     pub(crate) fn run(
         &mut self,
+        edges: Edges<'_, '_>,
         starts: &[DenseId],
         max_depth: Option<u32>,
         progress: &mut Progress<'_>,
         admit: &mut impl FnMut(Visit) -> Result<Admission, TraversalError>,
     ) -> Result<(), TraversalError> {
-        let mut flow = self.seed(starts, progress, admit)?;
-        while flow.is_continue()
-            && !self.frontier.is_empty()
-            && max_depth.is_none_or(|max_depth| self.depth < max_depth)
-        {
-            flow = self.expand(progress, admit)?;
+        let mut flow = self.seed(edges, starts, progress, admit)?;
+        while flow.is_continue() && !self.exhausted(max_depth) {
+            flow = self.expand(edges, progress, admit)?;
         }
         Ok(())
+    }
+
+    /// Whether there is no level left to expand: the frontier is empty or
+    /// at `max_depth`.
+    pub(crate) fn exhausted(&self, max_depth: Option<u32>) -> bool {
+        self.frontier.is_empty() || max_depth.is_some_and(|max_depth| self.depth >= max_depth)
     }
 
     /// Admits `starts` at depth 0 as the first frontier, dropping repeats.
     /// Starts are always admitted: the node filter applies to the nodes a
     /// search reaches, not to where it begins.
-    fn seed(
+    pub(crate) fn seed(
         &mut self,
+        edges: Edges<'_, '_>,
         starts: &[DenseId],
         progress: &mut Progress<'_>,
         admit: &mut impl FnMut(Visit) -> Result<Admission, TraversalError>,
     ) -> Result<ControlFlow<()>, TraversalError> {
-        if let Some(&node) = starts.iter().find(|&&node| node >= self.adjacency.id_space()) {
+        if let Some(&node) = starts.iter().find(|&&node| node >= edges.adjacency.id_space()) {
             return Err(TraversalError::NodeOutsideIdSpace { node });
         }
         for &node in starts {
@@ -98,17 +112,18 @@ impl<'a, 'g> LevelSearch<'a, 'g> {
     }
 
     /// Expands the current frontier by one level.
-    fn expand(
+    pub(crate) fn expand(
         &mut self,
+        edges: Edges<'_, '_>,
         progress: &mut Progress<'_>,
         admit: &mut impl FnMut(Visit) -> Result<Admission, TraversalError>,
     ) -> Result<ControlFlow<()>, TraversalError> {
         let depth = self.depth + 1;
         let frontier = std::mem::take(&mut self.frontier);
         for &via in &frontier {
-            for node in self.adjacency.row_entries(via) {
+            for node in edges.adjacency.row_entries(via) {
                 progress.edge_traversed()?;
-                if self.visited.contains(node) || self.filter.is_some_and(|f| !f.contains(node)) {
+                if self.visited.contains(node) || edges.filter.is_some_and(|f| !f.contains(node)) {
                     continue;
                 }
                 let visit = Visit { node, depth, via: Some(via) };

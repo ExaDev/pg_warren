@@ -18,8 +18,14 @@ runs:
         sudo apt-get update -qq
         sudo apt-get install -y -qq postgresql-common
         sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+        # From PG 18, PGDG ships the LLVM JIT provider (llvmjit.so) as its own
+        # package, only recommended by postgresql-NN; earlier majors bundle it.
+        # pg_warren's vector_map tests exercise JIT, so install it explicitly.
+        jit=()
+        if [ "$PG_MAJOR" -ge 18 ]; then jit=("postgresql-${PG_MAJOR}-jit"); fi
         sudo apt-get install -y -qq --no-install-recommends \
-          "postgresql-${PG_MAJOR}" "postgresql-server-dev-${PG_MAJOR}" libclang-dev clang
+          "postgresql-${PG_MAJOR}" "${jit[@]}" "postgresql-server-dev-${PG_MAJOR}" libclang-dev clang
+        test -f "$("/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config" --pkglibdir)/llvmjit.so"
         PG_CONFIG="/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config"
         "$PG_CONFIG" --version
         echo "PG_CONFIG=$PG_CONFIG" >> "$GITHUB_ENV"

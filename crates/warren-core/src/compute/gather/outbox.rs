@@ -5,7 +5,7 @@
 use std::ops::Range;
 
 use super::Messages;
-use crate::compute::{ComputeError, ComputeMemory, MemoryCharge, Message};
+use crate::compute::{ComputeError, ComputeMemory, MemoryCharge, Message, MessageBuffer};
 use crate::graph::DenseId;
 use crate::interrupts::{Cancellation, Cancelled};
 
@@ -18,8 +18,8 @@ pub(super) struct Outbox<M: Message> {
     /// `id_space + 1` positions into `messages`: sender `s`'s messages are
     /// `offsets[s]..offsets[s + 1]`.
     offsets: Vec<u64>,
-    messages: M::Storage,
-    _charges: [MemoryCharge; 2],
+    messages: MessageBuffer<M>,
+    _offsets: MemoryCharge,
 }
 
 impl<M: Message> Outbox<M> {
@@ -49,16 +49,14 @@ impl<M: Message> Outbox<M> {
             *offset -= 1;
             order[*offset as usize] = index;
         }
-        let messages_charge = memory.charge(messages.message_bytes())?;
-        let mut sorted = M::Storage::default();
+        let mut sorted = MessageBuffer::new(memory)?;
         for (position, &index) in order.iter().enumerate() {
             check(cancellation, position)?;
             if let Some(message) = messages.message(index) {
-                M::push(&mut sorted, message)
-                    .map_err(|_| ComputeError::OutOfMemory { bytes: messages_charge.bytes() })?;
+                sorted.push(message)?;
             }
         }
-        Ok(Self { offsets, messages: sorted, _charges: [offsets_charge, messages_charge] })
+        Ok(Self { offsets, messages: sorted, _offsets: offsets_charge })
     }
 
     /// The positions of `sender`'s messages.
@@ -74,7 +72,7 @@ impl<M: Message> Outbox<M> {
 
     /// `sender`'s messages, in push order.
     pub(super) fn of(&self, sender: DenseId) -> impl Iterator<Item = M::View<'_>> + Clone {
-        self.range(sender).filter_map(|index| M::get(&self.messages, index))
+        self.range(sender).filter_map(|index| self.messages.get(index))
     }
 }
 

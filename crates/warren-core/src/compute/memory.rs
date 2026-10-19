@@ -6,6 +6,7 @@ use std::mem::size_of;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use super::message::{growth, reserve};
 use super::ComputeError;
 
 /// A budget of compute memory in bytes. Clones share the budget.
@@ -112,12 +113,13 @@ impl MemoryCharge {
         Ok(())
     }
 
-    /// Room for one more element in `buffer`, charged first and reserved
-    /// with `try_reserve`; nothing is charged if either fails.
+    /// Room for one more element in `buffer`: the capacity it grows by is
+    /// charged first and then reserved exactly, so the charge follows the
+    /// reserved capacity; nothing is charged if either fails.
     pub(crate) fn reserve_one<T>(&mut self, buffer: &mut Vec<T>) -> Result<(), ComputeError> {
-        let bytes = size_of::<T>() as u64;
+        let bytes = growth(buffer, 1);
         self.grow(bytes)?;
-        buffer.try_reserve(1).map_err(|_| {
+        reserve(buffer, 1).map_err(|_| {
             self.shrink(bytes);
             ComputeError::OutOfMemory { bytes }
         })
@@ -171,12 +173,12 @@ impl Allowance {
         Ok(())
     }
 
-    /// Room for one more element in `buffer`, taken first and reserved
-    /// with `try_reserve`.
+    /// Room for one more element in `buffer`: the capacity it grows by is
+    /// taken first and then reserved exactly.
     pub(crate) fn reserve_one<T>(&mut self, buffer: &mut Vec<T>) -> Result<(), ComputeError> {
-        let bytes = size_of::<T>() as u64;
+        let bytes = growth(buffer, 1);
         self.take(bytes)?;
-        buffer.try_reserve(1).map_err(|_| {
+        reserve(buffer, 1).map_err(|_| {
             self.used -= bytes;
             ComputeError::OutOfMemory { bytes }
         })
@@ -246,8 +248,9 @@ mod tests {
         let mut charge = memory.charge(0).unwrap();
         let mut buffer = Vec::<u64>::new();
         charge.reserve_one(&mut buffer).unwrap();
-        assert!(buffer.capacity() >= 1);
-        assert_eq!(charge.bytes(), 8);
+        assert_eq!((buffer.capacity(), charge.bytes()), (1, 8));
+        buffer.push(0);
+        // Doubling to two elements would charge 8 more.
         assert!(matches!(charge.reserve_one(&mut buffer), Err(ComputeError::MemoryLimit { .. })));
         assert_eq!(memory.in_use(), 8);
     }
@@ -264,11 +267,14 @@ mod tests {
             allowance.reserve_one(&mut buffer).unwrap();
             buffer.push(0);
         }
-        assert_eq!((allowance.used(), memory.in_use()), (88, reserved));
+        // 8 bytes, then the buffer's capacity: 1, 2, 4, 8, then 16 elements.
+        let used = 8 + 16 * 8;
+        assert_eq!(buffer.capacity(), 16);
+        assert_eq!((allowance.used(), memory.in_use()), (used, reserved));
         allowance.settle();
-        assert_eq!((allowance.used(), memory.in_use()), (88, 88));
+        assert_eq!((allowance.used(), memory.in_use()), (used, used));
         allowance.take(1 << 16).unwrap();
-        assert_eq!(memory.in_use(), 88 + (1 << 16));
+        assert_eq!(memory.in_use(), used + (1 << 16));
         drop(allowance);
         assert_eq!(memory.in_use(), 0);
     }

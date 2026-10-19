@@ -159,6 +159,53 @@ jobs:
       - name: cargo pgrx test pg${{ matrix.pg }}
         working-directory: crates/pg_warren
         run: cargo pgrx test pg${{ matrix.pg }}
+      - name: Schema drift against sql/pg_warren--<version>.sql
+        if: matrix.pg == '16'
+        run: PG=pg16 sql/schema-drift.sh
+
+  harness:
+    # The out-of-crate harness (DESIGN.md §12): generator and harness pytest
+    # tests, the test/ SQL suite against an installed pg_warren, and one smoke
+    # run of the benchmark matrix.
+    name: Generators + SQL harness (PG 16)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: ./.github/actions/setup-postgres
+        with:
+          pg-major: "16"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: bench/requirements.txt
+      - run: pip install -r bench/requirements.txt
+      - name: pytest (generators, harness, oracle)
+        run: pytest
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: harness
+          cache-bin: "false"
+      - name: Cache cargo-pgrx ${{ env.PGRX_VERSION }}
+        id: cargo-pgrx-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-pgrx
+          key: cargo-pgrx-${{ env.PGRX_VERSION }}-${{ runner.os }}-${{ runner.arch }}-rust-${{ hashFiles('rust-toolchain.toml') }}
+      - name: Install cargo-pgrx
+        if: steps.cargo-pgrx-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-pgrx --version "$PGRX_VERSION" --locked
+      - name: Let the runner user install into the PG 16 tree
+        run: |
+          sudo chmod a+rwx "$("$PG_CONFIG" --pkglibdir)" "$("$PG_CONFIG" --sharedir)/extension"
+      - name: cargo pgrx init
+        run: cargo pgrx init --pg16 "$PG_CONFIG"
+      - name: SQL harness (test/run.py)
+        run: python test/run.py --pg-config "$PG_CONFIG"
+      - name: Benchmark matrix smoke run
+        run: bench/run.sh smoke --no-install --pg-config "$PG_CONFIG" --results bench/tmp
 
   docker:
     # Runs on every event; buildx's GHA cache keeps the toolchain and

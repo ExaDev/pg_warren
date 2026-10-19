@@ -1,8 +1,6 @@
 //! The messages `gather` fans out: a message per sending node, or several,
 //! for any subset of the graph's nodes.
 
-use std::mem::size_of;
-
 use crate::compute::{ComputeError, ComputeMemory, MemoryCharge, Message, MessageBuffer};
 use crate::graph::DenseId;
 
@@ -26,13 +24,12 @@ impl<M: Message> Messages<M> {
         })
     }
 
-    /// Appends `message` from `sender`, charging both first.
+    /// Appends `message` from `sender`, charging the capacity reserved for
+    /// each first. A failed push keeps no message; capacity it reserved
+    /// stays charged.
     pub fn push(&mut self, sender: DenseId, message: M::View<'_>) -> Result<(), ComputeError> {
         self.charge.reserve_one(&mut self.senders)?;
-        if let Err(error) = self.buffer.push(message) {
-            self.charge.shrink(size_of::<DenseId>() as u64);
-            return Err(error);
-        }
+        self.buffer.push(message)?;
         self.senders.push(sender);
         Ok(())
     }
@@ -62,11 +59,6 @@ impl<M: Message> Messages<M> {
         self.buffer.get(index)
     }
 
-    /// The bytes charged for the messages alone.
-    pub(super) fn message_bytes(&self) -> u64 {
-        self.buffer.bytes()
-    }
-
     /// The bytes charged for the messages and their senders.
     pub fn bytes(&self) -> u64 {
         self.charge.bytes() + self.buffer.bytes()
@@ -88,8 +80,9 @@ mod tests {
         messages.push(4, b"c").unwrap();
         assert_eq!(messages.len(), 3);
         assert_eq!(messages.iter().collect::<Vec<_>>(), [(4, &b"ab"[..]), (1, b""), (4, b"c")]);
-        // Each message costs its sender (8 bytes) and its buffer bytes.
-        assert_eq!(messages.bytes(), 3 * 8 + (2 + 8) + 8 + (1 + 8));
+        // The charge is the reserved capacity: 4 senders and 4 end offsets
+        // of 8 bytes, and 4 bytes (2, then doubled).
+        assert_eq!(messages.bytes(), 4 * 8 + 4 * 8 + 4);
         assert_eq!(memory.in_use(), messages.bytes());
         drop(messages);
         assert_eq!(memory.in_use(), 0);
@@ -108,6 +101,7 @@ mod tests {
         let mut messages = Messages::<f64>::new(&memory).unwrap();
         messages.push(0, 1.0).unwrap();
         assert!(messages.push(1, 2.0).is_err());
-        assert_eq!((messages.len(), memory.in_use()), (1, 16));
+        // The senders' second slot stays reserved, and charged.
+        assert_eq!((messages.len(), memory.in_use()), (1, 24));
     }
 }

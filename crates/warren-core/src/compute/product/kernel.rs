@@ -43,7 +43,7 @@ impl<E: SemiringElement, const ADD: usize, const MULTIPLY: usize> Ops<E> for Fix
             BinaryOp::Second | BinaryOp::Pair => E::default(),
             _ => E::from_weight(weight)?,
         };
-        E::apply(multiply, weight, value)
+        E::multiply(BinaryOp::ALL[ADD], multiply, weight, value)
     }
 }
 

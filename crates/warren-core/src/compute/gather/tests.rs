@@ -262,8 +262,9 @@ fn the_result_is_charged_and_the_scratch_released() {
         let gathered =
             super::gather(workers(), &memory, &mut Uninterrupted, &graph, &gather, &messages)
                 .unwrap();
-        // Three receivers and their ends, and eight collected f64s.
-        assert_eq!(gathered.bytes(), 3 * 8 + 3 * 8 + 8 * 8);
+        // The reserved capacity: four receivers and ends (for three), and
+        // eight collected f64s.
+        assert_eq!(gathered.bytes(), 4 * 8 + 4 * 8 + 8 * 8);
         assert_eq!(memory.in_use(), messages.bytes() + gathered.bytes());
         assert_eq!((gathered.len(), gathered.combiner()), (3, Combiner::Collect));
     }

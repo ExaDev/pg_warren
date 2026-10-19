@@ -35,5 +35,13 @@ harness = false
 name = "traversal"
 harness = false
 
+[[bench]]
+name = "version_diff"
+harness = false
+
+[[bench]]
+name = "walk"
+harness = false
+
 [lints]
 workspace = true

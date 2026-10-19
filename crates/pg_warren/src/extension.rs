@@ -8,15 +8,33 @@
 
 use pgrx::prelude::*;
 
+use crate::access::{entry, AccessError};
+use warren_core::graph::GraphError;
+
 /// The `warren` SQL schema. Intentionally empty: it exists so pgrx creates
 /// the schema; functions live in their feature modules.
 #[pg_schema]
 mod warren {}
 
+/// The SQLSTATE of a graph error: out of memory, over the build memory
+/// budget, a size limit, or (when decoding) corrupt data.
+pub(crate) fn graph_sqlstate(error: &GraphError) -> PgSqlErrorCode {
+    match error {
+        GraphError::OutOfMemory { .. } => PgSqlErrorCode::ERRCODE_OUT_OF_MEMORY,
+        GraphError::OffsetsOverBudget { .. } => {
+            PgSqlErrorCode::ERRCODE_CONFIGURATION_LIMIT_EXCEEDED
+        }
+        GraphError::TooManyRelations
+        | GraphError::IdSpaceTooLarge
+        | GraphError::RelationNameTooLong => PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+        _ => PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+    }
+}
+
 /// `warren.version()`: the version of the installed extension library.
 #[pg_extern(schema = "warren", stable, parallel_safe)]
 pub fn version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
+    entry(|_| Ok::<_, AccessError>(env!("CARGO_PKG_VERSION")))
 }
 
 #[cfg(any(test, feature = "pg_test"))]
@@ -73,7 +91,14 @@ mod tests {
 
     #[pg_test]
     fn drop_extension_drops_warren_schema() -> Result<(), Error> {
-        Spi::run("DROP EXTENSION pg_warren CASCADE")?;
+        // Other tests run concurrently and lock the catalog tables in this
+        // order; DROP EXTENSION would take them in its own order and could
+        // deadlock with them, so take them first, in theirs.
+        Spi::run(
+            "LOCK TABLE warren.graphs, warren.versions, warren.segments, warren.vectors,
+                        warren.vector_chunks IN ACCESS EXCLUSIVE MODE;
+             DROP EXTENSION pg_warren CASCADE",
+        )?;
         let exists = Spi::get_one::<bool>(
             "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'warren')",
         )?;
