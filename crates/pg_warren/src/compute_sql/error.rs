@@ -43,6 +43,18 @@ pub(crate) enum ComputeSqlError {
          smallint, numeric or boolean, not {0}"
     )]
     MapType(String),
+    /// `vector_from_query`'s id column does not cast implicitly to the
+    /// graph's id type.
+    #[error(
+        "query column 1 (id) is of type {found}, which does not cast implicitly to the graph's \
+         id type {id_type}"
+    )]
+    IdColumnType {
+        /// The column's type.
+        found: String,
+        /// The graph's id type.
+        id_type: String,
+    },
     /// A vector name must not be empty.
     #[error("a vector name must not be empty")]
     EmptyName,
@@ -90,6 +102,7 @@ impl SqlError for ComputeSqlError {
             Self::NullArgument(_) => PgSqlErrorCode::ERRCODE_NULL_VALUE_NOT_ALLOWED,
             Self::VectorNotFound { .. } => PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT,
             Self::DuplicateNode(_) => PgSqlErrorCode::ERRCODE_CARDINALITY_VIOLATION,
+            Self::IdColumnType { .. } => PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
             Self::MapSyntax(_) => PgSqlErrorCode::ERRCODE_SYNTAX_ERROR,
             Self::MapUnsupported(_) => PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
             Self::MapType(_) => PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,

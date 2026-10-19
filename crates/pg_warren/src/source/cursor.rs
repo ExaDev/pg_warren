@@ -91,6 +91,35 @@ where
     Ok(ReadOnlyCursor { cursor: client.find_cursor(&cursor_name)?, columns, estimated_rows })
 }
 
+/// The result column types of `query`, from parse analysis alone: it is
+/// prepared (parsed, analysed and rewritten) but neither planned nor
+/// executed. It must be one statement that returns rows as a SELECT does
+/// (a SELECT, VALUES or TABLE); whether it is read-only is checked when it
+/// is opened.
+pub(crate) fn describe<E>(name: &'static str, query: &str) -> Result<Vec<ColumnType>, E>
+where
+    E: From<SourceError>,
+{
+    let text = CString::new(query).map_err(|_| SourceError::NulByte { query: name })?;
+    // SAFETY: inside an SPI connection; `text` is NUL-terminated and
+    // outlives the call, which raises an ERROR on a bad query rather than
+    // return NULL. The plan's sources and their result descriptors live
+    // until SPI_freeplan, after the columns are copied out.
+    unsafe {
+        let plan = pg_sys::SPI_prepare(text.as_ptr(), 0, ptr::null_mut());
+        let sources =
+            PgList::<pg_sys::CachedPlanSource>::from_pg(pg_sys::SPI_plan_get_plan_sources(plan));
+        let columns = match (sources.len(), sources.head()) {
+            (1, Some(source)) if (*source).commandTag == pg_sys::CommandTag::CMDTAG_SELECT => {
+                Some(column_types((*source).resultDesc))
+            }
+            _ => None,
+        };
+        pg_sys::SPI_freeplan(plan);
+        Ok(columns.ok_or(SourceError::NotASelect { query: name })?)
+    }
+}
+
 /// The planner's estimate of the rows a plan returns: the top plan node's
 /// `plan_rows` (0 if there is none).
 ///
