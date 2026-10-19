@@ -1,0 +1,23 @@
+pg_warren
+Copyright 2026 ExaDev
+
+This product is licensed under the Apache License, Version 2.0.
+
+Prior art consulted
+-------------------
+
+The following projects were read for design lessons before implementation
+began (see docs/prior-art-notes.md). No code from either project has been
+copied into pg_warren. Where a specific idea or technique is later adopted,
+it is credited here and in a source comment at the point of use.
+
+  * pgGraph — Copyright 2026 Evokoa Pte. Ltd., Apache License 2.0.
+    https://github.com/evokoa/pggraph (read at commit b0f53df, v1.2.1)
+    "pgGraph" and "Evokoa" are trademarks of Evokoa Pte. Ltd.; their mention
+    here does not imply endorsement.
+
+  * OneSparse — Copyright Michel Pelletier, Apache License 2.0.
+    https://github.com/OneSparse/OneSparse (read at commit 79a57cd, 1.0.x)
+    OneSparse binds SuiteSparse:GraphBLAS (Timothy A. Davis et al.); the
+    GraphBLAS operation, semiring, mask and accumulator vocabulary used in
+    pg_warren's API follows the GraphBLAS C API specification.
