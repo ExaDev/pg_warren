@@ -781,9 +781,9 @@ Post-v0.3: contraction/project/lift and Louvain (§6.6), DSM cache + compute wor
 1. **Polymorphism over `id_type`** in SQL: `anyelement` runtime dispatch vs. generated overloads. Lean: `anyelement`.
 2. **Persistent store**: chunked `bytea` only, or additionally a regenerable `$PGDATA/pg_warren/*.csr` file for mmap? Lean: `bytea` only; measure before adding. Evidence from pgGraph (`docs/prior-art-notes.md` §1.3–1.4) supports this. Its file artifacts are copied and fully validated on every load anyway, so they are not zero-copy. They needed MVCC catalog publication, per-database namespacing and interrupted-replacement recovery added after the fact, and they have no standby support. M2 measures cold load from `warren.segments`; revisit only if it falls below ~300 MB/s.
 3. **Chunk size** (4/8/32 MB). Measure.
-4. **Parallel-edge deduplication**: drop with count; if weighted, sum or keep-first? Lean: sum, counted in `versions.deduplicated_edges`. pgGraph keeps parallel edges only because it returns per-edge source-row identities, which pg_warren does not.
-5. **Self-loops**: keep. Lean: yes.
-6. **Undirected weighted**: duplicate weight both directions. Lean: yes.
+4. **Parallel-edge deduplication**: drop with count; if weighted, sum or keep-first? **Decided (M1): sum**, in input order, counted in `versions.deduplicated_edges`; unweighted duplicates are dropped with the same count. pgGraph keeps parallel edges only because it returns per-edge source-row identities, which pg_warren does not.
+5. **Self-loops**: keep. **Decided (M1): kept**; an undirected self-loop is stored once.
+6. **Undirected weighted**: duplicate weight both directions. **Decided (M1): yes**, both directions carry the same weight.
 7. **Default `max_depth`** on `reachable_set`: unbounded vs. cap. Lean: unbounded, documented.
 8. **Lanczos precision default**: f32 vectors/f64 accumulate vs. all f64. Lean: f32 by default with an option.
 9. **Native kernels vs. SuiteSparse:GraphBLAS** (§6.10). Lean: native for v1; revisit after M6.
