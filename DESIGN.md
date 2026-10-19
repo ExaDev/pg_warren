@@ -491,9 +491,13 @@ warren.eigen(graph text, k int,
              symmetrize bool DEFAULT true,      -- (A + Aᵀ)/2 for directed graphs; false → Arnoldi (v1.1)
              tol float8 DEFAULT 1e-8, max_iter int DEFAULT NULL,
              vectors_prefix text DEFAULT NULL,  -- store eigenvectors as <prefix>_1..k
-             version bigint DEFAULT NULL)
+             version bigint DEFAULT NULL,
+             dtype text DEFAULT 'f32',          -- f32 | f64: the Lanczos and eigenvector element type (§14 item 8)
+             persist bool DEFAULT true)         -- false: the eigenvectors are transient vectors
   RETURNS TABLE (i int, eigenvalue float8, residual float8);
 ```
+
+**Implemented (M6, `pg_warren::spectral_sql`)** with that signature. The precision argument is `dtype`, the stored vectors' element type, because `precision` is an SQL keyword. Eigenvectors are persisted by default (they are results, and `distance` reads them in later statements); `persist := false` keeps them as transient vectors of the session. Owners and readers may call it; replacing stored eigenvectors follows the vector rules of §7 (only their writer or the graph owner). The call runs within `warren.max_compute_memory` and polls interrupts like the compute functions.
 
 Only SpMV is needed from the graph; with full reorthogonalisation Lanczos keeps its whole basis, so its state is m vectors of length `id_space` (m the basis size below) plus an m² projected matrix. For N = 10⁷, k = 50 (m = 101) that is ~8 GB in f64 — use f32 Lanczos vectors by default with f64 accumulation, or cap k and document. Implement in `warren-core` directly (~300 lines with reorthogonalisation); use `faer` or `nalgebra` for the small dense tridiagonal eigenproblem. Do not pull in ARPACK bindings in v1. SVD of the (rectangular, directed) adjacency via Lanczos on AᵀA is a straightforward extension. Full spectra are out of scope; k ≤ a few hundred is the design envelope.
 
@@ -630,7 +634,19 @@ COMMIT;
 - `subspace` — principal angles / projection-Frobenius distance between the spans of the top-k eigenvectors; the most sensitive to structural reorganisation and the least sensitive to volume. Requires stable dense IDs (§5.2); refuses across a compaction boundary.
 - `embedding` — mean/max row-wise distance between two N×d matrices (e.g. neighbour-aggregated embeddings before and after), so embedding drift induced by structural change is measurable too.
 
-**Implemented (M6, `warren_core::spectral`; the SQL binding follows).** Each method returns a small struct of scalars, which the binding returns as `jsonb` (§14 item 11). Versions are aligned by dense id; past a version's id space everything is absent.
+```sql
+warren.distance(graph text, v1 bigint, v2 bigint, method text,  -- edit | degree | spectral | subspace | embedding
+                vectors_prefix text DEFAULT NULL, k int DEFAULT NULL,  -- spectral, subspace: <prefix>_1..k
+                x text DEFAULT NULL, y text DEFAULT NULL,      -- embedding: matrix x of v1, y (default x) of v2
+                compared_rows text DEFAULT 'shared',           -- subspace, embedding: shared | all
+                matrix text DEFAULT 'adjacency', which text DEFAULT 'largest', rels text[] DEFAULT NULL,
+                weighted bool DEFAULT NULL, symmetrize bool DEFAULT true, tol float8 DEFAULT 1e-8,
+                max_iter int DEFAULT NULL, dtype text DEFAULT 'f32',  -- spectral: the operator, and a fresh solve
+                graph2 text DEFAULT NULL)                      -- v2 is a version of graph2, aligned by external id
+  RETURNS jsonb;   -- {"method", "from", "to", ["graph2"], ...the method's scalars}
+```
+
+**Implemented (M6, `warren_core::spectral`, bound by `pg_warren::spectral_sql`).** Each method returns a small struct of scalars, which the binding returns as `jsonb` (§14 item 11); `edit` names each relation. Versions are aligned by dense id; past a version's id space everything is absent.
 
 - `edit_distance` → per relation (by relation index) and overall over (relation, source, target) triples: `added`, `removed`, `union`, and the Jaccard distance `(added + removed)/union`. Weights are ignored. The row-wise merge of the two forward CSRs is `warren.diff`'s (`EdgeDelta::between`), O(N + M).
 - `degree_distance` → `wasserstein` (W₁, in degrees) and `ks` between the distributions of distinct out-neighbour counts in the all-relations forward CSR, over live (not tombstoned) nodes; an empty version is a point mass at 0.
@@ -638,8 +654,10 @@ COMMIT;
 - `subspace_distance` → `projection` (`‖P_X − P_Y‖_F = √(k₁ + k₂ − 2Σcos²θ)`), `max_angle` and the principal `angles`, from one block-ordered Gram pass over both vector sets, Cholesky and an SVD of `L_X⁻¹XᵀY L_Y⁻ᵀ` (inputs need only be independent; cosines within 8Kε of 1 count as 1, so identical inputs give exactly 0).
 - `embedding_distance` → `mean_l2`, `max_l2`, `mean_cosine`, `max_cosine` (1 − cos, from normalised rows) and `rows` compared, skipping rows zero on both sides.
 - `subspace` and `embedding` take a `ComparedRows`: `All` reads every row with absent rows as zero (§7), so added and removed nodes count as change; `Shared` reads only nodes present (non-zero) on both sides. A.2 needs `Shared`: with `All`, added volume moves every eigenvector's mass onto the new rows and outweighs restructuring.
-- Cross-graph comparison: `align` moves a vector's rows by a dense-id mapping that the adapter builds by joining the two `id_map`s on external id; the binding then calls the same functions.
-- Small-instance A.2 check (unit test): 4 planted communities of 30, 48 nodes ingested; over shared nodes the subspace distance of the 4 smallest normalised-Laplacian eigenvectors is < 0.5 for *volume* and > 1 for *novel* and *bridge*, whose relative order depends on the sizes (it flips with communities of 40 and 64 ingested), so A.2's `novel < bridge` is checked at its own scale in the integration test.
+- `spectral` with `vectors_prefix` compares the Rayleigh quotients of the stored `<prefix>_1..k` under `matrix` (their eigenvalues, without solving again); without it, it solves `k` eigenpairs on each version.
+- `compared_rows` defaults to `shared`: A.2 compares structure, not volume, and over `all` the added nodes' rows dominate (§8 above).
+- Cross-graph comparison (`graph2`, the shadow-schema pattern): `version::align` renumbers the second version into the first's id space by external id (shared nodes keep the first graph's dense ids, the second's own nodes are appended in external-id order, relations match by name, its CSRs are rebuilt), and `spectral::align` moves its vectors' rows the same way; the same functions then run. Both graphs need the same `id_type`. Versions of one graph are refused across a compaction (as `diff` is); across graphs the external ids align them, so a compaction is no boundary there.
+- Small-instance A.2 check (unit test): 4 planted communities of 30, 48 nodes ingested; over shared nodes the subspace distance of the 4 smallest normalised-Laplacian eigenvectors is < 0.5 for *volume* and > 1 for *novel* and *bridge*, whose relative order depends on the sizes (it flips with communities of 40 and 64 ingested), so A.2's `novel < bridge` is checked at its own scale in the integration test. The harness test `test/sql/a2_spectral.sql` (6 communities of 40, 80 nodes and 1,600 edges ingested, k = 6, f64) measures volume 0.40, novel 1.27, bridge 1.43 and asserts volume < 0.5 and both others above twice volume; with 400 ingested edges the bridge barely merged its two communities (0.24), which shows the ordering's dependence on the generator's density. The shadow-schema comparison matches the same-graph one within 10⁻⁹ (k = 6, f64, tol 10⁻¹², so that both Lanczos runs converge past the comparison's resolution although their start vectors differ by dense id). `distance('embedding')` after `aggregate_neighbours` ranking *bridge* highest waits for M5's `aggregate_neighbours`.
 
 Design consequences that this workflow imposes, all already reflected above: stable dense IDs; staged versions; transactional segment storage; eigenvectors stored as versioned vectors; alignment-by-dense-ID in all cross-version operations; retention that does not silently delete a version somebody is comparing against.
 
