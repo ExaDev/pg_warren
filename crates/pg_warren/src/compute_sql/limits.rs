@@ -49,6 +49,35 @@ mod tests {
         Ok(())
     }
 
+    #[pg_test]
+    fn gather_charges_its_messages_and_result_to_the_cap() -> Result<(), Error> {
+        ring("big", 20_000, 2)?;
+        refresh("big", true)?;
+        Spi::run("SET LOCAL warren.max_compute_memory = '64kB'")?;
+        let refused = failure(
+            "warren.gather('big', 'SELECT id, id FROM big_nodes', NULL::bigint, NULL::bigint, 'sum')",
+        )?
+        .unwrap_or_default();
+        assert!(refused.starts_with("53400: compute memory limit exceeded"), "{refused}");
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_pending_cancel_stops_gather_with_query_canceled() -> Result<(), Error> {
+        ring("big", 1000, 2)?;
+        refresh("big", true)?;
+        Spi::run(
+            "CREATE FUNCTION pg_temp.cancel_then_gather() RETURNS void LANGUAGE plpgsql AS $$
+             BEGIN
+                 PERFORM tests.mark_cancel_pending();
+                 PERFORM count(*) FROM warren.gather('big', 'SELECT id, id FROM big_nodes',
+                                                     NULL::bigint, NULL::bigint[]);
+             END $$",
+        )?;
+        assert_eq!(canceled("pg_temp.cancel_then_gather()")?, Some(true));
+        Ok(())
+    }
+
     /// Whether `PERFORM <expression>` raises `query_canceled` (which
     /// `WHEN OTHERS` does not catch).
     fn canceled(expression: &str) -> Result<Option<bool>, Error> {
