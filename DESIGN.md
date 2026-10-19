@@ -748,7 +748,7 @@ Workspace split, non-negotiable:
 - Integration tests (`cargo pgrx test`): every SQL function; every `id_type`; directed/undirected; weighted/unweighted; relations present/absent; reverse present/absent; filters; refresh with a prior version loaded; staged → promote → retention → drop; vectors bound to retained versions; `compact` and the refusal to compare across it; rollback of a transaction containing a staged build leaves no rows; cancellation of long traversals and compute; memory cap enforcement.
 - **Oracle tests:** every traversal function against an equivalent recursive CTE; PageRank and components against NetworkX on exported fixtures; `gather(... 'collect')` against a plain SQL join + `array_agg`; `diff` against SQL `EXCEPT`. Exact match on random graphs of ~10K nodes. This suite is the most valuable thing in the repository.
 - Robustness: a `cargo fuzz` target for the segment decoder (§5.3); a differential proptest of bidirectional against single-direction shortest path (§9.3).
-- Extension lifecycle: `cargo pgrx schema` output diffed against the committed `sql/pg_warren--X.Y.Z.sql`. From the first release on, install the previous release, run `ALTER EXTENSION pg_warren UPDATE`, and assert the resulting `pg_proc`/`pg_class` signatures equal a fresh install's. A `pg_dump`/restore round trip preserves `warren.*` rows (§5.1).
+- Extension lifecycle: `cargo pgrx schema` output diffed against the committed `sql/pg_warren--X.Y.Z.sql` (*M2:* `sql/schema-drift.sh`, in CI on PG 16; both sides are normalised — comments dropped, entity blocks sorted — because pgrx's order is unstable and its comments carry source lines). From the first release on, install the previous release, run `ALTER EXTENSION pg_warren UPDATE`, and assert the resulting `pg_proc`/`pg_class` signatures equal a fresh install's. A `pg_dump`/restore round trip preserves `warren.*` rows (§5.1).
 - Cross-version tests: build v1, mutate tables (add/remove nodes and edges), build v2, assert dense IDs of surviving nodes unchanged, assert `distance` is zero when nothing changed and monotone in perturbation size for `edit`.
 
 ### Performance
@@ -785,7 +785,7 @@ pg_warren/
 ├── test/                   ← integration tests not expressible in cargo pgrx test
 ├── docker/                 ← one Dockerfile, parameterised by a PG_MAJOR build arg
 └── .github/workflows/      ← fmt, clippy, unit, Miri (warren-core), pgrx tests PG 15–18 on PGDG packages
-                               (cargo pgrx init --pgNN=<pg_config>), schema-drift + upgrade-path checks (added in M2, once the catalog exists); bench targets compile+run once in core tests
+                               (cargo pgrx init --pgNN=<pg_config>), schema-drift check (added in M2); upgrade-path check from the first release (v0.1.0) on, when there is a previous release to upgrade from; bench targets compile+run once in core tests
 ```
 
 Each milestone leaves `main` green and demonstrable.

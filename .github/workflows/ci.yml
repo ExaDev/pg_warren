@@ -159,6 +159,9 @@ jobs:
       - name: cargo pgrx test pg${{ matrix.pg }}
         working-directory: crates/pg_warren
         run: cargo pgrx test pg${{ matrix.pg }}
+      - name: Schema drift against sql/pg_warren--<version>.sql
+        if: matrix.pg == '16'
+        run: PG=pg16 sql/schema-drift.sh
 
   docker:
     # Runs on every event; buildx's GHA cache keeps the toolchain and

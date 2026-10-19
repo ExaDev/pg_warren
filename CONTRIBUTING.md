@@ -51,6 +51,11 @@ MIRIFLAGS=-Zmiri-disable-isolation PROPTEST_CASES=16 PROPTEST_DISABLE_FAILURE_PE
 # Optional: run the micro-benchmarks (CI only builds and smoke-runs them)
 cargo bench -p warren-core
 
+# The generated extension SQL must match the committed snapshot (needs
+# cargo pgrx init for pg16). After a deliberate schema change, regenerate it
+# with sql/schema-drift.sh --update and commit the result.
+sql/schema-drift.sh
+
 # warren-core must never depend on Postgres (DESIGN.md §15.4); this must print nothing
 cargo tree -p warren-core -e all | grep -E 'pgrx|pg[-_]sys'
 ```
