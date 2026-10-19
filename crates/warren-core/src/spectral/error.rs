@@ -19,6 +19,9 @@ pub enum SpectralError {
     /// A `which` name is not `largest` or `smallest`.
     #[error("unknown which \"{0}\": expected largest or smallest")]
     UnknownWhich(String),
+    /// A precision name is not `f32` or `f64`.
+    #[error("unknown precision \"{0}\": expected f32 or f64")]
+    UnknownPrecision(String),
     /// `symmetrize = false` needs a symmetric matrix (Arnoldi, for directed
     /// graphs, is v1.1).
     #[error("the matrix is not symmetric: use symmetrize, or an undirected graph")]

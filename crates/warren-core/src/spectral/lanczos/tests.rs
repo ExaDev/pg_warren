@@ -56,6 +56,13 @@ fn wanted(pairs: &[(f64, DVector<f64>)], k: usize, which: Which) -> Vec<(f64, DV
 }
 
 #[test]
+fn precision_parses_from_its_dtype_name() {
+    assert_eq!("f32".parse(), Ok(Precision::F32));
+    assert_eq!("f64".parse(), Ok(Precision::F64));
+    assert_eq!("i64".parse::<Precision>(), Err(SpectralError::UnknownPrecision("i64".into())));
+}
+
+#[test]
 fn which_parses_from_its_sql_name() {
     assert_eq!("largest".parse(), Ok(Which::Largest));
     assert_eq!("smallest".parse(), Ok(Which::Smallest));

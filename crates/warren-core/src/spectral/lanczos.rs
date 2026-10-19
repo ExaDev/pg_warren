@@ -92,6 +92,27 @@ pub enum Precision {
     F64,
 }
 
+impl Precision {
+    /// The name the SQL `precision` argument uses: the vectors' dtype.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::F32 => "f32",
+            Self::F64 => "f64",
+        }
+    }
+}
+
+impl FromStr for Precision {
+    type Err = SpectralError;
+
+    fn from_str(name: &str) -> Result<Self, SpectralError> {
+        [Self::F32, Self::F64]
+            .into_iter()
+            .find(|precision| precision.name() == name)
+            .ok_or_else(|| SpectralError::UnknownPrecision(name.to_owned()))
+    }
+}
+
 /// What to compute and when to stop.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EigenOptions {
