@@ -8,9 +8,10 @@
 //! through the Gram matrix squares the condition number, which the
 //! near-orthonormal eigenvectors this is for can afford; it limits the
 //! resolution of small angles to about `√(Kε)` for `K` vectors, so cosines
-//! within `8Kε` of 1 are taken as exactly 1 (angle 0). The pass uses a
-//! fixed number of row blocks, so the result is the same for any thread
-//! count.
+//! within `8Kε` of 1 are taken as exactly 1 (angle 0). The pass splits
+//! the rows into blocks of a fixed size, each checking for cancellation,
+//! and adds their partial sums in block order, so the result is the same
+//! for any thread count.
 
 use nalgebra::{DMatrix, SVD};
 
@@ -20,8 +21,10 @@ use super::ComparedRows;
 use crate::compute::{AnyVector, ComputeError};
 use crate::interrupts::Interrupts;
 
-/// The number of row blocks the Gram pass splits the rows into.
-const GRAM_BLOCKS: usize = 64;
+/// The rows of one block of the Gram pass: each block checks the
+/// cancellation flag before it starts.
+/// Small under test, so tests cross block boundaries.
+const GRAM_ROWS: usize = if cfg!(test) { 7 } else { 1 << 16 };
 
 /// The sweeps nalgebra's SVD may take per dimension.
 const SWEEPS_PER_DIMENSION: usize = 100;
@@ -92,10 +95,9 @@ fn gram<I: Interrupts>(
 ) -> Result<DMatrix<f64>, SpectralError> {
     let k = columns.len();
     let rows = columns.iter().map(|column| column.id_space()).max().unwrap_or(0) as usize;
-    let block = rows.div_ceil(GRAM_BLOCKS);
+    let blocks = rows.div_ceil(GRAM_ROWS);
     let entries = k * k;
-    let _partials =
-        resources.memory.charge_elements::<f64>(entries.saturating_mul(GRAM_BLOCKS + 2))?;
+    let _partials = resources.memory.charge_elements::<f64>(entries.saturating_mul(blocks + 2))?;
     let products = |range: std::ops::Range<usize>| {
         let mut sums = vec![0.0; entries];
         let mut row = vec![0.0; k];
@@ -121,7 +123,7 @@ fn gram<I: Interrupts>(
         }
         total
     };
-    let sums = dense::fold(resources, rows, block, vec![0.0; entries], products, add)?;
+    let sums = dense::fold(resources, rows, GRAM_ROWS, vec![0.0; entries], products, add)?;
     Ok(DMatrix::from_fn(k, k, |a, b| sums[a.min(b) * k + a.max(b)]))
 }
 
