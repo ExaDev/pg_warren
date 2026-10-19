@@ -12,6 +12,7 @@ use std::str::FromStr;
 use rayon::prelude::*;
 
 use super::{AnyVector, ComputeError, Element, Workers};
+use crate::graph::Tombstones;
 use crate::interrupts::{Cancelled, Interrupts};
 
 /// The elements each parallel task reduces; small under test, so tests
@@ -117,14 +118,56 @@ pub fn reduce<I: Interrupts>(
     x: &AnyVector,
     reduction: Reduction,
 ) -> Result<Option<f64>, ComputeError> {
-    let len = x.id_space() as usize * x.width();
+    reduce_rows(workers, interrupts, x, None, reduction)
+}
+
+/// `reduction` over the elements of the rows of `x` that are not
+/// tombstoned: the live nodes of a version.
+pub fn reduce_live<I: Interrupts>(
+    workers: &Workers,
+    interrupts: &mut I,
+    x: &AnyVector,
+    tombstones: &Tombstones,
+    reduction: Reduction,
+) -> Result<Option<f64>, ComputeError> {
+    reduce_rows(workers, interrupts, x, Some(tombstones), reduction)
+}
+
+/// `reduction` over the elements of `x`, skipping the rows `skip` marks.
+fn reduce_rows<I: Interrupts>(
+    workers: &Workers,
+    interrupts: &mut I,
+    x: &AnyVector,
+    skip: Option<&Tombstones>,
+    reduction: Reduction,
+) -> Result<Option<f64>, ComputeError> {
+    let width = x.width();
+    let len = x.id_space() as usize * width;
     let partials = chunked(workers, interrupts, len, |range| match x {
-        AnyVector::F32(x) => partial(as_f64s(&x.values()[range]), reduction),
-        AnyVector::F64(x) => partial(as_f64s(&x.values()[range]), reduction),
-        AnyVector::I64(x) => partial(as_f64s(&x.values()[range]), reduction),
-        AnyVector::Bool(x) => partial(as_f64s(&x.values()[range]), reduction),
+        AnyVector::F32(x) => partial(kept(x.values(), range, width, skip), reduction),
+        AnyVector::F64(x) => partial(kept(x.values(), range, width, skip), reduction),
+        AnyVector::I64(x) => partial(kept(x.values(), range, width, skip), reduction),
+        AnyVector::Bool(x) => partial(kept(x.values(), range, width, skip), reduction),
     })?;
     Ok(combine(partials, reduction))
+}
+
+/// The elements of `values` in `range` as `f64`, skipping those in rows
+/// (of `width` elements) that `skip` marks.
+fn kept<'a, E: Element>(
+    values: &'a [E],
+    range: Range<usize>,
+    width: usize,
+    skip: Option<&'a Tombstones>,
+) -> impl Iterator<Item = f64> + 'a {
+    let start = range.start;
+    values[range].iter().enumerate().filter_map(move |(offset, value)| {
+        let row = || ((start + offset) / width) as u64;
+        match skip.is_some_and(|skip| skip.contains(row())) {
+            true => None,
+            false => Some(value.to_f64()),
+        }
+    })
 }
 
 /// `norm(a − b)`, aligning `a` and `b` by dense id: a row past the end of
@@ -173,10 +216,6 @@ fn chunked<I: Interrupts>(
             })
             .collect()
     })
-}
-
-fn as_f64s<E: Element>(values: &[E]) -> impl Iterator<Item = f64> + '_ {
-    values.iter().map(|value| value.to_f64())
 }
 
 /// The elements of `x` in `range` as `f64`, zero past its end.
@@ -319,6 +358,29 @@ mod tests {
         assert_eq!(reduced(&x, "sum"), Some(0.0));
         assert_eq!(reduced(&x, "l2"), Some(0.0));
         assert_eq!(reduced(&x, "nnz"), Some(0.0));
+    }
+
+    fn tombstoned(id_space: u64, ids: &[u64]) -> Tombstones {
+        let mut tombstones = Tombstones::new(id_space).unwrap();
+        ids.iter().for_each(|&id| tombstones.insert(id));
+        tombstones
+    }
+
+    #[test]
+    fn a_live_reduction_skips_every_element_of_tombstoned_rows() {
+        let x = vector(2, vec![3.0, -4.0, 0.0, -9.0, 1.0, 5.0]);
+        let tombstones = tombstoned(3, &[1]);
+        let found: Vec<_> = Reduction::ALL
+            .iter()
+            .map(|&r| reduce_live(workers(), &mut Uninterrupted, &x, &tombstones, r).unwrap())
+            .collect();
+        let l2 = 51f64.sqrt();
+        assert_eq!(found, [Some(5.0), Some(5.0), Some(-4.0), Some(13.0), Some(l2), Some(4.0)]);
+        let all_gone = tombstoned(3, &[0, 1, 2]);
+        assert_eq!(
+            reduce_live(workers(), &mut Uninterrupted, &x, &all_gone, Reduction::Min).unwrap(),
+            None
+        );
     }
 
     #[test]

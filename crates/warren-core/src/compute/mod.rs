@@ -29,7 +29,7 @@ pub use map::{
 pub use memory::{ComputeMemory, MemoryCharge};
 pub use message::{Bytes, Message, MessageBuffer, PackedBytes};
 pub use product::{spmm, spmv, Mask, Product};
-pub use reduce::{norm_diff, reduce, Norm, Reduction};
+pub use reduce::{norm_diff, reduce, reduce_live, Norm, Reduction};
 pub use semiring::{BinaryOp, Monoid, Semiring, SemiringElement};
 pub use vector::{AnyVector, Vector};
 pub use workers::Workers;
