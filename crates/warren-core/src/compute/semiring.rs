@@ -113,56 +113,99 @@ impl Monoid {
     }
 }
 
-/// A semiring `⊕.⊗`, named `<add>_<mult>`.
+/// A v1 semiring `⊕.⊗` (DESIGN.md §6.3), named `<add>_<mult>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Semiring {
-    add: Monoid,
-    multiply: BinaryOp,
+pub enum Semiring {
+    /// `plus_times`, the default: `Σ a_ij × x_j`.
+    PlusTimes,
+    /// `min_plus`: shortest paths.
+    MinPlus,
+    /// `max_plus`: longest paths.
+    MaxPlus,
+    /// `max_times`.
+    MaxTimes,
+    /// `min_times`.
+    MinTimes,
+    /// `lor_land` (alias `or_and`): reachability.
+    LorLand,
+    /// `any_pair`: whether a row has any entry.
+    AnyPair,
+    /// `plus_pair`: the number of entries in a row.
+    PlusPair,
+    /// `plus_first`: the sum of a row's edge weights.
+    PlusFirst,
+    /// `plus_second`: the sum of the neighbours' values.
+    PlusSecond,
+    /// `min_first`: the smallest edge weight.
+    MinFirst,
+    /// `min_second`: the smallest neighbour value (min-label propagation).
+    MinSecond,
+    /// `max_second`: the largest neighbour value.
+    MaxSecond,
 }
 
 impl Semiring {
-    /// The v1 semirings (DESIGN.md §6.3), by canonical name.
-    const ALL: [(&'static str, Self); 13] = [
-        ("plus_times", Self::new(Monoid::Plus, BinaryOp::Times)),
-        ("min_plus", Self::new(Monoid::Min, BinaryOp::Plus)),
-        ("max_plus", Self::new(Monoid::Max, BinaryOp::Plus)),
-        ("max_times", Self::new(Monoid::Max, BinaryOp::Times)),
-        ("min_times", Self::new(Monoid::Min, BinaryOp::Times)),
-        ("lor_land", Self::new(Monoid::Lor, BinaryOp::Land)),
-        ("any_pair", Self::new(Monoid::Any, BinaryOp::Pair)),
-        ("plus_pair", Self::new(Monoid::Plus, BinaryOp::Pair)),
-        ("plus_first", Self::new(Monoid::Plus, BinaryOp::First)),
-        ("plus_second", Self::new(Monoid::Plus, BinaryOp::Second)),
-        ("min_first", Self::new(Monoid::Min, BinaryOp::First)),
-        ("min_second", Self::new(Monoid::Min, BinaryOp::Second)),
-        ("max_second", Self::new(Monoid::Max, BinaryOp::Second)),
+    const ALL: [Self; 13] = [
+        Self::PlusTimes,
+        Self::MinPlus,
+        Self::MaxPlus,
+        Self::MaxTimes,
+        Self::MinTimes,
+        Self::LorLand,
+        Self::AnyPair,
+        Self::PlusPair,
+        Self::PlusFirst,
+        Self::PlusSecond,
+        Self::MinFirst,
+        Self::MinSecond,
+        Self::MaxSecond,
     ];
-
-    /// `plus_times`, the default.
-    pub const PLUS_TIMES: Self = Self::new(Monoid::Plus, BinaryOp::Times);
-
-    const fn new(add: Monoid, multiply: BinaryOp) -> Self {
-        Self { add, multiply }
-    }
 
     /// Every v1 semiring.
     pub fn all() -> impl Iterator<Item = Self> {
-        Self::ALL.into_iter().map(|(_, semiring)| semiring)
+        Self::ALL.into_iter()
     }
 
     /// `⊕`.
     pub fn add(self) -> Monoid {
-        self.add
+        match self {
+            Self::PlusTimes | Self::PlusPair | Self::PlusFirst | Self::PlusSecond => Monoid::Plus,
+            Self::MinPlus | Self::MinTimes | Self::MinFirst | Self::MinSecond => Monoid::Min,
+            Self::MaxPlus | Self::MaxTimes | Self::MaxSecond => Monoid::Max,
+            Self::LorLand => Monoid::Lor,
+            Self::AnyPair => Monoid::Any,
+        }
     }
 
     /// `⊗`, applied as `⊗(edge weight, vector value)`.
     pub fn multiply(self) -> BinaryOp {
-        self.multiply
+        match self {
+            Self::PlusTimes | Self::MaxTimes | Self::MinTimes => BinaryOp::Times,
+            Self::MinPlus | Self::MaxPlus => BinaryOp::Plus,
+            Self::LorLand => BinaryOp::Land,
+            Self::AnyPair | Self::PlusPair => BinaryOp::Pair,
+            Self::PlusFirst | Self::MinFirst => BinaryOp::First,
+            Self::PlusSecond | Self::MinSecond | Self::MaxSecond => BinaryOp::Second,
+        }
     }
 
     /// The canonical name.
     pub fn name(self) -> &'static str {
-        Self::ALL.iter().find(|(_, s)| *s == self).map_or("", |(name, _)| name)
+        match self {
+            Self::PlusTimes => "plus_times",
+            Self::MinPlus => "min_plus",
+            Self::MaxPlus => "max_plus",
+            Self::MaxTimes => "max_times",
+            Self::MinTimes => "min_times",
+            Self::LorLand => "lor_land",
+            Self::AnyPair => "any_pair",
+            Self::PlusPair => "plus_pair",
+            Self::PlusFirst => "plus_first",
+            Self::PlusSecond => "plus_second",
+            Self::MinFirst => "min_first",
+            Self::MinSecond => "min_second",
+            Self::MaxSecond => "max_second",
+        }
     }
 }
 
@@ -182,9 +225,8 @@ impl FromStr for Semiring {
             name => name,
         };
         Self::ALL
-            .iter()
-            .find(|(candidate, _)| *candidate == canonical)
-            .map(|&(_, semiring)| semiring)
+            .into_iter()
+            .find(|semiring| semiring.name() == canonical)
             .ok_or_else(|| ComputeError::UnknownSemiring(name.to_owned()))
     }
 }
@@ -335,7 +377,7 @@ mod tests {
         }
         assert_eq!(Semiring::all().count(), NAMES.len());
         assert_eq!("or_and".parse::<Semiring>(), "lor_land".parse());
-        assert_eq!("plus_times".parse::<Semiring>(), Ok(Semiring::PLUS_TIMES));
+        assert_eq!("plus_times".parse::<Semiring>(), Ok(Semiring::PlusTimes));
     }
 
     #[test]

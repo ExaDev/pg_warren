@@ -49,7 +49,7 @@ fn plain(product: Product<'_>, reverse: bool) -> Vec<f64> {
 
 #[test]
 fn plus_times_multiplies_by_a_or_its_transpose() {
-    let plus_times = Product::new(Semiring::PLUS_TIMES);
+    let plus_times = Product::new(Semiring::PlusTimes);
     assert_eq!(plain(plus_times, true), [33.0, 12.0, 5.0, 0.0]);
     let transposed = Product { transpose: true, ..plus_times };
     assert_eq!(plain(transposed, true), [15.0, 12.0, 11.0, 0.0]);
@@ -61,9 +61,9 @@ fn relations_and_weights_select_the_matrix() {
     let r = reference::relations(2);
     let only = [r[1]];
     let product =
-        Product { relations: RelationSelection::Only(&only), ..Product::new(Semiring::PLUS_TIMES) };
+        Product { relations: RelationSelection::Only(&only), ..Product::new(Semiring::PlusTimes) };
     assert_eq!(plain(product, true), [20.0, 0.0, 0.0, 0.0]);
-    let unweighted = Product { weighted: Some(false), ..Product::new(Semiring::PLUS_TIMES) };
+    let unweighted = Product { weighted: Some(false), ..Product::new(Semiring::PlusTimes) };
     assert_eq!(plain(unweighted, true), [5.0, 3.0, 1.0, 0.0]);
 }
 
@@ -81,7 +81,7 @@ fn masks_select_rows_and_replace_clears_the_rest() {
     let write = |mask: Mask<'_>, replace: bool, accumulate: Option<BinaryOp>| {
         let mut y = vector(1, vec![100.0; 4]);
         let product =
-            Product { mask: Some(mask), replace, accumulate, ..Product::new(Semiring::PLUS_TIMES) };
+            Product { mask: Some(mask), replace, accumulate, ..Product::new(Semiring::PlusTimes) };
         run(&graph, &product, &x, &mut y);
         values::<f64>(&y)
     };
@@ -99,7 +99,7 @@ fn spmm_combines_neighbour_rows_elementwise() {
     let graph = example(true);
     let x = vector(2, vec![1.0, 10.0, 2.0, 20.0, 3.0, 30.0, 4.0, 40.0]);
     let mut y = vector(2, vec![0.0; 8]);
-    let product = Product { transpose: true, ..Product::new(Semiring::PLUS_TIMES) };
+    let product = Product { transpose: true, ..Product::new(Semiring::PlusTimes) };
     spmm(workers(), &memory(), &mut Uninterrupted, &graph, &product, &x, &mut y).unwrap();
     assert_eq!(values::<f64>(&y), [15.0, 150.0, 12.0, 120.0, 11.0, 110.0, 0.0, 0.0]);
 }
@@ -118,7 +118,7 @@ fn error(
 #[test]
 fn operands_must_fit_the_graph_and_each_other() {
     let graph = example(true);
-    let product = Product::new(Semiring::PLUS_TIMES);
+    let product = Product::new(Semiring::PlusTimes);
     let x = vector(1, vec![1.0; 4]);
     assert_eq!(
         error(&graph, &product, &x, &mut vector(1, vec![0i64; 4]), false),
@@ -161,7 +161,7 @@ fn i64_overflow_is_an_error() {
     let graph = example(true);
     let x = vector(1, vec![i64::MAX; 4]);
     let mut y = vector(1, vec![0i64; 4]);
-    let product = Product::new(Semiring::PLUS_TIMES);
+    let product = Product::new(Semiring::PlusTimes);
     assert_eq!(
         error(&graph, &product, &x, &mut y, false),
         ComputeError::Arithmetic(crate::compute::ArithmeticError::BigintOutOfRange)
@@ -179,7 +179,7 @@ fn an_interrupt_cancels_the_product() {
     let graph = example(false);
     let x = vector(1, vec![1.0; 4]);
     for transpose in [false, true] {
-        let product = Product { transpose, ..Product::new(Semiring::PLUS_TIMES) };
+        let product = Product { transpose, ..Product::new(Semiring::PlusTimes) };
         let mut y = vector(1, vec![0.0; 4]);
         let result = spmv(workers(), &memory(), &mut Stop, &graph, &product, &x, &mut y);
         assert_eq!(result, Err(ComputeError::Cancelled));
@@ -191,7 +191,7 @@ fn the_push_form_charges_its_scratch_to_the_budget() {
     let graph = example(false);
     let x = vector(1, vec![1.0; 4]);
     let mut y = vector(1, vec![0.0; 4]);
-    let product = Product { transpose: true, ..Product::new(Semiring::PLUS_TIMES) };
+    let product = Product { transpose: true, ..Product::new(Semiring::PlusTimes) };
     let tight = ComputeMemory::new(8);
     let result = spmv(workers(), &tight, &mut Uninterrupted, &graph, &product, &x, &mut y);
     assert!(matches!(result, Err(ComputeError::MemoryLimit { .. })));
@@ -427,7 +427,7 @@ fn rows_span_many_tasks() {
     let x: Vec<f64> = (0..id_space).map(|i| i as f64).collect();
     for transpose in [false, true] {
         let mut y = vector(1, vec![0.0; id_space as usize]);
-        let product = Product { transpose, ..Product::new(Semiring::PLUS_TIMES) };
+        let product = Product { transpose, ..Product::new(Semiring::PlusTimes) };
         run(&graph, &product, &vector(1, x.clone()), &mut y);
         let expected: Vec<f64> = (0..id_space)
             .map(|i| match transpose {
