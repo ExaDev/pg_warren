@@ -405,3 +405,15 @@ fn the_connected_components_of_the_active_subgraph_are_counted() {
     let one = reference::graph(10, 1, &path(10), false, true);
     assert_eq!(solve(&one, Operator::Laplacian, &EigenOptions::new(1)).components, 1);
 }
+
+#[test]
+fn a_loose_tolerance_does_not_reorder_distinct_magnitudes() {
+    // S = [[−0.05, b], [b, −0.05]] with b = √(0.05² + 3.8): eigenvalues −2
+    // and 1.9. With tol 0.1 the largest is still −2.
+    let b = (0.05f64.powi(2) + 3.8).sqrt();
+    let edges = vec![(0, 0, 0, -0.05), (0, 0, 1, b), (0, 1, 0, b), (0, 1, 1, -0.05)];
+    let graph = reference::graph(2, 1, &edges, true, true);
+    let options = EigenOptions { tol: 0.1, precision: Precision::F64, ..EigenOptions::new(1) };
+    let value = solve(&graph, Operator::Adjacency, &options).pairs[0].value;
+    assert!((value + 2.0).abs() < 1e-9, "{value}");
+}
