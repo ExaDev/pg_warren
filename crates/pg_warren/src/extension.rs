@@ -14,7 +14,7 @@ use pgrx::prelude::*;
 mod warren {}
 
 /// `warren.version()`: the version of the installed extension library.
-#[pg_extern(schema = "warren", immutable, parallel_safe)]
+#[pg_extern(schema = "warren", stable, parallel_safe)]
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
@@ -37,12 +37,23 @@ mod tests {
 
     #[pg_test]
     fn warren_version_lives_in_warren_schema() -> Result<(), Error> {
-        let schema = Spi::get_one::<String>(
-            "SELECT n.nspname::text FROM pg_proc p
-             JOIN pg_namespace n ON n.oid = p.pronamespace
-             WHERE p.proname = 'version' AND n.nspname = 'warren'",
+        let in_warren = Spi::get_one::<bool>(
+            "SELECT pronamespace = 'warren'::regnamespace
+             FROM pg_proc WHERE oid = 'warren.version()'::regprocedure",
         )?;
-        assert_eq!(schema.as_deref(), Some("warren"));
+        assert_eq!(in_warren, Some(true));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn warren_version_is_stable_not_immutable() -> Result<(), Error> {
+        // The answer changes when the library is upgraded in place, so it must
+        // not be constant-folded into stored plans or index expressions.
+        let volatility = Spi::get_one::<String>(
+            "SELECT provolatile::text FROM pg_proc
+             WHERE oid = 'warren.version()'::regprocedure",
+        )?;
+        assert_eq!(volatility.as_deref(), Some("s"));
         Ok(())
     }
 
