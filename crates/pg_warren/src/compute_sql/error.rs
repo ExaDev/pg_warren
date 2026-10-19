@@ -30,6 +30,18 @@ pub(crate) enum ComputeSqlError {
     /// `vector_from_query`'s query returned two rows for one node.
     #[error("query returns more than one row for node {0}")]
     DuplicateNode(String),
+    /// A `vector_map` expression is not one SQL expression.
+    #[error("{0}")]
+    MapSyntax(String),
+    /// A `vector_map` expression uses SQL no vector can be computed with.
+    #[error("{0}")]
+    MapUnsupported(&'static str),
+    /// A `vector_map` expression's type is not one a vector holds.
+    #[error(
+        "a vector_map expression must be of type double precision, real, bigint, integer, \
+         smallint, numeric or boolean, not {0}"
+    )]
+    MapType(String),
     /// A vector name must not be empty.
     #[error("a vector name must not be empty")]
     EmptyName,
@@ -74,6 +86,9 @@ impl SqlError for ComputeSqlError {
             Self::NullArgument(_) => PgSqlErrorCode::ERRCODE_NULL_VALUE_NOT_ALLOWED,
             Self::VectorNotFound { .. } => PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT,
             Self::DuplicateNode(_) => PgSqlErrorCode::ERRCODE_CARDINALITY_VIOLATION,
+            Self::MapSyntax(_) => PgSqlErrorCode::ERRCODE_SYNTAX_ERROR,
+            Self::MapUnsupported(_) => PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
+            Self::MapType(_) => PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
             Self::EmptyName | Self::InvalidArgument(_) => {
                 PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE
             }

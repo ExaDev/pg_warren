@@ -16,6 +16,7 @@ mod constructors;
 mod drop;
 mod error;
 mod from_query;
+mod map;
 #[cfg(any(test, feature = "pg_test"))]
 mod oracle;
 mod product;

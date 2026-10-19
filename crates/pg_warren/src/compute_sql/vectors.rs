@@ -86,6 +86,11 @@ impl<E: IdDatum> Vectors<E> {
         self.loaded.id_map.tombstones()
     }
 
+    /// The vectors bound to the version, by name.
+    pub(super) fn records(&self) -> &[VectorRecord] {
+        &self.records
+    }
+
     /// The record of vector `name`, if bound.
     fn record(&self, name: &str) -> Option<&VectorRecord> {
         self.records.iter().find(|record| record.name == name)
