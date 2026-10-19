@@ -47,8 +47,25 @@ impl<E: Element> Vector<E> {
         Ok(Self { id_space, width, values, _charge: charge })
     }
 
+    /// A vector of `values`, already charged to the budget by `charge`.
+    pub(crate) fn charged(
+        id_space: u64,
+        width: usize,
+        values: Vec<E>,
+        charge: MemoryCharge,
+    ) -> Result<Self, ComputeError> {
+        let len = Self::len(id_space, width)?;
+        if values.len() != len {
+            return Err(ComputeError::VectorLength {
+                expected: len as u64,
+                found: values.len() as u64,
+            });
+        }
+        Ok(Self { id_space, width, values, _charge: charge })
+    }
+
     /// The number of elements of `id_space` rows of `width`.
-    fn len(id_space: u64, width: usize) -> Result<usize, ComputeError> {
+    pub(crate) fn len(id_space: u64, width: usize) -> Result<usize, ComputeError> {
         if width == 0 {
             return Err(ComputeError::ZeroWidth);
         }

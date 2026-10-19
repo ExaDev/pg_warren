@@ -7,6 +7,7 @@
 
 mod cast;
 mod dtype;
+mod encoding;
 mod error;
 mod map;
 mod memory;
@@ -23,6 +24,7 @@ mod vector;
 mod workers;
 
 pub use dtype::{Dtype, Element};
+pub use encoding::{encode, Decoder};
 pub use error::{ArithmeticError, ComputeError};
 pub use map::{
     map, AnyExpr, Arithmetic, BoolOp, Comparands, Comparison, Expr, F32Op, F64Op, Function, I64Op,
