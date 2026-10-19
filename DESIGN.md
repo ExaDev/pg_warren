@@ -1053,6 +1053,8 @@ v1.1 extension: `warren.contract('fraud', 'label', 'fraud_rings')` gives a ring-
 - Pairwise precision ≥ 0.98 and recall ≥ 0.95 against the generator's ground truth after the trust rules; without them, precision drops below 0.9 (the test that tier-2 SQL logic is load-bearing).
 - Memory accounted to the compute pool stays under `warren.max_compute_memory` and an attempt with the GUC set to 64 MB fails with the documented error rather than OOMing.
 
+*Measured (M5, `test/sql/a3_entity_resolution.sql`, at a tenth of the fixture: 20,000 records of 6,000 entities):* three `collect` supersteps over the record–identifier graph — identifiers send `kind:value` to their records; records send their ids to their identifiers; identifiers pass every holder's id on, one message each — each equal to the SQL join + `array_agg` in collect order. The trust rule: two records conflict if they carry identifiers of some kind but none in common; an identifier is untrusted if any two of its holders conflict; a link is kept if its records share a trusted identifier. `components_vector` over the kept links then gives pairwise precision 0.988 and recall 0.955; keeping every link gives precision 0.80. With `warren.max_compute_memory` at its 64 kB minimum (the scale-adjusted form of the 64 MB attempt) a superstep fails with `configuration_limit_exceeded` (53400) before allocating. (The trust SQL needs `ANALYZE` on its intermediate tables: without statistics the planner's join plan exhausted the disk.)
+
 **Scale target.** 10M records, 50M edges: each superstep < 20 s; three supersteps plus components < 2 min.
 
 ### A.4 Typed multi-hop retrieval for a research knowledge graph (`walk`)
