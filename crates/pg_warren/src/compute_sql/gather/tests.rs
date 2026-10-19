@@ -124,6 +124,34 @@ mod tests {
     }
 
     #[pg_test]
+    fn a_vector_never_shadows_a_query_and_a_name_of_both_is_ambiguous() -> Result<(), Error> {
+        small("t")?;
+        Spi::run(
+            "CREATE TABLE msgs AS SELECT id, id * 100 AS v FROM t_nodes;
+             SELECT warren.vector_const('t', 'SELECT id, v FROM msgs', 2, 'i64');
+             SELECT warren.vector_const('t', 'only_a_vector', 3, 'i64')",
+        )?;
+        let query = gathered("SELECT id, v FROM msgs", "bigint", ", 'sum'")?;
+        assert_eq!(query.as_deref(), Some("1:400 2:100 3:200 4:400 5:500"));
+        let vector = gathered("only_a_vector", "bigint", ", 'sum'")?;
+        assert_eq!(vector.as_deref(), Some("1:3 2:3 3:3 4:6 5:3"));
+        assert_eq!(
+            gathered("msgs", "bigint", ", 'sum'")?.as_deref(),
+            Some("1:400 2:100 3:200 4:400 5:500")
+        );
+        Spi::run("SELECT warren.vector_const('t', 'msgs', 1, 'i64')")?;
+        let ambiguous = failure("warren.gather('t', 'msgs', NULL::bigint, NULL::bigint, 'sum')")?
+            .unwrap_or_default();
+        assert!(
+            ambiguous.starts_with("42725: messages \"msgs\" names both a vector bound to version"),
+            "{ambiguous}"
+        );
+        let table = gathered("TABLE msgs", "bigint", ", 'sum'")?;
+        assert_eq!(table.as_deref(), Some("1:400 2:100 3:200 4:400 5:500"));
+        Ok(())
+    }
+
+    #[pg_test]
     fn a_mask_restricts_the_receivers() -> Result<(), Error> {
         small("t")?;
         Spi::run("SELECT warren.vector_from_query('t', 'odd', 'SELECT id, id % 2 FROM t_nodes')")?;

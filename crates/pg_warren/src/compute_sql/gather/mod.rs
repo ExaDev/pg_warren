@@ -84,6 +84,16 @@ fn qualified(oid: pg_sys::Oid) -> String {
         .into_owned()
 }
 
+/// Whether `name` is a relation on the caller's `search_path`.
+fn relation_visible(caller: &Caller, name: &str) -> bool {
+    with_search_path(caller.search_path(), || {
+        Spi::get_one_with_args::<pg_sys::Oid>("SELECT pg_catalog.to_regclass($1)", &[name.into()])
+    })
+    .ok()
+    .flatten()
+    .is_some()
+}
+
 /// The oid of a result type.
 fn result_oid(result: ResultType) -> Result<pg_sys::Oid, ComputeSqlError> {
     match result {
@@ -116,9 +126,15 @@ impl Arguments<'_> {
         caller: &Caller,
     ) -> Result<(Codec, Input), ComputeSqlError> {
         let names = vectors.names()?;
-        let query = match MessageSource::parse(self.messages, |name| {
-            names.iter().any(|bound| bound.name == name)
-        }) {
+        let is_vector = |name: &str| names.iter().any(|bound| bound.name == name);
+        let is_relation = |name: &str| relation_visible(caller, name);
+        let query = match MessageSource::parse(self.messages, is_vector, is_relation) {
+            MessageSource::Ambiguous(name) => {
+                return Err(ComputeSqlError::AmbiguousMessages {
+                    name: name.to_owned(),
+                    version: vectors.version,
+                })
+            }
             MessageSource::Vector(name) => {
                 let vector = vectors.get(name)?;
                 if vector.width() != 1 {
