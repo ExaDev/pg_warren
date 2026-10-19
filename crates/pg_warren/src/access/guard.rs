@@ -211,6 +211,8 @@ mod tests {
         ("shortest_path", "warren.shortest_path('victim', 1::bigint, 2::bigint)"),
         ("steps", "warren.steps('[]')"),
         ("vector_const", "warren.vector_const('victim', 'c', 1)"),
+        ("vector_degree", "warren.vector_degree('victim', 'd')"),
+        ("vector_dense_id", "warren.vector_dense_id('victim', 'i')"),
         ("vector_values", "warren.vector_values('victim', 'c', NULL::bigint)"),
         ("version", "warren.version()"),
         ("walk", "warren.walk('victim', ARRAY[1::bigint], ARRAY[warren.s(NULL)])"),
