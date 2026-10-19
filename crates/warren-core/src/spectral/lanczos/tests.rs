@@ -341,3 +341,16 @@ fn eigenvectors_have_the_precision_s_element_type() {
         assert!(eigen.pairs.iter().all(|p| p.vector.dtype() == dtype && p.vector.id_space() == 10));
     }
 }
+
+#[test]
+fn restarts_keep_converged_pairs_and_converge_in_few_steps() {
+    // Keeping the k wanted Ritz vectors plus one more per converged pair
+    // (ARPACK's adjustment, clamped to a quarter to half of the free space)
+    // takes 292 steps here; keeping k + (m − k)/2 regardless took 327.
+    let edges = random_graph(2000, 8000, 21);
+    let graph = reference::graph(2000, 2, &edges, true, true);
+    let options = EigenOptions { which: Which::Smallest, tol: 1e-6, ..EigenOptions::new(10) };
+    let eigen = solve(&graph, Operator::NormalizedLaplacian, &options);
+    assert!(eigen.converged);
+    assert!(eigen.iterations <= 300, "{} steps", eigen.iterations);
+}

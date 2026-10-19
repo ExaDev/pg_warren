@@ -1,12 +1,15 @@
 //! Lanczos eigenpairs of a graph operator (DESIGN.md §6.5, §14 item 8).
 //!
-//! Lanczos with full reorthogonalisation (classical Gram–Schmidt, twice,
-//! against every basis vector) and thick restarts: the basis holds
-//! `max(2k + 1, 20)` vectors (at most the dimension); when it is full, the
-//! Rayleigh–Ritz pairs of `H = QᵀMQ` are computed, and unless the `k`
-//! wanted ones have converged the basis is compressed to the
-//! `k + (size − k)/2` wanted Ritz vectors and extended again from the last
-//! residual. `H` is kept dense (it is tridiagonal plus the restart's
+//! Lanczos with full reorthogonalisation and thick restarts: the basis
+//! holds `max(2k + 1, 20)` vectors (at most the dimension); when it is full,
+//! the Rayleigh–Ritz pairs of `H = QᵀMQ` are computed, and unless the `k`
+//! wanted ones have converged the basis is compressed to the `k` wanted
+//! Ritz vectors plus one per converged pair (between `(size − k)/4` and
+//! `(size − k)/2` more) and extended again from the last residual. Each step removes the
+//! three-term recurrence's two vectors and then makes one classical
+//! Gram–Schmidt pass against the whole basis; the first step after a
+//! restart or a random vector, whose product couples to every kept vector,
+//! makes two. `H` is kept dense (it is tridiagonal plus the restart's
 //! arrowhead), and its entries are the reorthogonalisation coefficients,
 //! so it is the projection onto the basis as stored.
 //!
@@ -32,7 +35,7 @@ use std::str::FromStr;
 
 use nalgebra::DMatrix;
 
-use super::basis::{Basis, Stored};
+use super::basis::{Basis, Orthogonalized, Stored};
 use super::operator::LinearOperator;
 use super::ritz::Ritz;
 use super::{dense, GraphMatrix, Resources, SpectralError};
@@ -174,6 +177,9 @@ struct Lanczos<'o, 'g, E> {
     basis: Basis<E>,
     /// `QᵀMQ`, `size × size`; the leading `basis.len()` square is in use.
     h: DMatrix<f64>,
+    /// The coupling `β` of the newest basis vector to the one before it,
+    /// if the newest came from the plain three-term recurrence.
+    previous: Option<f64>,
     /// Random vectors drawn so far.
     streams: u64,
     iterations: usize,
@@ -184,7 +190,8 @@ struct Lanczos<'o, 'g, E> {
 enum Outcome {
     Converged,
     OutOfSteps,
-    Continue,
+    /// Restart; this many of the `k` wanted pairs have converged.
+    Continue(usize),
 }
 
 impl<'o, 'g, E: Stored> Lanczos<'o, 'g, E>
@@ -207,6 +214,7 @@ where
             max_iter,
             basis,
             h: DMatrix::zeros(size, size),
+            previous: None,
             streams: 0,
             iterations: 0,
         })
@@ -238,11 +246,13 @@ where
             }
             let ritz = Ritz::of(self.h.view((0, 0), (len, len)).into_owned(), self.options.which)?;
             match self.outcome(&ritz, beta.unwrap_or(0.0)) {
-                Outcome::Continue => {
-                    self.restart(resources, &ritz)?;
+                Outcome::Continue(converged) => {
+                    self.restart(resources, &ritz, converged)?;
                     if !self.extend(resources, beta)? {
                         return self.finish(resources, Outcome::Converged);
                     }
+                    // The residual couples to every kept Ritz vector.
+                    self.previous = None;
                 }
                 outcome => return self.finish_with(resources, ritz, outcome),
             }
@@ -260,12 +270,12 @@ where
         self.basis.column(resources, j, self.operator.input_mut())?;
         let w = self.operator.apply(resources)?;
         self.iterations += 1;
-        let coefficients = self.basis.orthogonalize(resources, w)?;
+        let Orthogonalized { coefficients, norm: beta } =
+            self.basis.orthogonalize(resources, w, self.previous)?;
         for (i, &c) in coefficients.iter().enumerate() {
             self.h[(i, j)] = c;
             self.h[(j, i)] = c;
         }
-        let beta = dense::sum(resources, w.len(), |i| w[i] * w[i])?.sqrt();
         let before = (coefficients.iter().map(|c| c * c).sum::<f64>() + beta * beta).sqrt();
         if !beta.is_finite() {
             return Err(SpectralError::NotFinite);
@@ -284,6 +294,7 @@ where
             Some(beta) => {
                 let w = self.operator.output_mut();
                 self.basis.push(resources, w, beta)?;
+                self.previous = Some(beta);
                 Ok(true)
             }
             None => self.extend_randomly(resources),
@@ -298,12 +309,12 @@ where
         self.streams += 1;
         let v = self.operator.random_input(resources, self.options.seed, self.streams - 1)?;
         let before = dense::sum(resources, v.len(), |i| v[i] * v[i])?.sqrt();
-        self.basis.orthogonalize(resources, v)?;
-        let norm = dense::sum(resources, v.len(), |i| v[i] * v[i])?.sqrt();
+        let norm = self.basis.orthogonalize(resources, v, None)?.norm;
         if norm <= BREAKDOWN * before {
             return Ok(false);
         }
         self.basis.push(resources, v, norm)?;
+        self.previous = None;
         Ok(true)
     }
 
@@ -313,23 +324,31 @@ where
         let len = self.basis.len();
         let scale = ritz.values.iter().fold(0.0f64, |m, v| m.max(v.abs()));
         let converged = (0..self.options.k)
-            .all(|l| (beta * ritz.vectors[(len - 1, l)]).abs() <= self.options.tol * scale);
-        match (len == self.dimension || converged, self.iterations >= self.max_iter) {
+            .filter(|&l| (beta * ritz.vectors[(len - 1, l)]).abs() <= self.options.tol * scale)
+            .count();
+        let done = len == self.dimension || converged == self.options.k;
+        match (done, self.iterations >= self.max_iter) {
             (true, _) => Outcome::Converged,
             (false, true) => Outcome::OutOfSteps,
-            (false, false) => Outcome::Continue,
+            (false, false) => Outcome::Continue(converged),
         }
     }
 
     /// Compresses the basis to its most wanted Ritz vectors, on which `H` is
-    /// diagonal.
+    /// diagonal: the `k` wanted ones plus one more for each that has
+    /// converged (ARPACK's adjustment, so converged pairs do not crowd out
+    /// the ones still converging), at least a quarter and at most half of
+    /// the rest of the basis (so a clustered spectrum keeps enough of its
+    /// Krylov space).
     fn restart<I: Interrupts>(
         &mut self,
         resources: &mut Resources<'_, I>,
         ritz: &Ritz,
+        converged: usize,
     ) -> Result<(), SpectralError> {
         let k = self.options.k;
-        let kept = (k + (self.size() - k) / 2).min(self.size() - 1);
+        let free = self.size() - k;
+        let kept = (k + converged.clamp(free / 4, free / 2)).min(self.size() - 1);
         self.basis.rotate(resources, &ritz.vectors.columns(0, kept).into_owned())?;
         self.h.fill(0.0);
         for (l, &value) in ritz.values[..kept].iter().enumerate() {

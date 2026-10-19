@@ -1,11 +1,11 @@
 //! The Lanczos basis: orthonormal vectors over the id space, stored as `f32`
 //! or `f64` with every sum accumulated in `f64` (DESIGN.md §14 item 8).
 //!
-//! The basis is row-major (row `i` holds element `i` of every basis
-//! vector), so each pass over it reads contiguous memory and splits into
-//! blocks of rows. Each row's result is summed in basis order and block
-//! partial sums are added in block order, so every pass gives the same
-//! bits for any thread count.
+//! The basis is stored in blocks of [`BLOCK`] rows, and within a block
+//! vector by vector, so a pass over the basis splits into independent row
+//! blocks and reads each vector's segment contiguously. Each row's result
+//! is summed in basis order and block partial sums are added in block
+//! order, so every pass gives the same bits for any thread count.
 
 use nalgebra::DMatrix;
 use rayon::prelude::*;
@@ -13,7 +13,7 @@ use rayon::prelude::*;
 use super::dense::BLOCK;
 use super::Resources;
 use crate::compute::{ComputeError, Element, MemoryCharge};
-use crate::interrupts::{Cancelled, Interrupts};
+use crate::interrupts::{Cancellation, Cancelled, Interrupts};
 
 /// The element type of the basis vectors.
 pub(super) trait Stored: Element {
@@ -36,11 +36,20 @@ impl Stored for f64 {
 /// Up to `capacity` basis vectors of `rows` elements.
 #[derive(Debug)]
 pub(super) struct Basis<E> {
-    rows: usize,
     capacity: usize,
     len: usize,
+    /// Block `b` holds `BLOCK × capacity` elements: vector `j`'s rows of the
+    /// block at `j·BLOCK..(j + 1)·BLOCK` (the last block padded with zeros).
     values: Vec<E>,
     _charge: MemoryCharge,
+}
+
+/// A vector made orthogonal to the basis: its coefficients `Qᵀw` and the
+/// norm of what is left.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct Orthogonalized {
+    pub(super) coefficients: Vec<f64>,
+    pub(super) norm: f64,
 }
 
 impl<E: Stored> Basis<E> {
@@ -50,15 +59,36 @@ impl<E: Stored> Basis<E> {
         rows: usize,
         capacity: usize,
     ) -> Result<Self, ComputeError> {
-        let len =
-            rows.checked_mul(capacity).ok_or(ComputeError::OutOfMemory { bytes: u64::MAX })?;
+        let len = rows
+            .div_ceil(BLOCK)
+            .checked_mul(BLOCK * capacity)
+            .ok_or(ComputeError::OutOfMemory { bytes: u64::MAX })?;
         let (values, charge) = resources.memory.filled(len, E::default())?;
-        Ok(Self { rows, capacity, len: 0, values, _charge: charge })
+        Ok(Self { capacity, len: 0, values, _charge: charge })
     }
 
     /// The number of basis vectors.
     pub(super) fn len(&self) -> usize {
         self.len
+    }
+
+    /// Runs `f(block's basis values, block's rows of w)` for every block in
+    /// parallel, and returns the results in block order.
+    fn blocks<I: Interrupts, R: Send>(
+        &self,
+        resources: &mut Resources<'_, I>,
+        w: &mut [f64],
+        f: impl Fn(&[E], &mut [f64]) -> R + Sync,
+    ) -> Result<Vec<R>, ComputeError> {
+        let values = &self.values;
+        let width = BLOCK * self.capacity;
+        resources.run(|cancellation| {
+            values
+                .par_chunks(width)
+                .zip(w.par_chunks_mut(BLOCK))
+                .map(|(block, w)| checked(cancellation).map(|()| f(block, w)))
+                .collect()
+        })
     }
 
     /// Writes basis vector `column` to `out`.
@@ -68,38 +98,67 @@ impl<E: Stored> Basis<E> {
         column: usize,
         out: &mut [f64],
     ) -> Result<(), ComputeError> {
-        let capacity = self.capacity;
-        resources.run(|cancellation| {
-            out.par_chunks_mut(BLOCK).zip(self.values.par_chunks(BLOCK * capacity)).try_for_each(
-                |(out, rows)| {
-                    if cancellation.is_cancelled() {
-                        return Err(Cancelled.into());
-                    }
-                    for (out, row) in out.iter_mut().zip(rows.chunks(capacity)) {
-                        *out = row[column].to_f64();
-                    }
-                    Ok(())
-                },
-            )
-        })
+        self.blocks(resources, out, |block, out| {
+            for (out, value) in out.iter_mut().zip(&block[column * BLOCK..]) {
+                *out = value.to_f64();
+            }
+        })?;
+        Ok(())
     }
 
-    /// Makes `w` orthogonal to every basis vector by classical Gram–Schmidt
-    /// applied twice, returning the coefficients `Qᵀw` of both passes
-    /// summed.
+    /// Makes `w`, `M` times the newest basis vector `q_j`, orthogonal to the
+    /// basis. With `previous = Some(β)`, `q_j` came from the plain
+    /// three-term recurrence (`β` its coupling to `q_{j−1}`), so in exact
+    /// arithmetic `w` lies in the span of `q_{j−1}`, `q_j` and a new
+    /// direction: the recurrence removes the first two and one pass of
+    /// classical Gram–Schmidt against the whole basis removes what rounding
+    /// left. Otherwise (after a restart or a random vector) Gram–Schmidt
+    /// runs twice.
     pub(super) fn orthogonalize<I: Interrupts>(
         &self,
         resources: &mut Resources<'_, I>,
         w: &mut [f64],
-    ) -> Result<Vec<f64>, ComputeError> {
-        let mut coefficients = self.project(resources, w)?;
-        self.subtract(resources, w, &coefficients)?;
-        let correction = self.project(resources, w)?;
-        self.subtract(resources, w, &correction)?;
-        for (c, d) in coefficients.iter_mut().zip(correction) {
-            *c += d;
-        }
-        Ok(coefficients)
+        previous: Option<f64>,
+    ) -> Result<Orthogonalized, ComputeError> {
+        let mut coefficients = vec![0.0; self.len];
+        let pending = match (previous, self.len.checked_sub(1)) {
+            (Some(beta), Some(j)) if j > 0 => {
+                let alpha = self.recurrence(resources, w, j, beta)?;
+                coefficients[j - 1] = beta;
+                coefficients[j] = alpha;
+                Some((j, alpha))
+            }
+            _ => {
+                let first = self.project(resources, w, None)?;
+                self.subtract(resources, w, &first)?;
+                add(&mut coefficients, &first);
+                None
+            }
+        };
+        let correction = self.project(resources, w, pending)?;
+        let norm = self.subtract(resources, w, &correction)?;
+        add(&mut coefficients, &correction);
+        Ok(Orthogonalized { coefficients, norm })
+    }
+
+    /// `w −= β·q_{j−1}`, then returns `α = q_jᵀw` (still to be removed).
+    fn recurrence<I: Interrupts>(
+        &self,
+        resources: &mut Resources<'_, I>,
+        w: &mut [f64],
+        j: usize,
+        beta: f64,
+    ) -> Result<f64, ComputeError> {
+        let partials = self.blocks(resources, w, |block, w| {
+            let (previous, newest) = (&block[(j - 1) * BLOCK..], &block[j * BLOCK..]);
+            let mut alpha = 0.0;
+            for ((w, p), q) in w.iter_mut().zip(previous).zip(newest) {
+                *w -= beta * p.to_f64();
+                alpha += q.to_f64() * *w;
+            }
+            alpha
+        })?;
+        Ok(partials.into_iter().fold(0.0, |a, b| a + b))
     }
 
     /// Appends `w / norm` as a basis vector; full bases ignore it.
@@ -112,20 +171,16 @@ impl<E: Stored> Basis<E> {
         if self.len == self.capacity {
             return Ok(());
         }
-        let (capacity, column) = (self.capacity, self.len);
+        let (width, column) = (BLOCK * self.capacity, self.len);
         let values = &mut self.values;
         resources.run(|cancellation| {
-            values.par_chunks_mut(BLOCK * capacity).zip(w.par_chunks(BLOCK)).try_for_each(
-                |(rows, w)| {
-                    if cancellation.is_cancelled() {
-                        return Err(Cancelled.into());
-                    }
-                    for (row, &w) in rows.chunks_mut(capacity).zip(w) {
-                        row[column] = E::from_f64(w / norm);
-                    }
-                    Ok(())
-                },
-            )
+            values.par_chunks_mut(width).zip(w.par_chunks(BLOCK)).try_for_each(|(block, w)| {
+                checked(cancellation)?;
+                for (stored, &w) in block[column * BLOCK..].iter_mut().zip(w) {
+                    *stored = E::from_f64(w / norm);
+                }
+                Ok(())
+            })
         })?;
         self.len += 1;
         Ok(())
@@ -138,21 +193,22 @@ impl<E: Stored> Basis<E> {
         resources: &mut Resources<'_, I>,
         combinations: &DMatrix<f64>,
     ) -> Result<(), ComputeError> {
-        let (capacity, len, kept) = (self.capacity, self.len, combinations.ncols());
+        let (width, len, kept) = (BLOCK * self.capacity, self.len, combinations.ncols());
         let values = &mut self.values;
         resources.run(|cancellation| {
-            values.par_chunks_mut(BLOCK * capacity).try_for_each(|rows| {
-                if cancellation.is_cancelled() {
-                    return Err(Cancelled.into());
+            values.par_chunks_mut(width).try_for_each(|block| {
+                checked(cancellation)?;
+                let mut rotated = vec![0.0; BLOCK * kept];
+                for (l, out) in rotated.chunks_mut(BLOCK).enumerate() {
+                    for j in 0..len {
+                        let c = combinations[(j, l)];
+                        for (out, value) in out.iter_mut().zip(&block[j * BLOCK..]) {
+                            *out += c * value.to_f64();
+                        }
+                    }
                 }
-                let mut rotated = vec![0.0; kept];
-                for row in rows.chunks_mut(capacity) {
-                    for (l, out) in rotated.iter_mut().enumerate() {
-                        *out = (0..len).map(|j| combinations[(j, l)] * row[j].to_f64()).sum();
-                    }
-                    for (stored, &value) in row.iter_mut().zip(&rotated) {
-                        *stored = E::from_f64(value);
-                    }
+                for (stored, &value) in block.iter_mut().zip(&rotated) {
+                    *stored = E::from_f64(value);
                 }
                 Ok(())
             })
@@ -168,78 +224,73 @@ impl<E: Stored> Basis<E> {
         coefficients: &[f64],
         out: &mut [f64],
     ) -> Result<(), ComputeError> {
-        let (capacity, len) = (self.capacity, self.len);
-        resources.run(|cancellation| {
-            out.par_chunks_mut(BLOCK).zip(self.values.par_chunks(BLOCK * capacity)).try_for_each(
-                |(out, rows)| {
-                    if cancellation.is_cancelled() {
-                        return Err(Cancelled.into());
-                    }
-                    for (out, row) in out.iter_mut().zip(rows.chunks(capacity)) {
-                        *out = (0..len).map(|j| coefficients[j] * row[j].to_f64()).sum();
-                    }
-                    Ok(())
-                },
-            )
-        })
+        self.blocks(resources, out, |block, out| {
+            out.fill(0.0);
+            for (j, &c) in coefficients.iter().enumerate() {
+                for (out, value) in out.iter_mut().zip(&block[j * BLOCK..]) {
+                    *out += c * value.to_f64();
+                }
+            }
+        })?;
+        Ok(())
     }
 
-    /// `Qᵀw`.
+    /// `Qᵀw`, after `w −= c·q_j` for `pending = Some((j, c))`.
     fn project<I: Interrupts>(
         &self,
         resources: &mut Resources<'_, I>,
-        w: &[f64],
+        w: &mut [f64],
+        pending: Option<(usize, f64)>,
     ) -> Result<Vec<f64>, ComputeError> {
-        let (capacity, len) = (self.capacity, self.len);
-        let blocks = self.rows.div_ceil(BLOCK);
-        let (mut partials, _charge) = resources.memory.filled(blocks * len.max(1), 0.0)?;
-        resources.run(|cancellation| {
-            partials
-                .par_chunks_mut(len.max(1))
-                .zip(self.values.par_chunks(BLOCK * capacity))
-                .zip(w.par_chunks(BLOCK))
-                .try_for_each(|((partial, rows), w)| {
-                    if cancellation.is_cancelled() {
-                        return Err(Cancelled.into());
-                    }
-                    for (row, &w) in rows.chunks(capacity).zip(w) {
-                        for (sum, value) in partial.iter_mut().zip(&row[..len]) {
-                            *sum += value.to_f64() * w;
-                        }
-                    }
-                    Ok(())
-                })
+        let len = self.len;
+        let partials = self.blocks(resources, w, |block, w| {
+            if let Some((j, c)) = pending {
+                for (w, q) in w.iter_mut().zip(&block[j * BLOCK..]) {
+                    *w -= c * q.to_f64();
+                }
+            }
+            let dot = |j: usize| {
+                w.iter().zip(&block[j * BLOCK..]).fold(0.0, |sum, (w, q)| sum + q.to_f64() * w)
+            };
+            (0..len).map(dot).collect::<Vec<f64>>()
         })?;
         let mut coefficients = vec![0.0; len];
-        for partial in partials.chunks(len.max(1)) {
-            for (sum, &value) in coefficients.iter_mut().zip(partial) {
-                *sum += value;
-            }
+        for partial in &partials {
+            add(&mut coefficients, partial);
         }
         Ok(coefficients)
     }
 
-    /// `w −= Q·coefficients`.
+    /// `w −= Q·coefficients`; returns `‖w‖₂` after.
     fn subtract<I: Interrupts>(
         &self,
         resources: &mut Resources<'_, I>,
         w: &mut [f64],
         coefficients: &[f64],
-    ) -> Result<(), ComputeError> {
-        let (capacity, len) = (self.capacity, self.len);
-        resources.run(|cancellation| {
-            w.par_chunks_mut(BLOCK).zip(self.values.par_chunks(BLOCK * capacity)).try_for_each(
-                |(w, rows)| {
-                    if cancellation.is_cancelled() {
-                        return Err(Cancelled.into());
-                    }
-                    for (w, row) in w.iter_mut().zip(rows.chunks(capacity)) {
-                        let sum: f64 = (0..len).map(|j| coefficients[j] * row[j].to_f64()).sum();
-                        *w -= sum;
-                    }
-                    Ok(())
-                },
-            )
-        })
+    ) -> Result<f64, ComputeError> {
+        let partials = self.blocks(resources, w, |block, w| {
+            for (j, &c) in coefficients.iter().enumerate() {
+                for (w, q) in w.iter_mut().zip(&block[j * BLOCK..]) {
+                    *w -= c * q.to_f64();
+                }
+            }
+            w.iter().map(|w| w * w).sum::<f64>()
+        })?;
+        Ok(partials.into_iter().fold(0.0, |a, b| a + b).sqrt())
+    }
+}
+
+/// Fails if the job has been cancelled.
+fn checked(cancellation: &Cancellation) -> Result<(), ComputeError> {
+    match cancellation.is_cancelled() {
+        true => Err(Cancelled.into()),
+        false => Ok(()),
+    }
+}
+
+/// `sum += part`, elementwise.
+fn add(sum: &mut [f64], part: &[f64]) {
+    for (sum, part) in sum.iter_mut().zip(part) {
+        *sum += part;
     }
 }
