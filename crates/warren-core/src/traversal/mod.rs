@@ -20,6 +20,7 @@ mod reachable;
 mod scratch;
 mod shortest_path;
 mod stats;
+mod walk;
 
 #[cfg(test)]
 mod example;
@@ -37,3 +38,4 @@ pub use node_set::NodeSet;
 pub use reachable::{reachable, reachable_set, reachable_set_each};
 pub use shortest_path::shortest_path;
 pub use stats::{TraversalStats, Traversed};
+pub use walk::{HopRange, Step};
