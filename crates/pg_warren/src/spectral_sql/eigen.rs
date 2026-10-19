@@ -193,6 +193,8 @@ mod tests {
             ("'p', 1, dtype := 'i64'", "22023: unknown precision \"i64\""),
             ("'d', 1, symmetrize := false", "22023: the matrix is not symmetric"),
             ("'nope', 1", "42704: graph \"nope\" does not exist"),
+            // The library's reserved prefix is never persisted (§6.7).
+            ("'p', 1, vectors_prefix := '_warren_e'", "42939: "),
         ];
         for (args, expected) in cases {
             let found = failure(&format!("warren.eigen({args})"))?.unwrap_or_default();
