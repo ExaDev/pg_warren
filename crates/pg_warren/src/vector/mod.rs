@@ -22,7 +22,7 @@ pub(crate) use cache::{evict_vectors, forget, load, remember};
 pub(crate) use error::VectorError;
 pub(crate) use persist::{read_vector, write_vector};
 pub(crate) use spi::SpiVectorStore;
-pub(crate) use store::{ChunkVisitor, VectorId, VectorRecord, VectorStore};
+pub(crate) use store::{Binding, ChunkSource, ChunkVisitor, VectorId, VectorRecord, VectorStore};
 
 #[cfg(test)]
 pub(crate) use store::tests::MemoryVectorStore;

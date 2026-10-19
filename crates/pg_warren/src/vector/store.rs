@@ -1,5 +1,6 @@
 //! The port to `warren.vectors` and `warren.vector_chunks`.
 
+use pgrx::pg_sys;
 use warren_core::compute::Dtype;
 
 use super::VectorError;
@@ -21,34 +22,69 @@ pub(crate) struct VectorRecord {
     pub(crate) width: usize,
     /// Rows: the version's id space.
     pub(crate) length: u64,
+    /// The role that wrote it.
+    pub(crate) created_by: pg_sys::Oid,
+}
+
+/// Where a vector is written: its graph, version and name, and the role
+/// writing it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Binding<'a> {
+    /// `graphs.graph_id`.
+    pub(crate) graph_id: i32,
+    /// The version it is bound to.
+    pub(crate) version: VersionId,
+    /// Its name, unique within the version.
+    pub(crate) name: &'a str,
+    /// The role writing it.
+    pub(crate) created_by: pg_sys::Oid,
+}
+
+impl<'a> Binding<'a> {
+    /// Vector `name` bound to `version` of graph `graph_id`, written by role
+    /// `created_by`.
+    pub(crate) fn new(
+        graph_id: i32,
+        version: VersionId,
+        name: &'a str,
+        created_by: pg_sys::Oid,
+    ) -> Self {
+        Self { graph_id, version, name, created_by }
+    }
 }
 
 /// Receives a vector's chunks as (chunk number, bytes).
 pub(crate) type ChunkVisitor<'a> = dyn FnMut(i32, &[u8]) -> Result<(), VectorError> + 'a;
+
+/// Stores the next chunk of a vector.
+pub(crate) type ChunkSink<'a> = dyn FnMut(&[u8]) -> Result<(), VectorError> + 'a;
+
+/// Produces a vector's chunks, in order, into a sink.
+pub(crate) type ChunkSource<'a> = dyn FnMut(&mut ChunkSink<'_>) -> Result<(), VectorError> + 'a;
 
 /// The port to the vectors bound to each version, and their chunks.
 pub(crate) trait VectorStore {
     /// The vectors bound to `version`, by name.
     fn bound(&mut self, version: VersionId) -> Result<Vec<VectorRecord>, VectorError>;
 
-    /// Records a vector named `name` bound to `version` of graph
-    /// `graph_id`, replacing any of that name, and returns its id.
+    /// Records a vector at `binding`, replacing any of that name, and
+    /// returns its id. A vector of that name written meanwhile by a
+    /// concurrent transaction is [`VectorError::WrittenConcurrently`].
     fn insert(
         &mut self,
-        graph_id: i32,
-        version: VersionId,
-        name: &str,
+        binding: &Binding<'_>,
         dtype: Dtype,
         width: usize,
         length: u64,
     ) -> Result<VectorId, VectorError>;
 
-    /// Stores one chunk of a vector.
-    fn write_chunk(
+    /// Stores the chunks `source` produces as chunks `0..n` of `vector`
+    /// (named `name`, for errors), through one prepared statement.
+    fn write_chunks(
         &mut self,
         vector: VectorId,
-        chunk_no: i32,
-        data: &[u8],
+        name: &str,
+        source: &mut ChunkSource<'_>,
     ) -> Result<(), VectorError>;
 
     /// Passes each chunk of a vector to `each` as (chunk number, bytes), in
@@ -94,29 +130,39 @@ pub(crate) mod tests {
 
         fn insert(
             &mut self,
-            _graph_id: i32,
-            version: VersionId,
-            name: &str,
+            binding: &Binding<'_>,
             dtype: Dtype,
             width: usize,
             length: u64,
         ) -> Result<VectorId, VectorError> {
-            self.delete(version, name)?;
+            self.delete(binding.version, binding.name)?;
             self.next += 1;
-            let record =
-                VectorRecord { vector: self.next, name: name.to_owned(), dtype, width, length };
-            self.rows.insert(self.next, (version, record));
+            let record = VectorRecord {
+                vector: self.next,
+                name: binding.name.to_owned(),
+                dtype,
+                width,
+                length,
+                created_by: binding.created_by,
+            };
+            self.rows.insert(self.next, (binding.version, record));
             Ok(self.next)
         }
 
-        fn write_chunk(
+        fn write_chunks(
             &mut self,
             vector: VectorId,
-            chunk_no: i32,
-            data: &[u8],
+            name: &str,
+            source: &mut ChunkSource<'_>,
         ) -> Result<(), VectorError> {
-            self.chunks.insert((vector, chunk_no), data.to_vec());
-            Ok(())
+            let mut chunk_no = 0i32;
+            source(&mut |data| {
+                self.chunks.insert((vector, chunk_no), data.to_vec());
+                chunk_no = chunk_no
+                    .checked_add(1)
+                    .ok_or_else(|| VectorError::TooManyChunks(name.to_owned()))?;
+                Ok(())
+            })
         }
 
         fn read_chunks(

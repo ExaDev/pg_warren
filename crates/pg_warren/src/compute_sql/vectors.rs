@@ -16,7 +16,8 @@ use crate::catalog::{GraphDefinition, VersionId};
 use crate::segment::CHUNK_SIZE;
 use crate::source::IdDatum;
 use crate::vector::{
-    forget, load, remember, write_vector, SpiVectorStore, VectorId, VectorRecord, VectorStore,
+    forget, load, remember, write_vector, Binding, SpiVectorStore, VectorId, VectorRecord,
+    VectorStore,
 };
 
 /// The budget cached vectors are charged to while cached: unlimited, since
@@ -134,8 +135,10 @@ impl<E: IdDatum> Vectors<E> {
             forget(old);
         }
         let graph_id = self.graph.graph_id;
-        let record =
-            write_vector(&mut SpiVectorStore, graph_id, self.version, name, &vector, CHUNK_SIZE)?;
+        // SAFETY: reads the backend's current user id: the caller's role.
+        let caller = unsafe { pgrx::pg_sys::GetUserId() };
+        let binding = Binding::new(graph_id, self.version, name, caller);
+        let record = write_vector(&mut SpiVectorStore, &binding, &vector, CHUNK_SIZE)?;
         let id = record.vector;
         remember(graph_id, id, Arc::new(vector));
         self.records.retain(|bound| bound.name != name);

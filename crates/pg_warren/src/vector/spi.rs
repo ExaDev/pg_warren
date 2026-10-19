@@ -4,16 +4,18 @@
 
 use pgrx::prelude::*;
 use pgrx::spi::SpiHeapTupleData;
+use pgrx::PgOid;
 use warren_core::compute::Dtype;
 
-use super::{ChunkVisitor, VectorError, VectorId, VectorRecord, VectorStore};
+use super::{Binding, ChunkSource, ChunkVisitor, VectorError, VectorId, VectorRecord, VectorStore};
 use crate::access::as_extension_owner;
 use crate::catalog::VersionId;
 
 /// `warren.vectors` and `warren.vector_chunks`.
 pub(crate) struct SpiVectorStore;
 
-/// A `vectors` row as (vector_id, name, dtype, width, length).
+/// A `vectors` row as (vector_id, name, dtype, width, length,
+/// created_by::oid).
 fn record(row: &SpiHeapTupleData<'_>) -> Result<VectorRecord, VectorError> {
     let vector: VectorId = row.get(1)?.unwrap_or_default();
     let dtype: String = row.get(3)?.unwrap_or_default();
@@ -23,6 +25,7 @@ fn record(row: &SpiHeapTupleData<'_>) -> Result<VectorRecord, VectorError> {
         dtype: dtype.parse::<Dtype>().map_err(|_| VectorError::UnknownDtype { vector, dtype })?,
         width: usize::try_from(row.get::<i32>(4)?.unwrap_or(1)).unwrap_or(1),
         length: u64::try_from(row.get::<i64>(5)?.unwrap_or_default()).unwrap_or_default(),
+        created_by: row.get::<pg_sys::Oid>(6)?.unwrap_or(pg_sys::Oid::INVALID),
     })
 }
 
@@ -32,7 +35,8 @@ impl VectorStore for SpiVectorStore {
             Spi::connect(|client| {
                 client
                     .select(
-                        "SELECT vector_id, name, dtype, width, length FROM warren.vectors
+                        "SELECT vector_id, name, dtype, width, length, created_by::oid
+                         FROM warren.vectors
                          WHERE version_id = $1 ORDER BY name",
                         None,
                         &[version.into()],
@@ -45,53 +49,74 @@ impl VectorStore for SpiVectorStore {
 
     fn insert(
         &mut self,
-        graph_id: i32,
-        version: VersionId,
-        name: &str,
+        binding: &Binding<'_>,
         dtype: Dtype,
         width: usize,
         length: u64,
     ) -> Result<VectorId, VectorError> {
-        self.delete(version, name)?;
+        self.delete(binding.version, binding.name)?;
         let width = i32::try_from(width).unwrap_or(i32::MAX);
         let length = i64::try_from(length).unwrap_or(i64::MAX);
-        as_extension_owner(|| {
+        // A concurrent transaction that deleted the old row first makes
+        // this one wait on it, then find nothing to delete; its own new row
+        // is then a conflict, reported as such rather than as a raw
+        // unique_violation.
+        let id = as_extension_owner(|| {
             Spi::connect_mut(|client| {
-                let row = client
-                    .update(
-                        "INSERT INTO warren.vectors (graph_id, version_id, name, dtype, width, length)
-                         VALUES ($1, $2, $3, $4, $5, $6) RETURNING vector_id",
-                        Some(1),
-                        &[
-                            graph_id.into(),
-                            version.into(),
-                            name.into(),
-                            dtype.name().into(),
-                            width.into(),
-                            length.into(),
-                        ],
-                    )?
-                    .first();
-                Ok(row.get::<VectorId>(1)?.unwrap_or_default())
+                let rows = client.update(
+                    "INSERT INTO warren.vectors
+                         (graph_id, version_id, name, dtype, width, length, created_by)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7)
+                     ON CONFLICT (graph_id, version_id, name) DO NOTHING
+                     RETURNING vector_id",
+                    None,
+                    &[
+                        binding.graph_id.into(),
+                        binding.version.into(),
+                        binding.name.into(),
+                        dtype.name().into(),
+                        width.into(),
+                        length.into(),
+                        binding.created_by.into(),
+                    ],
+                )?;
+                Ok::<_, VectorError>(match rows.is_empty() {
+                    true => None,
+                    false => rows.first().get::<VectorId>(1)?,
+                })
             })
+        })?;
+        id.ok_or_else(|| VectorError::WrittenConcurrently {
+            name: binding.name.to_owned(),
+            version: binding.version,
         })
     }
 
-    fn write_chunk(
+    fn write_chunks(
         &mut self,
         vector: VectorId,
-        chunk_no: i32,
-        data: &[u8],
+        name: &str,
+        source: &mut ChunkSource<'_>,
     ) -> Result<(), VectorError> {
         as_extension_owner(|| {
             Spi::connect_mut(|client| {
-                client.update(
+                let insert = client.prepare_mut(
                     "INSERT INTO warren.vector_chunks (vector_id, chunk_no, data)
                      VALUES ($1, $2, $3)",
-                    None,
-                    &[vector.into(), chunk_no.into(), data.into()],
+                    &[
+                        PgOid::from(pg_sys::INT8OID),
+                        PgOid::from(pg_sys::INT4OID),
+                        PgOid::from(pg_sys::BYTEAOID),
+                    ],
                 )?;
-                Ok(())
+                let mut chunk_no = 0i32;
+                source(&mut |data| {
+                    client.update(&insert, None, &[vector.into(), chunk_no.into(), data.into()])?;
+                    chunk_no = chunk_no
+                        .checked_add(1)
+                        .ok_or_else(|| VectorError::TooManyChunks(name.to_owned()))?;
+                    Ok(())
+                })
             })
         })
     }
@@ -163,7 +188,13 @@ mod tests {
     use super::SpiVectorStore;
     use crate::fixture::{refresh, ring};
     use crate::segment::CHUNK_SIZE;
-    use crate::vector::{read_vector, write_vector, VectorStore};
+    use crate::vector::{read_vector, write_vector, Binding, VectorStore};
+
+    /// The session's current role.
+    fn me() -> pg_sys::Oid {
+        // SAFETY: reads the backend's current user id.
+        unsafe { pg_sys::GetUserId() }
+    }
 
     fn graph_id(name: &str) -> Result<i32, Error> {
         Spi::get_one::<i32>(&format!("SELECT graph_id FROM warren.graphs WHERE name = '{name}'"))?
@@ -180,19 +211,25 @@ mod tests {
             .map_err(|_| Error::InvalidPosition)?
             .into();
         let mut store = SpiVectorStore;
-        let record =
-            write_vector(&mut store, graph_id("vs")?, version, "roots", &vector, CHUNK_SIZE)
-                .map_err(|_| Error::InvalidPosition)?;
+        let record = write_vector(
+            &mut store,
+            &Binding::new(graph_id("vs")?, version, "roots", me()),
+            &vector,
+            CHUNK_SIZE,
+        )
+        .map_err(|_| Error::InvalidPosition)?;
         let chunks = Spi::get_one::<i64>(&format!(
             "SELECT count(*) FROM warren.vector_chunks WHERE vector_id = {}",
             record.vector
         ))?;
         assert_eq!(chunks, Some(3), "2400 bytes in 1 KiB chunks");
         let row = Spi::get_one::<String>(&format!(
-            "SELECT name || ' ' || dtype || ' ' || width || ' ' || length FROM warren.vectors
+            "SELECT name || ' ' || dtype || ' ' || width || ' ' || length || ' ' || created_by
+             FROM warren.vectors
              WHERE version_id = {version}"
         ))?;
-        assert_eq!(row.as_deref(), Some("roots f64 1 300"));
+        let user = Spi::get_one::<String>("SELECT current_user::text")?.unwrap_or_default();
+        assert_eq!(row, Some(format!("roots f64 1 300 {user}")));
         let back = read_vector(&mut store, &memory, &record).map_err(|_| Error::InvalidPosition)?;
         assert_eq!(back, vector);
         assert_eq!(store.bound(version).map_err(|_| Error::InvalidPosition)?, [record]);
@@ -208,10 +245,12 @@ mod tests {
             Vector::filled(&memory, 10, 1, 1i64).map_err(|_| Error::InvalidPosition)?.into();
         let mut store = SpiVectorStore;
         let graph = graph_id("vs")?;
-        let first = write_vector(&mut store, graph, version, "x", &ones, CHUNK_SIZE)
-            .map_err(|_| Error::InvalidPosition)?;
-        let second = write_vector(&mut store, graph, version, "x", &ones, CHUNK_SIZE)
-            .map_err(|_| Error::InvalidPosition)?;
+        let first =
+            write_vector(&mut store, &Binding::new(graph, version, "x", me()), &ones, CHUNK_SIZE)
+                .map_err(|_| Error::InvalidPosition)?;
+        let second =
+            write_vector(&mut store, &Binding::new(graph, version, "x", me()), &ones, CHUNK_SIZE)
+                .map_err(|_| Error::InvalidPosition)?;
         let existing =
             store.existing(&[first.vector, second.vector]).map_err(|_| Error::InvalidPosition)?;
         assert_eq!(existing, [second.vector]);
