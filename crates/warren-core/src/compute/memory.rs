@@ -112,6 +112,17 @@ impl MemoryCharge {
         Ok(())
     }
 
+    /// Room for one more element in `buffer`, charged first and reserved
+    /// with `try_reserve`; nothing is charged if either fails.
+    pub(crate) fn reserve_one<T>(&mut self, buffer: &mut Vec<T>) -> Result<(), ComputeError> {
+        let bytes = size_of::<T>() as u64;
+        self.grow(bytes)?;
+        buffer.try_reserve(1).map_err(|_| {
+            self.shrink(bytes);
+            ComputeError::OutOfMemory { bytes }
+        })
+    }
+
     /// Releases `bytes` of this charge.
     pub(crate) fn shrink(&mut self, bytes: u64) {
         let bytes = bytes.min(self.bytes);
@@ -170,6 +181,18 @@ mod tests {
         assert_eq!((charge.bytes(), memory.in_use()), (3, 3));
         charge.shrink(99);
         assert_eq!((charge.bytes(), memory.in_use()), (0, 0));
+    }
+
+    #[test]
+    fn room_for_one_more_element_is_charged_first() {
+        let memory = ComputeMemory::new(12);
+        let mut charge = memory.charge(0).unwrap();
+        let mut buffer = Vec::<u64>::new();
+        charge.reserve_one(&mut buffer).unwrap();
+        assert!(buffer.capacity() >= 1);
+        assert_eq!(charge.bytes(), 8);
+        assert!(matches!(charge.reserve_one(&mut buffer), Err(ComputeError::MemoryLimit { .. })));
+        assert_eq!(memory.in_use(), 8);
     }
 
     #[test]

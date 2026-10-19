@@ -2,5 +2,7 @@
 //! them at each receiver, in-engine (DESIGN.md §6.4, tier 2).
 
 mod combiner;
+mod messages;
 
 pub use combiner::Combiner;
+pub use messages::Messages;
