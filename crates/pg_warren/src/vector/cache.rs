@@ -41,7 +41,13 @@ impl VectorCache {
         self.entries.insert(id, Entry { graph_id, vector, last_used: Instant::now() });
     }
 
-    /// Each cached vector's id, bytes and last use, by vector id.
+    /// The heap bytes the cached vectors hold.
+    pub(crate) fn bytes(&self) -> u64 {
+        self.entries.values().map(|entry| entry.vector.bytes()).sum()
+    }
+
+    /// Each cached vector's id, bytes and last use, by vector id. A tuple,
+    /// not `cache::lru::Held`: `vector` must not depend on `cache`.
     pub(crate) fn held(&self) -> Vec<(VectorId, u64, Instant)> {
         let mut held: Vec<_> = self
             .entries
@@ -112,6 +118,11 @@ pub(crate) fn remember(graph_id: i32, id: VectorId, vector: Arc<AnyVector>) {
 /// Drops vector `id` from this backend's cache: its row was just deleted.
 pub(crate) fn forget(id: VectorId) {
     CACHE.with_borrow_mut(|cache| cache.remove(id));
+}
+
+/// The heap bytes this backend's cached vectors hold.
+pub(crate) fn cached_vector_bytes() -> u64 {
+    CACHE.with_borrow(VectorCache::bytes)
 }
 
 /// Each of this backend's cached vectors' id, bytes and last use, by

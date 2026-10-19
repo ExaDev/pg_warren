@@ -53,21 +53,17 @@ pub(crate) fn resolve(
 /// reach only by asking for them explicitly (scans holding one keep their
 /// copy, and a later explicit call reloads it); and a load ends by
 /// trimming the cache to `warren.max_cache_memory`, which may evict the
-/// version just loaded (the caller still holds it).
+/// version just loaded (the caller still holds it). A hit trims it too, so
+/// a lowered cap takes effect at the next lookup.
 pub(crate) fn cached<E: IdDatum + Send + Sync>(
     resolved: &Resolved,
 ) -> Result<Arc<LoadedVersion<E>>, CacheError> {
     let (graph_id, version) = (resolved.graph.graph_id, resolved.version);
     if let Some(loaded) = CACHE.with_borrow_mut(|cache| cache.get::<E>(version)) {
+        trim();
         return Ok(loaded);
     }
-    let mut cached = CACHE.with_borrow(VersionCache::versions);
-    cached.extend(transient_versions());
-    cached.sort_unstable();
-    cached.dedup();
-    let existing = existing_versions(&cached)?;
-    CACHE.with_borrow_mut(|cache| cache.retain(&existing));
-    retain_transients(&existing);
+    prune_dropped()?;
     // Load outside any borrow of the cache: loading runs SPI, which may
     // raise an ERROR that unwinds through this frame.
     let loaded = load::<E>(&mut SpiSegmentStore, version)?;
@@ -80,6 +76,21 @@ pub(crate) fn cached<E: IdDatum + Send + Sync>(
     });
     trim();
     Ok(loaded)
+}
+
+/// Drops this backend's cached versions, and transient vectors (of every
+/// role), of versions that no longer exist as of the statement's snapshot:
+/// dropped with their graphs, by `drop_version` or by retention, here or in
+/// another backend, or rolled back.
+pub(super) fn prune_dropped() -> Result<(), CacheError> {
+    let mut cached = CACHE.with_borrow(VersionCache::versions);
+    cached.extend(transient_versions());
+    cached.sort_unstable();
+    cached.dedup();
+    let existing = existing_versions(&cached)?;
+    CACHE.with_borrow_mut(|cache| cache.retain(&existing));
+    retain_transients(&existing);
+    Ok(())
 }
 
 /// Drops this backend's cached versions of graph `graph_id`; returns how

@@ -80,6 +80,17 @@ pub(crate) fn transient_bytes() -> u64 {
     TRANSIENT.with_borrow(|map| map.values().map(|vector| vector.bytes()).sum())
 }
 
+/// The heap bytes the current role's transient vectors hold.
+pub(crate) fn role_transient_bytes() -> u64 {
+    let role = role();
+    TRANSIENT.with_borrow(|map| {
+        map.iter()
+            .filter(|((_, _, owner, _), _)| *owner == role)
+            .map(|(_, vector)| vector.bytes())
+            .sum()
+    })
+}
+
 /// The versions that have transient vectors (of any role), ascending.
 pub(crate) fn transient_versions() -> Vec<VersionId> {
     let mut versions: Vec<VersionId> =
@@ -131,11 +142,13 @@ mod tests {
         Spi::run("CREATE ROLE other; SET ROLE other")?;
         keep_transient(1, 10, "a", vector(5.0)?);
         let all_roles = transient_bytes();
+        let own = role_transient_bytes();
         let other: Vec<String> = transients(1, 10).into_iter().map(|(name, _)| name).collect();
         assert_eq!(evict_transients(1), 1, "another role evicts only its own");
         Spi::run("RESET ROLE")?;
         assert_eq!(other, ["a"]);
         assert_eq!(all_roles, 5 * 16, "every role's transient vectors count");
+        assert_eq!(own, 16);
         let names: Vec<String> = transients(1, 10).into_iter().map(|(name, _)| name).collect();
         assert_eq!(names, ["a", "b"]);
         assert_eq!(transient(1, 10, "a"), Some(vector(2.0)?));

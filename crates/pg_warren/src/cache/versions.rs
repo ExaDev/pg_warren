@@ -64,6 +64,11 @@ impl VersionCache {
         loaded
     }
 
+    /// The heap bytes the cached versions hold.
+    pub(crate) fn bytes(&self) -> u64 {
+        self.entries.values().map(|entry| entry.bytes).sum()
+    }
+
     /// Each cached version's bytes and last use, by version id.
     pub(crate) fn held(&self) -> Vec<Held<VersionId>> {
         let mut held: Vec<_> = self
