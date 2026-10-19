@@ -74,6 +74,18 @@ impl AnyCsr {
     }
 }
 
+impl From<Csr<u32>> for AnyCsr {
+    fn from(csr: Csr<u32>) -> Self {
+        Self::U32(csr)
+    }
+}
+
+impl From<Csr<u64>> for AnyCsr {
+    fn from(csr: Csr<u64>) -> Self {
+        Self::U64(csr)
+    }
+}
+
 /// The targets of one row, as dense ids.
 #[derive(Debug, Clone)]
 pub enum Neighbours<'a> {

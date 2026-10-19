@@ -66,4 +66,21 @@ pub enum GraphError {
         /// The number of weights given.
         found: u64,
     },
+    /// A CSR's target width must represent every dense id of its id space.
+    #[error("id space exceeds the CSR target width")]
+    IdSpaceExceedsTargetWidth,
+    /// An edge endpoint is not a dense id of the id space.
+    #[error("edge {from} → {to} lies outside the id space")]
+    EdgeOutsideIdSpace {
+        /// The edge's source (named `from`: thiserror reserves `source`).
+        from: DenseId,
+        /// The edge's target.
+        to: DenseId,
+    },
+    /// An edge's relation is not in the relation dictionary.
+    #[error("relation {relation} is not in the relation dictionary")]
+    RelationOutsideDictionary {
+        /// The relation index.
+        relation: u64,
+    },
 }

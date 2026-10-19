@@ -7,11 +7,15 @@
 //! uses [`AnyCsr`], which hides the width behind iterators of [`DenseId`].
 
 mod any;
+mod build;
+mod graph_csr;
 mod target;
+mod transpose;
 
 use std::ops::Range;
 
 pub use any::{AnyCsr, Neighbours};
+pub use graph_csr::{GraphCsr, RelationCsr};
 pub use target::Target;
 
 use super::{DenseId, GraphError};
@@ -28,7 +32,7 @@ pub struct Csr<T> {
 impl<T: Target> Csr<T> {
     /// A CSR from its segments, after checking every invariant: `id_space +
     /// 1` offsets starting at 0, monotonic, ending at the number of targets;
-    /// every target inside the id space; each row strictly ascending (sorted,
+    /// every target inside the id space; every dense id representable as `T`; each row strictly ascending (sorted,
     /// no parallel edges); one weight per target.
     pub fn from_parts(
         id_space: u64,
@@ -37,6 +41,9 @@ impl<T: Target> Csr<T> {
         weights: Option<Vec<f64>>,
     ) -> Result<Self, GraphError> {
         let rows = id_space.checked_add(1).ok_or(GraphError::IdSpaceTooLarge)?;
+        if id_space > 0 && T::from_dense(id_space - 1).is_none() {
+            return Err(GraphError::IdSpaceExceedsTargetWidth);
+        }
         if offsets.len() as u64 != rows {
             return Err(GraphError::OffsetsLength { expected: rows, found: offsets.len() as u64 });
         }
@@ -222,6 +229,10 @@ mod tests {
         assert_eq!(
             Csr::<u64>::from_parts(u64::MAX, vec![0], vec![], None).unwrap_err(),
             GraphError::IdSpaceTooLarge
+        );
+        assert_eq!(
+            Csr::<u32>::from_parts(1 << 32 | 1, vec![0], vec![], None).unwrap_err(),
+            GraphError::IdSpaceExceedsTargetWidth
         );
     }
 }

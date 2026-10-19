@@ -11,7 +11,7 @@ mod sealed {
 }
 
 /// A target width: `u32` when the id space is below 2³², else `u64`.
-pub trait Target: Copy + Ord + Debug + Send + Sync + 'static + sealed::Sealed {
+pub trait Target: Copy + Ord + Default + Debug + Send + Sync + 'static + sealed::Sealed {
     /// `id` at this width, if it fits.
     fn from_dense(id: DenseId) -> Option<Self>;
 
