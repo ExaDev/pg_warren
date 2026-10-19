@@ -7,20 +7,24 @@
 
 mod cast;
 mod dtype;
+mod encoding;
 mod error;
 mod map;
 mod memory;
 mod message;
 mod product;
+mod ranking;
 mod reduce;
 #[cfg(test)]
 #[cfg(not(miri))]
 pub(crate) mod reference;
 mod semiring;
+mod summary;
 mod vector;
 mod workers;
 
 pub use dtype::{Dtype, Element};
+pub use encoding::{encode, Decoder};
 pub use error::{ArithmeticError, ComputeError};
 pub use map::{
     map, AnyExpr, Arithmetic, BoolOp, Comparands, Comparison, Expr, F32Op, F64Op, Function, I64Op,
@@ -29,7 +33,9 @@ pub use map::{
 pub use memory::{ComputeMemory, MemoryCharge};
 pub use message::{Bytes, Message, MessageBuffer, PackedBytes};
 pub use product::{spmm, spmv, Mask, Product};
-pub use reduce::{norm_diff, reduce, Norm, Reduction};
+pub use ranking::top_k;
+pub use reduce::{norm_diff, reduce, reduce_live, Norm, Reduction};
 pub use semiring::{BinaryOp, Monoid, Semiring, SemiringElement};
+pub use summary::{summarise, Summary};
 pub use vector::{AnyVector, Vector};
 pub use workers::Workers;

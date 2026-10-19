@@ -43,6 +43,12 @@ pub(crate) enum SourceError {
         /// The column's type.
         found: String,
     },
+    /// The query is not one SELECT (or VALUES, or TABLE).
+    #[error("{query} must be a single SELECT (or VALUES, or TABLE)")]
+    NotASelect {
+        /// The query's name.
+        query: &'static str,
+    },
     /// The query text contains a NUL byte.
     #[error("{query} contains a NUL byte")]
     NulByte {
@@ -58,6 +64,7 @@ impl SqlError for SourceError {
                 PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH
             }
             Self::NulByte { .. } => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+            Self::NotASelect { .. } => PgSqlErrorCode::ERRCODE_SYNTAX_ERROR,
         }
     }
 }

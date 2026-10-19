@@ -88,7 +88,21 @@ fn generate(shape: &Shape, tombstones: bool) -> Result<(), Error> {
              'SELECT src, dst{rel}{w} FROM {g}_edges', directed := {directed},
              weighted := {weighted}, has_relations := {relations},
              build_reverse := {reverse});
-         SELECT warren.refresh('{g}');",
+         SELECT warren.refresh('{g}');
+         -- Starts: three nodes, an id that is not a node, NULL, a repeat, and
+         -- (chosen before any tombstoning) node i = 17, which tombstoning
+         -- removes.
+         CREATE TABLE {g}_starts AS
+             (SELECT id FROM {g}_nodes WHERE id IS NOT NULL ORDER BY md5(id::text) LIMIT 3)
+             UNION ALL (SELECT id FROM {g}_ix WHERE i = 50)
+             UNION ALL (SELECT NULL)
+             UNION ALL (SELECT id FROM {g}_nodes WHERE id IS NOT NULL
+                        ORDER BY md5(id::text) LIMIT 1)
+             UNION ALL (SELECT id FROM {g}_ix WHERE i = 17);
+         CREATE TABLE {g}_filter AS
+             SELECT id FROM {g}_ix WHERE i % 5 <> 0 OR i % 50 = 0;
+         CREATE TABLE {g}_sample AS
+             SELECT id FROM {g}_ix ORDER BY md5(id::text || 's') LIMIT 60;",
         rel = if shape.relations { ", rel" } else { "" },
         w = if shape.weighted { ", w" } else { "" },
         directed = shape.directed,
@@ -124,18 +138,7 @@ fn generate(shape: &Shape, tombstones: bool) -> Result<(), Error> {
              WITH valid AS ({valid}), stored AS ({both_ways})
              SELECT src, dst, rel, {sum} AS w FROM stored GROUP BY src, dst, rel;
          CREATE INDEX ON {g}_arc (src, dst);
-         ANALYZE {g}_arc;
-         -- Starts: three nodes, an id that is not a node, NULL, a repeat.
-         CREATE TABLE {g}_starts AS
-             (SELECT id FROM {g}_nodes WHERE id IS NOT NULL ORDER BY md5(id::text) LIMIT 3)
-             UNION ALL (SELECT id FROM {g}_ix WHERE i = 50)
-             UNION ALL (SELECT NULL)
-             UNION ALL (SELECT id FROM {g}_nodes WHERE id IS NOT NULL
-                        ORDER BY md5(id::text) LIMIT 1);
-         CREATE TABLE {g}_filter AS
-             SELECT id FROM {g}_ix WHERE i % 5 <> 0 OR i % 50 = 0;
-         CREATE TABLE {g}_sample AS
-             SELECT id FROM {g}_ix ORDER BY md5(id::text || 's') LIMIT 60;"
+         ANALYZE {g}_arc;"
     ))
 }
 

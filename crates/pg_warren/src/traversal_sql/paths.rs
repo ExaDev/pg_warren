@@ -6,18 +6,18 @@
 use pgrx::prelude::*;
 use pgrx::{AnyArray, AnyElement};
 use warren_core::graph::DenseId;
-use warren_core::graph::RelationSelection;
 use warren_core::traversal::{
     dijkstra as cheapest_path, reachable as reaches, shortest_path as shortest, Adjacency,
     Direction, TraversalStats,
 };
 
-use super::args::{bound, direction, relations};
-use super::ids::{element, external_array};
-use super::interrupts::PostgresInterrupts;
+use super::args::bound;
 use super::stats::Recorder;
 use super::{entry, TraversalSqlError};
 use crate::cache::{cached, resolve, LoadedVersion, Resolved};
+use crate::external_ids::{element, element_widened, external_array};
+use crate::interrupts::PostgresInterrupts;
+use crate::selection::{adjacency, direction};
 use crate::source::{with_id_type, IdDatum, IdType};
 
 /// `warren.reachable`: whether `target` is within `max_depth` edges of
@@ -41,7 +41,16 @@ fn reachable(
     direction: Option<&str>,
     version: Option<i64>,
 ) -> Option<bool> {
-    let call = Endpoints { function: "reachable", graph, start, target, rels, direction, version };
+    let call = Endpoints {
+        function: "reachable",
+        graph,
+        start,
+        target,
+        rels,
+        direction,
+        version,
+        widen: true,
+    };
     entry(|| {
         let max_depth = bound("max_depth", max_depth.map(i64::from))?;
         let opened = call.open()?;
@@ -76,8 +85,16 @@ fn shortest_path(
     direction: Option<&str>,
     version: Option<i64>,
 ) -> Option<AnyArray> {
-    let call =
-        Endpoints { function: "shortest_path", graph, start, target, rels, direction, version };
+    let call = Endpoints {
+        function: "shortest_path",
+        graph,
+        start,
+        target,
+        rels,
+        direction,
+        version,
+        widen: false,
+    };
     entry(|| {
         let max_depth = bound("max_depth", max_depth.map(i64::from))?;
         let opened = call.open()?;
@@ -112,7 +129,16 @@ fn dijkstra(
     direction: Option<&str>,
     version: Option<i64>,
 ) -> TableIterator<'static, (name!(path, AnyArray), name!(cost, f64))> {
-    let call = Endpoints { function: "dijkstra", graph, start, target, rels, direction, version };
+    let call = Endpoints {
+        function: "dijkstra",
+        graph,
+        start,
+        target,
+        rels,
+        direction,
+        version,
+        widen: false,
+    };
     entry(|| {
         let opened = call.open()?;
         let row = with_id_type!(opened.id_type(), E => opened.run::<E, _>(|loaded, adjacency, start, target| {
@@ -135,6 +161,9 @@ struct Endpoints<'a> {
     rels: Option<Vec<Option<String>>>,
     direction: Option<&'a str>,
     version: Option<i64>,
+    /// Whether narrower integer ids are widened (for results that hold no
+    /// ids).
+    widen: bool,
 }
 
 /// What a search over two endpoints returns, with the work it did.
@@ -175,17 +204,20 @@ impl Opened<'_> {
         let (Some(start), Some(target)) = (self.call.start, self.call.target) else {
             return Ok(None);
         };
-        let start = element::<E>(self.graph, "start", start)?;
-        let target = element::<E>(self.graph, "target", target)?;
-        let loaded = cached::<E>(self.resolved.graph.graph_id, self.resolved.version)?;
+        let read = match self.call.widen {
+            true => element_widened::<E>,
+            false => element::<E>,
+        };
+        let start = read(self.graph, "start", start)?;
+        let target = read(self.graph, "target", target)?;
+        let loaded = cached::<E>(&self.resolved)?;
         let (Some(start), Some(target)) =
             (loaded.id_map.dense_id(&start), loaded.id_map.dense_id(&target))
         else {
             return Ok(Some(None));
         };
-        let selected = relations(&loaded.relations, self.call.rels.as_deref());
-        let selection = selected.as_deref().map_or(RelationSelection::All, RelationSelection::Only);
-        let adjacency = Adjacency::new(&loaded.graph, self.direction, selection)?;
+        let adjacency =
+            adjacency(&loaded.graph, &loaded.relations, self.direction, self.call.rels.as_deref())?;
         let (result, stats) = search(&loaded, &adjacency, start, target)?;
         recorder.record(stats);
         Ok(Some(Some(result)))

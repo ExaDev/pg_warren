@@ -152,6 +152,39 @@ optional `-- fixture:` / `-- oracle:` directives; `test/README.md` has the
 format. To benchmark a new function, add a workload with `requires` to
 `bench/matrix.json`.
 
+## Releases and upgrades
+
+- The workspace version in `Cargo.toml` is the version **in development**;
+  `sql/pg_warren--<version>.sql` is its install script, regenerated with
+  `sql/schema-drift.sh --update`.
+- **Released install scripts are immutable.** Each released
+  `sql/pg_warren--<version>.sql` is listed in `sql/released.sha256`;
+  `sql/schema-drift.sh` fails if one changes, or if the version in
+  development is a released one.
+- **Every schema change after a release updates the upgrade script in the
+  same commit**: `sql/pg_warren--<released>--<version>.sql`, hand-written
+  (new or changed functions, tables and columns with a backfill, storage,
+  grants). `test/upgrade.py` (in CI, on every major) installs each
+  release, writes some state with it (several versions, a staged one, a
+  vector), runs `ALTER EXTENSION pg_warren UPDATE`, fails on any catalog
+  difference from a fresh install, and checks the backfills and a
+  retention pass on the upgraded catalog. `crates/pg_warren/sql` links to `sql/`, so
+  `cargo pgrx install` installs the upgrade scripts.
+- Users upgrade by installing the new build and then running
+  `ALTER EXTENSION pg_warren UPDATE;` in every database that has the
+  extension, **before using the new version**: the new `pg_warren.so` is
+  loaded at once, but the catalog (new columns, functions, storage) only
+  changes with the update, so calls in between can fail. Release notes
+  (CHANGELOG.md) say so for every release with a schema change.
+- To release: add the version's line to `sql/released.sha256`
+  (`cd sql && sha256sum pg_warren--X.Y.Z.sql >> released.sha256`), tag
+  `vX.Y.Z`, then bump the workspace version and start the next upgrade
+  script.
+
+```sh
+test/upgrade.py --pg-config "$(command -v pg_config)"   # installs, then checks every release's path
+```
+
 ## Docker
 
 `docker/Dockerfile` builds the extension against one major and installs it into

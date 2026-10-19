@@ -30,6 +30,36 @@ pub(crate) enum AccessError {
         /// The graph.
         graph: String,
     },
+    /// A persisted vector was written by another role, of which the caller
+    /// is not a member, and the caller is not a member of the owner role.
+    #[error(
+        "vector \"{vector}\" of graph \"{graph}\" was written by role \"{creator}\"; only that \
+         role or members of role \"{owner}\" may replace or drop it"
+    )]
+    NotCreator {
+        /// The vector.
+        vector: String,
+        /// The graph.
+        graph: String,
+        /// The role that wrote it.
+        creator: String,
+        /// The owner role's name.
+        owner: String,
+    },
+    /// A persisted vector was written by a role since dropped, and the
+    /// caller is not a member of the owner role.
+    #[error(
+        "vector \"{vector}\" of graph \"{graph}\" was written by a role that no longer exists; \
+         only members of role \"{owner}\" may replace or drop it"
+    )]
+    CreatorDropped {
+        /// The vector.
+        vector: String,
+        /// The graph.
+        graph: String,
+        /// The owner role's name.
+        owner: String,
+    },
     /// The graph's owner role was dropped (DESIGN.md §7).
     #[error("the owner of graph \"{0}\" no longer exists")]
     OwnerDropped(String),
@@ -44,9 +74,10 @@ pub(crate) enum AccessError {
 impl SqlError for AccessError {
     fn sqlstate(&self) -> PgSqlErrorCode {
         match self {
-            Self::NotOwner { .. } | Self::NotReader { .. } => {
-                PgSqlErrorCode::ERRCODE_INSUFFICIENT_PRIVILEGE
-            }
+            Self::NotOwner { .. }
+            | Self::NotReader { .. }
+            | Self::NotCreator { .. }
+            | Self::CreatorDropped { .. } => PgSqlErrorCode::ERRCODE_INSUFFICIENT_PRIVILEGE,
             Self::OwnerDropped(_) | Self::ExtensionMissing => {
                 PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT
             }

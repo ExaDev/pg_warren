@@ -159,6 +159,12 @@ jobs:
       - name: cargo pgrx test pg${{ matrix.pg }}
         working-directory: crates/pg_warren
         run: cargo pgrx test pg${{ matrix.pg }}
+      - name: Upgrade path from every release (test/upgrade.py)
+        # ALTER EXTENSION UPDATE from each released version must give the
+        # catalog of a fresh install of the version in development, on every
+        # major (the catalog, and what pgrx generates, differ by major). The
+        # harness is standard-library Python.
+        run: python3 test/upgrade.py --pg-config "$PG_CONFIG"
       - name: Schema drift against sql/pg_warren--<version>.sql
         if: matrix.pg == '16'
         run: PG=pg16 sql/schema-drift.sh

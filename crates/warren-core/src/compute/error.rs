@@ -40,6 +40,15 @@ pub enum ComputeError {
         /// The number of values given.
         found: u64,
     },
+    /// A vector's stored bytes do not encode `id_space × width` elements
+    /// of its dtype.
+    #[error("vector has {found} bytes, expected {expected} bytes of valid elements")]
+    VectorBytes {
+        /// The bytes the shape needs.
+        expected: u64,
+        /// The bytes found.
+        found: u64,
+    },
     /// A pool of compute threads needs at least one thread.
     #[error("compute needs at least one thread")]
     NoThreads,

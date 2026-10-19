@@ -1286,8 +1286,9 @@ dependencies = [
 
 [[package]]
 name = "pg_warren"
-version = "0.0.1"
+version = "0.2.0"
 dependencies = [
+ "libc",
  "pgrx",
  "pgrx-tests",
  "serde_json",
@@ -2229,7 +2230,7 @@ dependencies = [
 
 [[package]]
 name = "warren-core"
-version = "0.0.1"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "nalgebra",

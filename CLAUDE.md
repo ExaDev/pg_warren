@@ -29,15 +29,23 @@ before changing code. Commands, toolchain setup and environment gotchas are in
 3. **Package by feature, named in the domain language.** Modules are domain
    concepts, not technical layers. No `utils`, `helpers`, `common`, `models`,
    `types` or `misc` modules.
-   - `warren-core/src/`: `graph/` (csr, id_map, tombstones), `traversal/`,
-     `compute/` (semiring, kernels, message), `spectral/`, `version/` (diff, compaction across versions).
+   - `warren-core/src/`: `graph/` (csr, id_map, tombstones, relation
+     selection), `interrupts` (the cancellation poll shared by traversal and
+     compute), `traversal/`, `compute/` (semiring, kernels, message),
+     `spectral/`, `version/` (diff, compaction across versions).
    - `pg_warren/src/`: `extension` (schema + `warren.version()`, SQL
      errors), `access/` (identity switches, privilege checks), `source/`
      (node/edge query columns and read-only cursors), `catalog/`,
      `segment/` (chunked persistence), `cache/` (loader), `build/`,
-     `version_sql/` (compact, diff), `traversal_sql/`, `compute_sql/`.
+     `version_sql/` (compact, diff), `interrupts` (the main-thread poll),
+     `external_ids/` (id arguments ↔ dense ids), `selection/` (direction and
+     relations), `traversal_sql/`, `vector/` (persistence and cache of named
+     vectors), `compute_sql/`.
      Feature dependencies form a DAG: `access`, `source` → `catalog` →
-     `segment` → `cache` → `build` → `version_sql`; never the reverse.
+     `segment` → `vector` → `cache` → `build` → `version_sql`; `cache` →
+     `external_ids`, `selection`; and `external_ids`, `selection`,
+     `interrupts` → `traversal_sql`, `compute_sql` (siblings: neither depends
+     on the other); never the reverse.
    - Each module's `mod.rs` doc comment states its responsibility. Add a
      submodule when the code exists, not before.
 4. **Ubiquitous language (from DESIGN.md).** Use these terms exactly, in code,
@@ -82,6 +90,11 @@ before changing code. Commands, toolchain setup and environment gotchas are in
   schema outside the extension, and the script's `CREATE SCHEMA IF NOT EXISTS`
   then fails with "schema warren is not a member of extension"
   (CVE-2022-2625 hardening).
+- **Releases are frozen.** Released `sql/pg_warren--X.Y.Z.sql` files
+  (listed in `sql/released.sha256`) never change. Any schema change after a
+  release also updates `sql/pg_warren--<released>--<current>.sql` in the
+  same commit; `test/upgrade.py` checks it (CONTRIBUTING.md, "Releases and
+  upgrades").
 - `#[pg_test]` names are prefixed `pg_` in test output. Running them as root
   (`--runas`) and their `Result` return convention are covered in
   CONTRIBUTING.md.

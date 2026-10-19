@@ -59,12 +59,17 @@ impl Workers {
         let caller = thread::current();
         let mut result = Err(ComputeError::Cancelled);
         let mut interrupted = false;
+        // `in_place_scope` catches an unwind out of this closure (a Postgres
+        // ERROR raised by the `interrupts` poll), waits for the job, then
+        // resumes the unwind. That is sound only because nothing between
+        // the catch and the resume calls into Postgres: keep it that way.
         self.pool.in_place_scope(|scope| {
             let raise_on_unwind = RaiseOnDrop(&cancellation);
             scope.spawn(|_| {
+                // Set on return and on unwind, so a panicking job does not
+                // leave the caller polling until an interrupt.
+                let _finished = Finished { finished: &finished, caller: &caller };
                 result = job(&cancellation);
-                finished.store(true, Ordering::Release);
-                caller.unpark();
             });
             while !finished.load(Ordering::Acquire) {
                 if interrupts.check().is_err() {
@@ -82,6 +87,20 @@ impl Workers {
             true => Err(ComputeError::Cancelled),
             false => result,
         }
+    }
+}
+
+/// Marks the job finished and wakes the caller when dropped, including
+/// while unwinding.
+struct Finished<'a> {
+    finished: &'a AtomicBool,
+    caller: &'a thread::Thread,
+}
+
+impl Drop for Finished<'_> {
+    fn drop(&mut self) {
+        self.finished.store(true, Ordering::Release);
+        self.caller.unpark();
     }
 }
 
@@ -188,6 +207,22 @@ mod tests {
         }));
         assert!(unwound.is_err());
         assert!(saw_cancellation.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn a_panicking_job_unwinds_promptly() {
+        // On a helper thread, so a hang fails the test instead of stalling it.
+        let (sender, receiver) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let workers = Workers::new(2).unwrap();
+            let unwound = catch_unwind(AssertUnwindSafe(|| {
+                workers.run(&mut Uninterrupted, |_| -> Result<(), ComputeError> {
+                    panic!("a bug in a kernel")
+                })
+            }));
+            let _ = sender.send(unwound.is_err());
+        });
+        assert_eq!(receiver.recv_timeout(Duration::from_secs(5)), Ok(true));
     }
 
     /// Passes the first `n - 1` polls, then unwinds.

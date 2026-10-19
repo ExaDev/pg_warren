@@ -10,8 +10,7 @@ use super::bfs::Results;
 use super::level::{Admission, Edges, LevelSearch};
 use super::stats::{Progress, Tally};
 use super::{Adjacency, Direction, Limits, NodeSet, TraversalError, TraversalStats, Visit};
-use crate::graph::RelationSelection;
-use crate::graph::{DenseId, GraphCsr, RelationIndex};
+use crate::graph::{DenseId, GraphCsr, RelationIndex, RelationSelection};
 use crate::interrupts::Interrupts;
 
 /// [`bfs`](super::bfs) as a cursor: each [`Self::next_level`] call runs

@@ -10,11 +10,15 @@ mod cache;
 mod catalog;
 mod compute_sql;
 mod extension;
+mod external_ids;
 #[cfg(any(test, feature = "pg_test"))]
 mod fixture;
+mod interrupts;
 mod segment;
+mod selection;
 mod source;
 mod traversal_sql;
+mod vector;
 mod version_sql;
 
 /// Library initialisation: registers the GUCs.
@@ -22,6 +26,7 @@ mod version_sql;
 pub extern "C-unwind" fn _PG_init() {
     build::define_max_build_memory();
     traversal_sql::define_max_walk_paths();
+    compute_sql::define_compute_settings();
 }
 
 /// Required by `cargo pgrx test`; must be visible at the crate root.

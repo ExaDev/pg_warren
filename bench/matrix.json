@@ -17,6 +17,6 @@
     {"name": "diff", "sql": "SELECT warren.diff('g', (SELECT min(version_id) FROM warren.versions), (SELECT max(version_id) FROM warren.versions))"},
     {"name": "bfs_depth6_cte", "sql": "WITH RECURSIVE r (id, depth) AS (SELECT {source}::bigint, 0 UNION SELECT n.id, r.depth + 1 FROM r CROSS JOIN LATERAL (SELECT dst FROM edges WHERE src = r.id UNION ALL SELECT src FROM edges WHERE dst = r.id) n (id) WHERE r.depth < 6) SELECT count(DISTINCT id) FROM r"},
     {"name": "bfs_depth6", "requires": ["warren.bfs"], "sql": "SELECT count(*) FROM warren.bfs('g', ARRAY[{source}::bigint], 6)"},
-    {"name": "components", "requires": ["warren.components"], "sql": "SELECT count(DISTINCT component_id) FROM warren.components('g')"}
+    {"name": "components", "requires": ["warren.components"], "sql": "SELECT count(DISTINCT component_id) FROM warren.components('g', NULL::bigint)"}
   ]
 }
