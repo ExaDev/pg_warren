@@ -52,15 +52,25 @@ pub(super) struct Vectors<E> {
 }
 
 impl<E: IdDatum> Vectors<E> {
-    /// Opens `resolved`'s version and lists its vectors.
+    /// Opens `resolved`'s version and lists its vectors, with a fresh call
+    /// budget of `warren.max_compute_memory`.
     pub(super) fn open(resolved: Resolved) -> Result<Self, ComputeSqlError> {
+        Self::open_within(resolved, &compute_memory())
+    }
+
+    /// Opens `resolved`'s version and lists its vectors, charging what the
+    /// call reads to `memory` (a budget shared with other versions).
+    pub(super) fn open_within(
+        resolved: Resolved,
+        memory: &ComputeMemory,
+    ) -> Result<Self, ComputeSqlError> {
         let loaded = cached::<E>(&resolved)?;
         let records = SpiVectorStore.bound(resolved.version)?;
         Ok(Self {
             graph: resolved.graph,
             version: resolved.version,
             loaded,
-            memory: compute_memory(),
+            memory: memory.clone(),
             records,
             held: HashMap::new(),
         })

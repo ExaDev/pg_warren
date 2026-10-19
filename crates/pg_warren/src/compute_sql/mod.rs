@@ -16,7 +16,9 @@ mod constructors;
 mod drop;
 mod error;
 mod read;
+mod reduce;
 mod settings;
+mod summary;
 mod vectors;
 
 pub(crate) use error::{entry, ComputeSqlError};
