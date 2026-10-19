@@ -157,6 +157,33 @@ fn operands_must_fit_the_graph_and_each_other() {
 }
 
 #[test]
+fn i64_min_plus_supersteps_keep_unreached_nodes_at_the_identity() {
+    // 0 → 1 (1), 2 → 1 (1): node 2 is never reached from node 0.
+    let graph = reference::graph(3, 1, &vec![(0, 0, 1, 1.0), (0, 2, 1, 1.0)], true, true);
+    let product = Product {
+        transpose: true,
+        accumulate: Some(BinaryOp::Min),
+        ..Product::new("min_plus".parse().unwrap())
+    };
+    let mut distance = vector(1, vec![0i64, i64::MAX, i64::MAX]);
+    for _ in 0..2 {
+        let x = vector(1, values::<i64>(&distance));
+        run(&graph, &product, &x, &mut distance);
+        assert_eq!(values::<i64>(&distance), [0, 1, i64::MAX]);
+    }
+    let longest =
+        Product { accumulate: Some(BinaryOp::Max), ..Product::new("max_plus".parse().unwrap()) };
+    let mut y = vector(1, vec![i64::MIN; 3]);
+    run(
+        &graph,
+        &Product { transpose: true, ..longest },
+        &vector(1, vec![5, i64::MIN, i64::MIN]),
+        &mut y,
+    );
+    assert_eq!(values::<i64>(&y), [i64::MIN, 6, i64::MIN]);
+}
+
+#[test]
 fn i64_overflow_is_an_error() {
     let graph = example(true);
     let x = vector(1, vec![i64::MAX; 4]);

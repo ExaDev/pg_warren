@@ -244,6 +244,20 @@ pub trait SemiringElement: Element {
     /// SQL casts from `double precision` do (`i64` rounds half to even),
     /// failing out of range; `bool` is `weight ≠ 0`.
     fn from_weight(weight: f64) -> Result<Self, ArithmeticError>;
+
+    /// `⊗(weight, value)` in a semiring whose `⊕` is `add`: `apply`, except
+    /// that for `i64` the `min` identity `i64::MAX` and the `max` identity
+    /// `i64::MIN` stand for ±∞ and absorb `plus`, so a node no edge has
+    /// reached stays unreached across supersteps. Other overflow is still
+    /// an error.
+    fn multiply(
+        _add: BinaryOp,
+        multiply: BinaryOp,
+        weight: Self,
+        value: Self,
+    ) -> Result<Self, ArithmeticError> {
+        Self::apply(multiply, weight, value)
+    }
 }
 
 /// The smaller in SQL order; the first on a tie, as SQL `LEAST` keeps.
@@ -319,6 +333,23 @@ impl SemiringElement for i64 {
             Monoid::Plus | Monoid::Lor | Monoid::Any => 0,
             Monoid::Min => i64::MAX,
             Monoid::Max => i64::MIN,
+        }
+    }
+
+    fn multiply(
+        add: BinaryOp,
+        multiply: BinaryOp,
+        weight: Self,
+        value: Self,
+    ) -> Result<Self, ArithmeticError> {
+        let infinite = match add {
+            BinaryOp::Min => value == i64::MAX,
+            BinaryOp::Max => value == i64::MIN,
+            _ => false,
+        };
+        match multiply == BinaryOp::Plus && infinite {
+            true => Ok(value),
+            false => Self::apply(multiply, weight, value),
         }
     }
 
@@ -429,6 +460,27 @@ mod tests {
         assert_eq!(f64::apply(BinaryOp::Lor, nan, 0.0), Ok(1.0));
         // Ties keep the first operand, as SQL LEAST does.
         assert!(f64::apply(BinaryOp::Min, -0.0, 0.0).unwrap().is_sign_negative());
+    }
+
+    #[test]
+    fn the_i64_min_and_max_identities_absorb_plus() {
+        let (min, max, plus) = (BinaryOp::Min, BinaryOp::Max, BinaryOp::Plus);
+        assert_eq!(i64::multiply(min, plus, 3, i64::MAX), Ok(i64::MAX));
+        assert_eq!(i64::multiply(min, plus, -3, i64::MAX), Ok(i64::MAX));
+        assert_eq!(i64::multiply(max, plus, 3, i64::MIN), Ok(i64::MIN));
+        assert_eq!(i64::multiply(min, plus, 3, 4), Ok(7));
+        // Genuine overflow is still an error, as is the other infinity.
+        assert_eq!(i64::multiply(min, plus, 1, i64::MAX - 1), Ok(i64::MAX));
+        assert_eq!(
+            i64::multiply(min, plus, 2, i64::MAX - 1),
+            Err(ArithmeticError::BigintOutOfRange)
+        );
+        assert_eq!(i64::multiply(max, plus, 1, i64::MAX), Err(ArithmeticError::BigintOutOfRange));
+        assert_eq!(
+            i64::multiply(min, BinaryOp::Times, 2, i64::MAX),
+            Err(ArithmeticError::BigintOutOfRange)
+        );
+        assert_eq!(f64::multiply(min, plus, 1.0, f64::INFINITY), Ok(f64::INFINITY));
     }
 
     #[test]
