@@ -4,6 +4,7 @@ use pgrx::prelude::*;
 
 use super::CatalogError;
 use crate::access::as_extension_owner;
+use crate::source::IdType;
 
 /// A graph's definition, as `warren.create_graph` recorded it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,6 +17,8 @@ pub(crate) struct GraphDefinition {
     pub(crate) owner: pg_sys::Oid,
     /// Roles whose members may query the graph (DESIGN.md §7).
     pub(crate) readers: Vec<pg_sys::Oid>,
+    /// The type of its node ids.
+    pub(crate) id_type: IdType,
     /// `SELECT <id> ...`.
     pub(crate) node_query: String,
     /// `SELECT <src>, <dst> [, <rel>] [, <weight>] ...`.
@@ -59,7 +62,7 @@ impl GraphDefinition {
                     .select(
                         "SELECT graph_id, owner::oid, readers::oid[], node_query, edge_query,
                                 directed, weighted, has_relations, build_reverse,
-                                retain_versions, current_version
+                                retain_versions, current_version, id_type::oid
                          FROM warren.graphs WHERE name = $1",
                         Some(1),
                         &[name.into()],
@@ -68,7 +71,12 @@ impl GraphDefinition {
                 if row.is_empty() {
                     return Err(CatalogError::GraphNotFound(name.to_owned()));
                 }
+                let id_type = row
+                    .get::<pg_sys::Oid>(12)?
+                    .and_then(IdType::from_oid)
+                    .ok_or_else(|| CatalogError::UnknownIdType(name.to_owned()))?;
                 Ok(Self {
+                    id_type,
                     graph_id: row.get(1)?.unwrap_or_default(),
                     name: name.to_owned(),
                     owner: row.get(2)?.unwrap_or(pg_sys::Oid::INVALID),

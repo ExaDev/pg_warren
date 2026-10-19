@@ -9,7 +9,9 @@ use super::error::BuildError;
 use super::source::{EdgeRow, EdgeSink, SourceReader};
 use crate::access::as_role;
 use crate::catalog::GraphDefinition;
-use crate::source::{check_edge_columns, check_node_columns, for_each_row, open_read_only};
+use crate::source::{
+    check_edge_columns, check_node_columns, for_each_row, open_read_only, IdDatum, SourceError,
+};
 
 /// A graph's sources, read through SPI.
 pub(crate) struct SpiSource<'g> {
@@ -23,17 +25,26 @@ impl<'g> SpiSource<'g> {
     }
 }
 
-impl SourceReader<i64> for SpiSource<'_> {
-    fn node_ids(&mut self) -> Result<Vec<i64>, BuildError> {
+impl<E: IdDatum> SourceReader<E> for SpiSource<'_> {
+    fn node_ids(&mut self) -> Result<Vec<E>, BuildError> {
         let graph = self.graph;
         as_role(graph.owner, || {
             Spi::connect(|client| {
                 let mut opened =
                     open_read_only::<BuildError>(client, "node_query", &graph.node_query)?;
-                check_node_columns(&opened.columns)?;
+                if check_node_columns(&opened.columns)? != graph.id_type {
+                    return Err(SourceError::ColumnType {
+                        query: "node_query",
+                        column: 1,
+                        role: "node id",
+                        expected: graph.id_type.sql_name(),
+                        found: opened.columns[0].name.clone(),
+                    }
+                    .into());
+                }
                 let mut ids = Vec::new();
                 for_each_row::<BuildError>(&mut opened.cursor, |row| {
-                    if let Some(id) = row.get::<i64>(1)? {
+                    if let Some(id) = row.get::<E::Sql>(1)?.map(E::from_sql) {
                         ids.try_reserve(1)
                             .map_err(|_| GraphError::OutOfMemory { elements: ids.len() + 1 })?;
                         ids.push(id);
@@ -45,19 +56,24 @@ impl SourceReader<i64> for SpiSource<'_> {
         })
     }
 
-    fn edges(&mut self, sink: &mut dyn EdgeSink<i64>) -> Result<(), BuildError> {
+    fn edges(&mut self, sink: &mut dyn EdgeSink<E>) -> Result<(), BuildError> {
         let graph = self.graph;
         let weight_column = if graph.has_relations { 4 } else { 3 };
         as_role(graph.owner, || {
             Spi::connect(|client| {
                 let mut opened =
                     open_read_only::<BuildError>(client, "edge_query", &graph.edge_query)?;
-                check_edge_columns(&opened.columns, graph.has_relations, graph.weighted)?;
+                check_edge_columns(
+                    &opened.columns,
+                    graph.id_type,
+                    graph.has_relations,
+                    graph.weighted,
+                )?;
                 sink.expect_rows(opened.estimated_rows);
                 for_each_row(&mut opened.cursor, |row| {
                     sink.row(EdgeRow {
-                        source: row.get::<i64>(1)?,
-                        target: row.get::<i64>(2)?,
+                        source: row.get::<E::Sql>(1)?.map(E::from_sql),
+                        target: row.get::<E::Sql>(2)?.map(E::from_sql),
                         relation: match graph.has_relations {
                             true => row.get::<&str>(3)?,
                             false => None,

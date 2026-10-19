@@ -166,6 +166,7 @@ mod tests {
             name: "g".to_owned(),
             owner: pg_sys::Oid::INVALID,
             readers: Vec::new(),
+            id_type: crate::source::IdType::Int8,
             node_query: String::new(),
             edge_query: String::new(),
             directed: true,

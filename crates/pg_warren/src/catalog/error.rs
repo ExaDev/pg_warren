@@ -36,6 +36,9 @@ pub(crate) enum CatalogError {
     /// `retain_versions` must keep at least the current version.
     #[error("retain_versions must be at least 1, not {0}")]
     RetainVersions(i32),
+    /// The recorded id type is not one this library supports.
+    #[error("graph \"{0}\" has an unsupported id type")]
+    UnknownIdType(String),
     /// A count does not fit its `bigint` column.
     #[error("{0} exceeds the range of bigint")]
     TooLarge(&'static str),
@@ -59,6 +62,7 @@ impl SqlError for CatalogError {
             Self::DropCurrent { .. } => PgSqlErrorCode::ERRCODE_OBJECT_IN_USE,
             Self::GraphExists(_) => PgSqlErrorCode::ERRCODE_DUPLICATE_OBJECT,
             Self::RetainVersions(_) => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+            Self::UnknownIdType(_) => PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
             Self::TooLarge(_) => PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
             Self::Access(error) => error.sqlstate(),
             Self::Source(error) => error.sqlstate(),

@@ -13,7 +13,7 @@ use crate::access::require_owner;
 use crate::catalog::{GraphDefinition, VersionId};
 use crate::extension::or_raise;
 use crate::segment::{SpiSegmentStore, CHUNK_SIZE};
-use crate::source::with_pinned_snapshot;
+use crate::source::{with_id_type, with_pinned_snapshot};
 
 /// `warren.refresh`: builds a new version of graph `name` and returns its
 /// id. The caller must be a member of the graph's owner role. The version
@@ -38,13 +38,13 @@ fn refresh_graph(name: &str, promote: bool, label: Option<&str>) -> Result<Versi
             chunk_size: CHUNK_SIZE,
             memory_budget: max_build_memory(),
         };
-        build(
+        with_id_type!(graph.id_type, E => build::<E>(
             &graph,
             &request,
             &mut SpiSource::new(&graph),
             &mut SpiSegmentStore,
             &mut SpiCatalog::at_current_wal_lsn()?,
-        )
+        ))
     })
 }
 
@@ -195,6 +195,40 @@ mod tests {
             &[version.into()],
         )?;
         assert_eq!(merged, Some(6), "forward and reverse offsets, targets and weights");
+        Ok(())
+    }
+
+    #[pg_test]
+    fn int4_and_uuid_graphs_build_with_stable_ids() -> Result<(), Error> {
+        Spi::run(
+            "CREATE TABLE small_nodes (id int);
+             CREATE TABLE small_edges (src int, dst int);
+             INSERT INTO small_nodes VALUES (3), (1), (2);
+             INSERT INTO small_edges VALUES (1, 2), (2, 3), (3, 9);
+             SELECT warren.create_graph('small', 'SELECT id FROM small_nodes',
+                                        'SELECT src, dst FROM small_edges');
+             CREATE TABLE u_nodes (id uuid);
+             CREATE TABLE u_edges (src uuid, dst uuid);
+             INSERT INTO u_nodes VALUES ('00000000-0000-0000-0000-000000000002'),
+                                        ('00000000-0000-0000-0000-000000000001');
+             INSERT INTO u_edges VALUES ('00000000-0000-0000-0000-000000000001',
+                                         '00000000-0000-0000-0000-000000000002');
+             SELECT warren.create_graph('u', 'SELECT id FROM u_nodes',
+                                        'SELECT src, dst FROM u_edges')",
+        )?;
+        let small = refresh("SELECT warren.refresh('small')")?;
+        assert_eq!(version_row(small)?.as_deref(), Some("1|f|3|3|2|1|0|4|t|"));
+        let uuid = refresh("SELECT warren.refresh('u')")?;
+        assert_eq!(version_row(uuid)?.as_deref(), Some("1|f|2|2|1|0|0|4|t|"));
+        let tombstones = Tombstones::decode(&segment(uuid, "tombstones")).ok();
+        let id_map =
+            tombstones.and_then(|t| IdMap::<[u8; 16]>::decode(&segment(uuid, "id_map"), t).ok());
+        let mut first = [0; 16];
+        first[15] = 1;
+        assert_eq!(id_map.and_then(|m| m.dense_id(&first)), Some(0));
+        Spi::run("INSERT INTO small_nodes VALUES (0)")?;
+        let next = refresh("SELECT warren.refresh('small')")?;
+        assert_eq!(version_row(next)?.as_deref(), Some("2|f|4|4|2|1|0|4|t|"));
         Ok(())
     }
 
