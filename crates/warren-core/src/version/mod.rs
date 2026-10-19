@@ -1,4 +1,4 @@
-//! Operations across versions of a graph: the structural `diff` of two
+//! Operations across versions of a graph: the structural [`diff`] of two
 //! versions in the same id space (DESIGN.md §7) and [`compact`], which
 //! renumbers a version into a new id space without tombstones (DESIGN.md
 //! §5.2).
@@ -8,11 +8,13 @@
 //! built through [`GraphCsr::build`]).
 
 mod compaction;
+mod diff;
 mod error;
 #[cfg(test)]
 mod history;
 
 pub use compaction::{compact, Compaction, Renumbering};
+pub use diff::{diff, DegreeCount, DegreeShift, EdgeDelta, NodeDelta, RelationDelta, VersionDiff};
 pub use error::VersionError;
 
 use crate::graph::{ExternalId, GraphCsr, IdMap, RelationDictionary};

@@ -26,6 +26,22 @@ pub enum VersionError {
         /// The number of per-relation CSRs.
         csr: usize,
     },
+    /// A later version's id space never shrinks.
+    #[error("the later version's id space ({after}) is smaller than the earlier's ({before})")]
+    IdSpaceShrank {
+        /// The earlier version's id space.
+        before: u64,
+        /// The later version's id space.
+        after: u64,
+    },
+    /// Two versions compared by dense id must give each dense id of the
+    /// earlier version the same external id: not true across a compaction
+    /// boundary or between graphs.
+    #[error("dense id {dense} names different nodes in the two versions")]
+    IdSpacesDiverge {
+        /// The first dense id whose external ids differ.
+        dense: DenseId,
+    },
     /// A live edge must not touch a tombstoned node.
     #[error("edge {from} → {to} touches a tombstoned node")]
     EdgeTouchesTombstone {
