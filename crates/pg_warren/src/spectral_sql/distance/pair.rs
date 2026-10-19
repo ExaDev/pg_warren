@@ -6,27 +6,31 @@
 use std::sync::Arc;
 
 use warren_core::compute::AnyVector;
-use warren_core::graph::GraphCsr;
-use warren_core::spectral::align;
-use warren_core::version::{self, Alignment};
+use warren_core::spectral::{
+    align, align_graph, align_ids, edit_distance, EditDistance, IdAlignment, Resources,
+};
+use warren_core::version;
 
 use super::super::SpectralSqlError;
 use crate::cache::Resolved;
 use crate::catalog::compaction_between;
-use crate::compute_sql::{compute_memory, Vectors};
+use crate::compute_sql::{compute_memory, workers, Vectors};
+use crate::interrupts::PostgresInterrupts;
 use crate::source::IdDatum;
 
 /// The versions compared, `before` first.
 pub(super) struct Pair<E> {
     pub(super) before: Vectors<E>,
     pub(super) after: Vectors<E>,
-    /// For versions of two graphs: `after` in `before`'s id space.
-    alignment: Option<Alignment>,
+    /// For versions of two graphs: how `after` maps into `before`'s id
+    /// space.
+    alignment: Option<IdAlignment>,
 }
 
 impl<E: IdDatum> Pair<E> {
     /// Opens `before` and `after`. Versions of one graph must not have a
-    /// compaction between them; versions of two graphs are aligned.
+    /// compaction between them, and their shared dense ids must name the
+    /// same nodes; versions of two graphs are aligned by external id.
     pub(super) fn open(before: Resolved, after: Resolved) -> Result<Self, SpectralSqlError> {
         let same_graph = before.graph.graph_id == after.graph.graph_id;
         if same_graph {
@@ -49,26 +53,42 @@ impl<E: IdDatum> Pair<E> {
         let before = Vectors::<E>::open_within(before, &memory)?;
         let after = Vectors::<E>::open_within(after, &memory)?;
         let alignment = match same_graph {
-            true => None,
-            false => Some(version::align(&before.loaded.version()?, &after.loaded.version()?)?),
+            // One graph's versions are compared by dense id, so each shared
+            // dense id must name one node (not so for sibling staged
+            // versions); relations are matched by name.
+            true => {
+                version::shared_dense_ids(&before.loaded.id_map, &after.loaded.id_map)?;
+                None
+            }
+            false => {
+                let pool = workers()?;
+                let mut resources = Resources {
+                    workers: &pool,
+                    memory: &before.memory,
+                    interrupts: &mut PostgresInterrupts,
+                };
+                let (this, other) = (before.loaded.version()?, after.loaded.version()?);
+                Some(align_ids(&mut resources, &this, &other)?)
+            }
         };
         Ok(Self { before, after, alignment })
     }
 
-    /// The later version's CSRs in the shared id space and relation indexes.
-    pub(super) fn after_graph(&self) -> &GraphCsr {
-        self.alignment.as_ref().map_or(&self.after.loaded.graph, |a| &a.graph)
-    }
-
-    /// The relation names, by relation index of the shared dictionary.
-    pub(super) fn relation_names(&self) -> &[String] {
-        let (before, after) = (&self.before.loaded.relations, &self.after.loaded.relations);
-        match &self.alignment {
-            Some(alignment) => alignment.relations.names(),
-            // One graph's dictionary only grows: the longer one names both.
-            None if before.len() >= after.len() => before.names(),
-            None => after.names(),
-        }
+    /// The `edit` distance between the versions, relations matched by name.
+    /// For versions of two graphs, `after`'s CSRs are rebuilt in the shared
+    /// dense ids first (charged to the budget).
+    pub(super) fn edit_distance(&self) -> Result<EditDistance, SpectralSqlError> {
+        let before = (&self.before.loaded.relations, &self.before.loaded.graph);
+        let Some(alignment) = &self.alignment else {
+            let after = &self.after.loaded;
+            return Ok(edit_distance(before, (&after.relations, &after.graph)));
+        };
+        let pool = workers()?;
+        let memory = &self.before.memory;
+        let mut resources =
+            Resources { workers: &pool, memory, interrupts: &mut PostgresInterrupts };
+        let aligned = align_graph(&mut resources, &self.after.loaded.version()?, alignment)?;
+        Ok(edit_distance(before, (&alignment.relations, &aligned.graph)))
     }
 
     /// Vector `name` of `before`.

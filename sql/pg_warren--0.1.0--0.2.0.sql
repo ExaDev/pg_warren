@@ -198,7 +198,7 @@ CREATE  FUNCTION warren."distance"(
 	"x" TEXT DEFAULT NULL, /* Option < & str > */
 	"y" TEXT DEFAULT NULL, /* Option < & str > */
 	"compared_rows" TEXT DEFAULT 'shared', /* Option < & str > */
-	"matrix" TEXT DEFAULT 'adjacency', /* Option < & str > */
+	"matrix" TEXT DEFAULT NULL, /* Option < & str > */
 	"which" TEXT DEFAULT 'largest', /* Option < & str > */
 	"rels" TEXT[] DEFAULT NULL, /* :: std :: option :: Option < Vec < Option < String > > > */
 	"weighted" bool DEFAULT NULL, /* Option < bool > */

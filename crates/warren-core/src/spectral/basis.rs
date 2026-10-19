@@ -198,17 +198,18 @@ impl<E: Stored> Basis<E> {
         resources.run(|cancellation| {
             values.par_chunks_mut(width).try_for_each(|block| {
                 checked(cancellation)?;
-                let mut rotated = vec![0.0; BLOCK * kept];
-                for (l, out) in rotated.chunks_mut(BLOCK).enumerate() {
-                    for j in 0..len {
-                        let c = combinations[(j, l)];
-                        for (out, value) in out.iter_mut().zip(&block[j * BLOCK..]) {
-                            *out += c * value.to_f64();
-                        }
+                // One row at a time, so the scratch is one row of the basis
+                // (at most `capacity` values), not a block of it.
+                let mut row = vec![0.0; len];
+                for r in 0..BLOCK {
+                    for (j, old) in row.iter_mut().enumerate() {
+                        *old = block[j * BLOCK + r].to_f64();
                     }
-                }
-                for (stored, &value) in block.iter_mut().zip(&rotated) {
-                    *stored = E::from_f64(value);
+                    for l in 0..kept {
+                        let value =
+                            (0..len).fold(0.0, |sum, j| sum + combinations[(j, l)] * row[j]);
+                        block[l * BLOCK + r] = E::from_f64(value);
+                    }
                 }
                 Ok(())
             })

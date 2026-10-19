@@ -6,11 +6,11 @@
 //! directions, which leaves the ratio unchanged). The distance is the
 //! Jaccard distance `|E₁ △ E₂| / |E₁ ∪ E₂|`: 0 for equal sets, 1 for
 //! disjoint ones, and growing with every edge added or removed. Relations
-//! are matched by relation index, which the append-only relation
-//! dictionary keeps stable across versions (DESIGN.md §5.3).
+//! are matched by name: sibling staged versions, and other graphs, may give
+//! one relation index to different relations.
 
-use crate::graph::{AnyCsr, GraphCsr};
-use crate::version::EdgeDelta;
+use crate::graph::{GraphCsr, RelationDictionary};
+use crate::version::{relation_deltas, EdgeDelta};
 
 /// How one edge set changed between two versions.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -25,37 +25,44 @@ pub struct EdgeSetChange {
     pub distance: f64,
 }
 
+/// One relation's change, by name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RelationChange {
+    /// The relation's name.
+    pub name: String,
+    /// How its edge set changed.
+    pub change: EdgeSetChange,
+}
+
 /// The `edit` distance between two versions.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EditDistance {
-    /// Each relation's change, in relation-index order, over the relations
-    /// of either version.
-    pub relations: Vec<EdgeSetChange>,
+    /// Each relation's change, matched by name: the later version's
+    /// relations in index order, then those only in the earlier.
+    pub relations: Vec<RelationChange>,
     /// The change of the set of `(relation, source, target)` edges.
     pub overall: EdgeSetChange,
 }
 
-/// The `edit` distance from `before` to `after`, by merging the sorted
-/// rows of their forward CSRs as `warren.diff` does (O(N + M)).
-pub fn edit_distance(before: &GraphCsr, after: &GraphCsr) -> EditDistance {
-    let count = before.relations().len().max(after.relations().len());
-    let deltas: Vec<EdgeDelta> =
-        (0..count).map(|r| EdgeDelta::between(forward(before, r), forward(after, r))).collect();
+/// The `edit` distance from `before` to `after`, each a relation
+/// dictionary and its CSRs, by merging the sorted rows of the forward CSRs
+/// of each relation of either version as `warren.diff` does (O(N + M)).
+pub fn edit_distance(
+    before: (&RelationDictionary, &GraphCsr),
+    after: (&RelationDictionary, &GraphCsr),
+) -> EditDistance {
+    let deltas = relation_deltas(before, after);
     let overall = deltas.iter().fold(EdgeDelta::default(), |sum, delta| EdgeDelta {
-        before: sum.before + delta.before,
-        after: sum.after + delta.after,
-        added: sum.added + delta.added,
-        removed: sum.removed + delta.removed,
+        before: sum.before + delta.edges.before,
+        after: sum.after + delta.edges.after,
+        added: sum.added + delta.edges.added,
+        removed: sum.removed + delta.edges.removed,
     });
-    EditDistance {
-        relations: deltas.into_iter().map(EdgeSetChange::from).collect(),
-        overall: overall.into(),
-    }
-}
-
-/// The forward CSR of relation index `relation`, if the version has it.
-fn forward(graph: &GraphCsr, relation: usize) -> Option<&AnyCsr> {
-    graph.relations().get(relation).map(|r| r.forward())
+    let relations = deltas
+        .into_iter()
+        .map(|delta| RelationChange { name: delta.name, change: delta.edges.into() })
+        .collect();
+    EditDistance { relations, overall: overall.into() }
 }
 
 impl From<EdgeDelta> for EdgeSetChange {

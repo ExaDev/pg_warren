@@ -65,7 +65,7 @@ CREATE EXTENSION pg_warren;
 SELECT warren.version();
 ```
 
-**Upgrading** (from 0.1.0): install the new build, then run
+**Upgrading** (from 0.1.0 or 0.2.0): install the new build, then run
 `ALTER EXTENSION pg_warren UPDATE;` in every database that has the extension,
 *before* calling any `warren.*` function. The new library is loaded at once,
 but the catalog changes only with the update, so calls in between can fail.
@@ -151,13 +151,12 @@ Every SQL example in the README and `docs/` runs in CI, in
 
 ## Status
 
-- **0.1.0** (released): versioned graphs and traversal, milestones M0–M3
-  of DESIGN.md §13.
-- **0.2.0** (milestones M4–M6, all landed; release being cut): vectors,
-  semiring compute, `gather`, the algorithm library, `eigen` and
-  `distance`.
-- **0.3.0** (in progress, M7): hardening, including a size bound on the
-  backend-local cache (planned, not shipped) and these docs.
+- **0.1.0**: versioned graphs and traversal, milestones M0–M3 of
+  DESIGN.md §13.
+- **0.2.0**: vectors, semiring compute, `gather`, the algorithm library,
+  `eigen` and `distance`, milestones M4–M6.
+- **0.3.0** (in development, M7): hardening. The size bound on the
+  backend-local cache is planned for it, not shipped.
 
 See [CHANGELOG.md](CHANGELOG.md). This is pre-1.0 software: the SQL surface
 may still change between minor versions, with an upgrade script each time.
@@ -188,7 +187,7 @@ pg_warren's contribution is different:
   names).
 - Control flow stays in PL/pgSQL, with per-node logic written as SQL
   expressions.
-- Contraction gives community-level computation (planned: DESIGN.md §6.6).
+- Contraction (planned, v1.1) will give community-level computation.
 
 pg_warren takes no code from either project. Ideas adopted from them are
 credited in [NOTICE](NOTICE) and in comments where they are used; the reading

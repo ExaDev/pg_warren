@@ -3,8 +3,24 @@ use proptest::prelude::*;
 use super::*;
 use crate::compute::reference::{self, Edges};
 
+/// A dictionary of relations `r0..r<count>`.
+fn dictionary(count: usize) -> RelationDictionary {
+    let mut dictionary = RelationDictionary::new();
+    (0..count).for_each(|r| drop(dictionary.intern(&format!("r{r}"))));
+    dictionary
+}
+
 fn distance(before: &GraphCsr, after: &GraphCsr) -> EditDistance {
-    edit_distance(before, after)
+    let (b, a) = (dictionary(before.relations().len()), dictionary(after.relations().len()));
+    edit_distance((&b, before), (&a, after))
+}
+
+fn named(names: &[&str], changes: &[EdgeSetChange]) -> Vec<RelationChange> {
+    names
+        .iter()
+        .zip(changes)
+        .map(|(n, &change)| RelationChange { name: (*n).into(), change })
+        .collect()
 }
 
 fn change(added: u64, removed: u64, union: u64) -> EdgeSetChange {
@@ -18,7 +34,7 @@ fn identical_versions_are_zero_apart() {
     let graph = reference::graph(3, 2, &edges, true, false);
     let d = distance(&graph, &graph);
     assert_eq!(d.overall, change(0, 0, 2));
-    assert_eq!(d.relations, [change(0, 0, 1), change(0, 0, 1)]);
+    assert_eq!(d.relations, named(&["r0", "r1"], &[change(0, 0, 1), change(0, 0, 1)]));
 }
 
 #[test]
@@ -30,11 +46,37 @@ fn changes_are_counted_per_relation_and_overall() {
     let after_edges = vec![(0, 0, 2, 9.0), (0, 1, 0, 1.0), (1, 1, 2, 2.0), (2, 3, 0, 1.0)];
     let after = reference::graph(4, 3, &after_edges, true, true);
     let d = distance(&before, &after);
-    assert_eq!(d.relations, [change(1, 1, 3), change(0, 0, 1), change(1, 0, 1)]);
+    assert_eq!(
+        d.relations,
+        named(&["r0", "r1", "r2"], &[change(1, 1, 3), change(0, 0, 1), change(1, 0, 1)])
+    );
     assert_eq!(d.overall, change(2, 1, 5));
     let reversed = distance(&after, &before);
     assert_eq!(reversed.overall, change(1, 2, 5));
     assert_eq!(reversed.overall.distance, d.overall.distance);
+}
+
+#[test]
+fn relations_are_matched_by_name_not_index() {
+    // Relation index 1 is `x` before and `y` after: x's edge is removed and
+    // y's added, rather than one compared with the other.
+    let (mut before_names, mut after_names) =
+        (RelationDictionary::new(), RelationDictionary::new());
+    for name in ["a", "x"] {
+        before_names.intern(name).unwrap();
+    }
+    for name in ["a", "y"] {
+        after_names.intern(name).unwrap();
+    }
+    let edges = vec![(0, 0, 1, 1.0), (1, 1, 2, 1.0)];
+    let (before, after) = (
+        reference::graph(3, 2, &edges, false, false),
+        reference::graph(3, 2, &edges, false, false),
+    );
+    let d = edit_distance((&before_names, &before), (&after_names, &after));
+    let expected = named(&["a", "y", "x"], &[change(0, 0, 1), change(1, 0, 1), change(0, 1, 1)]);
+    assert_eq!(d.relations, expected);
+    assert_eq!(d.overall, change(1, 1, 3));
 }
 
 #[test]

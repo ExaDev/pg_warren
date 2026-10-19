@@ -6,8 +6,8 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use warren_core::compute::AnyVector;
 use warren_core::spectral::{
-    degree_distance, edit_distance, embedding_distance, rayleigh_quotients, spectral_distance,
-    subspace_distance, ComparedRows, EdgeSetChange, EigenOptions, Resources,
+    degree_distance, embedding_distance, rayleigh_quotients, spectral_distance, subspace_distance,
+    ComparedRows, EdgeSetChange, EigenOptions, Resources,
 };
 
 use super::super::eigen::eigenpairs;
@@ -18,21 +18,19 @@ use crate::compute_sql::{workers, Vectors};
 use crate::interrupts::PostgresInterrupts;
 use crate::source::IdDatum;
 
-/// `edit`: per relation (named) and overall.
-pub(super) fn edit<E: IdDatum>(pair: &Pair<E>) -> Value {
-    let distance = edit_distance(&pair.before.loaded.graph, pair.after_graph());
-    let names = pair.relation_names();
+/// `edit`: per relation (matched by name) and overall.
+pub(super) fn edit<E: IdDatum>(pair: &Pair<E>) -> Result<Value, SpectralSqlError> {
+    let distance = pair.edit_distance()?;
     let relations: Vec<Value> = distance
         .relations
         .iter()
-        .enumerate()
-        .map(|(index, change)| {
-            let mut entry = change_json(change);
-            entry["relation"] = json!(names.get(index));
+        .map(|relation| {
+            let mut entry = change_json(&relation.change);
+            entry["relation"] = json!(relation.name);
             entry
         })
         .collect();
-    json!({ "relations": relations, "overall": change_json(&distance.overall) })
+    Ok(json!({ "relations": relations, "overall": change_json(&distance.overall) }))
 }
 
 fn change_json(change: &EdgeSetChange) -> Value {
@@ -70,24 +68,29 @@ pub(super) fn spectral<E: IdDatum>(
     operator: &OperatorArguments,
     eigenvalues: &Eigenvalues<'_>,
 ) -> Result<Value, SpectralSqlError> {
-    let before = values(&mut pair.before, operator, eigenvalues)?;
-    let after = values(&mut pair.after, operator, eigenvalues)?;
+    let (before, before_converged) = values(&mut pair.before, operator, eigenvalues)?;
+    let (after, after_converged) = values(&mut pair.after, operator, eigenvalues)?;
     let distance = spectral_distance(&before, &after);
-    Ok(json!({
+    let mut result = json!({
         "l2": distance.l2, "relative": distance.relative, "max": distance.max,
         "before": before, "after": after,
-    }))
+    });
+    if let (Some(before), Some(after)) = (before_converged, after_converged) {
+        result["converged"] = json!(before && after);
+    }
+    Ok(result)
 }
 
-/// One version's eigenvalues.
+/// One version's eigenvalues, and for a fresh solve whether it converged.
 fn values<E: IdDatum>(
     vectors: &mut Vectors<E>,
     operator: &OperatorArguments,
     eigenvalues: &Eigenvalues<'_>,
-) -> Result<Vec<f64>, SpectralSqlError> {
+) -> Result<(Vec<f64>, Option<bool>), SpectralSqlError> {
     match eigenvalues {
         Eigenvalues::Solved(options) => {
-            Ok(eigenpairs(vectors, operator, options)?.pairs.iter().map(|p| p.value).collect())
+            let solved = eigenpairs(vectors, operator, options)?;
+            Ok((solved.pairs.iter().map(|p| p.value).collect(), Some(solved.converged)))
         }
         Eigenvalues::Stored { prefix, k } => {
             let stored = (1..=*k)
@@ -101,7 +104,7 @@ fn values<E: IdDatum>(
             let mut resources =
                 Resources { workers: &pool, memory, interrupts: &mut PostgresInterrupts };
             let refs: Vec<&AnyVector> = stored.iter().map(|v| &**v).collect();
-            Ok(rayleigh_quotients(&mut resources, &loaded.graph, &matrix, &refs)?)
+            Ok((rayleigh_quotients(&mut resources, &loaded.graph, &matrix, &refs)?, None))
         }
     }
 }

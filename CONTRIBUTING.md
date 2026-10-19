@@ -176,10 +176,14 @@ format. To benchmark a new function, add a workload with `requires` to
   loaded at once, but the catalog (new columns, functions, storage) only
   changes with the update, so calls in between can fail. Release notes
   (CHANGELOG.md) say so for every release with a schema change.
-- To release: add the version's line to `sql/released.sha256`
-  (`cd sql && sha256sum pg_warren--X.Y.Z.sql >> released.sha256`), tag
-  `vX.Y.Z`, then bump the workspace version and start the next upgrade
-  script.
+- To release: finalise CHANGELOG.md (and README's Status) in a commit
+  that is otherwise the version in development; that commit gets the tag
+  `vX.Y.Z`. Then, in one commit: add the version's line to
+  `sql/released.sha256` (`cd sql && sha256sum pg_warren--X.Y.Z.sql >>
+  released.sha256`), bump the workspace version, regenerate its install
+  script (`sql/schema-drift.sh --update`) and add the header-only upgrade
+  script `sql/pg_warren--X.Y.Z--<next>.sql`. In the other order the tagged
+  commit fails `schema-drift.sh` (its version would already be released).
 
 ```sh
 test/upgrade.py --pg-config "$(command -v pg_config)"   # installs, then checks every release's path

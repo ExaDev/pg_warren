@@ -40,6 +40,7 @@ mod summary;
 mod transient;
 mod vectors;
 
+pub(crate) use drop::drop_named;
 pub(crate) use error::{compute_sqlstate, entry, ComputeSqlError};
 pub(crate) use settings::{compute_memory, define_compute_settings, workers};
 pub(crate) use vectors::Vectors;

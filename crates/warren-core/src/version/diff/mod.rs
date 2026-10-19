@@ -9,14 +9,14 @@ mod edges;
 mod nodes;
 
 pub use degree::{DegreeCount, DegreeShift};
-pub use edges::{EdgeDelta, RelationDelta};
+pub use edges::{relation_deltas, EdgeDelta, RelationDelta};
 pub use nodes::NodeDelta;
 
 use degree::{degree_shift, in_degree_counts, out_degree_counts};
-use edges::{edge_delta, relation_deltas};
+use edges::edge_delta;
 use nodes::node_delta;
 
-use super::{GraphVersion, VersionError};
+use super::{shared_dense_ids, GraphVersion, VersionError};
 use crate::graph::ExternalId;
 
 /// The structural delta from an earlier version of a graph to a later one.
@@ -51,11 +51,7 @@ pub fn diff<E: ExternalId>(
             after: later.id_space(),
         });
     }
-    if let Some(dense) = (0..earlier.id_space())
-        .find(|&dense| earlier.external_id(dense) != later.external_id(dense))
-    {
-        return Err(VersionError::IdSpacesDiverge { dense });
-    }
+    shared_dense_ids(earlier, later)?;
     let (forward_before, forward_after) =
         (before.graph().all_relations().forward(), after.graph().all_relations().forward());
     let out_degree = degree_shift(
@@ -68,7 +64,10 @@ pub fn diff<E: ExternalId>(
     );
     Ok(VersionDiff {
         nodes: node_delta(earlier, later),
-        relations: relation_deltas(before, after),
+        relations: relation_deltas(
+            (before.relations(), before.graph()),
+            (after.relations(), after.graph()),
+        ),
         all_relations: edge_delta(forward_before, forward_after),
         out_degree,
         in_degree,

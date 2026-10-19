@@ -47,11 +47,11 @@ const RESERVED_PREFIX: &str = "_warren_";
 
 /// A vector name bound to a version, and its element type.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct BoundName {
+pub(crate) struct BoundName {
     /// The name.
-    pub(super) name: String,
+    pub(crate) name: String,
     /// Its dtype.
-    pub(super) dtype: Dtype,
+    pub(crate) dtype: Dtype,
 }
 
 /// The names of the vectors bound to `version` of graph `graph_id` that a
@@ -124,7 +124,7 @@ impl<E: IdDatum> Vectors<E> {
     }
 
     /// The names of the vectors bound to the version that this call sees.
-    pub(super) fn names(&self) -> Result<Vec<BoundName>, ComputeSqlError> {
+    pub(crate) fn names(&self) -> Result<Vec<BoundName>, ComputeSqlError> {
         bound_names(self.graph.graph_id, self.version)
     }
 
@@ -167,6 +167,23 @@ impl<E: IdDatum> Vectors<E> {
         Ok(Some(load(&mut SpiVectorStore, cache_memory(), graph_id, &record)?))
     }
 
+    /// Whether the caller may store a vector as `name` (persisted if
+    /// `persist`): a non-empty name, reserved only if transient, and any
+    /// persisted vector of that name written by the caller or the caller a
+    /// member of the graph's owner role.
+    pub(crate) fn check_writable(&self, name: &str, persist: bool) -> Result<(), ComputeSqlError> {
+        if name.is_empty() {
+            return Err(ComputeSqlError::EmptyName);
+        }
+        if persist && name.starts_with(RESERVED_PREFIX) {
+            return Err(ComputeSqlError::ReservedName(name.to_owned()));
+        }
+        if let Some(old) = self.record(name) {
+            require_creator_or_owner(old.created_by, self.graph.owner, &self.graph.name, name)?;
+        }
+        Ok(())
+    }
+
     /// Stores `vector` as `name` (which may be reserved only if not
     /// `persist`) after clearing its tombstoned rows:
     /// persisted (returning its vector id) or, if not `persist`, as a
@@ -180,17 +197,9 @@ impl<E: IdDatum> Vectors<E> {
         mut vector: AnyVector,
         persist: bool,
     ) -> Result<Option<VectorId>, ComputeSqlError> {
-        if name.is_empty() {
-            return Err(ComputeSqlError::EmptyName);
-        }
-        if persist && name.starts_with(RESERVED_PREFIX) {
-            return Err(ComputeSqlError::ReservedName(name.to_owned()));
-        }
+        self.check_writable(name, persist)?;
         let graph_id = self.graph.graph_id;
         let old = self.record(name).map(|old| (old.vector, old.created_by));
-        if let Some((_, created_by)) = old {
-            require_creator_or_owner(created_by, self.graph.owner, &self.graph.name, name)?;
-        }
         let replacing = old.map(|(vector, _)| vector);
         vector.clear_tombstoned(self.tombstones());
         self.held.remove(name);

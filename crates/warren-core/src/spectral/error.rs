@@ -8,6 +8,9 @@ use crate::graph::DenseId;
 /// Why an eigenproblem or a distance could not be computed.
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum SpectralError {
+    /// Graph structure could not be built.
+    #[error(transparent)]
+    Graph(#[from] crate::graph::GraphError),
     /// A compute kernel failed, ran out of budget or was cancelled.
     #[error(transparent)]
     Compute(#[from] ComputeError),

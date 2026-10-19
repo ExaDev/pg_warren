@@ -43,7 +43,7 @@ impl Method<'_> {
     /// The distance between the versions of `pair`.
     fn measure<E: IdDatum>(&self, pair: &mut Pair<E>) -> Result<Value, SpectralSqlError> {
         match self {
-            Self::Edit => Ok(methods::edit(pair)),
+            Self::Edit => methods::edit(pair),
             Self::Degree => methods::degree(pair),
             Self::Spectral(operator, eigenvalues) => methods::spectral(pair, operator, eigenvalues),
             Self::Subspace { prefix, k, compared } => {
@@ -80,8 +80,9 @@ fn count(k: Option<i32>) -> Result<usize, SpectralSqlError> {
 ///
 /// - `edit` and `degree` need nothing more.
 /// - `spectral` compares the eigenvalues of `<vectors_prefix>_1..k` under
-///   `matrix` (Rayleigh quotients), or without a prefix solves the `k`
-///   eigenpairs of `matrix` at the `which` end on each version.
+///   `matrix`, which must then be given (Rayleigh quotients), or without a
+///   prefix solves the `k` eigenpairs of `matrix` (default `adjacency`) at
+///   the `which` end on each version.
 /// - `subspace` compares the spans of `<vectors_prefix>_1..k`.
 /// - `embedding` compares matrix `x` of `v1` with matrix `y` (default `x`)
 ///   of `v2`.
@@ -103,7 +104,7 @@ fn distance(
     x: default!(Option<&str>, "NULL"),
     y: default!(Option<&str>, "NULL"),
     compared_rows: default!(Option<&str>, "'shared'"),
-    matrix: default!(Option<&str>, "'adjacency'"),
+    matrix: default!(Option<&str>, "NULL"),
     which: default!(Option<&str>, "'largest'"),
     rels: default!(Option<Vec<Option<String>>>, "NULL"),
     weighted: default!(Option<bool>, "NULL"),
@@ -127,8 +128,21 @@ fn distance(
             "edit" => Method::Edit,
             "degree" => Method::Degree,
             "spectral" => {
+                // Stored eigenvectors carry no record of their operator, so
+                // their Rayleigh quotients need it named; a fresh solve
+                // defaults to the adjacency, as eigen does.
+                let matrix = match (matrix, vectors_prefix) {
+                    (Some(matrix), _) => matrix,
+                    (None, None) => "adjacency",
+                    (None, Some(_)) => {
+                        return Err(SpectralSqlError::InvalidArgument(
+                            "spectral with vectors_prefix needs the matrix the eigenvectors are of"
+                                .to_owned(),
+                        ))
+                    }
+                };
                 let operator = OperatorArguments {
-                    matrix: matrix.ok_or(SpectralSqlError::NullArgument("matrix"))?.to_owned(),
+                    matrix: matrix.to_owned(),
                     rels,
                     weighted,
                     symmetrize: symmetrize.ok_or(SpectralSqlError::NullArgument("symmetrize"))?,
@@ -235,6 +249,7 @@ mod tests {
         assert!(zero(&d, "wasserstein") && zero(&d, "ks"), "{d}");
         let d = distance(&format!("'g', {v}, {v}, 'spectral', k := 2"))?;
         assert!(zero(&d, "l2"), "{d}");
+        assert_eq!(d["converged"], true);
         let d = distance(&format!("'g', {v}, {v}, 'spectral', vectors_prefix := 'lap', k := 3, matrix := 'normalized_laplacian'"))?;
         assert!(d["l2"].as_f64().is_some_and(|l2| l2 == 0.0), "{d}");
         assert!(d["before"][0].as_f64().is_some_and(|value| value.abs() < 1e-9), "{d}");
@@ -276,6 +291,59 @@ mod tests {
             );
         }
         Ok(())
+    }
+
+    #[pg_test]
+    fn a_fresh_solve_that_stops_early_says_so() -> Result<(), Error> {
+        Spi::run(
+            "CREATE TABLE q_nodes (id bigint); CREATE TABLE q_edges (src bigint, dst bigint);
+             INSERT INTO q_nodes SELECT generate_series(1, 200);
+             INSERT INTO q_edges SELECT g, (g * 7) % 200 + 1 FROM generate_series(1, 200) g
+                       UNION ALL SELECT g, g % 200 + 1 FROM generate_series(1, 200) g;
+             SELECT warren.create_graph('q', 'SELECT id FROM q_nodes', 'SELECT src, dst FROM q_edges',
+                                        directed := false)",
+        )?;
+        let v = refreshed("q")?;
+        let d = distance(&format!("'q', {v}, {v}, 'spectral', k := 4, max_iter := 25"))?;
+        assert_eq!(d["converged"], false, "{d}");
+        Ok(())
+    }
+
+    #[pg_test]
+    fn sibling_staged_versions_are_refused() -> Result<(), Error> {
+        // Two staged builds from one current version: node 10 in one and node
+        // 20 in the other get the same new dense id, relations x and y the
+        // same relation index. Like diff, distance refuses to compare them.
+        graph()?;
+        Spi::run("INSERT INTO g_nodes VALUES (10); INSERT INTO g_edges VALUES (4, 10, 'x')")?;
+        let with_10 = staged("g")?;
+        Spi::run(
+            "DELETE FROM g_edges WHERE dst = 10; DELETE FROM g_nodes WHERE id = 10;
+             INSERT INTO g_nodes VALUES (20); INSERT INTO g_edges VALUES (1, 20, 'y')",
+        )?;
+        let with_20 = staged("g")?;
+        for version in [with_10, with_20] {
+            Spi::run(&format!(
+                "SELECT warren.vector_from_query('g', 'e', 'SELECT id, ARRAY[id::float8] FROM g_nodes',
+                                                 version := {version})"
+            ))?;
+        }
+        let diff = failure(&format!("warren.diff('g', {with_10}, {with_20})"))?.unwrap_or_default();
+        assert!(diff.starts_with("22023: dense id"), "{diff}");
+        for method in ["'edit'", "'degree'", "'spectral', k := 1", "'embedding', x := 'e'"] {
+            let found = failure(&format!("warren.distance('g', {with_10}, {with_20}, {method})"))?
+                .unwrap_or_default();
+            assert!(
+                found.starts_with("22023: dense id 6 names different nodes"),
+                "{method}: {found}"
+            );
+        }
+        Ok(())
+    }
+
+    fn staged(graph: &str) -> Result<i64, Error> {
+        Spi::get_one::<i64>(&format!("SELECT warren.refresh('{graph}', promote := false)"))?
+            .ok_or(Error::InvalidPosition)
     }
 
     #[pg_test]
@@ -338,6 +406,10 @@ mod tests {
         let u = refreshed("u")?;
         let cases = [
             (format!("'g', {v}, {v}, 'cosine'"), "22023: unknown method \"cosine\""),
+            (
+                format!("'g', {v}, {v}, 'spectral', vectors_prefix := 'lap', k := 1"),
+                "22023: spectral with vectors_prefix needs the matrix",
+            ),
             (
                 format!("'g', {v}, {v}, 'subspace', k := 2"),
                 "22004: vectors_prefix must not be NULL",
