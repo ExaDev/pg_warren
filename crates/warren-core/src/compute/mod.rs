@@ -15,7 +15,7 @@ mod product;
 mod reduce;
 #[cfg(test)]
 #[cfg(not(miri))]
-mod reference;
+pub(crate) mod reference;
 mod semiring;
 mod vector;
 mod workers;
