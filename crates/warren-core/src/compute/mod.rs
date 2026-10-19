@@ -8,11 +8,13 @@
 mod dtype;
 mod error;
 mod memory;
+mod semiring;
 mod vector;
 mod workers;
 
 pub use dtype::{Dtype, Element};
-pub use error::ComputeError;
+pub use error::{ArithmeticError, ComputeError};
 pub use memory::{ComputeMemory, MemoryCharge};
+pub use semiring::{BinaryOp, Monoid, Semiring, SemiringElement};
 pub use vector::{AnyVector, Vector};
 pub use workers::Workers;

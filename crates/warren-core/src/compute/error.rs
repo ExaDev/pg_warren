@@ -45,6 +45,15 @@ pub enum ComputeError {
     /// The compute threads could not be started.
     #[error("could not start the compute threads: {0}")]
     Threads(String),
+    /// A semiring name is not one of the v1 semirings.
+    #[error("unknown semiring \"{0}\"")]
+    UnknownSemiring(String),
+    /// A binary operator name is not a GraphBLAS binary operator.
+    #[error("unknown binary operator \"{0}\"")]
+    UnknownBinaryOp(String),
+    /// Arithmetic failed as the same SQL arithmetic would.
+    #[error(transparent)]
+    Arithmetic(#[from] ArithmeticError),
     /// The caller's interrupts asked the kernel to stop.
     #[error("compute cancelled")]
     Cancelled,
@@ -54,4 +63,19 @@ impl From<Cancelled> for ComputeError {
     fn from(_: Cancelled) -> Self {
         Self::Cancelled
     }
+}
+
+/// An arithmetic error, with the message Postgres raises for it, so the
+/// compiled path and SQL agree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum ArithmeticError {
+    /// An `i64` result or cast out of range (SQLSTATE 22003).
+    #[error("bigint out of range")]
+    BigintOutOfRange,
+    /// A finite float result that overflows (SQLSTATE 22003).
+    #[error("value out of range: overflow")]
+    FloatOverflow,
+    /// A non-zero float result that underflows to zero (SQLSTATE 22003).
+    #[error("value out of range: underflow")]
+    FloatUnderflow,
 }
