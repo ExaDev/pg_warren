@@ -362,8 +362,16 @@ mod tests {
         random_vectors()?;
         let expr = "CASE WHEN d THEN a * b ELSE sqrt(abs(e)) + c END";
         Spi::run("SET LOCAL jit = on; SET LOCAL jit_above_cost = 0")?;
+        // Whether this server can load its JIT provider (llvmjit): with one,
+        // the executor must JIT-compile; without one (e.g. PG 18 without
+        // postgresql-18-jit), it must still evaluate, uncompiled.
+        let available = Spi::get_one::<bool>("SELECT pg_jit_available()")?.unwrap_or(false);
         let (compiled, executed) = both("p", expr)?;
-        assert!(last_was_jit_compiled(), "the executor path was not JIT-compiled");
+        assert_eq!(
+            last_was_jit_compiled(),
+            available,
+            "JIT-compiled must match pg_jit_available() = {available}"
+        );
         assert_eq!(compiled, executed);
         Spi::run("SET LOCAL jit_above_cost = 1e9")?;
         let (_, again) = both("p", expr)?;
