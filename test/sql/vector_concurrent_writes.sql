@@ -7,7 +7,7 @@ SELECT warren.create_graph('g', 'SELECT id FROM nodes', 'SELECT src, dst FROM ed
 SELECT warren.refresh('g');
 SELECT warren.vector_const('g', 'x', 0);
 
-SELECT format('dbname=%s host=%s port=%s', current_database(),
+SELECT format('dbname=%s user=%s host=%s port=%s', current_database(), session_user,
               split_part(current_setting('unix_socket_directories'), ',', 1),
               current_setting('port')) AS conninfo \gset
 SELECT dblink_connect('first', :'conninfo');
