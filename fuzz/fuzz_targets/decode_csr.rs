@@ -31,9 +31,9 @@ fuzz_target!(|data: &[u8]| {
         let segments = csr.encode().expect("a decoded CSR re-encodes");
         let again = AnyCsr::decode(
             id_space,
-            &segments.offsets,
-            &segments.targets,
-            segments.weights.as_deref(),
+            segments.offsets(),
+            segments.targets(),
+            segments.weights(),
         );
         assert_eq!(again.as_ref(), Ok(&csr));
     }

@@ -1,9 +1,9 @@
 //! A CSR of either target width, behind a width-free read API.
 
-use std::iter::{Copied, FusedIterator, Map};
+use std::iter::FusedIterator;
 use std::slice::Iter;
 
-use super::{Csr, Target};
+use super::{Csr, Target, TargetWidth};
 use crate::graph::DenseId;
 
 /// A CSR whose target width was chosen from its id space.
@@ -21,6 +21,14 @@ impl AnyCsr {
         match self {
             Self::U32(csr) => csr.id_space(),
             Self::U64(csr) => csr.id_space(),
+        }
+    }
+
+    /// The width of the targets.
+    pub fn width(&self) -> TargetWidth {
+        match self {
+            Self::U32(_) => TargetWidth::U32,
+            Self::U64(_) => TargetWidth::U64,
         }
     }
 
@@ -44,8 +52,8 @@ impl AnyCsr {
     /// id space.
     pub fn neighbours(&self, source: DenseId) -> Neighbours<'_> {
         match self {
-            Self::U32(csr) => Neighbours::U32(csr.neighbours(source).iter().map(|&t| t.dense())),
-            Self::U64(csr) => Neighbours::U64(csr.neighbours(source).iter().copied()),
+            Self::U32(csr) => Neighbours(Row::U32(csr.neighbours(source).iter())),
+            Self::U64(csr) => Neighbours(Row::U64(csr.neighbours(source).iter())),
         }
     }
 
@@ -86,29 +94,30 @@ impl From<Csr<u64>> for AnyCsr {
     }
 }
 
-/// The targets of one row, as dense ids.
+/// The targets of one row, as dense ids, in ascending order.
 #[derive(Debug, Clone)]
-pub enum Neighbours<'a> {
-    /// Over a `u32` row.
-    U32(Map<Iter<'a, u32>, fn(&u32) -> DenseId>),
-    /// Over a `u64` row.
-    U64(Copied<Iter<'a, u64>>),
+pub struct Neighbours<'a>(Row<'a>);
+
+#[derive(Debug, Clone)]
+enum Row<'a> {
+    U32(Iter<'a, u32>),
+    U64(Iter<'a, u64>),
 }
 
 impl Iterator for Neighbours<'_> {
     type Item = DenseId;
 
     fn next(&mut self) -> Option<DenseId> {
-        match self {
-            Self::U32(row) => row.next(),
-            Self::U64(row) => row.next(),
+        match &mut self.0 {
+            Row::U32(row) => row.next().map(|&target| target.dense()),
+            Row::U64(row) => row.next().copied(),
         }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        match self {
-            Self::U32(row) => row.size_hint(),
-            Self::U64(row) => row.size_hint(),
+        match &self.0 {
+            Row::U32(row) => row.size_hint(),
+            Row::U64(row) => row.size_hint(),
         }
     }
 }

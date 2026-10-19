@@ -9,7 +9,7 @@
 //! | 4 | format, currently 1 |
 //! | 5 | [`SegmentKind`] |
 //! | 6 | element width in bytes (0 for variable-width elements) |
-//! | 7 | reserved, 0 |
+//! | 7 | reserved, must be 0 |
 //! | 8..16 | element count (`u64`); for tombstones, the id space in bits |
 //!
 //! Decoding never panics on malformed input: it checks the header, the
@@ -33,7 +33,7 @@ const FORMAT: u8 = 1;
 /// What a segment holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub enum SegmentKind {
+pub(crate) enum SegmentKind {
     /// CSR `offsets` (`u64`).
     Offsets = 1,
     /// CSR `targets` (`u32` or `u64`).
@@ -134,12 +134,15 @@ pub(crate) fn read_header(bytes: &[u8], kind: SegmentKind) -> Result<(Header, &[
     if header[5] != kind as u8 {
         return Err(GraphError::SegmentKind { expected: kind as u8, found: header[5] });
     }
+    if header[7] != 0 {
+        return Err(GraphError::SegmentReserved { found: header[7] });
+    }
     let header = Header { width: header[6], count: u64::read(&header[8..]) };
     Ok((header, payload))
 }
 
 /// Checks that a header declares elements of `width` bytes.
-fn expect_width(header: &Header, width: usize) -> Result<(), GraphError> {
+pub(crate) fn expect_width(header: &Header, width: usize) -> Result<(), GraphError> {
     if usize::from(header.width) == width {
         Ok(())
     } else {
@@ -176,7 +179,7 @@ pub(crate) fn decode<E: Element>(kind: SegmentKind, bytes: &[u8]) -> Result<Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{AnyCsr, EdgeList, GraphCsr, IdMap, RelationDictionary, Tombstones};
+    use crate::graph::{AnyCsr, Csr, EdgeList, GraphCsr, IdMap, RelationDictionary, Tombstones};
     use proptest::prelude::*;
 
     fn csr_example() -> AnyCsr {
@@ -192,10 +195,10 @@ mod tests {
     #[test]
     fn a_segment_starts_with_its_header() {
         let segments = csr_example().encode().unwrap();
-        assert_eq!(&segments.offsets[..8], b"WRSG\x01\x01\x08\x00");
-        assert_eq!(&segments.offsets[8..16], &4u64.to_le_bytes());
-        assert_eq!(&segments.targets[4..8], b"\x01\x02\x04\x00");
-        assert_eq!(segments.offsets.len(), HEADER_LEN + 4 * 8);
+        assert_eq!(&segments.offsets()[..8], b"WRSG\x01\x01\x08\x00");
+        assert_eq!(&segments.offsets()[8..16], &4u64.to_le_bytes());
+        assert_eq!(&segments.targets()[4..8], b"\x01\x02\x04\x00");
+        assert_eq!(segments.offsets().len(), HEADER_LEN + 4 * 8);
     }
 
     #[test]
@@ -203,50 +206,62 @@ mod tests {
         let csr = csr_example();
         let segments = csr.encode().unwrap();
         let decoded =
-            AnyCsr::decode(3, &segments.offsets, &segments.targets, segments.weights.as_deref())
-                .unwrap();
+            AnyCsr::decode(3, segments.offsets(), segments.targets(), segments.weights()).unwrap();
         assert_eq!(decoded, csr);
     }
 
     #[test]
     fn decoding_checks_the_header() {
         let segments = csr_example().encode().unwrap();
-        let decode_offsets = |bytes: &[u8]| AnyCsr::decode(3, bytes, &segments.targets, None);
-        assert_eq!(decode_offsets(&segments.offsets[..10]), Err(GraphError::SegmentTruncated));
-        let mut bad = segments.offsets.clone();
+        let decode_offsets = |bytes: &[u8]| AnyCsr::decode(3, bytes, segments.targets(), None);
+        assert_eq!(decode_offsets(&segments.offsets()[..10]), Err(GraphError::SegmentTruncated));
+        let mut bad = segments.offsets().to_vec();
         bad[0] = b'X';
         assert_eq!(decode_offsets(&bad), Err(GraphError::SegmentMagic));
-        let mut bad = segments.offsets.clone();
+        let mut bad = segments.offsets().to_vec();
         bad[4] = 9;
         assert_eq!(decode_offsets(&bad), Err(GraphError::SegmentFormat { found: 9 }));
         assert_eq!(
-            decode_offsets(&segments.targets),
+            decode_offsets(segments.targets()),
             Err(GraphError::SegmentKind {
                 expected: SegmentKind::Offsets as u8,
                 found: SegmentKind::Targets as u8
             })
         );
-        let mut bad = segments.offsets.clone();
+        let mut bad = segments.offsets().to_vec();
         bad[6] = 4;
         assert_eq!(decode_offsets(&bad), Err(GraphError::SegmentWidth { expected: 8, found: 4 }));
-        let mut bad = segments.offsets.clone();
+        let mut bad = segments.offsets().to_vec();
         bad.push(0);
         assert_eq!(
             decode_offsets(&bad),
             Err(GraphError::SegmentLength { expected: 32, found: 33 })
         );
-        let mut bad = segments.offsets.clone();
+        let mut bad = segments.offsets().to_vec();
         bad[8..16].copy_from_slice(&u64::MAX.to_le_bytes());
         assert!(matches!(decode_offsets(&bad), Err(GraphError::SegmentLength { .. })));
+        let mut bad = segments.offsets().to_vec();
+        bad[7] = 1;
+        assert_eq!(decode_offsets(&bad), Err(GraphError::SegmentReserved { found: 1 }));
+    }
+
+    #[test]
+    fn decoding_requires_the_target_width_of_the_id_space() {
+        let wide = AnyCsr::U64(Csr::from_parts(3, vec![0, 1, 1, 1], vec![2u64], None).unwrap());
+        let segments = wide.encode().unwrap();
+        assert_eq!(
+            AnyCsr::decode(3, segments.offsets(), segments.targets(), None),
+            Err(GraphError::SegmentWidth { expected: 4, found: 8 })
+        );
     }
 
     #[test]
     fn decoding_checks_the_csr_invariants() {
         let segments = csr_example().encode().unwrap();
-        let mut bad = segments.offsets.clone();
+        let mut bad = segments.offsets().to_vec();
         bad[HEADER_LEN + 8..HEADER_LEN + 16].copy_from_slice(&5u64.to_le_bytes());
         assert_eq!(
-            AnyCsr::decode(3, &bad, &segments.targets, None),
+            AnyCsr::decode(3, &bad, segments.targets(), None),
             Err(GraphError::OffsetsNotMonotone { row: 1 })
         );
     }
@@ -312,9 +327,21 @@ mod tests {
         bad.extend_from_slice(&5u32.to_le_bytes());
         bad.extend_from_slice(b"cites");
         assert_eq!(RelationDictionary::decode(&bad), Err(GraphError::DuplicateRelationName));
-        let mut bad = bytes;
+        let mut bad = bytes.clone();
         bad.pop();
         assert_eq!(RelationDictionary::decode(&bad), Err(GraphError::SegmentTruncated));
+        let mut bad = bytes.clone();
+        bad.push(0);
+        assert_eq!(
+            RelationDictionary::decode(&bad),
+            Err(GraphError::SegmentLength { expected: 21, found: 22 })
+        );
+        let mut bad = bytes;
+        bad[6] = 4;
+        assert_eq!(
+            RelationDictionary::decode(&bad),
+            Err(GraphError::SegmentWidth { expected: 0, found: 4 })
+        );
     }
 
     fn graphs() -> impl Strategy<Value = (u64, bool, Vec<(u64, u64, u8)>)> {
@@ -346,7 +373,7 @@ mod tests {
             let graph = GraphCsr::build(edges, relations.len(), id_space, true).unwrap();
             for csr in [graph.all_relations().forward(), graph.relation(r).unwrap().reverse().unwrap()] {
                 let segments = csr.encode().unwrap();
-                let decoded = AnyCsr::decode(id_space, &segments.offsets, &segments.targets, segments.weights.as_deref());
+                let decoded = AnyCsr::decode(id_space, segments.offsets(), segments.targets(), segments.weights());
                 prop_assert_eq!(decoded.as_ref(), Ok(csr));
             }
 
@@ -375,7 +402,7 @@ mod tests {
             framed.extend_from_slice(&payload);
             for input in [&bytes, &framed] {
                 let _ = AnyCsr::decode(id_space, input, input, Some(input));
-                let _ = AnyCsr::decode(id_space, &csr_example().encode().unwrap().offsets, input, None);
+                let _ = AnyCsr::decode(id_space, csr_example().encode().unwrap().offsets(), input, None);
                 let tombstones = Tombstones::decode(input);
                 let _ = IdMap::<i32>::decode(input, tombstones.clone().unwrap_or_default());
                 let _ = IdMap::<i64>::decode(input, tombstones.clone().unwrap_or_default());

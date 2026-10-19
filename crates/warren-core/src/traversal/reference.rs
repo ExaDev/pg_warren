@@ -7,7 +7,7 @@ use proptest::prelude::*;
 
 use super::example::relations;
 use super::{Direction, RelationSelection};
-use crate::graph::{DenseId, EdgeList, GraphCsr, RelationIndex};
+use crate::graph::{AnyCsr, DenseId, EdgeList, GraphCsr, RelationIndex};
 
 /// A small random graph: relations, self-loops, parallel edges, weights and
 /// tombstoned nodes, whose edges the build never sees.
@@ -59,12 +59,26 @@ pub(crate) fn directions() -> impl Strategy<Value = Direction> {
 impl Scenario {
     /// The graph the build makes of the live edges, with a reverse CSR.
     pub(crate) fn graph(&self) -> GraphCsr {
+        GraphCsr::build(self.edge_list(), self.relation_count, self.id_space, true).unwrap()
+    }
+
+    /// [`Self::graph`] with `u64` targets, which the build otherwise
+    /// chooses only for id spaces of 2³² or more.
+    pub(crate) fn wide_graph(&self) -> GraphCsr {
+        let graph =
+            GraphCsr::build_with::<u64>(self.edge_list(), self.relation_count, self.id_space, true)
+                .unwrap();
+        assert!(matches!(graph.all_relations().forward(), AnyCsr::U64(_)));
+        graph
+    }
+
+    fn edge_list(&self) -> EdgeList {
         let indexes = relations(self.relation_count);
         let mut list = EdgeList::new(self.weighted);
         for (r, s, t, w) in self.live_edges() {
             list.push(indexes[r], s, t, w).unwrap();
         }
-        GraphCsr::build(list, self.relation_count, self.id_space, true).unwrap()
+        list
     }
 
     /// The relation indexes of `selection`, owned so a test can borrow them.
