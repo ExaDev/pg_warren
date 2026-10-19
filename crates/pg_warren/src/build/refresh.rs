@@ -4,13 +4,15 @@
 
 use pgrx::prelude::*;
 
-use super::chunk::{VersionId, CHUNK_SIZE};
 use super::error::BuildError;
 use super::pipeline::{build, RefreshRequest};
-use super::spi_catalog::{SpiCatalog, SpiSegmentStore};
-use super::spi_source::{with_pinned_snapshot, SpiSource};
-use crate::catalog::GraphDefinition;
+use super::spi_catalog::SpiCatalog;
+use super::spi_source::SpiSource;
+use crate::access::require_owner;
+use crate::catalog::{GraphDefinition, VersionId};
 use crate::extension::or_raise;
+use crate::segment::{SpiSegmentStore, CHUNK_SIZE};
+use crate::source::with_pinned_snapshot;
 
 /// `warren.refresh`: builds a new version of graph `name` and returns its
 /// id. The caller must be a member of the graph's owner role. The version
@@ -26,7 +28,7 @@ fn refresh(
 
 fn refresh_graph(name: &str, promote: bool, label: Option<&str>) -> Result<VersionId, BuildError> {
     let mut graph = GraphDefinition::find(name)?;
-    graph.check_owner("refresh")?;
+    require_owner(graph.owner, &graph.name, "refresh")?;
     graph.lock()?;
     with_pinned_snapshot(|| {
         let request = RefreshRequest { promote, label, chunk_size: CHUNK_SIZE };
@@ -47,8 +49,7 @@ mod tests {
     use pgrx::spi::Error;
     use warren_core::graph::{AnyCsr, EdgeIntake, GraphCsr, IdMap, RelationDictionary, Tombstones};
 
-    use crate::build::chunk::read_segment;
-    use crate::build::spi_catalog::SpiSegmentStore;
+    use crate::segment::{read_segment, SpiSegmentStore};
 
     /// A ring of 200 nodes, 1 → 2 → … → 200 → 1, as graph `ring`.
     fn ring() -> Result<(), Error> {

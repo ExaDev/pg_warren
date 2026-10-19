@@ -2,10 +2,8 @@
 //! rows of at most [`CHUNK_SIZE`] bytes, numbered from 0, and read back by
 //! concatenating the chunks in order (DESIGN.md §5.1).
 
-use super::error::BuildError;
-
-/// A version id: `warren.versions.version_id`.
-pub(crate) type VersionId = i64;
+use super::SegmentError;
+use crate::catalog::VersionId;
 
 /// The port to the chunks of each segment of each version.
 pub(crate) trait SegmentStore {
@@ -16,14 +14,14 @@ pub(crate) trait SegmentStore {
         segment: &str,
         chunk_no: i32,
         data: &[u8],
-    ) -> Result<(), BuildError>;
+    ) -> Result<(), SegmentError>;
 
     /// The chunks of a segment as (chunk number, bytes), in chunk order.
     fn read_chunks(
         &mut self,
         version: VersionId,
         segment: &str,
-    ) -> Result<Vec<(i32, Vec<u8>)>, BuildError>;
+    ) -> Result<Vec<(i32, Vec<u8>)>, SegmentError>;
 }
 
 /// The chunk size of production builds: 8 MiB (DESIGN.md §5.1, §14 item 3).
@@ -42,10 +40,10 @@ pub(crate) fn write_segment(
     segment: &str,
     bytes: &[u8],
     chunk_size: usize,
-) -> Result<u64, BuildError> {
+) -> Result<u64, SegmentError> {
     for (chunk_no, chunk) in bytes.chunks(chunk_size).enumerate() {
         let chunk_no = i32::try_from(chunk_no)
-            .map_err(|_| BuildError::TooManyChunks { segment: segment.to_owned() })?;
+            .map_err(|_| SegmentError::TooManyChunks { segment: segment.to_owned() })?;
         store.write_chunk(version, segment, chunk_no, chunk)?;
     }
     Ok(bytes.len() as u64)
@@ -57,15 +55,15 @@ pub(crate) fn read_segment(
     store: &mut impl SegmentStore,
     version: VersionId,
     segment: &str,
-) -> Result<Vec<u8>, BuildError> {
+) -> Result<Vec<u8>, SegmentError> {
     let chunks = store.read_chunks(version, segment)?;
     if chunks.is_empty() {
-        return Err(BuildError::SegmentMissing { version, segment: segment.to_owned() });
+        return Err(SegmentError::SegmentMissing { version, segment: segment.to_owned() });
     }
     let mut bytes = Vec::new();
     for (expected, (chunk_no, data)) in (0..).zip(chunks) {
         if chunk_no != expected {
-            return Err(BuildError::ChunkMissing {
+            return Err(SegmentError::ChunkMissing {
                 version,
                 segment: segment.to_owned(),
                 chunk_no: expected,
@@ -77,14 +75,14 @@ pub(crate) fn read_segment(
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
     /// An in-memory [`SegmentStore`].
     #[derive(Debug, Default)]
-    pub(in crate::build) struct MemorySegmentStore {
-        pub(in crate::build) chunks: BTreeMap<(VersionId, String, i32), Vec<u8>>,
+    pub(crate) struct MemorySegmentStore {
+        pub(crate) chunks: BTreeMap<(VersionId, String, i32), Vec<u8>>,
     }
 
     impl SegmentStore for MemorySegmentStore {
@@ -94,7 +92,7 @@ pub(super) mod tests {
             segment: &str,
             chunk_no: i32,
             data: &[u8],
-        ) -> Result<(), BuildError> {
+        ) -> Result<(), SegmentError> {
             self.chunks.insert((version, segment.to_owned(), chunk_no), data.to_vec());
             Ok(())
         }
@@ -103,7 +101,7 @@ pub(super) mod tests {
             &mut self,
             version: VersionId,
             segment: &str,
-        ) -> Result<Vec<(i32, Vec<u8>)>, BuildError> {
+        ) -> Result<Vec<(i32, Vec<u8>)>, SegmentError> {
             Ok(self
                 .chunks
                 .iter()
@@ -152,7 +150,7 @@ pub(super) mod tests {
         let mut store = MemorySegmentStore::default();
         assert!(matches!(
             read_segment(&mut store, 3, "id_map"),
-            Err(BuildError::SegmentMissing { version: 3, .. })
+            Err(SegmentError::SegmentMissing { version: 3, .. })
         ));
     }
 
@@ -163,7 +161,7 @@ pub(super) mod tests {
         store.chunks.remove(&(3, "id_map".to_owned(), 1));
         assert!(matches!(
             read_segment(&mut store, 3, "id_map"),
-            Err(BuildError::ChunkMissing { chunk_no: 1, .. })
+            Err(SegmentError::ChunkMissing { chunk_no: 1, .. })
         ));
     }
 

@@ -1,9 +1,9 @@
-//! Graph definitions: the rows of `warren.graphs` (DESIGN.md §5.1), and the
-//! owner check that management functions make (DESIGN.md §7).
+//! Graph definitions: the rows of `warren.graphs` (DESIGN.md §5.1).
 
 use pgrx::prelude::*;
 
-use super::{as_extension_owner, CatalogError};
+use super::CatalogError;
+use crate::access::as_extension_owner;
 
 /// A graph's definition, as `warren.create_graph` recorded it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,24 +77,6 @@ impl GraphDefinition {
                 })
             })
         })
-    }
-
-    /// Checks that the caller is a member of the owner role, as management
-    /// functions require; `action` names the function for the error.
-    pub(crate) fn check_owner(&self, action: &'static str) -> Result<(), CatalogError> {
-        let (owner, member) = Spi::get_two_with_args::<String, bool>(
-            "SELECT r.rolname::text,
-                    CASE WHEN r.oid IS NOT NULL THEN pg_has_role(r.oid, 'MEMBER') END
-             FROM (SELECT $1::oid AS oid) o LEFT JOIN pg_roles r ON r.oid = o.oid",
-            &[self.owner.into()],
-        )?;
-        match (owner, member) {
-            (Some(_), Some(true)) => Ok(()),
-            (Some(owner), _) => {
-                Err(CatalogError::NotOwner { owner, action, graph: self.name.clone() })
-            }
-            (None, _) => Err(CatalogError::OwnerDropped(self.name.clone())),
-        }
     }
 
     /// Locks the graph's row until the end of the transaction, so that

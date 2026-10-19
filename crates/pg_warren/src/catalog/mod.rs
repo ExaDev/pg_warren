@@ -1,12 +1,20 @@
-//! Catalog adapter: `warren.graphs` / `warren.versions` rows, graph
-//! definitions, promotion, staging and retention (DESIGN.md §5.1, §7).
+//! The catalog: graph definitions and their versions, as rows of
+//! `warren.graphs` and `warren.versions` (DESIGN.md §5.1, §7) — creating
+//! graphs, recording and promoting versions, staging and retention.
+//!
+//! It depends on `access` (catalog statements run as the extension owner)
+//! and `source` (a new graph's queries are checked); `build` and the query
+//! features depend on it, never the reverse.
 
 mod bootstrap;
 mod create_graph;
 mod error;
 mod graph;
-mod identity;
+mod version;
 
 pub(crate) use error::CatalogError;
-pub(crate) use graph::{GraphDefinition, NewGraph};
-pub(crate) use identity::{as_extension_owner, as_role, current_user};
+pub(crate) use graph::GraphDefinition;
+use graph::NewGraph;
+pub(crate) use version::{
+    current_wal_lsn, insert_version, promote, record_bytes, VersionId, VersionStats,
+};

@@ -3,9 +3,10 @@
 
 use pgrx::prelude::*;
 
-use super::{current_user, CatalogError, NewGraph};
-use crate::build::{check_edge_columns, check_node_columns, source_columns};
+use super::{CatalogError, NewGraph};
+use crate::access::current_user;
 use crate::extension::or_raise;
+use crate::source::{check_edge_columns, check_node_columns, source_columns};
 
 /// `warren.create_graph`: records graph `name` over `node_query` and
 /// `edge_query`, owned by the calling role. Both queries are opened (not

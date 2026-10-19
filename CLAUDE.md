@@ -31,8 +31,12 @@ before changing code. Commands, toolchain setup and environment gotchas are in
    `types` or `misc` modules.
    - `warren-core/src/`: `graph/` (csr, id_map, tombstones), `traversal/`,
      `compute/` (semiring, kernels, message), `spectral/`, `version/` (diff, compaction across versions).
-   - `pg_warren/src/`: `extension` (schema + `warren.version()`), `catalog/`,
-     `build/`, `cache/`, `traversal_sql/`, `compute_sql/`.
+   - `pg_warren/src/`: `extension` (schema + `warren.version()`, SQL
+     errors), `access/` (identity switches, privilege checks), `source/`
+     (node/edge query columns and read-only cursors), `catalog/`,
+     `segment/` (chunked persistence), `build/`, `cache/`,
+     `traversal_sql/`, `compute_sql/`. Feature dependencies form a DAG:
+     `access`, `source` → `catalog` → `segment` → `build`; never the reverse.
    - Each module's `mod.rs` doc comment states its responsibility. Add a
      submodule when the code exists, not before.
 4. **Ubiquitous language (from DESIGN.md).** Use these terms exactly, in code,

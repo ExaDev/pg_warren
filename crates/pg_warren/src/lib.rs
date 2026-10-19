@@ -4,11 +4,14 @@
 
 ::pgrx::pg_module_magic!(name, version);
 
+mod access;
 mod build;
 mod cache;
 mod catalog;
 mod compute_sql;
 mod extension;
+mod segment;
+mod source;
 mod traversal_sql;
 
 /// Required by `cargo pgrx test`; must be visible at the crate root.

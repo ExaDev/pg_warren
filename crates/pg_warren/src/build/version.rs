@@ -1,27 +1,8 @@
 //! The port to the catalog of versions: a build records its new version in
 //! `warren.versions` and may promote it (DESIGN.md §5.4 steps 5–6, §7).
 
-use super::chunk::VersionId;
 use super::error::BuildError;
-
-/// The statistics of a built version, as recorded in `warren.versions`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct VersionStats {
-    /// Live nodes.
-    pub(crate) node_count: u64,
-    /// The dense id high-water mark, tombstones included.
-    pub(crate) id_space: u64,
-    /// Stored edges summed over relations, after deduplication. An
-    /// undirected edge is stored, and counted, in both directions.
-    pub(crate) edge_count: u64,
-    /// Edge rows dropped for a NULL field or an unknown or tombstoned
-    /// endpoint.
-    pub(crate) dropped_edges: u64,
-    /// Parallel edges folded by deduplication.
-    pub(crate) deduplicated_edges: u64,
-    /// The CSR target width in bytes: 4 or 8.
-    pub(crate) target_width: i16,
-}
+use crate::catalog::{VersionId, VersionStats};
 
 /// Records versions of a graph.
 pub(crate) trait Catalog {

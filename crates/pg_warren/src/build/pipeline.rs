@@ -8,11 +8,14 @@ use warren_core::graph::{
     RelationIndex, Tombstones,
 };
 
-use super::chunk::{read_segment, write_segment, SegmentStore, VersionId};
 use super::error::BuildError;
 use super::source::{EdgeRow, SourceReader};
-use super::version::{Catalog, VersionStats};
-use crate::catalog::GraphDefinition;
+use super::version::Catalog;
+use crate::catalog::{GraphDefinition, VersionId, VersionStats};
+use crate::segment::{
+    csr_segment, read_segment, write_segment, CsrPart, CsrScope, Direction, SegmentStore, ID_MAP,
+    RELATION_DICTIONARY, TOMBSTONES,
+};
 
 /// The name of the one relation of a graph without relations.
 const IMPLICIT_RELATION: &str = "";
@@ -57,14 +60,14 @@ pub(crate) fn build<E: ExternalId>(
     };
     let version = catalog.insert_version(graph.graph_id, &stats, request.label)?;
     let mut writer = SegmentWriter { segments, version, chunk_size: request.chunk_size, bytes: 0 };
-    writer.write("id_map", &id_map.encode()?)?;
-    writer.write("tombstones", &id_map.tombstones().encode()?)?;
-    writer.write("rel_dict", &relations.encode()?)?;
+    writer.write(ID_MAP, &id_map.encode()?)?;
+    writer.write(TOMBSTONES, &id_map.tombstones().encode()?)?;
+    writer.write(RELATION_DICTIONARY, &relations.encode()?)?;
     for (index, relation) in csr.relations().iter().enumerate() {
-        writer.write_csrs(&index.to_string(), relation)?;
+        writer.write_csrs(CsrScope::Relation(index), relation)?;
     }
-    if csr.relations().len() != 1 {
-        writer.write_csrs("merged", csr.all_relations())?;
+    if let Some(merged) = csr.merged() {
+        writer.write_csrs(CsrScope::Merged, merged)?;
     }
     catalog.record_bytes(version, writer.bytes)?;
     if request.promote {
@@ -78,9 +81,10 @@ fn base_version<E: ExternalId>(
     segments: &mut impl SegmentStore,
     version: VersionId,
 ) -> Result<(IdMap<E>, RelationDictionary), BuildError> {
-    let tombstones = Tombstones::decode(&read_segment(segments, version, "tombstones")?)?;
-    let id_map = IdMap::decode(&read_segment(segments, version, "id_map")?, tombstones)?;
-    let relations = RelationDictionary::decode(&read_segment(segments, version, "rel_dict")?)?;
+    let tombstones = Tombstones::decode(&read_segment(segments, version, TOMBSTONES)?)?;
+    let id_map = IdMap::decode(&read_segment(segments, version, ID_MAP)?, tombstones)?;
+    let relations =
+        RelationDictionary::decode(&read_segment(segments, version, RELATION_DICTIONARY)?)?;
     Ok((id_map, relations))
 }
 
@@ -150,23 +154,26 @@ impl<S: SegmentStore> SegmentWriter<'_, S> {
         Ok(())
     }
 
-    /// The forward and reverse CSRs of a relation, or of the merged CSR:
-    /// `offsets:<scope>`, `targets:<scope>`, `weights:<scope>` and the same
-    /// with a `rev_` prefix.
-    fn write_csrs(&mut self, scope: &str, csrs: &RelationCsr) -> Result<(), BuildError> {
-        self.write_csr("", scope, csrs.forward())?;
+    /// The forward and reverse CSRs of a relation, or of the merged CSR.
+    fn write_csrs(&mut self, scope: CsrScope, csrs: &RelationCsr) -> Result<(), BuildError> {
+        self.write_csr(Direction::Forward, scope, csrs.forward())?;
         if let Some(reverse) = csrs.reverse() {
-            self.write_csr("rev_", scope, reverse)?;
+            self.write_csr(Direction::Reverse, scope, reverse)?;
         }
         Ok(())
     }
 
-    fn write_csr(&mut self, prefix: &str, scope: &str, csr: &AnyCsr) -> Result<(), BuildError> {
+    fn write_csr(
+        &mut self,
+        direction: Direction,
+        scope: CsrScope,
+        csr: &AnyCsr,
+    ) -> Result<(), BuildError> {
         let encoded = csr.encode()?;
-        self.write(&format!("{prefix}offsets:{scope}"), &encoded.offsets)?;
-        self.write(&format!("{prefix}targets:{scope}"), &encoded.targets)?;
+        self.write(&csr_segment(direction, CsrPart::Offsets, scope), &encoded.offsets)?;
+        self.write(&csr_segment(direction, CsrPart::Targets, scope), &encoded.targets)?;
         if let Some(weights) = &encoded.weights {
-            self.write(&format!("{prefix}weights:{scope}"), weights)?;
+            self.write(&csr_segment(direction, CsrPart::Weights, scope), weights)?;
         }
         Ok(())
     }
@@ -175,11 +182,11 @@ impl<S: SegmentStore> SegmentWriter<'_, S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build::chunk::tests::MemorySegmentStore;
-    use crate::build::chunk::{read_segment, VersionId};
     use crate::build::source::tests::{MemorySource, OwnedEdgeRow};
     use crate::build::version::tests::MemoryCatalog;
     use crate::catalog::GraphDefinition;
+    use crate::catalog::VersionId;
+    use crate::segment::{read_segment, MemorySegmentStore};
     use pgrx::pg_sys;
     use warren_core::graph::{AnyCsr, EdgeIntake, GraphCsr, IdMap, RelationDictionary, Tombstones};
 

@@ -1,13 +1,11 @@
 //! Identity switches (DESIGN.md §7): source queries run as the graph owner;
-//! catalog, segment and vector statements run as the extension owner. Every
-//! `warren.*` function is `SECURITY INVOKER`, so these are the only places
-//! its privileges change.
+//! catalog, segment and vector statements run as the extension owner.
 
 use std::cell::Cell;
 
 use pgrx::prelude::*;
 
-use super::CatalogError;
+use super::AccessError;
 
 /// The security context flags of a switch: the user id was changed locally,
 /// and the statements inside may not change it back or create temporary
@@ -45,21 +43,21 @@ pub(crate) fn as_role<R>(role: pg_sys::Oid, f: impl FnOnce() -> R) -> R {
 /// Runs `f` as the extension owner, the only role with privileges on the
 /// `warren.*` tables (DESIGN.md §5.1, §7). Only extension-written SQL
 /// against those tables may run inside.
-pub(crate) fn as_extension_owner<R, E: From<CatalogError>>(
+pub(crate) fn as_extension_owner<R, E: From<AccessError>>(
     f: impl FnOnce() -> Result<R, E>,
 ) -> Result<R, E> {
     as_role(extension_owner()?, f)
 }
 
 /// The role that owns the pg_warren extension (`pg_extension.extowner`).
-pub(crate) fn extension_owner() -> Result<pg_sys::Oid, CatalogError> {
+pub(crate) fn extension_owner() -> Result<pg_sys::Oid, AccessError> {
     if let Some(owner) = EXTENSION_OWNER.get() {
         return Ok(owner);
     }
     let owner = Spi::get_one::<pg_sys::Oid>(
         "SELECT extowner FROM pg_extension WHERE extname = 'pg_warren'",
     )?
-    .ok_or(CatalogError::ExtensionMissing)?;
+    .ok_or(AccessError::ExtensionMissing)?;
     EXTENSION_OWNER.set(Some(owner));
     Ok(owner)
 }
