@@ -745,7 +745,7 @@ Workspace split, non-negotiable:
 
 - `warren-core` unit and property tests: CSR construction (duplicates, self-loops, dangling edges, tombstones, stable-ID merge across builds), BFS, shortest paths, components, every semiring kernel against a naive dense reference on small random graphs, `gather` with fixed- and variable-width messages against a naive implementation, Lanczos against a dense eigensolver on graphs with N ≤ 500.
 - `vector_map`: every expression in Appendix A and the library takes the compiled path (asserted via `warren.explain_map`); compiled and executor paths agree bit-for-bit on random expressions over random vectors.
-- **Use-case tests (Appendix A):** each worked example is an integration test with a generated fixture and the stated expected outcome.
+- **Use-case tests (Appendix A):** each worked example is an integration test with a generated fixture and the stated expected outcome. *Implemented (M2):* `bench/generate.py` writes seeded, deterministic fixtures (CSV + `load.sql` + ground truth) for every Appendix A fixture and the benchmark graphs; `test/run.py` runs `test/sql/*.sql` in fresh databases of a scratch cluster, with `-- fixture:` / `-- oracle:` directives and `assert.*` functions that raise on failure (format in `test/README.md`).
 - Integration tests (`cargo pgrx test`): every SQL function; every `id_type`; directed/undirected; weighted/unweighted; relations present/absent; reverse present/absent; filters; refresh with a prior version loaded; staged → promote → retention → drop; vectors bound to retained versions; `compact` and the refusal to compare across it; rollback of a transaction containing a staged build leaves no rows; cancellation of long traversals and compute; memory cap enforcement.
 - **Oracle tests:** every traversal function against an equivalent recursive CTE; PageRank and components against NetworkX on exported fixtures; `gather(... 'collect')` against a plain SQL join + `array_agg`; `diff` against SQL `EXCEPT`. Exact match on random graphs of ~10K nodes. This suite is the most valuable thing in the repository.
 - Robustness: a `cargo fuzz` target for the segment decoder (§5.3); a differential proptest of bidirectional against single-direction shortest path (§9.3).
@@ -768,7 +768,7 @@ Targets on a commodity 8-core machine, graph in cache, 10M nodes / 100M edges, a
 | `diff` between two versions | < 30 s |
 | Cold load into backend | < 15 s |
 
-Benchmark harness: generators for random, power-law (preferential attachment), grid, and *evolving* graphs (a base graph plus a parameterised perturbation, so `distance` methods can be evaluated for sensitivity and monotonicity); loads into `nodes`/`edges`; builds; runs the matrix against baselines (recursive CTE, NetworkX, igraph). Commit results per version to `bench/results/`. SNAP datasets (LiveJournal, Orkut, road networks) as secondary benchmarks.
+Benchmark harness: generators for random, power-law (preferential attachment), grid, and *evolving* graphs (a base graph plus a parameterised perturbation, so `distance` methods can be evaluated for sensitivity and monotonicity); loads into `nodes`/`edges`; builds; runs the matrix against baselines (recursive CTE, NetworkX, igraph). Commit results per version to `bench/results/`. *Implemented (M2):* `bench/run.sh` runs `bench/matrix.json`; a workload names the functions it `requires` and is recorded as skipped until they exist. SNAP datasets (LiveJournal, Orkut, road networks) as secondary benchmarks.
 
 ## 13. Repository layout and milestones
 
@@ -936,7 +936,7 @@ v1.1 extension: `warren.contract('fraud', 'label', 'fraud_rings')` gives a ring-
 - *novel*: new entities form a new community of their own.
 
 **Expected outcome (assertions).**
-- `diff` reports edge counts within 5% of the generator's for all three variants (it measures volume and cannot distinguish them — documented).
+- `diff` reports edge counts within 5% of the generator's for all three variants (it measures volume and cannot distinguish them — documented). The graph is undirected, and `diff` counts each undirected edge once per direction, so the comparison is against twice the generator's count.
 - `distance('subspace', k := 40)`: *volume* < *novel* < *bridge*, with *volume* below a documented threshold and *bridge* above it; results are identical across two runs (determinism of Lanczos with fixed seed).
 - `distance('embedding')` after `aggregate_neighbours` ranks *bridge* highest (the merged communities' embeddings drift towards each other).
 - After `ROLLBACK`, `warren.versions`, `warren.segments` and `warren.vectors` contain no rows for the staged version; after `COMMIT` without `promote`, the staged version is queryable by explicit `version` and invisible by default; dense IDs of all pre-existing entities are identical in both versions.
