@@ -4,12 +4,12 @@
 use pgrx::prelude::*;
 
 use super::{CatalogError, NewGraph};
-use crate::access::current_user;
-use crate::extension::or_raise;
+use crate::access::{current_user, entry, with_search_path};
 use crate::source::{check_edge_columns, check_node_columns, source_columns};
 
 /// `warren.create_graph`: records graph `name` over `node_query` and
-/// `edge_query`, owned by the calling role. Both queries are opened (not
+/// `edge_query`, owned by the calling role, with the caller's
+/// `search_path`, under which every refresh will run the queries. Both queries are opened (not
 /// run) as the caller to check their columns; the node query's column type
 /// becomes the graph's `id_type`.
 #[allow(clippy::too_many_arguments)] // the SQL signature of DESIGN.md §9.3
@@ -24,27 +24,35 @@ fn create_graph(
     build_reverse: default!(bool, true),
     retain_versions: default!(i32, 2),
 ) {
-    or_raise(record(&NewGraph {
-        name,
-        owner: current_user(),
-        node_query,
-        edge_query,
-        id_type: pg_sys::Oid::INVALID,
-        directed,
-        weighted,
-        has_relations,
-        build_reverse,
-        retain_versions,
-    }));
+    entry(|caller| {
+        record(&NewGraph {
+            name,
+            owner: current_user(),
+            search_path: caller.search_path(),
+            node_query,
+            edge_query,
+            id_type: pg_sys::Oid::INVALID,
+            directed,
+            weighted,
+            has_relations,
+            build_reverse,
+            retain_versions,
+        })
+    });
 }
 
 fn record(graph: &NewGraph<'_>) -> Result<(), CatalogError> {
     if graph.retain_versions < 1 {
         return Err(CatalogError::RetainVersions(graph.retain_versions));
     }
-    let id_type =
-        check_node_columns(&source_columns::<CatalogError>("node_query", graph.node_query)?)?;
-    let edge_columns = source_columns::<CatalogError>("edge_query", graph.edge_query)?;
+    // The queries are the caller's own SQL: check them under its search_path.
+    let (node_columns, edge_columns) = with_search_path(graph.search_path, || {
+        Ok::<_, CatalogError>((
+            source_columns::<CatalogError>("node_query", graph.node_query)?,
+            source_columns::<CatalogError>("edge_query", graph.edge_query)?,
+        ))
+    })?;
+    let id_type = check_node_columns(&node_columns)?;
     check_edge_columns(&edge_columns, id_type, graph.has_relations, graph.weighted)?;
     NewGraph { id_type: id_type.oid(), ..*graph }.create()
 }

@@ -66,7 +66,20 @@ pub(crate) fn small(name: &str) -> Result<i64, Error> {
     refresh(name, true)
 }
 
-/// The rows of `query`, each formatted by `format`, joined by spaces.
+/// The rows of `query`, which returns one text column, joined by spaces.
 pub(crate) fn rows(query: &str) -> Result<Option<String>, Error> {
     Spi::get_one::<String>(&format!("SELECT coalesce(string_agg(r, ' '), '') FROM ({query}) q(r)"))
+}
+
+/// Runs `PERFORM <expression>` and returns the SQLSTATE and message it
+/// failed with, as `"<sqlstate>: <message>"`, or `None` if it succeeded.
+pub(crate) fn failure(expression: &str) -> Result<Option<String>, Error> {
+    Spi::run("CREATE TEMP TABLE IF NOT EXISTS failure (what text); TRUNCATE failure")?;
+    Spi::run(&format!(
+        "DO $do$ BEGIN PERFORM {expression};
+         EXCEPTION WHEN OTHERS THEN
+             INSERT INTO failure VALUES (SQLSTATE || ': ' || SQLERRM);
+         END $do$"
+    ))?;
+    Spi::get_one::<String>("SELECT max(what) FROM failure")
 }

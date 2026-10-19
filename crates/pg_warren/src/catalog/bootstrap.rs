@@ -14,6 +14,7 @@ CREATE TABLE warren.graphs (
     source           text NOT NULL DEFAULT 'query',
     node_query       text,
     edge_query       text,
+    search_path      text NOT NULL,
     id_type          regtype NOT NULL,
     directed         boolean NOT NULL DEFAULT true,
     build_reverse    boolean NOT NULL DEFAULT true,
@@ -119,7 +120,7 @@ mod tests {
             Some(
                 "graph_id integer not null, name text not null, owner regrole not null, \
                  readers regrole[] not null, source text not null, node_query text, \
-                 edge_query text, id_type regtype not null, directed boolean not null, \
+                 edge_query text, search_path text not null, id_type regtype not null, directed boolean not null, \
                  build_reverse boolean not null, weighted boolean not null, \
                  has_relations boolean not null, retain_versions integer not null, \
                  current_version bigint"

@@ -97,6 +97,15 @@ before changing code. Commands, toolchain setup and environment gotchas are in
 - Reserve graph-sized buffers with `try_reserve`; an allocation failure is a
   SQL error, never an abort.
 - SPI writes need `Spi::connect_mut` + `update()`. `Spi::connect` is read-only.
+- **Every SQL entry point uses the guard.** The body of every
+  `#[pg_extern]` is `access::entry(|caller| ...)`, which pins
+  `search_path = pg_catalog, pg_temp` for the whole call and raises errors
+  with their SQLSTATE (DESIGN.md §7). Write SPI SQL assuming that
+  `search_path`: schema-qualify `warren.*` objects, never rely on `public`.
+  Run user-supplied SQL only under the search_path it belongs to
+  (`access::with_search_path`: the caller's, or a graph's stored one).
+  `access::guard`'s test calls every `warren.*` function with a hostile
+  `search_path`; add each new function to its `CALLS` list.
 - Use pgrx `=0.19.3` (pinned). Upgrade pgrx and cargo-pgrx together, in their
   own change.
 

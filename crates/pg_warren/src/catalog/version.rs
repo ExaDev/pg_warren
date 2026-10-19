@@ -248,6 +248,39 @@ pub(crate) fn compaction_between(
     })
 }
 
+/// Checks that `version` is in `graph`'s current id space: that no
+/// compacted version has a higher `seq`. Promotion and refresh call it, so
+/// a graph never returns to an id space a compaction replaced.
+pub(crate) fn require_current_id_space(
+    graph: &GraphDefinition,
+    version: VersionId,
+) -> Result<(), CatalogError> {
+    let compacted = as_extension_owner(|| {
+        Spi::connect(|client| {
+            let row = client
+                .select(
+                    "SELECT c.version_id FROM warren.versions c, warren.versions v
+                     WHERE v.version_id = $2 AND c.graph_id = $1
+                       AND c.compacted_from IS NOT NULL AND c.seq > v.seq
+                     ORDER BY c.seq DESC LIMIT 1",
+                    Some(1),
+                    &[graph.graph_id.into(), version.into()],
+                )?
+                .first();
+            match row.is_empty() {
+                true => Ok::<_, CatalogError>(None),
+                false => Ok(row.get::<i64>(1)?),
+            }
+        })
+    })?;
+    match compacted {
+        None => Ok(()),
+        Some(compacted) => {
+            Err(CatalogError::SupersededIdSpace { graph: graph.name.clone(), version, compacted })
+        }
+    }
+}
+
 /// Checks that `version` is a version of `graph`.
 pub(crate) fn require_version(
     graph: &GraphDefinition,

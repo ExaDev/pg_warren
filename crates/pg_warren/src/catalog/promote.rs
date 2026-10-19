@@ -3,15 +3,17 @@
 
 use pgrx::prelude::*;
 
-use super::{promote_version, require_version, CatalogError, GraphDefinition, VersionId};
-use crate::access::require_owner;
-use crate::extension::or_raise;
+use super::{
+    promote_version, require_current_id_space, require_version, CatalogError, GraphDefinition,
+    VersionId,
+};
+use crate::access::{entry, require_owner};
 
 /// `warren.promote`: makes `version` the current version of graph `name`.
 /// The caller must be a member of the owner role.
 #[pg_extern(schema = "warren")]
 fn promote(name: &str, version: i64) {
-    or_raise(promote_by_name(name, version));
+    entry(|_| promote_by_name(name, version));
 }
 
 fn promote_by_name(name: &str, version: VersionId) -> Result<(), CatalogError> {
@@ -19,6 +21,7 @@ fn promote_by_name(name: &str, version: VersionId) -> Result<(), CatalogError> {
     require_owner(graph.owner, &graph.name, "promote")?;
     graph.lock()?;
     require_version(&graph, version)?;
+    require_current_id_space(&graph, version)?;
     promote_version(&graph, version)
 }
 

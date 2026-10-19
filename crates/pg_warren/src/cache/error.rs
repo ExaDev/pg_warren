@@ -4,9 +4,8 @@ use pgrx::PgSqlErrorCode;
 use thiserror::Error;
 
 use super::LoadError;
-use crate::access::AccessError;
+use crate::access::{AccessError, SqlError};
 use crate::catalog::CatalogError;
-use crate::extension::SqlError;
 
 /// Why a version could not be opened for reading.
 #[derive(Debug, Error)]

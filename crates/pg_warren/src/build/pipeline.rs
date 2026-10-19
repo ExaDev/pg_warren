@@ -169,6 +169,7 @@ mod tests {
             id_type: crate::source::IdType::Int8,
             node_query: String::new(),
             edge_query: String::new(),
+            search_path: String::new(),
             directed: true,
             weighted: false,
             has_relations: false,

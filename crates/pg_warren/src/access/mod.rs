@@ -7,9 +7,11 @@
 //! on no other feature; the catalog, build and query features depend on it.
 
 mod error;
+mod guard;
 mod identity;
 mod privilege;
 
 pub(crate) use error::AccessError;
+pub(crate) use guard::{entry, with_search_path, SqlError};
 pub(crate) use identity::{as_extension_owner, as_role, current_user};
 pub(crate) use privilege::{is_superuser, require_owner, require_reader};

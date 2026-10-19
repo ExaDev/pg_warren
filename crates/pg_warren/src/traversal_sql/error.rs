@@ -1,12 +1,13 @@
-//! The traversal bindings' error type, and the one entry point every
-//! traversal function's body runs through.
+//! The traversal bindings' error type, and the entry point their bodies
+//! run through.
 
 use pgrx::PgSqlErrorCode;
 use thiserror::Error;
 use warren_core::traversal::TraversalError;
 
+use crate::access::{self, SqlError};
 use crate::cache::{CacheError, LoadError};
-use crate::extension::{graph_sqlstate, or_raise, SqlError};
+use crate::extension::graph_sqlstate;
 
 /// Why a traversal function could not answer.
 #[derive(Debug, Error)]
@@ -77,9 +78,10 @@ fn traversal_sqlstate(error: &TraversalError) -> PgSqlErrorCode {
     }
 }
 
-/// Runs the body of a traversal function and returns its result, or
-/// raises its error as a SQL `ERROR`. Every `warren.*` traversal function
-/// enters here, and set-returning functions also wrap each later fetch.
+/// Runs the body of a traversal function under the access guard (trusted
+/// `search_path`, errors raised with their SQLSTATE) and returns its
+/// result. Every traversal function enters here, and so does each later
+/// fetch of a set-returning one.
 pub(crate) fn entry<T>(body: impl FnOnce() -> Result<T, TraversalSqlError>) -> T {
-    or_raise(body())
+    access::entry(|_| body())
 }

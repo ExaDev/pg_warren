@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use super::VersionId;
 use crate::access::AccessError;
-use crate::extension::SqlError;
+use crate::access::SqlError;
 use crate::source::SourceError;
 
 /// Why a graph definition could not be created, found or used.
@@ -21,6 +21,20 @@ pub(crate) enum CatalogError {
         graph: String,
         /// The version asked for.
         version: VersionId,
+    },
+    /// The version is in an id space a later compaction replaced
+    /// (DESIGN.md §5.2): it may not become current or be built on.
+    #[error(
+        "version {version} of graph \"{graph}\" is in an id space that compacted version \
+         {compacted} replaced"
+    )]
+    SupersededIdSpace {
+        /// The graph.
+        graph: String,
+        /// The version asked for.
+        version: VersionId,
+        /// The latest compacted version after it.
+        compacted: VersionId,
     },
     /// The current version cannot be dropped.
     #[error("cannot drop version {version} of graph \"{graph}\": it is the current version; promote another first")]
@@ -60,6 +74,9 @@ impl SqlError for CatalogError {
                 PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT
             }
             Self::DropCurrent { .. } => PgSqlErrorCode::ERRCODE_OBJECT_IN_USE,
+            Self::SupersededIdSpace { .. } => {
+                PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE
+            }
             Self::GraphExists(_) => PgSqlErrorCode::ERRCODE_DUPLICATE_OBJECT,
             Self::RetainVersions(_) => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
             Self::UnknownIdType(_) => PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,

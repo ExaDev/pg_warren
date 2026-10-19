@@ -3,7 +3,7 @@
 use pgrx::PgSqlErrorCode;
 use thiserror::Error;
 
-use crate::extension::SqlError;
+use super::SqlError;
 
 /// Why the caller may not do what it asked, or an identity switch failed.
 #[derive(Debug, Error)]

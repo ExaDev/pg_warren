@@ -5,8 +5,7 @@
 use pgrx::prelude::*;
 
 use super::{CatalogError, GraphDefinition};
-use crate::access::require_owner;
-use crate::extension::or_raise;
+use crate::access::{entry, require_owner};
 
 /// `warren.grant(name text, role regrole)`: lets members of `role` query
 /// graph `name`. The caller must be a member of the owner role.
@@ -18,7 +17,7 @@ STRICT VOLATILE LANGUAGE c AS 'MODULE_PATHNAME', 'grant_wrapper';
 "#
 )]
 fn grant(name: &str, role: pg_sys::Oid) {
-    or_raise(set_reader(name, role, true, "grant"));
+    entry(|_| set_reader(name, role, true, "grant"));
 }
 
 /// `warren.revoke(name text, role regrole)`: removes `role` from the
@@ -31,7 +30,7 @@ STRICT VOLATILE LANGUAGE c AS 'MODULE_PATHNAME', 'revoke_wrapper';
 "#
 )]
 fn revoke(name: &str, role: pg_sys::Oid) {
-    or_raise(set_reader(name, role, false, "revoke"));
+    entry(|_| set_reader(name, role, false, "revoke"));
 }
 
 fn set_reader(

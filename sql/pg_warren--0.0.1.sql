@@ -7,78 +7,12 @@ The ordering of items is not stable, it is driven by a dependency graph.
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/extension.rs:14
+-- crates/pg_warren/src/extension.rs:16
 CREATE SCHEMA IF NOT EXISTS warren; /* pg_warren::extension::warren */
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/traversal_sql/paths.rs:96
--- pg_warren::traversal_sql::paths::dijkstra
-
-CREATE FUNCTION warren.dijkstra(graph text, start anyelement, target anyelement,
-                                rels text[] DEFAULT NULL, direction text DEFAULT 'out',
-                                version bigint DEFAULT NULL)
-RETURNS TABLE (path anyarray, cost float8)
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'dijkstra_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/pg_warren/src/traversal_sql/bfs.rs:36
--- pg_warren::traversal_sql::bfs::bfs
-
-CREATE FUNCTION warren.bfs(graph text, start anyarray, max_depth int,
-                           direction text DEFAULT 'out', rels text[] DEFAULT NULL,
-                           node_filter "any" DEFAULT NULL, max_results bigint DEFAULT NULL,
-                           version bigint DEFAULT NULL)
-RETURNS TABLE (node_id anyelement, depth int, via anyelement)
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'bfs_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/pg_warren/src/traversal_sql/neighbourhood.rs:48
--- pg_warren::traversal_sql::neighbourhood::degree
-
-CREATE FUNCTION warren.degree(graph text, node anyelement, direction text DEFAULT 'out',
-                              rels text[] DEFAULT NULL, version bigint DEFAULT NULL)
-RETURNS bigint
-STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'degree_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/pg_warren/src/version_sql/diff.rs:22
--- pg_warren::version_sql::diff::diff
-CREATE  FUNCTION warren."diff"(
-	"name" TEXT, /* & str */
-	"v1" bigint, /* i64 */
-	"v2" bigint /* i64 */
-) RETURNS jsonb /* JsonB */
-STRICT STABLE 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'diff_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/pg_warren/src/cache/warm.rs:16
--- pg_warren::cache::warm::prewarm
-CREATE  FUNCTION warren."prewarm"(
-	"name" TEXT, /* & str */
-	"version" bigint DEFAULT NULL /* Option < i64 > */
-) RETURNS bigint /* i64 */
-VOLATILE PARALLEL RESTRICTED 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'prewarm_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/pg_warren/src/catalog/readers.rs:26
--- pg_warren::catalog::readers::revoke
-
-CREATE FUNCTION warren."revoke"(name text, role regrole) RETURNS void
-STRICT VOLATILE LANGUAGE c AS 'MODULE_PATHNAME', 'revoke_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/pg_warren/src/catalog/drop.rs:14
+-- crates/pg_warren/src/catalog/drop.rs:13
 -- pg_warren::catalog::drop::drop_version
 CREATE  FUNCTION warren."drop_version"(
 	"name" TEXT, /* & str */
@@ -90,122 +24,7 @@ AS 'MODULE_PATHNAME', 'drop_version_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/traversal_sql/paths.rs:59
--- pg_warren::traversal_sql::paths::shortest_path
-
-CREATE FUNCTION warren.shortest_path(graph text, start anyelement, target anyelement,
-                                     max_depth int DEFAULT NULL, rels text[] DEFAULT NULL,
-                                     direction text DEFAULT 'out', version bigint DEFAULT NULL)
-RETURNS anyarray
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'shortest_path_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/pg_warren/src/traversal_sql/stats.rs:25
--- pg_warren::traversal_sql::stats::last_stats
-CREATE  FUNCTION warren."last_stats"() RETURNS jsonb /* Option < JsonB > */
-STRICT VOLATILE PARALLEL RESTRICTED 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'last_stats_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/pg_warren/src/catalog/drop.rs:29
--- pg_warren::catalog::drop::drop_graph
-CREATE  FUNCTION warren."drop_graph"(
-	"name" TEXT /* & str */
-) RETURNS void
-STRICT 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'drop_graph_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/pg_warren/src/version_sql/compact.rs:21
--- pg_warren::version_sql::compact::compact
-CREATE  FUNCTION warren."compact"(
-	"name" TEXT /* & str */
-) RETURNS bigint /* i64 */
-STRICT 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'compact_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/pg_warren/src/traversal_sql/bfs.rs:82
--- pg_warren::traversal_sql::bfs::reachable_set
-
-CREATE FUNCTION warren.reachable_set(graph text, start anyarray, max_depth int DEFAULT NULL,
-                                     rels text[] DEFAULT NULL, direction text DEFAULT 'out',
-                                     version bigint DEFAULT NULL)
-RETURNS SETOF anyelement
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'reachable_set_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/pg_warren/src/catalog/create_graph.rs:16
--- pg_warren::catalog::create_graph::create_graph
-CREATE  FUNCTION warren."create_graph"(
-	"name" TEXT, /* & str */
-	"node_query" TEXT, /* & str */
-	"edge_query" TEXT, /* & str */
-	"directed" bool DEFAULT true, /* bool */
-	"weighted" bool DEFAULT false, /* bool */
-	"has_relations" bool DEFAULT false, /* bool */
-	"build_reverse" bool DEFAULT true, /* bool */
-	"retain_versions" INT DEFAULT 2 /* i32 */
-) RETURNS void
-STRICT 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'create_graph_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/pg_warren/src/cache/warm.rs:31
--- pg_warren::cache::warm::evict
-CREATE  FUNCTION warren."evict"(
-	"name" TEXT /* & str */
-) RETURNS bigint /* i64 */
-STRICT VOLATILE PARALLEL RESTRICTED 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'evict_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/pg_warren/src/traversal_sql/neighbourhood.rs:19
--- pg_warren::traversal_sql::neighbourhood::neighbours
-
-CREATE FUNCTION warren.neighbours(graph text, node anyelement, direction text DEFAULT 'out',
-                                  rels text[] DEFAULT NULL, version bigint DEFAULT NULL)
-RETURNS SETOF anyelement
-STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'neighbours_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/pg_warren/src/catalog/promote.rs:12
--- pg_warren::catalog::promote::promote
-CREATE  FUNCTION warren."promote"(
-	"name" TEXT, /* & str */
-	"version" bigint /* i64 */
-) RETURNS void
-STRICT 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'promote_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/pg_warren/src/catalog/info.rs:14
--- pg_warren::catalog::info::info
-CREATE  FUNCTION warren."info"(
-	"name" TEXT /* & str */
-) RETURNS jsonb /* JsonB */
-STRICT STABLE 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'info_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/pg_warren/src/build/refresh.rs:21
+-- crates/pg_warren/src/build/refresh.rs:20
 -- pg_warren::build::refresh::refresh
 CREATE  FUNCTION warren."refresh"(
 	"name" TEXT, /* & str */
@@ -227,7 +46,30 @@ STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'components_wrapper'
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/extension.rs:50
+-- crates/pg_warren/src/traversal_sql/bfs.rs:36
+-- pg_warren::traversal_sql::bfs::bfs
+
+CREATE FUNCTION warren.bfs(graph text, start anyarray, max_depth int,
+                           direction text DEFAULT 'out', rels text[] DEFAULT NULL,
+                           node_filter "any" DEFAULT NULL, max_results bigint DEFAULT NULL,
+                           version bigint DEFAULT NULL)
+RETURNS TABLE (node_id anyelement, depth int, via anyelement)
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'bfs_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/catalog/info.rs:13
+-- pg_warren::catalog::info::info
+CREATE  FUNCTION warren."info"(
+	"name" TEXT /* & str */
+) RETURNS jsonb /* JsonB */
+STRICT STABLE 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'info_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/extension.rs:35
 -- pg_warren::extension::version
 CREATE  FUNCTION warren."version"() RETURNS TEXT /* & '_ str */
 STRICT STABLE PARALLEL SAFE 
@@ -257,7 +99,165 @@ STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'reachable_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/catalog/readers.rs:13
+-- crates/pg_warren/src/traversal_sql/bfs.rs:82
+-- pg_warren::traversal_sql::bfs::reachable_set
+
+CREATE FUNCTION warren.reachable_set(graph text, start anyarray, max_depth int DEFAULT NULL,
+                                     rels text[] DEFAULT NULL, direction text DEFAULT 'out',
+                                     version bigint DEFAULT NULL)
+RETURNS SETOF anyelement
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'reachable_set_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/version_sql/diff.rs:21
+-- pg_warren::version_sql::diff::diff
+CREATE  FUNCTION warren."diff"(
+	"name" TEXT, /* & str */
+	"v1" bigint, /* i64 */
+	"v2" bigint /* i64 */
+) RETURNS jsonb /* JsonB */
+STRICT STABLE 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'diff_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/traversal_sql/neighbourhood.rs:19
+-- pg_warren::traversal_sql::neighbourhood::neighbours
+
+CREATE FUNCTION warren.neighbours(graph text, node anyelement, direction text DEFAULT 'out',
+                                  rels text[] DEFAULT NULL, version bigint DEFAULT NULL)
+RETURNS SETOF anyelement
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'neighbours_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/catalog/promote.rs:14
+-- pg_warren::catalog::promote::promote
+CREATE  FUNCTION warren."promote"(
+	"name" TEXT, /* & str */
+	"version" bigint /* i64 */
+) RETURNS void
+STRICT 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'promote_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/traversal_sql/paths.rs:96
+-- pg_warren::traversal_sql::paths::dijkstra
+
+CREATE FUNCTION warren.dijkstra(graph text, start anyelement, target anyelement,
+                                rels text[] DEFAULT NULL, direction text DEFAULT 'out',
+                                version bigint DEFAULT NULL)
+RETURNS TABLE (path anyarray, cost float8)
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'dijkstra_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/catalog/readers.rs:25
+-- pg_warren::catalog::readers::revoke
+
+CREATE FUNCTION warren."revoke"(name text, role regrole) RETURNS void
+STRICT VOLATILE LANGUAGE c AS 'MODULE_PATHNAME', 'revoke_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/traversal_sql/stats.rs:25
+-- pg_warren::traversal_sql::stats::last_stats
+CREATE  FUNCTION warren."last_stats"() RETURNS jsonb /* Option < JsonB > */
+STRICT VOLATILE PARALLEL RESTRICTED 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'last_stats_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/cache/warm.rs:16
+-- pg_warren::cache::warm::prewarm
+CREATE  FUNCTION warren."prewarm"(
+	"name" TEXT, /* & str */
+	"version" bigint DEFAULT NULL /* Option < i64 > */
+) RETURNS bigint /* i64 */
+VOLATILE PARALLEL RESTRICTED 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'prewarm_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/version_sql/compact.rs:20
+-- pg_warren::version_sql::compact::compact
+CREATE  FUNCTION warren."compact"(
+	"name" TEXT /* & str */
+) RETURNS bigint /* i64 */
+STRICT 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'compact_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/traversal_sql/paths.rs:59
+-- pg_warren::traversal_sql::paths::shortest_path
+
+CREATE FUNCTION warren.shortest_path(graph text, start anyelement, target anyelement,
+                                     max_depth int DEFAULT NULL, rels text[] DEFAULT NULL,
+                                     direction text DEFAULT 'out', version bigint DEFAULT NULL)
+RETURNS anyarray
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'shortest_path_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/catalog/create_graph.rs:16
+-- pg_warren::catalog::create_graph::create_graph
+CREATE  FUNCTION warren."create_graph"(
+	"name" TEXT, /* & str */
+	"node_query" TEXT, /* & str */
+	"edge_query" TEXT, /* & str */
+	"directed" bool DEFAULT true, /* bool */
+	"weighted" bool DEFAULT false, /* bool */
+	"has_relations" bool DEFAULT false, /* bool */
+	"build_reverse" bool DEFAULT true, /* bool */
+	"retain_versions" INT DEFAULT 2 /* i32 */
+) RETURNS void
+STRICT 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'create_graph_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/traversal_sql/neighbourhood.rs:48
+-- pg_warren::traversal_sql::neighbourhood::degree
+
+CREATE FUNCTION warren.degree(graph text, node anyelement, direction text DEFAULT 'out',
+                              rels text[] DEFAULT NULL, version bigint DEFAULT NULL)
+RETURNS bigint
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'degree_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/catalog/drop.rs:28
+-- pg_warren::catalog::drop::drop_graph
+CREATE  FUNCTION warren."drop_graph"(
+	"name" TEXT /* & str */
+) RETURNS void
+STRICT 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'drop_graph_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/cache/warm.rs:31
+-- pg_warren::cache::warm::evict
+CREATE  FUNCTION warren."evict"(
+	"name" TEXT /* & str */
+) RETURNS bigint /* i64 */
+STRICT VOLATILE PARALLEL RESTRICTED 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'evict_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/catalog/readers.rs:12
 -- pg_warren::catalog::readers::grant
 
 CREATE FUNCTION warren."grant"(name text, role regrole) RETURNS void
@@ -276,6 +276,7 @@ CREATE TABLE warren.graphs (
     source           text NOT NULL DEFAULT 'query',
     node_query       text,
     edge_query       text,
+    search_path      text NOT NULL,
     id_type          regtype NOT NULL,
     directed         boolean NOT NULL DEFAULT true,
     build_reverse    boolean NOT NULL DEFAULT true,

@@ -6,8 +6,8 @@ use pgrx::prelude::*;
 
 use super::open::{cached, evict_graph, resolve};
 use super::CacheError;
+use crate::access::entry;
 use crate::catalog::{GraphDefinition, VersionId};
-use crate::extension::or_raise;
 use crate::source::with_id_type;
 
 /// `warren.prewarm`: loads version `version` of graph `name` (its current
@@ -15,7 +15,7 @@ use crate::source::with_id_type;
 /// and readers may call it.
 #[pg_extern(schema = "warren", volatile, parallel_restricted)]
 fn prewarm(name: &str, version: default!(Option<i64>, "NULL")) -> i64 {
-    or_raise(prewarm_version(name, version))
+    entry(|_| prewarm_version(name, version))
 }
 
 fn prewarm_version(name: &str, version: Option<VersionId>) -> Result<VersionId, CacheError> {
@@ -30,7 +30,7 @@ fn prewarm_version(name: &str, version: Option<VersionId>) -> Result<VersionId, 
 /// memory, so it needs no privilege on the graph.
 #[pg_extern(schema = "warren", volatile, parallel_restricted)]
 fn evict(name: &str) -> i64 {
-    or_raise(evict_versions(name))
+    entry(|_| evict_versions(name))
 }
 
 fn evict_versions(name: &str) -> Result<i64, CacheError> {

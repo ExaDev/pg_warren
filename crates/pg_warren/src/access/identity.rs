@@ -55,7 +55,7 @@ pub(crate) fn extension_owner() -> Result<pg_sys::Oid, AccessError> {
         return Ok(owner);
     }
     let owner = Spi::get_one::<pg_sys::Oid>(
-        "SELECT extowner FROM pg_extension WHERE extname = 'pg_warren'",
+        "SELECT extowner FROM pg_catalog.pg_extension WHERE extname = 'pg_warren'",
     )?
     .ok_or(AccessError::ExtensionMissing)?;
     EXTENSION_OWNER.set(Some(owner));
@@ -98,7 +98,7 @@ mod tests {
     #[pg_test]
     fn the_extension_owner_is_the_role_that_created_the_extension() -> Result<(), Error> {
         let owner = Spi::get_one::<pg_sys::Oid>(
-            "SELECT extowner FROM pg_extension WHERE extname = 'pg_warren'",
+            "SELECT extowner FROM pg_catalog.pg_extension WHERE extname = 'pg_warren'",
         )?;
         assert_eq!(extension_owner().ok(), owner);
         Ok(())
