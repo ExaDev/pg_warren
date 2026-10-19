@@ -2,6 +2,7 @@
 
 use thiserror::Error;
 
+use super::Dtype;
 use crate::traversal::Cancelled;
 
 /// Why a compute kernel could not run to completion.
@@ -45,6 +46,36 @@ pub enum ComputeError {
     /// The compute threads could not be started.
     #[error("could not start the compute threads: {0}")]
     Threads(String),
+    /// Operands of one kernel must share an element type.
+    #[error("element type mismatch: expected {expected}, found {found}")]
+    DtypeMismatch {
+        /// The element type of the output.
+        expected: Dtype,
+        /// The offending operand's element type.
+        found: Dtype,
+    },
+    /// Vectors must cover the id space of the graph they are used with.
+    #[error("vector covers {found} dense ids, expected the id space {expected}")]
+    IdSpaceMismatch {
+        /// The graph's (or the output's) id space.
+        expected: u64,
+        /// The offending vector's id space.
+        found: u64,
+    },
+    /// Vectors combined row by row must have compatible widths.
+    #[error("vector width {found} does not match width {expected}")]
+    WidthMismatch {
+        /// The width required.
+        expected: usize,
+        /// The offending vector's width.
+        found: usize,
+    },
+    /// A selected relation is not in the graph's relation dictionary.
+    #[error("relation {relation} is not in the graph")]
+    UnknownRelation {
+        /// The relation index.
+        relation: usize,
+    },
     /// A semiring name is not one of the v1 semirings.
     #[error("unknown semiring \"{0}\"")]
     UnknownSemiring(String),

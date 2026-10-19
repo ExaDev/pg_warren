@@ -8,6 +8,9 @@
 mod dtype;
 mod error;
 mod memory;
+mod product;
+#[cfg(test)]
+mod reference;
 mod semiring;
 mod vector;
 mod workers;
@@ -15,6 +18,7 @@ mod workers;
 pub use dtype::{Dtype, Element};
 pub use error::{ArithmeticError, ComputeError};
 pub use memory::{ComputeMemory, MemoryCharge};
+pub use product::{spmm, spmv, Mask, Product};
 pub use semiring::{BinaryOp, Monoid, Semiring, SemiringElement};
 pub use vector::{AnyVector, Vector};
 pub use workers::Workers;
