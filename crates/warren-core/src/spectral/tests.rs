@@ -4,7 +4,7 @@
 
 use crate::compute::reference::{self, Edges};
 use crate::compute::{ComputeMemory, Workers};
-use crate::graph::GraphCsr;
+use crate::graph::{GraphCsr, RelationDictionary};
 use crate::interrupts::Uninterrupted;
 use crate::spectral::{
     edit_distance, eigen, subspace_distance, ComparedRows, EigenOptions, GraphMatrix, Operator,
@@ -134,7 +134,9 @@ fn the_edit_distance_measures_only_volume() {
     let base_edges = base.all_relations().forward().edge_count();
     for ingest in [Ingest::Volume, Ingest::Novel, Ingest::Bridge] {
         let after = graph(Some(ingest));
-        let d = edit_distance(&base, &after).overall;
+        let mut names = RelationDictionary::new();
+        names.intern("r0").unwrap();
+        let d = edit_distance((&names, &base), (&names, &after)).overall;
         assert_eq!((d.removed, d.union), (0, after.all_relations().forward().edge_count()));
         assert_eq!(d.distance, d.added as f64 / (base_edges + d.added) as f64);
     }

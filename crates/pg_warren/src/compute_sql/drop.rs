@@ -6,6 +6,7 @@ use pgrx::prelude::*;
 use super::{entry, ComputeSqlError};
 use crate::access::require_creator_or_owner;
 use crate::cache::resolve;
+use crate::catalog::{GraphDefinition, VersionId};
 use crate::vector::{drop_transient, forget, SpiVectorStore, VectorError, VectorStore};
 
 /// `warren.drop_vector`: deletes vector `name` bound to `version` (the
@@ -24,34 +25,41 @@ fn drop_vector(
         let graph = graph.ok_or(ComputeSqlError::NullArgument("graph"))?;
         let name = name.ok_or(ComputeSqlError::NullArgument("name"))?;
         let resolved = resolve(graph, version, "write vectors of")?;
-        if drop_transient(resolved.graph.graph_id, resolved.version, name) {
+        if drop_named(&resolved.graph, resolved.version, name)? || if_exists {
             return Ok(());
         }
-        let mut store = SpiVectorStore;
-        let bound = store.bound(resolved.version)?;
-        let Some(record) = bound.iter().find(|record| record.name == name) else {
-            if if_exists {
-                return Ok(());
-            }
-            return Err(ComputeSqlError::VectorNotFound {
-                graph: graph.to_owned(),
-                name: name.to_owned(),
-                version: resolved.version,
-            });
-        };
-        require_creator_or_owner(record.created_by, resolved.graph.owner, graph, name)?;
-        // By id: the row checked above, never one of that name committed
-        // since by another transaction.
-        if !store.delete(record.vector)? {
-            return Err(VectorError::WrittenConcurrently {
-                name: name.to_owned(),
-                version: resolved.version,
-            }
-            .into());
-        }
-        forget(record.vector);
-        Ok(())
+        Err(ComputeSqlError::VectorNotFound {
+            graph: graph.to_owned(),
+            name: name.to_owned(),
+            version: resolved.version,
+        })
     })
+}
+
+/// Drops vector `name` bound to `version` of `graph`: the session's
+/// transient one if there is one, else the persisted one (which the caller
+/// must have written, or own the graph). False if there is none.
+pub(crate) fn drop_named(
+    graph: &GraphDefinition,
+    version: VersionId,
+    name: &str,
+) -> Result<bool, ComputeSqlError> {
+    if drop_transient(graph.graph_id, version, name) {
+        return Ok(true);
+    }
+    let mut store = SpiVectorStore;
+    let bound = store.bound(version)?;
+    let Some(record) = bound.iter().find(|record| record.name == name) else {
+        return Ok(false);
+    };
+    require_creator_or_owner(record.created_by, graph.owner, &graph.name, name)?;
+    // By id: the row checked above, never one of that name committed since
+    // by another transaction.
+    if !store.delete(record.vector)? {
+        return Err(VectorError::WrittenConcurrently { name: name.to_owned(), version }.into());
+    }
+    forget(record.vector);
+    Ok(true)
 }
 
 #[cfg(any(test, feature = "pg_test"))]

@@ -46,6 +46,10 @@ use crate::interrupts::Interrupts;
 /// The smallest basis, unless the dimension is smaller.
 const MIN_BASIS: usize = 20;
 
+/// The relative rounding of Ritz values from `f32` and `f64` vectors.
+const F32_TIE: f64 = 1e-6;
+const F64_TIE: f64 = 1e-12;
+
 /// The default `max_iter`, per basis vector.
 const STEPS_PER_BASIS_VECTOR: usize = 100;
 
@@ -168,6 +172,11 @@ pub struct Eigen {
     pub iterations: usize,
     /// Whether every pair met the tolerance before `max_iter`.
     pub converged: bool,
+    /// The connected components of the active nodes. With more than one,
+    /// repeated eigenvalues are likely (each Laplacian has eigenvalue 0 once
+    /// per component), and single-vector Lanczos may find fewer copies than
+    /// there are.
+    pub components: u64,
 }
 
 /// The `options.k` eigenpairs of `matrix` over `graph` at the `which` end.
@@ -241,6 +250,16 @@ where
         })
     }
 
+    /// How close two magnitudes may be for `Largest` to treat them as tied:
+    /// the tolerance, or the precision's rounding if that is larger.
+    fn tie(&self) -> f64 {
+        let rounding = match self.options.precision {
+            Precision::F32 => F32_TIE,
+            Precision::F64 => F64_TIE,
+        };
+        self.options.tol.max(rounding)
+    }
+
     fn size(&self) -> usize {
         self.h.nrows()
     }
@@ -265,7 +284,11 @@ where
                 // invariant subspace holding every active node.
                 return self.finish(resources, Outcome::Converged);
             }
-            let ritz = Ritz::of(self.h.view((0, 0), (len, len)).into_owned(), self.options.which)?;
+            let ritz = Ritz::of(
+                self.h.view((0, 0), (len, len)).into_owned(),
+                self.options.which,
+                self.tie(),
+            )?;
             match self.outcome(&ritz, beta.unwrap_or(0.0)) {
                 Outcome::Continue(converged) => {
                     self.restart(resources, &ritz, converged)?;
@@ -385,7 +408,8 @@ where
         outcome: Outcome,
     ) -> Result<Eigen, SpectralError> {
         let len = self.basis.len();
-        let ritz = Ritz::of(self.h.view((0, 0), (len, len)).into_owned(), self.options.which)?;
+        let ritz =
+            Ritz::of(self.h.view((0, 0), (len, len)).into_owned(), self.options.which, self.tie())?;
         self.finish_with(resources, ritz, outcome)
     }
 
@@ -413,7 +437,12 @@ where
             }
             pairs.push(Eigenpair { value, residual, vector: vector.into() });
         }
-        Ok(Eigen { pairs, iterations: self.iterations, converged: outcome == Outcome::Converged })
+        Ok(Eigen {
+            pairs,
+            iterations: self.iterations,
+            converged: outcome == Outcome::Converged,
+            components: self.operator.components(resources)?,
+        })
     }
 }
 

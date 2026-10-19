@@ -10,6 +10,7 @@
 //! poll. Depends on `access`, `cache`, `catalog`, `compute_sql`,
 //! `interrupts`, `selection` and `source`; nothing depends on it.
 
+mod caveats;
 mod distance;
 mod eigen;
 mod error;

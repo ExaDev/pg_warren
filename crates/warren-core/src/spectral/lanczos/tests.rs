@@ -361,3 +361,47 @@ fn restarts_keep_converged_pairs_and_converge_in_few_steps() {
     assert!(eigen.converged);
     assert!(eigen.iterations <= 300, "{} steps", eigen.iterations);
 }
+
+/// `count` disjoint undirected cycles of `length`.
+fn cycles(count: u64, length: u64) -> Edges {
+    (0..count * length)
+        .flat_map(|i| {
+            let next = i - i % length + (i + 1) % length;
+            [(0, i, next, 1.0), (0, next, i, 1.0)]
+        })
+        .collect()
+}
+
+#[test]
+fn of_two_eigenvalues_of_equal_magnitude_the_positive_comes_first() {
+    // An even cycle's adjacency has eigenvalues 2 and −2 (30 times each
+    // here); which Ritz value is larger in magnitude is rounding.
+    let mut edges = crate::graph::EdgeList::for_id_space(1200, false);
+    let relation = reference::relations(1)[0];
+    for (_, source, target, _) in cycles(30, 40) {
+        edges.push(relation, source, target, 1.0).unwrap();
+    }
+    let graph = GraphCsr::build(edges, 1, 1200, false).unwrap();
+    for (dtype, symmetrize) in
+        [(Precision::F64, false), (Precision::F64, true), (Precision::F32, false)]
+    {
+        let options = EigenOptions { precision: dtype, ..EigenOptions::new(3) };
+        let matrix = GraphMatrix { symmetrize, ..GraphMatrix::new(Operator::Adjacency) };
+        let solved = solve_on(2, &graph, &matrix, &options).unwrap();
+        let values: Vec<f64> = solved.pairs.iter().map(|p| p.value).collect();
+        assert!((values[0] - 2.0).abs() < 1e-5, "{values:?}");
+        for pair in values.windows(2) {
+            let tie = (pair[0].abs() - pair[1].abs()).abs() < 1e-5;
+            assert!(!tie || pair[0] >= pair[1], "{dtype:?}: {values:?}");
+        }
+    }
+}
+
+#[test]
+fn the_connected_components_of_the_active_subgraph_are_counted() {
+    let cycles = reference::graph(1201, 1, &cycles(30, 40), false, true);
+    let eigen = solve(&cycles, Operator::Laplacian, &EigenOptions::new(1));
+    assert_eq!(eigen.components, 30, "node 1200 is isolated, so inactive");
+    let one = reference::graph(10, 1, &path(10), false, true);
+    assert_eq!(solve(&one, Operator::Laplacian, &EigenOptions::new(1)).components, 1);
+}
