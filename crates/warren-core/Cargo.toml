@@ -8,6 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+rayon = "1.10"
 thiserror = "2"
 
 [dev-dependencies]
