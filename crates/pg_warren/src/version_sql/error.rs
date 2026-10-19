@@ -5,10 +5,10 @@ use thiserror::Error;
 use warren_core::version::VersionError;
 
 use crate::access::AccessError;
+use crate::access::SqlError;
 use crate::build::BuildError;
 use crate::cache::LoadError;
 use crate::catalog::{CatalogError, VersionId};
-use crate::extension::SqlError;
 use crate::segment::SegmentError;
 
 /// Why `compact` or `diff` could not run.

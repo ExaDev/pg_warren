@@ -7,8 +7,74 @@ The ordering of items is not stable, it is driven by a dependency graph.
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/extension.rs:14
+-- crates/pg_warren/src/extension.rs:16
 CREATE SCHEMA IF NOT EXISTS warren; /* pg_warren::extension::warren */
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/version_sql/diff.rs:20
+-- pg_warren::version_sql::diff::diff
+CREATE  FUNCTION warren."diff"(
+	"name" TEXT, /* & str */
+	"v1" bigint, /* i64 */
+	"v2" bigint /* i64 */
+) RETURNS jsonb /* JsonB */
+STRICT STABLE 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'diff_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/catalog/drop.rs:13
+-- pg_warren::catalog::drop::drop_version
+CREATE  FUNCTION warren."drop_version"(
+	"name" TEXT, /* & str */
+	"version" bigint /* i64 */
+) RETURNS void
+STRICT 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'drop_version_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/version_sql/compact.rs:19
+-- pg_warren::version_sql::compact::compact
+CREATE  FUNCTION warren."compact"(
+	"name" TEXT /* & str */
+) RETURNS bigint /* i64 */
+STRICT 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'compact_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/build/refresh.rs:20
+-- pg_warren::build::refresh::refresh
+CREATE  FUNCTION warren."refresh"(
+	"name" TEXT, /* & str */
+	"promote" bool DEFAULT true, /* bool */
+	"label" TEXT DEFAULT NULL /* Option < & str > */
+) RETURNS bigint /* i64 */
+
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'refresh_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/catalog/readers.rs:25
+-- pg_warren::catalog::readers::revoke
+
+CREATE FUNCTION warren."revoke"(name text, role regrole) RETURNS void
+STRICT VOLATILE LANGUAGE c AS 'MODULE_PATHNAME', 'revoke_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/extension.rs:35
+-- pg_warren::extension::version
+CREATE  FUNCTION warren."version"() RETURNS TEXT /* & '_ str */
+STRICT STABLE PARALLEL SAFE 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'version_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -30,78 +96,7 @@ AS 'MODULE_PATHNAME', 'create_graph_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/catalog/readers.rs:26
--- pg_warren::catalog::readers::revoke
-
-CREATE FUNCTION warren."revoke"(name text, role regrole) RETURNS void
-STRICT VOLATILE LANGUAGE c AS 'MODULE_PATHNAME', 'revoke_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/pg_warren/src/extension.rs:50
--- pg_warren::extension::version
-CREATE  FUNCTION warren."version"() RETURNS TEXT /* & '_ str */
-STRICT STABLE PARALLEL SAFE 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'version_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/pg_warren/src/version_sql/compact.rs:20
--- pg_warren::version_sql::compact::compact
-CREATE  FUNCTION warren."compact"(
-	"name" TEXT /* & str */
-) RETURNS bigint /* i64 */
-STRICT 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'compact_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/pg_warren/src/catalog/readers.rs:13
--- pg_warren::catalog::readers::grant
-
-CREATE FUNCTION warren."grant"(name text, role regrole) RETURNS void
-STRICT VOLATILE LANGUAGE c AS 'MODULE_PATHNAME', 'grant_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/pg_warren/src/version_sql/diff.rs:21
--- pg_warren::version_sql::diff::diff
-CREATE  FUNCTION warren."diff"(
-	"name" TEXT, /* & str */
-	"v1" bigint, /* i64 */
-	"v2" bigint /* i64 */
-) RETURNS jsonb /* JsonB */
-STRICT STABLE 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'diff_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/pg_warren/src/catalog/info.rs:14
--- pg_warren::catalog::info::info
-CREATE  FUNCTION warren."info"(
-	"name" TEXT /* & str */
-) RETURNS jsonb /* JsonB */
-STRICT STABLE 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'info_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/pg_warren/src/catalog/drop.rs:29
--- pg_warren::catalog::drop::drop_graph
-CREATE  FUNCTION warren."drop_graph"(
-	"name" TEXT /* & str */
-) RETURNS void
-STRICT 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'drop_graph_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/pg_warren/src/catalog/promote.rs:12
+-- crates/pg_warren/src/catalog/promote.rs:14
 -- pg_warren::catalog::promote::promote
 CREATE  FUNCTION warren."promote"(
 	"name" TEXT, /* & str */
@@ -113,28 +108,33 @@ AS 'MODULE_PATHNAME', 'promote_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/catalog/drop.rs:14
--- pg_warren::catalog::drop::drop_version
-CREATE  FUNCTION warren."drop_version"(
-	"name" TEXT, /* & str */
-	"version" bigint /* i64 */
-) RETURNS void
-STRICT 
+-- crates/pg_warren/src/catalog/info.rs:13
+-- pg_warren::catalog::info::info
+CREATE  FUNCTION warren."info"(
+	"name" TEXT /* & str */
+) RETURNS jsonb /* JsonB */
+STRICT STABLE 
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'drop_version_wrapper';
+AS 'MODULE_PATHNAME', 'info_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/build/refresh.rs:21
--- pg_warren::build::refresh::refresh
-CREATE  FUNCTION warren."refresh"(
-	"name" TEXT, /* & str */
-	"promote" bool DEFAULT true, /* bool */
-	"label" TEXT DEFAULT NULL /* Option < & str > */
-) RETURNS bigint /* i64 */
+-- crates/pg_warren/src/catalog/readers.rs:12
+-- pg_warren::catalog::readers::grant
 
+CREATE FUNCTION warren."grant"(name text, role regrole) RETURNS void
+STRICT VOLATILE LANGUAGE c AS 'MODULE_PATHNAME', 'grant_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/catalog/drop.rs:28
+-- pg_warren::catalog::drop::drop_graph
+CREATE  FUNCTION warren."drop_graph"(
+	"name" TEXT /* & str */
+) RETURNS void
+STRICT 
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'refresh_wrapper';
+AS 'MODULE_PATHNAME', 'drop_graph_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -149,6 +149,7 @@ CREATE TABLE warren.graphs (
     source           text NOT NULL DEFAULT 'query',
     node_query       text,
     edge_query       text,
+    search_path      text NOT NULL,
     id_type          regtype NOT NULL,
     directed         boolean NOT NULL DEFAULT true,
     build_reverse    boolean NOT NULL DEFAULT true,

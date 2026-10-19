@@ -7,10 +7,9 @@ use serde_json::{json, Value};
 use warren_core::version::{diff as delta, DegreeShift, EdgeDelta, VersionDiff};
 
 use super::error::VersionOperationError;
-use crate::access::require_reader;
+use crate::access::{entry, require_reader};
 use crate::cache::load;
 use crate::catalog::{compaction_between, require_version, GraphDefinition, VersionId};
-use crate::extension::or_raise;
 use crate::segment::SpiSegmentStore;
 
 /// `warren.diff`: the structural delta from version `v1` of graph `name` to
@@ -20,7 +19,7 @@ use crate::segment::SpiSegmentStore;
 /// may call it.
 #[pg_extern(schema = "warren", stable)]
 fn diff(name: &str, v1: i64, v2: i64) -> JsonB {
-    or_raise(diff_versions(name, v1, v2))
+    entry(|_| diff_versions(name, v1, v2))
 }
 
 fn diff_versions(name: &str, v1: VersionId, v2: VersionId) -> Result<JsonB, VersionOperationError> {
@@ -148,7 +147,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{refresh, ring};
+    use crate::fixture::{failure, refresh, ring};
 
     #[pg_test]
     fn diff_reports_the_delta_between_a_staged_and_the_current_version() -> Result<(), Error> {
@@ -188,16 +187,21 @@ mod tests {
         Ok(())
     }
 
-    #[pg_test(
-        error = "versions 1 and 3 of graph \"df\" are in different id spaces: version 3 was compacted from version 2"
-    )]
+    #[pg_test]
     fn the_compaction_boundary_is_named() -> Result<(), Error> {
         ring("df", 5, 3)?;
-        Spi::run("SELECT setval('warren.versions_version_id_seq', 1, false)")?;
-        refresh("df", true)?;
+        let first = refresh("df", true)?;
         Spi::run("DELETE FROM df_nodes WHERE id = 3")?;
-        refresh("df", true)?;
-        Spi::run("SELECT warren.compact('df'); SELECT warren.diff('df', 1, 3)")
+        let second = refresh("df", true)?;
+        let compacted = Spi::get_one::<i64>("SELECT warren.compact('df')")?.unwrap_or_default();
+        assert_eq!(
+            failure(&format!("warren.diff('df', {first}, {compacted})"))?,
+            Some(format!(
+                "22023: versions {first} and {compacted} of graph \"df\" are in different id \
+                 spaces: version {compacted} was compacted from version {second}"
+            ))
+        );
+        Ok(())
     }
 
     #[pg_test(error = "graph \"df\" has no version 999")]

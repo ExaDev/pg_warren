@@ -5,9 +5,10 @@ use thiserror::Error;
 use warren_core::graph::GraphError;
 
 use crate::access::AccessError;
+use crate::access::SqlError;
 use crate::cache::LoadError;
 use crate::catalog::CatalogError;
-use crate::extension::{graph_sqlstate, SqlError};
+use crate::extension::graph_sqlstate;
 use crate::segment::SegmentError;
 use crate::source::SourceError;
 

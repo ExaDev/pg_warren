@@ -168,6 +168,7 @@ mod tests {
             readers: Vec::new(),
             node_query: String::new(),
             edge_query: String::new(),
+            search_path: String::new(),
             directed: true,
             weighted: false,
             has_relations: false,

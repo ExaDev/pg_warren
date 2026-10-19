@@ -43,3 +43,16 @@ pub(crate) fn versions(name: &str) -> Result<Option<String>, Error> {
 pub(crate) fn current(name: &str) -> Result<Option<i64>, Error> {
     Spi::get_one::<i64>(&format!("SELECT current_version FROM warren.graphs WHERE name = '{name}'"))
 }
+
+/// Runs `PERFORM <expression>` and returns the SQLSTATE and message it
+/// failed with, as `"<sqlstate>: <message>"`, or `None` if it succeeded.
+pub(crate) fn failure(expression: &str) -> Result<Option<String>, Error> {
+    Spi::run("CREATE TEMP TABLE IF NOT EXISTS failure (what text); TRUNCATE failure")?;
+    Spi::run(&format!(
+        "DO $do$ BEGIN PERFORM {expression};
+         EXCEPTION WHEN OTHERS THEN
+             INSERT INTO failure VALUES (SQLSTATE || ': ' || SQLERRM);
+         END $do$"
+    ))?;
+    Spi::get_one::<String>("SELECT max(what) FROM failure")
+}

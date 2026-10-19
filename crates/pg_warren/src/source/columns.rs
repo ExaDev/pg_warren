@@ -4,7 +4,7 @@
 use pgrx::{pg_sys, PgSqlErrorCode};
 use thiserror::Error;
 
-use crate::extension::SqlError;
+use crate::access::SqlError;
 
 /// The type of one result column of a source query.
 #[derive(Debug, Clone, PartialEq, Eq)]

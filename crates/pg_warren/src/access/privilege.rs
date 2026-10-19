@@ -43,8 +43,10 @@ pub(crate) fn require_reader(
 
 /// Whether the caller is a superuser.
 pub(crate) fn is_superuser() -> Result<bool, AccessError> {
-    Ok(Spi::get_one::<bool>("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")?
-        .unwrap_or(false))
+    Ok(Spi::get_one::<bool>(
+        "SELECT rolsuper FROM pg_catalog.pg_roles WHERE rolname = pg_catalog.current_user()",
+    )?
+    .unwrap_or(false))
 }
 
 /// The owner's name (`None` if it no longer exists), and whether the caller
@@ -54,10 +56,10 @@ fn membership(
     readers: &[pg_sys::Oid],
 ) -> Result<(Option<String>, bool), AccessError> {
     let (name, member) = Spi::get_two_with_args::<String, bool>(
-        "SELECT (SELECT rolname::text FROM pg_roles WHERE oid = $1),
-                EXISTS (SELECT 1 FROM pg_roles r
+        "SELECT (SELECT rolname::text FROM pg_catalog.pg_roles WHERE oid = $1),
+                EXISTS (SELECT 1 FROM pg_catalog.pg_roles r
                         WHERE (r.oid = $1 OR r.oid = ANY ($2))
-                          AND pg_has_role(r.oid, 'MEMBER'))",
+                          AND pg_catalog.pg_has_role(r.oid, 'MEMBER'))",
         &[owner.into(), readers.to_vec().into()],
     )?;
     Ok((name, member.unwrap_or(false)))

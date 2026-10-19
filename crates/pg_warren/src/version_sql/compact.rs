@@ -6,11 +6,10 @@ use warren_core::graph::ExternalId;
 use warren_core::version::compact as renumber;
 
 use super::error::VersionOperationError;
-use crate::access::require_owner;
+use crate::access::{entry, require_owner};
 use crate::build::{Catalog, SpiCatalog};
 use crate::cache::load;
 use crate::catalog::{version_record, GraphDefinition, NewVersion, VersionId, VersionStats};
-use crate::extension::or_raise;
 use crate::segment::{write_version, SegmentStore, SpiSegmentStore, CHUNK_SIZE};
 
 /// `warren.compact`: renumbers graph `name`'s current version to remove its
@@ -19,7 +18,7 @@ use crate::segment::{write_version, SegmentStore, SpiSegmentStore, CHUNK_SIZE};
 /// must be a member of the owner role.
 #[pg_extern(schema = "warren")]
 fn compact(name: &str) -> i64 {
-    or_raise(compact_graph(name))
+    entry(|_| compact_graph(name))
 }
 
 fn compact_graph(name: &str) -> Result<VersionId, VersionOperationError> {
@@ -97,6 +96,7 @@ mod unit {
             readers: Vec::new(),
             node_query: String::new(),
             edge_query: String::new(),
+            search_path: String::new(),
             directed: true,
             weighted: true,
             has_relations: false,
@@ -166,7 +166,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{current, refresh, ring, versions};
+    use crate::fixture::{current, failure, refresh, ring, versions};
 
     /// Graph `c`: a ring of 5, built, then node 3 removed and rebuilt, so the
     /// current version has a tombstone. Returns both versions.
@@ -225,5 +225,45 @@ mod tests {
     fn only_the_owner_may_compact() -> Result<(), Error> {
         tombstoned()?;
         Spi::run("CREATE ROLE compacter; SET ROLE compacter; SELECT warren.compact('c')")
+    }
+
+    #[pg_test]
+    fn a_version_older_than_a_compaction_cannot_be_promoted() -> Result<(), Error> {
+        let (_, second) = tombstoned()?;
+        let staged = refresh("c", false)?;
+        Spi::run("SELECT warren.compact('c')")?;
+        assert_eq!(state(&format!("warren.promote('c', {staged})"))?.as_deref(), Some("55000"));
+        assert_eq!(state(&format!("warren.promote('c', {second})"))?.as_deref(), Some("55000"));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_refresh_does_not_build_on_a_version_older_than_a_compaction() -> Result<(), Error> {
+        let (_, second) = tombstoned()?;
+        Spi::run("SELECT warren.compact('c')")?;
+        Spi::run(&format!("UPDATE warren.graphs SET current_version = {second}"))?;
+        assert_eq!(state("warren.refresh('c')")?.as_deref(), Some("55000"));
+        Ok(())
+    }
+
+    /// The SQLSTATE `expression` fails with.
+    fn state(expression: &str) -> Result<Option<String>, Error> {
+        Ok(failure(expression)?.map(|failure| failure[..5].to_owned()))
+    }
+
+    #[pg_test]
+    fn the_superseding_compaction_is_named() -> Result<(), Error> {
+        ring("c", 5, 3)?;
+        refresh("c", true)?;
+        let staged = refresh("c", false)?;
+        let compacted = Spi::get_one::<i64>("SELECT warren.compact('c')")?.unwrap_or_default();
+        assert_eq!(
+            failure(&format!("warren.promote('c', {staged})"))?,
+            Some(format!(
+                "55000: version {staged} of graph \"c\" is in an id space that compacted \
+                 version {compacted} replaced"
+            ))
+        );
+        Ok(())
     }
 }

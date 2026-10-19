@@ -9,9 +9,8 @@ use super::error::BuildError;
 use super::pipeline::{build, RefreshRequest};
 use super::spi_catalog::SpiCatalog;
 use super::spi_source::SpiSource;
-use crate::access::require_owner;
-use crate::catalog::{GraphDefinition, VersionId};
-use crate::extension::or_raise;
+use crate::access::{entry, require_owner};
+use crate::catalog::{require_current_id_space, GraphDefinition, VersionId};
 use crate::segment::{SpiSegmentStore, CHUNK_SIZE};
 use crate::source::with_pinned_snapshot;
 
@@ -24,13 +23,16 @@ fn refresh(
     promote: default!(bool, true),
     label: default!(Option<&str>, "NULL"),
 ) -> i64 {
-    or_raise(refresh_graph(name, promote, label))
+    entry(|_| refresh_graph(name, promote, label))
 }
 
 fn refresh_graph(name: &str, promote: bool, label: Option<&str>) -> Result<VersionId, BuildError> {
     let mut graph = GraphDefinition::find(name)?;
     require_owner(graph.owner, &graph.name, "refresh")?;
     graph.lock()?;
+    if let Some(base) = graph.current_version {
+        require_current_id_space(&graph, base)?;
+    }
     with_pinned_snapshot(|| {
         let request = RefreshRequest {
             promote,
@@ -204,6 +206,8 @@ mod tests {
         // A PL/pgSQL block with an EXCEPTION clause runs in a subtransaction;
         // raising WR001 after the build rolls back exactly that subtransaction,
         // as ROLLBACK would the whole transaction (DESIGN.md §8).
+        // This is a subtransaction-level rollback; a literal BEGIN; refresh;
+        // ROLLBACK case needs a harness that spans transactions (test/, M3+).
         Spi::run(
             "DO $$
              BEGIN
@@ -369,5 +373,30 @@ mod tests {
              DROP ROLE graph_owner;
              SELECT warren.refresh('owned')",
         )
+    }
+
+    #[pg_test]
+    fn source_queries_run_under_the_search_path_create_graph_saw() -> Result<(), Error> {
+        Spi::run(
+            "CREATE SCHEMA sp_a; CREATE SCHEMA sp_b;
+             CREATE TABLE sp_a.n (id bigint); CREATE TABLE sp_b.n (id bigint);
+             CREATE TABLE sp_a.e (src bigint, dst bigint);
+             CREATE TABLE sp_b.e (src bigint, dst bigint);
+             INSERT INTO sp_a.n VALUES (1), (2); INSERT INTO sp_b.n VALUES (1), (2), (3);
+             SET search_path = sp_a;
+             SELECT warren.create_graph('sp', 'SELECT id FROM n', 'SELECT src, dst FROM e');
+             SET search_path = sp_b",
+        )?;
+        let version = Spi::get_one::<i64>("SELECT warren.refresh('sp')");
+        Spi::run("RESET search_path")?;
+        let nodes = Spi::get_one_with_args::<i64>(
+            "SELECT node_count FROM warren.versions WHERE version_id = $1",
+            &[version?.into()],
+        )?;
+        assert_eq!(nodes, Some(2), "the queries read sp_a, as when the graph was created");
+        let stored =
+            Spi::get_one::<String>("SELECT search_path FROM warren.graphs WHERE name = 'sp'")?;
+        assert_eq!(stored.as_deref(), Some("sp_a"));
+        Ok(())
     }
 }

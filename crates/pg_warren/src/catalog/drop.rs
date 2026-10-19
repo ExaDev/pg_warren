@@ -5,15 +5,14 @@ use pgrx::prelude::*;
 
 use super::version::drop_version as delete_version;
 use super::{CatalogError, GraphDefinition, VersionId};
-use crate::access::{is_superuser, require_owner, AccessError};
-use crate::extension::or_raise;
+use crate::access::{entry, is_superuser, require_owner, AccessError};
 
 /// `warren.drop_version`: deletes a version of graph `name` that is not
 /// its current version, even one with bound vectors. The caller must be a
 /// member of the owner role.
 #[pg_extern(schema = "warren")]
 fn drop_version(name: &str, version: i64) {
-    or_raise(drop_version_by_name(name, version));
+    entry(|_| drop_version_by_name(name, version));
 }
 
 fn drop_version_by_name(name: &str, version: VersionId) -> Result<(), CatalogError> {
@@ -28,7 +27,7 @@ fn drop_version_by_name(name: &str, version: VersionId) -> Result<(), CatalogErr
 /// dropped, a superuser may still drop the graph.
 #[pg_extern(schema = "warren")]
 fn drop_graph(name: &str) {
-    or_raise(drop_graph_by_name(name));
+    entry(|_| drop_graph_by_name(name));
 }
 
 fn drop_graph_by_name(name: &str) -> Result<(), CatalogError> {
@@ -46,7 +45,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{refresh, ring, versions};
+    use crate::fixture::{failure, refresh, ring, versions};
 
     fn rows(version: i64) -> Result<Option<i64>, Error> {
         Spi::get_one::<i64>(&format!(
@@ -70,14 +69,18 @@ mod tests {
         Ok(())
     }
 
-    #[pg_test(
-        error = "cannot drop version 1 of graph \"d\": it is the current version; promote another first"
-    )]
+    #[pg_test]
     fn the_current_version_cannot_be_dropped() -> Result<(), Error> {
         ring("d", 5, 2)?;
-        Spi::run("SELECT setval('warren.versions_version_id_seq', 1, false)")?;
         let first = refresh("d", true)?;
-        Spi::run(&format!("SELECT warren.drop_version('d', {first})"))
+        assert_eq!(
+            failure(&format!("warren.drop_version('d', {first})"))?,
+            Some(format!(
+                "55006: cannot drop version {first} of graph \"d\": it is the current version; \
+                 promote another first"
+            ))
+        );
+        Ok(())
     }
 
     #[pg_test(error = "graph \"d\" has no version 999")]

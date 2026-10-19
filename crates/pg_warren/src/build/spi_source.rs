@@ -7,7 +7,7 @@ use warren_core::graph::GraphError;
 
 use super::error::BuildError;
 use super::source::{EdgeRow, EdgeSink, SourceReader};
-use crate::access::as_role;
+use crate::access::{as_role, with_search_path};
 use crate::catalog::GraphDefinition;
 use crate::source::{check_edge_columns, check_node_columns, for_each_row, open_read_only};
 
@@ -27,20 +27,22 @@ impl SourceReader<i64> for SpiSource<'_> {
     fn node_ids(&mut self) -> Result<Vec<i64>, BuildError> {
         let graph = self.graph;
         as_role(graph.owner, || {
-            Spi::connect(|client| {
-                let mut opened =
-                    open_read_only::<BuildError>(client, "node_query", &graph.node_query)?;
-                check_node_columns(&opened.columns)?;
-                let mut ids = Vec::new();
-                for_each_row::<BuildError>(&mut opened.cursor, |row| {
-                    if let Some(id) = row.get::<i64>(1)? {
-                        ids.try_reserve(1)
-                            .map_err(|_| GraphError::OutOfMemory { elements: ids.len() + 1 })?;
-                        ids.push(id);
-                    }
-                    Ok(())
-                })?;
-                Ok(ids)
+            with_search_path(&graph.search_path, || {
+                Spi::connect(|client| {
+                    let mut opened =
+                        open_read_only::<BuildError>(client, "node_query", &graph.node_query)?;
+                    check_node_columns(&opened.columns)?;
+                    let mut ids = Vec::new();
+                    for_each_row::<BuildError>(&mut opened.cursor, |row| {
+                        if let Some(id) = row.get::<i64>(1)? {
+                            ids.try_reserve(1)
+                                .map_err(|_| GraphError::OutOfMemory { elements: ids.len() + 1 })?;
+                            ids.push(id);
+                        }
+                        Ok(())
+                    })?;
+                    Ok(ids)
+                })
             })
         })
     }
@@ -49,23 +51,25 @@ impl SourceReader<i64> for SpiSource<'_> {
         let graph = self.graph;
         let weight_column = if graph.has_relations { 4 } else { 3 };
         as_role(graph.owner, || {
-            Spi::connect(|client| {
-                let mut opened =
-                    open_read_only::<BuildError>(client, "edge_query", &graph.edge_query)?;
-                check_edge_columns(&opened.columns, graph.has_relations, graph.weighted)?;
-                sink.expect_rows(opened.estimated_rows);
-                for_each_row(&mut opened.cursor, |row| {
-                    sink.row(EdgeRow {
-                        source: row.get::<i64>(1)?,
-                        target: row.get::<i64>(2)?,
-                        relation: match graph.has_relations {
-                            true => row.get::<&str>(3)?,
-                            false => None,
-                        },
-                        weight: match graph.weighted {
-                            true => row.get::<f64>(weight_column)?,
-                            false => None,
-                        },
+            with_search_path(&graph.search_path, || {
+                Spi::connect(|client| {
+                    let mut opened =
+                        open_read_only::<BuildError>(client, "edge_query", &graph.edge_query)?;
+                    check_edge_columns(&opened.columns, graph.has_relations, graph.weighted)?;
+                    sink.expect_rows(opened.estimated_rows);
+                    for_each_row(&mut opened.cursor, |row| {
+                        sink.row(EdgeRow {
+                            source: row.get::<i64>(1)?,
+                            target: row.get::<i64>(2)?,
+                            relation: match graph.has_relations {
+                                true => row.get::<&str>(3)?,
+                                false => None,
+                            },
+                            weight: match graph.weighted {
+                                true => row.get::<f64>(weight_column)?,
+                                false => None,
+                            },
+                        })
                     })
                 })
             })

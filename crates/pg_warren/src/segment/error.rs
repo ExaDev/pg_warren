@@ -5,8 +5,9 @@ use thiserror::Error;
 use warren_core::graph::GraphError;
 
 use crate::access::AccessError;
+use crate::access::SqlError;
 use crate::catalog::VersionId;
-use crate::extension::{graph_sqlstate, SqlError};
+use crate::extension::graph_sqlstate;
 
 /// Why a segment could not be stored or read.
 #[derive(Debug, Error)]

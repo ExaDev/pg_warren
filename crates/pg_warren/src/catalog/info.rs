@@ -5,15 +5,14 @@ use pgrx::prelude::*;
 use pgrx::JsonB;
 
 use super::{CatalogError, GraphDefinition};
-use crate::access::{as_extension_owner, require_reader};
-use crate::extension::or_raise;
+use crate::access::{as_extension_owner, entry, require_reader};
 
 /// `warren.info`: graph `name`'s definition, current version, staleness
 /// (`now() - built_at` of the current version), total bytes, and every
 /// version with its statistics, oldest first.
 #[pg_extern(schema = "warren", stable)]
 fn info(name: &str) -> JsonB {
-    or_raise(describe(name))
+    entry(|_| describe(name))
 }
 
 fn describe(name: &str) -> Result<JsonB, CatalogError> {
@@ -23,7 +22,7 @@ fn describe(name: &str) -> Result<JsonB, CatalogError> {
         Ok::<_, CatalogError>(Spi::get_one_with_args::<JsonB>(
             "SELECT jsonb_build_object(
                  'name', g.name, 'owner', g.owner::text, 'readers', to_jsonb(g.readers::text[]),
-                 'id_type', g.id_type::text, 'directed', g.directed, 'weighted', g.weighted,
+                 'id_type', g.id_type::text, 'search_path', g.search_path, 'directed', g.directed, 'weighted', g.weighted,
                  'has_relations', g.has_relations, 'build_reverse', g.build_reverse,
                  'retain_versions', g.retain_versions, 'current_version', g.current_version,
                  'staleness', (SELECT (now() - c.built_at)::text FROM warren.versions c

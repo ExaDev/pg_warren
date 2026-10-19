@@ -8,8 +8,9 @@ use warren_core::graph::{
 };
 use warren_core::version::{GraphVersion, VersionError};
 
+use crate::access::SqlError;
 use crate::catalog::VersionId;
-use crate::extension::{graph_sqlstate, SqlError};
+use crate::extension::graph_sqlstate;
 use crate::segment::{
     csr_segment, read_optional_segment, read_segment, CsrPart, CsrScope, Direction, SegmentError,
     SegmentStore, ID_MAP, RELATION_DICTIONARY, TOMBSTONES,

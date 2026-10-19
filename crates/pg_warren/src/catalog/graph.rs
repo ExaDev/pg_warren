@@ -20,6 +20,8 @@ pub(crate) struct GraphDefinition {
     pub(crate) node_query: String,
     /// `SELECT <src>, <dst> [, <rel>] [, <weight>] ...`.
     pub(crate) edge_query: String,
+    /// The `search_path` the source queries run under: the creator's.
+    pub(crate) search_path: String,
     /// Whether edges are directed; undirected edges are stored both ways.
     pub(crate) directed: bool,
     /// Whether the edge query has a weight column.
@@ -42,6 +44,7 @@ pub(crate) struct NewGraph<'a> {
     pub(crate) owner: pg_sys::Oid,
     pub(crate) node_query: &'a str,
     pub(crate) edge_query: &'a str,
+    pub(crate) search_path: &'a str,
     pub(crate) id_type: pg_sys::Oid,
     pub(crate) directed: bool,
     pub(crate) weighted: bool,
@@ -58,8 +61,8 @@ impl GraphDefinition {
                 let row = client
                     .select(
                         "SELECT graph_id, owner::oid, readers::oid[], node_query, edge_query,
-                                directed, weighted, has_relations, build_reverse,
-                                retain_versions, current_version
+                                search_path, directed, weighted, has_relations,
+                                build_reverse, retain_versions, current_version
                          FROM warren.graphs WHERE name = $1",
                         Some(1),
                         &[name.into()],
@@ -75,12 +78,13 @@ impl GraphDefinition {
                     readers: row.get(3)?.unwrap_or_default(),
                     node_query: row.get(4)?.unwrap_or_default(),
                     edge_query: row.get(5)?.unwrap_or_default(),
-                    directed: row.get(6)?.unwrap_or_default(),
-                    weighted: row.get(7)?.unwrap_or_default(),
-                    has_relations: row.get(8)?.unwrap_or_default(),
-                    build_reverse: row.get(9)?.unwrap_or_default(),
-                    retain_versions: row.get(10)?.unwrap_or(1),
-                    current_version: row.get(11)?,
+                    search_path: row.get(6)?.unwrap_or_default(),
+                    directed: row.get(7)?.unwrap_or_default(),
+                    weighted: row.get(8)?.unwrap_or_default(),
+                    has_relations: row.get(9)?.unwrap_or_default(),
+                    build_reverse: row.get(10)?.unwrap_or_default(),
+                    retain_versions: row.get(11)?.unwrap_or(1),
+                    current_version: row.get(12)?,
                 })
             })
         })
@@ -120,7 +124,7 @@ impl GraphDefinition {
             Spi::connect_mut(|client| {
                 client.update(
                     "UPDATE warren.graphs SET readers = ARRAY(
-                         SELECT DISTINCT r.oid FROM pg_roles r
+                         SELECT DISTINCT r.oid FROM pg_catalog.pg_roles r
                          WHERE r.oid = ANY (readers::oid[] || CASE WHEN $3 THEN $2 END)
                            AND r.oid <> CASE WHEN $3 THEN 0::oid ELSE $2 END
                          ORDER BY r.oid)::regrole[]
@@ -151,15 +155,18 @@ impl NewGraph<'_> {
                     return Err(CatalogError::GraphExists(graph.name.to_owned()));
                 }
                 client.update(
-                    "INSERT INTO warren.graphs (name, owner, node_query, edge_query, id_type,
-                         directed, weighted, has_relations, build_reverse, retain_versions)
-                     VALUES ($1, $2::oid::regrole, $3, $4, $5::oid::regtype, $6, $7, $8, $9, $10)",
+                    "INSERT INTO warren.graphs (name, owner, node_query, edge_query, search_path,
+                         id_type, directed, weighted, has_relations, build_reverse,
+                         retain_versions)
+                     VALUES ($1, $2::oid::regrole, $3, $4, $5, $6::oid::regtype, $7, $8, $9,
+                             $10, $11)",
                     None,
                     &[
                         graph.name.into(),
                         graph.owner.into(),
                         graph.node_query.into(),
                         graph.edge_query.into(),
+                        graph.search_path.into(),
                         graph.id_type.into(),
                         graph.directed.into(),
                         graph.weighted.into(),
