@@ -19,6 +19,8 @@ env:
   RUSTFLAGS: -D warnings
   RUSTDOCFLAGS: -D warnings
   PGRX_VERSION: 0.19.3
+  # Dated nightly for Miri. Bump deliberately, after checking it locally.
+  MIRI_NIGHTLY: nightly-2026-10-15
 
 jobs:
   fmt:
@@ -57,11 +59,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: core
+      # --all-targets also builds the criterion benches and runs each once in
+      # test mode, so no separate bench-compile job is needed.
       - run: cargo test -p warren-core --all-targets
       - run: cargo test -p warren-core --doc
 
   miri:
-    name: warren-core under Miri (nightly)
+    name: warren-core under Miri (pinned nightly)
     runs-on: ubuntu-latest
     env:
       # Miri is slow: keep property tests small and off the filesystem.
@@ -70,24 +74,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install nightly with Miri
-        run: rustup toolchain install nightly --profile minimal --component miri,rust-src
+        run: rustup toolchain install "$MIRI_NIGHTLY" --profile minimal --component miri,rust-src
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: miri
-      - run: cargo +nightly miri setup
-      - run: cargo +nightly miri test -p warren-core
-
-  bench-smoke:
-    name: warren-core benches compile
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: bench
-      - run: cargo bench -p warren-core --no-run
+      - run: cargo "+$MIRI_NIGHTLY" miri setup
+      - run: cargo "+$MIRI_NIGHTLY" miri test -p warren-core
 
   lint:
     name: Clippy + rustdoc (PG 16)
@@ -126,12 +118,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: pg${{ matrix.pg }}
+          # cargo-pgrx is cached on its own below; its key survives Cargo.lock changes.
+          cache-bin: "false"
       - name: Cache cargo-pgrx ${{ env.PGRX_VERSION }}
         id: cargo-pgrx-cache
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin/cargo-pgrx
-          key: cargo-pgrx-${{ env.PGRX_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+          key: cargo-pgrx-${{ env.PGRX_VERSION }}-${{ runner.os }}-${{ runner.arch }}-rust-${{ hashFiles('rust-toolchain.toml') }}
       - name: Install cargo-pgrx
         if: steps.cargo-pgrx-cache.outputs.cache-hit != 'true'
         run: cargo install cargo-pgrx --version "$PGRX_VERSION" --locked
@@ -145,20 +139,38 @@ jobs:
         run: cargo pgrx test pg${{ matrix.pg }}
 
   docker:
+    # Runs on every event; buildx's GHA cache keeps the toolchain and
+    # cargo-pgrx layers warm, so only the extension build reruns.
     name: Docker image builds (PG 16)
-    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
       - name: docker build
-        run: docker build -f docker/Dockerfile --build-arg PG_MAJOR=16 -t pg_warren:pg16 .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          build-args: PG_MAJOR=16
+          tags: pg_warren:pg16
+          load: true
+          cache-from: type=gha,scope=docker-pg16
+          cache-to: type=gha,scope=docker-pg16,mode=max
       - name: CREATE EXTENSION in the image
         run: |
           set -euo pipefail
           docker run -d --name pgw -e POSTGRES_PASSWORD=postgres pg_warren:pg16
-          for _ in $(seq 1 30); do
-            docker exec pgw pg_isready -U postgres && break
+          # The entrypoint's init server listens only on the Unix socket and
+          # then restarts, so wait for TCP, which only the final server opens.
+          ready=0
+          for _ in $(seq 1 60); do
+            if docker exec pgw pg_isready -h 127.0.0.1 -U postgres; then ready=1; break; fi
             sleep 1
           done
-          docker exec pgw psql -U postgres -v ON_ERROR_STOP=1 \
+          if [ "$ready" -ne 1 ]; then
+            echo "::error::postgres did not become ready over TCP within 60s"
+            docker logs pgw
+            exit 1
+          fi
+          docker exec pgw psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 \
             -c 'CREATE EXTENSION pg_warren' -c 'SELECT warren.version()'
