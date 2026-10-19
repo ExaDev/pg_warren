@@ -5,6 +5,11 @@
 //! (DESIGN.md §15.4; enforced in CI). It takes plain slices and a thread
 //! count, and returns results. One module per domain concept.
 
+// Offsets and dense ids are u64 and index in-memory arrays; a 32-bit target
+// could not address a graph-sized buffer and would make those casts lossy.
+#[cfg(not(target_pointer_width = "64"))]
+compile_error!("warren-core requires a 64-bit target");
+
 pub mod compute;
 pub mod graph;
 pub mod spectral;
