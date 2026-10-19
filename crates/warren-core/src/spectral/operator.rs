@@ -247,6 +247,32 @@ impl<'g> LinearOperator<'g> {
         Ok(true)
     }
 
+    /// The inverse of [`Self::map_eigenvector`], in place on the input:
+    /// `D^1/2 x` for the random walk (zero at inactive nodes), else `x`.
+    pub(super) fn unmap_eigenvector<I: Interrupts>(
+        &mut self,
+        resources: &mut Resources<'_, I>,
+    ) -> Result<(), SpectralError> {
+        if self.operator == Operator::RandomWalk {
+            let scale = &self.scale;
+            let unscaled = |i: usize, x: f64| if scale[i] == 0.0 { 0.0 } else { x / scale[i] };
+            dense::update(resources, values_mut(&mut self.buffers.input), unscaled)?;
+        }
+        Ok(())
+    }
+
+    /// `xᵀMx / xᵀx` for the input `x`.
+    pub(super) fn rayleigh_quotient<I: Interrupts>(
+        &mut self,
+        resources: &mut Resources<'_, I>,
+    ) -> Result<f64, SpectralError> {
+        self.apply(resources)?;
+        let (x, y) = (values(&self.buffers.input), values(&self.buffers.output));
+        let numerator = dense::sum(resources, x.len(), |i| x[i] * y[i])?;
+        let denominator = dense::sum(resources, x.len(), |i| x[i] * x[i])?;
+        Ok(numerator / denominator)
+    }
+
     /// Finds the active nodes and the degrees, and checks that the
     /// normalised operators can divide by them.
     fn measure_degrees<I: Interrupts>(

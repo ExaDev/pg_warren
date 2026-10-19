@@ -9,6 +9,7 @@ mod error;
 mod lanczos;
 mod operator;
 mod random;
+mod rayleigh;
 #[cfg(test)]
 #[cfg(not(miri))]
 mod reference;
@@ -26,4 +27,5 @@ pub use distance::{
 pub use error::SpectralError;
 pub use lanczos::{eigen, Eigen, EigenOptions, Eigenpair, Precision, Which};
 pub use operator::{GraphMatrix, Operator};
+pub use rayleigh::rayleigh_quotients;
 pub use resources::Resources;
