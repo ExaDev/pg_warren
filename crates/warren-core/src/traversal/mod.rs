@@ -16,6 +16,7 @@ mod limits;
 mod node_set;
 mod reachable;
 mod scratch;
+mod shortest_path;
 mod stats;
 
 #[cfg(test)]
@@ -30,4 +31,5 @@ pub use error::TraversalError;
 pub use limits::Limits;
 pub use node_set::NodeSet;
 pub use reachable::{reachable, reachable_set};
+pub use shortest_path::shortest_path;
 pub use stats::{TraversalStats, Traversed};
