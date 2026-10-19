@@ -46,10 +46,33 @@ impl<M: Message> Gathered<M> {
         })
     }
 
+    /// The row at `at`, advancing `at` past it: a cursor for callers that
+    /// own the result and stream it a row at a time, as `iter` yields.
+    pub fn next_row(&self, at: &mut RowAt) -> Option<(DenseId, Received<'_, M>)> {
+        loop {
+            let part = self.parts.get(at.part)?;
+            if at.index < part.receivers.len() {
+                let index = at.index;
+                at.index += 1;
+                return Some((part.receivers[index], part.received(self.combiner, index)?));
+            }
+            at.part += 1;
+            at.index = 0;
+        }
+    }
+
     /// The bytes charged for the result.
     pub fn bytes(&self) -> u64 {
         self.parts.iter().map(|part| part.allowance.used()).sum()
     }
+}
+
+/// A position in a [`Gathered`], for [`Gathered::next_row`]; the default
+/// is its first row.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RowAt {
+    part: usize,
+    index: usize,
 }
 
 /// A receiver's value.

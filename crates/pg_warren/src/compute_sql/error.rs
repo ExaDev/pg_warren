@@ -73,6 +73,24 @@ pub(crate) enum ComputeSqlError {
         /// The witness's type.
         found: String,
     },
+    /// `gather`'s `messages` names both a vector and a relation.
+    #[error(
+        "messages \"{name}\" names both a vector bound to version {version} and a relation: \
+         write TABLE {name} for the relation, or rename the vector"
+    )]
+    AmbiguousMessages {
+        /// The name.
+        name: String,
+        /// The version the vector is bound to.
+        version: VersionId,
+    },
+    /// Persisted vector names, and the library's arguments, must not use
+    /// the prefix of its intermediates.
+    #[error(
+        "vector names beginning with _warren_ are reserved for the library's intermediates, and \
+         are only ever transient: \"{0}\""
+    )]
+    ReservedName(String),
     /// A vector name must not be empty.
     #[error("a vector name must not be empty")]
     EmptyName,
@@ -126,6 +144,8 @@ impl SqlError for ComputeSqlError {
             Self::MapType(_) | Self::GatherType(_) | Self::ValueType { .. } => {
                 PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH
             }
+            Self::AmbiguousMessages { .. } => PgSqlErrorCode::ERRCODE_AMBIGUOUS_FUNCTION,
+            Self::ReservedName(_) => PgSqlErrorCode::ERRCODE_RESERVED_NAME,
             Self::EmptyName | Self::InvalidArgument(_) => {
                 PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE
             }

@@ -1,6 +1,8 @@
 //! Reading `gather`'s messages into the kernel's buffers: from a vector
 //! (every live node's value), or from a query's `(id, message)` rows run as
-//! the caller, under the caller's `search_path`, as a read-only cursor.
+//! the caller, under the caller's `search_path`, as a read-only cursor in a
+//! read-only transaction state (so not even a VOLATILE function it calls
+//! can write).
 //! Rows whose id is NULL, unknown or tombstoned in the version, or whose
 //! message is NULL, send nothing.
 
@@ -12,7 +14,7 @@ use warren_core::graph::DenseId;
 
 use super::super::vectors::Vectors;
 use super::super::ComputeSqlError;
-use crate::access::{with_search_path, Caller};
+use crate::access::{with_read_only, with_search_path, Caller};
 use crate::source::{for_each_row, open_read_only, IdDatum};
 
 /// Every live node's value of `vector` (width 1), as a message.
@@ -42,16 +44,18 @@ pub(super) fn from_query<E: IdDatum>(
     mut each: impl FnMut(DenseId, &SpiHeapTupleData<'_>) -> Result<(), ComputeSqlError>,
 ) -> Result<(), ComputeSqlError> {
     with_search_path(caller.search_path(), || {
-        Spi::connect(|client| {
-            let mut opened = open_read_only::<ComputeSqlError>(client, "messages", query)?;
-            for_each_row(&mut opened.cursor, |row| {
-                let Some(id) = row.get::<E::Sql>(1)?.map(E::from_sql) else {
-                    return Ok(());
-                };
-                match vectors.loaded.id_map.dense_id(&id) {
-                    Some(node) => each(node, row),
-                    None => Ok(()),
-                }
+        with_read_only(|| {
+            Spi::connect(|client| {
+                let mut opened = open_read_only::<ComputeSqlError>(client, "messages", query)?;
+                for_each_row(&mut opened.cursor, |row| {
+                    let Some(id) = row.get::<E::Sql>(1)?.map(E::from_sql) else {
+                        return Ok(());
+                    };
+                    match vectors.loaded.id_map.dense_id(&id) {
+                        Some(node) => each(node, row),
+                        None => Ok(()),
+                    }
+                })
             })
         })
     })
@@ -69,26 +73,26 @@ pub(super) fn element<T: Element + FromDatum + IntoDatum>(
     Ok(())
 }
 
-/// The non-NULL `text` message of `row`, as its bytes.
-pub(super) fn text(
+/// The non-NULL `text` or `bytea` message of `row`, as the bytes of its
+/// detoasted varlena (text in the database encoding, never re-encoded).
+pub(super) fn payload(
     messages: &mut Messages<Bytes>,
     node: DenseId,
     row: &SpiHeapTupleData<'_>,
 ) -> Result<(), ComputeSqlError> {
-    if let Some(value) = row.get::<String>(2)? {
-        messages.push(node, value.as_bytes())?;
-    }
-    Ok(())
-}
-
-/// The non-NULL `bytea` message of `row`, as its bytes.
-pub(super) fn bytea(
-    messages: &mut Messages<Bytes>,
-    node: DenseId,
-    row: &SpiHeapTupleData<'_>,
-) -> Result<(), ComputeSqlError> {
-    if let Some(value) = row.get::<Vec<u8>>(2)? {
-        messages.push(node, &value)?;
+    let Some(value) = row.get::<AnyElement>(2)? else {
+        return Ok(());
+    };
+    // SAFETY: the value is a text or bytea datum, a varlena; detoasting
+    // returns it, or a palloc'd copy, which is freed after it is read.
+    unsafe {
+        let stored = value.datum().cast_mut_ptr::<pg_sys::varlena>();
+        let detoasted = pg_sys::pg_detoast_datum_packed(stored);
+        let pushed = messages.push(node, pgrx::varlena::varlena_to_byte_slice(detoasted));
+        if detoasted != stored {
+            pg_sys::pfree(detoasted.cast());
+        }
+        pushed?;
     }
     Ok(())
 }

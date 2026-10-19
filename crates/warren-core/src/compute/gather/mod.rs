@@ -25,7 +25,7 @@ mod outbox;
 use rayon::prelude::*;
 
 pub use combiner::{Combine, Combiner};
-pub use gathered::{Collected, Gathered, Received};
+pub use gathered::{Collected, Gathered, Received, RowAt};
 pub use messages::Messages;
 
 use gathered::Part;

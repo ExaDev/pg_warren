@@ -196,12 +196,24 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{refresh, rows, small};
+    use crate::fixture::{failure, refresh, rows, small};
 
     fn values(name: &str) -> Result<Option<String>, Error> {
         rows(&format!(
             "SELECT node_id || ':' || value FROM warren.vector_values('t', '{name}', NULL::bigint)"
         ))
+    }
+
+    #[pg_test]
+    fn reserved_names_are_only_transient() -> Result<(), Error> {
+        small("t")?;
+        let refused = failure("warren.vector_const('t', '_warren_x', 1)")?.unwrap_or_default();
+        assert!(
+            refused.starts_with("42939: vector names beginning with _warren_ are reserved"),
+            "{refused}"
+        );
+        Spi::run("SELECT warren.vector_const('t', '_warren_x', 1, persist := false)")?;
+        Ok(())
     }
 
     #[pg_test]
