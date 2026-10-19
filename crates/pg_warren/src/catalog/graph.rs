@@ -1,10 +1,25 @@
 //! Graph definitions: the rows of `warren.graphs` (DESIGN.md §5.1).
 
+use std::cell::OnceCell;
+
 use pgrx::prelude::*;
+use pgrx::spi::OwnedPreparedStatement;
+use pgrx::PgOid;
 
 use super::CatalogError;
 use crate::access::as_extension_owner;
 use crate::source::IdType;
+
+/// The query [`GraphDefinition::find`] runs, planned once per backend.
+const FIND: &str = "SELECT graph_id, owner::oid, readers::oid[], node_query, edge_query,
+                           directed, weighted, has_relations, build_reverse,
+                           retain_versions, current_version, id_type::oid
+                    FROM warren.graphs WHERE name = $1";
+
+thread_local! {
+    /// The saved plan of [`FIND`].
+    static FIND_PLAN: OnceCell<OwnedPreparedStatement> = const { OnceCell::new() };
+}
 
 /// A graph's definition, as `warren.create_graph` recorded it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,20 +69,21 @@ pub(crate) struct NewGraph<'a> {
 }
 
 impl GraphDefinition {
-    /// The definition of graph `name`.
+    /// The definition of graph `name`, as of the statement's snapshot. Its
+    /// `current_version` is read afresh on every call, through a saved
+    /// plan, so a promotion is seen by the next statement (DESIGN.md §5.5).
     pub(crate) fn find(name: &str) -> Result<Self, CatalogError> {
         as_extension_owner(|| {
             Spi::connect(|client| {
-                let row = client
-                    .select(
-                        "SELECT graph_id, owner::oid, readers::oid[], node_query, edge_query,
-                                directed, weighted, has_relations, build_reverse,
-                                retain_versions, current_version, id_type::oid
-                         FROM warren.graphs WHERE name = $1",
-                        Some(1),
-                        &[name.into()],
-                    )?
-                    .first();
+                let row = FIND_PLAN.with(|plan| {
+                    if plan.get().is_none() {
+                        let prepared = client.prepare(FIND, &[PgOid::from(pg_sys::TEXTOID)])?;
+                        // Set only here, after the check above: cannot fail.
+                        let _ = plan.set(prepared.keep());
+                    }
+                    let plan = plan.get().ok_or(pgrx::spi::Error::InvalidPosition)?;
+                    Ok::<_, pgrx::spi::Error>(client.select(plan, Some(1), &[name.into()])?.first())
+                })?;
                 if row.is_empty() {
                     return Err(CatalogError::GraphNotFound(name.to_owned()));
                 }
