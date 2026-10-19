@@ -90,7 +90,14 @@ mod tests {
 
     #[pg_test]
     fn drop_extension_drops_warren_schema() -> Result<(), Error> {
-        Spi::run("DROP EXTENSION pg_warren CASCADE")?;
+        // Other tests run concurrently and lock the catalog tables in this
+        // order; DROP EXTENSION would take them in its own order and could
+        // deadlock with them, so take them first, in theirs.
+        Spi::run(
+            "LOCK TABLE warren.graphs, warren.versions, warren.segments, warren.vectors,
+                        warren.vector_chunks IN ACCESS EXCLUSIVE MODE;
+             DROP EXTENSION pg_warren CASCADE",
+        )?;
         let exists = Spi::get_one::<bool>(
             "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'warren')",
         )?;

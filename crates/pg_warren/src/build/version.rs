@@ -2,7 +2,7 @@
 //! `warren.versions` and may promote it (DESIGN.md §5.4 steps 5–6, §7).
 
 use super::error::BuildError;
-use crate::catalog::{VersionId, VersionStats};
+use crate::catalog::{GraphDefinition, VersionId, VersionStats};
 
 /// Records versions of a graph.
 pub(crate) trait Catalog {
@@ -18,9 +18,9 @@ pub(crate) trait Catalog {
     /// Records the total size of the version's segments.
     fn record_bytes(&mut self, version: VersionId, bytes: u64) -> Result<(), BuildError>;
 
-    /// Makes `version` the current version of graph `graph_id`, and marks it
-    /// no longer staged.
-    fn promote(&mut self, graph_id: i32, version: VersionId) -> Result<(), BuildError>;
+    /// Makes `version` the current version of `graph`, marks it no longer
+    /// staged, and applies retention.
+    fn promote(&mut self, graph: &GraphDefinition, version: VersionId) -> Result<(), BuildError>;
 }
 
 #[cfg(test)]
@@ -72,7 +72,11 @@ pub(super) mod tests {
             Ok(())
         }
 
-        fn promote(&mut self, _graph_id: i32, version: VersionId) -> Result<(), BuildError> {
+        fn promote(
+            &mut self,
+            _graph: &GraphDefinition,
+            version: VersionId,
+        ) -> Result<(), BuildError> {
             self.versions[version as usize - 1].staged = false;
             self.current_version = Some(version);
             Ok(())

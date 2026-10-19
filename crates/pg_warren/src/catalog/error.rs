@@ -3,6 +3,7 @@
 use pgrx::PgSqlErrorCode;
 use thiserror::Error;
 
+use super::VersionId;
 use crate::access::AccessError;
 use crate::extension::SqlError;
 use crate::source::SourceError;
@@ -13,6 +14,22 @@ pub(crate) enum CatalogError {
     /// No graph has this name.
     #[error("graph \"{0}\" does not exist")]
     GraphNotFound(String),
+    /// The version is not a version of the graph.
+    #[error("graph \"{graph}\" has no version {version}")]
+    VersionNotFound {
+        /// The graph.
+        graph: String,
+        /// The version asked for.
+        version: VersionId,
+    },
+    /// The current version cannot be dropped.
+    #[error("cannot drop version {version} of graph \"{graph}\": it is the current version; promote another first")]
+    DropCurrent {
+        /// The graph.
+        graph: String,
+        /// Its current version.
+        version: VersionId,
+    },
     /// A graph with this name exists already.
     #[error("graph \"{0}\" already exists")]
     GraphExists(String),
@@ -36,7 +53,10 @@ pub(crate) enum CatalogError {
 impl SqlError for CatalogError {
     fn sqlstate(&self) -> PgSqlErrorCode {
         match self {
-            Self::GraphNotFound(_) => PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT,
+            Self::GraphNotFound(_) | Self::VersionNotFound { .. } => {
+                PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT
+            }
+            Self::DropCurrent { .. } => PgSqlErrorCode::ERRCODE_OBJECT_IN_USE,
             Self::GraphExists(_) => PgSqlErrorCode::ERRCODE_DUPLICATE_OBJECT,
             Self::RetainVersions(_) => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
             Self::TooLarge(_) => PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,

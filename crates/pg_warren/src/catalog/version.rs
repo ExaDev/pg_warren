@@ -4,7 +4,8 @@
 
 use pgrx::prelude::*;
 
-use super::CatalogError;
+use super::retention::{retention, VersionSummary};
+use super::{CatalogError, GraphDefinition};
 use crate::access::as_extension_owner;
 
 /// A version id: `warren.versions.version_id`.
@@ -89,17 +90,96 @@ pub(crate) fn record_bytes(version: VersionId, bytes: u64) -> Result<(), Catalog
     })
 }
 
-/// Makes `version` the current version of graph `graph_id`, no longer
-/// staged.
-pub(crate) fn promote(graph_id: i32, version: VersionId) -> Result<(), CatalogError> {
-    as_extension_owner(|| {
+/// Makes `version` the current version of `graph`, no longer staged, then
+/// deletes the promoted versions retention no longer keeps, raising a
+/// `NOTICE` for each version kept only because vectors are bound to it.
+pub(crate) fn promote_version(
+    graph: &GraphDefinition,
+    version: VersionId,
+) -> Result<(), CatalogError> {
+    let outcome = as_extension_owner(|| {
         Spi::connect_mut(|client| {
             client.update(
                 "WITH promoted AS (
                      UPDATE warren.versions SET staged = false WHERE version_id = $1)
                  UPDATE warren.graphs SET current_version = $1 WHERE graph_id = $2",
                 None,
-                &[version.into(), graph_id.into()],
+                &[version.into(), graph.graph_id.into()],
+            )?;
+            let versions = client
+                .select(
+                    "SELECT v.version_id, v.seq, v.staged,
+                            (SELECT count(*) FROM warren.vectors x
+                             WHERE x.version_id = v.version_id)
+                     FROM warren.versions v WHERE v.graph_id = $1",
+                    None,
+                    &[graph.graph_id.into()],
+                )?
+                .map(|row| {
+                    Ok(VersionSummary {
+                        version: row.get(1)?.unwrap_or_default(),
+                        seq: row.get(2)?.unwrap_or_default(),
+                        staged: row.get(3)?.unwrap_or_default(),
+                        bound_vectors: row.get(4)?.unwrap_or_default(),
+                    })
+                })
+                .collect::<Result<Vec<_>, pgrx::spi::Error>>()?;
+            let outcome = retention(&versions, version, graph.retain_versions);
+            client.update(
+                "DELETE FROM warren.versions WHERE version_id = ANY ($1)",
+                None,
+                &[outcome.delete.clone().into()],
+            )?;
+            Ok::<_, CatalogError>(outcome)
+        })
+    })?;
+    for (kept, vectors) in outcome.kept_for_vectors {
+        ereport!(
+            NOTICE,
+            PgSqlErrorCode::ERRCODE_SUCCESSFUL_COMPLETION,
+            format!(
+                "version {kept} of graph \"{}\" is kept beyond retain_versions: {vectors} \
+                 vectors are bound to it",
+                graph.name
+            )
+        );
+    }
+    Ok(())
+}
+
+/// Checks that `version` is a version of `graph`.
+pub(crate) fn require_version(
+    graph: &GraphDefinition,
+    version: VersionId,
+) -> Result<(), CatalogError> {
+    let found = as_extension_owner(|| {
+        Ok::<_, CatalogError>(Spi::get_one_with_args::<bool>(
+            "SELECT EXISTS (SELECT 1 FROM warren.versions WHERE version_id = $1 AND graph_id = $2)",
+            &[version.into(), graph.graph_id.into()],
+        )?)
+    })?;
+    match found {
+        Some(true) => Ok(()),
+        _ => Err(CatalogError::VersionNotFound { graph: graph.name.clone(), version }),
+    }
+}
+
+/// Deletes `version` of `graph` with its segments and bound vectors. The
+/// current version cannot be dropped.
+pub(crate) fn drop_version(
+    graph: &GraphDefinition,
+    version: VersionId,
+) -> Result<(), CatalogError> {
+    require_version(graph, version)?;
+    if graph.current_version == Some(version) {
+        return Err(CatalogError::DropCurrent { graph: graph.name.clone(), version });
+    }
+    as_extension_owner(|| {
+        Spi::connect_mut(|client| {
+            client.update(
+                "DELETE FROM warren.versions WHERE version_id = $1",
+                None,
+                &[version.into()],
             )?;
             Ok(())
         })

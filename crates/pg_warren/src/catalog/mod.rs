@@ -8,13 +8,19 @@
 
 mod bootstrap;
 mod create_graph;
+mod drop;
 mod error;
 mod graph;
+mod info;
+mod promote;
+mod readers;
+mod retention;
 mod version;
 
 pub(crate) use error::CatalogError;
 pub(crate) use graph::GraphDefinition;
 use graph::NewGraph;
 pub(crate) use version::{
-    current_wal_lsn, insert_version, promote, record_bytes, VersionId, VersionStats,
+    current_wal_lsn, insert_version, promote_version, record_bytes, require_version, VersionId,
+    VersionStats,
 };

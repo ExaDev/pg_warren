@@ -71,7 +71,7 @@ pub(crate) fn build<E: ExternalId>(
     }
     catalog.record_bytes(version, writer.bytes)?;
     if request.promote {
-        catalog.promote(graph.graph_id, version)?;
+        catalog.promote(graph, version)?;
     }
     Ok(version)
 }
@@ -195,12 +195,14 @@ mod tests {
             graph_id: 1,
             name: "g".to_owned(),
             owner: pg_sys::Oid::INVALID,
+            readers: Vec::new(),
             node_query: String::new(),
             edge_query: String::new(),
             directed: true,
             weighted: false,
             has_relations: false,
             build_reverse: true,
+            retain_versions: 2,
             current_version: None,
         }
     }

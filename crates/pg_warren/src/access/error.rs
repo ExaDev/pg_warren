@@ -18,6 +18,18 @@ pub(crate) enum AccessError {
         /// The graph.
         graph: String,
     },
+    /// The caller is neither a member of the owner role nor of a reader.
+    #[error(
+        "must be a member of role \"{owner}\" or of a reader role to {action} graph \"{graph}\""
+    )]
+    NotReader {
+        /// The owner role's name.
+        owner: String,
+        /// What the caller tried to do.
+        action: &'static str,
+        /// The graph.
+        graph: String,
+    },
     /// The graph's owner role was dropped (DESIGN.md §7).
     #[error("the owner of graph \"{0}\" no longer exists")]
     OwnerDropped(String),
@@ -32,7 +44,9 @@ pub(crate) enum AccessError {
 impl SqlError for AccessError {
     fn sqlstate(&self) -> PgSqlErrorCode {
         match self {
-            Self::NotOwner { .. } => PgSqlErrorCode::ERRCODE_INSUFFICIENT_PRIVILEGE,
+            Self::NotOwner { .. } | Self::NotReader { .. } => {
+                PgSqlErrorCode::ERRCODE_INSUFFICIENT_PRIVILEGE
+            }
             Self::OwnerDropped(_) | Self::ExtensionMissing => {
                 PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT
             }

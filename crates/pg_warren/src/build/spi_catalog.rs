@@ -3,7 +3,7 @@
 
 use super::error::BuildError;
 use super::version::Catalog;
-use crate::catalog::{self, VersionId, VersionStats};
+use crate::catalog::{self, GraphDefinition, VersionId, VersionStats};
 
 /// `warren.versions` and `warren.graphs.current_version`.
 pub(crate) struct SpiCatalog {
@@ -33,7 +33,7 @@ impl Catalog for SpiCatalog {
         Ok(catalog::record_bytes(version, bytes)?)
     }
 
-    fn promote(&mut self, graph_id: i32, version: VersionId) -> Result<(), BuildError> {
-        Ok(catalog::promote(graph_id, version)?)
+    fn promote(&mut self, graph: &GraphDefinition, version: VersionId) -> Result<(), BuildError> {
+        Ok(catalog::promote_version(graph, version)?)
     }
 }

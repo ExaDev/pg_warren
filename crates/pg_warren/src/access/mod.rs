@@ -12,4 +12,4 @@ mod privilege;
 
 pub(crate) use error::AccessError;
 pub(crate) use identity::{as_extension_owner, as_role, current_user};
-pub(crate) use privilege::require_owner;
+pub(crate) use privilege::{is_superuser, require_owner, require_reader};

@@ -49,18 +49,12 @@ mod tests {
     use pgrx::spi::Error;
     use warren_core::graph::{AnyCsr, EdgeIntake, GraphCsr, IdMap, RelationDictionary, Tombstones};
 
+    use crate::fixture;
     use crate::segment::{read_segment, SpiSegmentStore};
 
     /// A ring of 200 nodes, 1 → 2 → … → 200 → 1, as graph `ring`.
     fn ring() -> Result<(), Error> {
-        Spi::run(
-            "CREATE TABLE ring_nodes (id bigint);
-             CREATE TABLE ring_edges (src bigint, dst bigint);
-             INSERT INTO ring_nodes SELECT generate_series(1, 200);
-             INSERT INTO ring_edges SELECT g, g % 200 + 1 FROM generate_series(1, 200) g;
-             SELECT warren.create_graph('ring', 'SELECT id FROM ring_nodes',
-                                        'SELECT src, dst FROM ring_edges')",
-        )
+        fixture::ring("ring", 200, 2)
     }
 
     fn refresh(sql: &str) -> Result<i64, Error> {

@@ -14,6 +14,8 @@ pub(crate) struct GraphDefinition {
     pub(crate) name: String,
     /// The owner role: source queries run as this role (DESIGN.md §7).
     pub(crate) owner: pg_sys::Oid,
+    /// Roles whose members may query the graph (DESIGN.md §7).
+    pub(crate) readers: Vec<pg_sys::Oid>,
     /// `SELECT <id> ...`.
     pub(crate) node_query: String,
     /// `SELECT <src>, <dst> [, <rel>] [, <weight>] ...`.
@@ -26,6 +28,8 @@ pub(crate) struct GraphDefinition {
     pub(crate) has_relations: bool,
     /// Whether to build the reverse CSRs.
     pub(crate) build_reverse: bool,
+    /// Promoted versions kept, the current one included.
+    pub(crate) retain_versions: i32,
     /// The promoted version builds start from, if any.
     pub(crate) current_version: Option<i64>,
 }
@@ -53,8 +57,9 @@ impl GraphDefinition {
             Spi::connect(|client| {
                 let row = client
                     .select(
-                        "SELECT graph_id, owner::oid, node_query, edge_query, directed,
-                                weighted, has_relations, build_reverse, current_version
+                        "SELECT graph_id, owner::oid, readers::oid[], node_query, edge_query,
+                                directed, weighted, has_relations, build_reverse,
+                                retain_versions, current_version
                          FROM warren.graphs WHERE name = $1",
                         Some(1),
                         &[name.into()],
@@ -67,13 +72,15 @@ impl GraphDefinition {
                     graph_id: row.get(1)?.unwrap_or_default(),
                     name: name.to_owned(),
                     owner: row.get(2)?.unwrap_or(pg_sys::Oid::INVALID),
-                    node_query: row.get(3)?.unwrap_or_default(),
-                    edge_query: row.get(4)?.unwrap_or_default(),
-                    directed: row.get(5)?.unwrap_or_default(),
-                    weighted: row.get(6)?.unwrap_or_default(),
-                    has_relations: row.get(7)?.unwrap_or_default(),
-                    build_reverse: row.get(8)?.unwrap_or_default(),
-                    current_version: row.get(9)?,
+                    readers: row.get(3)?.unwrap_or_default(),
+                    node_query: row.get(4)?.unwrap_or_default(),
+                    edge_query: row.get(5)?.unwrap_or_default(),
+                    directed: row.get(6)?.unwrap_or_default(),
+                    weighted: row.get(7)?.unwrap_or_default(),
+                    has_relations: row.get(8)?.unwrap_or_default(),
+                    build_reverse: row.get(9)?.unwrap_or_default(),
+                    retain_versions: row.get(10)?.unwrap_or(1),
+                    current_version: row.get(11)?,
                 })
             })
         })
@@ -90,6 +97,40 @@ impl GraphDefinition {
             )?)
         })?;
         Ok(())
+    }
+
+    /// Deletes the graph, and with it every version, segment and vector.
+    pub(crate) fn drop_graph(&self) -> Result<(), CatalogError> {
+        as_extension_owner(|| {
+            Spi::connect_mut(|client| {
+                client.update(
+                    "DELETE FROM warren.graphs WHERE graph_id = $1",
+                    None,
+                    &[self.graph_id.into()],
+                )?;
+                Ok(())
+            })
+        })
+    }
+
+    /// Adds `role` to the readers (if `add`) or removes it, pruning reader
+    /// roles that no longer exist.
+    pub(crate) fn set_reader(&self, role: pg_sys::Oid, add: bool) -> Result<(), CatalogError> {
+        as_extension_owner(|| {
+            Spi::connect_mut(|client| {
+                client.update(
+                    "UPDATE warren.graphs SET readers = ARRAY(
+                         SELECT DISTINCT r.oid FROM pg_roles r
+                         WHERE r.oid = ANY (readers::oid[] || CASE WHEN $3 THEN $2 END)
+                           AND r.oid <> CASE WHEN $3 THEN 0::oid ELSE $2 END
+                         ORDER BY r.oid)::regrole[]
+                     WHERE graph_id = $1",
+                    None,
+                    &[self.graph_id.into(), role.into(), add.into()],
+                )?;
+                Ok(())
+            })
+        })
     }
 }
 
