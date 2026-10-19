@@ -1,7 +1,7 @@
 //! The CSRs of one graph version: forward and (optionally) reverse per
 //! relation, plus the merged all-relations CSR (DESIGN.md §5.3, §5.4 step 4).
 
-use super::{build, transpose::transpose, AnyCsr, Csr, Target};
+use super::{build, transpose::transpose, AnyCsr, Csr, Target, TargetWidth};
 use crate::graph::{EdgeList, GraphError, RelationIndex};
 
 /// The forward CSR of a relation, and its reverse if the graph builds one.
@@ -36,21 +36,26 @@ pub struct GraphCsr {
 impl GraphCsr {
     /// Builds the CSRs of `edges`, whose relations index a dictionary of
     /// `relation_count` relations and whose dense ids lie in `id_space`.
-    /// Targets are `u32` when `id_space < 2³²`, else `u64`.
+    /// Targets are `u32` when `id_space < 2³²`, else `u64` ([`TargetWidth`]).
     pub fn build(
         edges: EdgeList,
         relation_count: usize,
         id_space: u64,
         build_reverse: bool,
     ) -> Result<Self, GraphError> {
-        if id_space <= u64::from(u32::MAX) {
-            Self::build_with::<u32>(edges, relation_count, id_space, build_reverse)
-        } else {
-            Self::build_with::<u64>(edges, relation_count, id_space, build_reverse)
+        match TargetWidth::for_id_space(id_space) {
+            TargetWidth::U32 => {
+                Self::build_with::<u32>(edges, relation_count, id_space, build_reverse)
+            }
+            TargetWidth::U64 => {
+                Self::build_with::<u64>(edges, relation_count, id_space, build_reverse)
+            }
         }
     }
 
-    fn build_with<T: Target>(
+    /// [`Self::build`] at target width `T`, which must cover the id space.
+    /// Tests use it to reach the `u64` path without a 2³² id space.
+    pub(crate) fn build_with<T: Target>(
         edges: EdgeList,
         relation_count: usize,
         id_space: u64,
@@ -101,7 +106,7 @@ impl GraphCsr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{DenseId, EdgeIntake, IdMap, RelationDictionary};
+    use crate::graph::{DenseId, EdgeIntake, IdMap, RelationDictionary, TargetWidth};
     use proptest::prelude::*;
     use std::collections::BTreeMap;
 
@@ -202,6 +207,7 @@ mod tests {
 
     #[derive(Debug, Clone)]
     struct Scenario {
+        wide: bool,
         relation_count: usize,
         id_space: u64,
         weighted: bool,
@@ -209,10 +215,11 @@ mod tests {
     }
 
     fn scenarios() -> impl Strategy<Value = Scenario> {
-        (1usize..4, 1u64..12, any::<bool>()).prop_flat_map(
-            |(relation_count, id_space, weighted)| {
+        (any::<bool>(), 1usize..4, 1u64..12, any::<bool>()).prop_flat_map(
+            |(wide, relation_count, id_space, weighted)| {
                 let edge = (0..relation_count, 0..id_space, 0..id_space, 0u8..8);
                 prop::collection::vec(edge, 0..60).prop_map(move |edges| Scenario {
+                    wide,
                     relation_count,
                     id_space,
                     weighted,
@@ -246,7 +253,14 @@ mod tests {
             }
             let distinct: usize = per_relation.iter().map(BTreeMap::len).sum();
 
-            let graph = GraphCsr::build(edges, scenario.relation_count, scenario.id_space, true).unwrap();
+            // The u64 path is otherwise reachable only from id spaces of 2^32.
+            let graph = match scenario.wide {
+                false => GraphCsr::build(edges, scenario.relation_count, scenario.id_space, true),
+                true => GraphCsr::build_with::<u64>(edges, scenario.relation_count, scenario.id_space, true),
+            }
+            .unwrap();
+            let width = if scenario.wide { TargetWidth::U64 } else { TargetWidth::U32 };
+            prop_assert_eq!(graph.all_relations().forward().width(), width);
 
             prop_assert_eq!(graph.deduplicated_edges(), (scenario.edges.len() - distinct) as u64);
             for (relation, naive) in graph.relations().iter().zip(&per_relation) {

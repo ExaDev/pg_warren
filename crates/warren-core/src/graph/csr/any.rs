@@ -3,7 +3,7 @@
 use std::iter::{Copied, FusedIterator, Map};
 use std::slice::Iter;
 
-use super::{Csr, Target};
+use super::{Csr, Target, TargetWidth};
 use crate::graph::DenseId;
 
 /// A CSR whose target width was chosen from its id space.
@@ -21,6 +21,14 @@ impl AnyCsr {
         match self {
             Self::U32(csr) => csr.id_space(),
             Self::U64(csr) => csr.id_space(),
+        }
+    }
+
+    /// The width of the targets.
+    pub fn width(&self) -> TargetWidth {
+        match self {
+            Self::U32(_) => TargetWidth::U32,
+            Self::U64(_) => TargetWidth::U64,
         }
     }
 

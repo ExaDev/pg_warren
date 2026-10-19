@@ -18,7 +18,7 @@ mod relation;
 mod segment;
 mod tombstones;
 
-pub use csr::{AnyCsr, Csr, GraphCsr, Neighbours, RelationCsr, Target};
+pub use csr::{AnyCsr, Csr, GraphCsr, Neighbours, RelationCsr, Target, TargetWidth};
 pub use edge_list::{EdgeIntake, EdgeList};
 pub use error::GraphError;
 pub use id_map::{ExternalId, IdMap};

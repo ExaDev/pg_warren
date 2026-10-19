@@ -1,7 +1,7 @@
 //! Encoding of a CSR as its `offsets`, `targets` and `weights` segments.
 
 use super::{decode, elements, encode, read_header, Element, SegmentKind};
-use crate::graph::{AnyCsr, Csr, GraphError, Target};
+use crate::graph::{AnyCsr, Csr, GraphError, Target, TargetWidth};
 
 /// The encoded segments of one CSR.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,7 +24,8 @@ impl AnyCsr {
     }
 
     /// Decodes a CSR over `id_space` from its segments, validating every
-    /// CSR invariant (see [`Csr::from_parts`]).
+    /// CSR invariant (see [`Csr::from_parts`]). The targets must have the
+    /// width the id space implies ([`TargetWidth::for_id_space`]).
     pub fn decode(
         id_space: u64,
         offsets: &[u8],
@@ -35,12 +36,15 @@ impl AnyCsr {
         let weights =
             weights.map(|weights| decode::<f64>(SegmentKind::Weights, weights)).transpose()?;
         let (header, payload) = read_header(targets, SegmentKind::Targets)?;
-        if usize::from(header.width) == u32::WIDTH {
-            let targets = elements::<u32>(&header, payload)?;
-            Csr::from_parts(id_space, offsets, targets, weights).map(Self::U32)
-        } else {
-            let targets = elements::<u64>(&header, payload)?;
-            Csr::from_parts(id_space, offsets, targets, weights).map(Self::U64)
+        match TargetWidth::for_id_space(id_space) {
+            TargetWidth::U32 => {
+                let targets = elements::<u32>(&header, payload)?;
+                Csr::from_parts(id_space, offsets, targets, weights).map(Self::U32)
+            }
+            TargetWidth::U64 => {
+                let targets = elements::<u64>(&header, payload)?;
+                Csr::from_parts(id_space, offsets, targets, weights).map(Self::U64)
+            }
         }
     }
 }
