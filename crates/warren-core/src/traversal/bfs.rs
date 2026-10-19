@@ -261,9 +261,10 @@ mod properties {
                 )
             }),
             direction in directions(),
+            wide in any::<bool>(),
             max_depth in prop::option::of(0u32..4),
         ) {
-            let graph = scenario.graph();
+            let graph = if wide { scenario.wide_graph() } else { scenario.graph() };
             let indexes = scenario.indexes(&selection);
             let adjacency = Adjacency::new(&graph, direction, Scenario::selection(&indexes)).unwrap();
             let node_filter = filter
