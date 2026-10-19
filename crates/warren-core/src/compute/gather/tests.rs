@@ -4,10 +4,11 @@ use std::sync::OnceLock;
 use super::*;
 use crate::compute::reference;
 use crate::compute::{
-    ArithmeticError, Bytes, ComputeMemory, Message, MessageKind, SemiringElement, Workers,
+    AnyVector, ArithmeticError, Bytes, ComputeMemory, Element, Mask, Message, MessageKind,
+    SemiringElement, Vector, Workers,
 };
-use crate::graph::{DenseId, Direction, GraphCsr};
-use crate::interrupts::Uninterrupted;
+use crate::graph::{DenseId, Direction, GraphCsr, RelationIndex};
+use crate::interrupts::{Cancelled, Uninterrupted};
 
 fn workers() -> &'static Workers {
     static WORKERS: OnceLock<Workers> = OnceLock::new();
@@ -206,4 +207,126 @@ fn a_combiner_the_message_kind_does_not_accept_is_an_error() {
             message: MessageKind::Element(crate::compute::Dtype::F64)
         })
     );
+}
+
+fn vector<E: Element>(values: Vec<E>) -> AnyVector
+where
+    AnyVector: From<Vector<E>>,
+{
+    Vector::from_values(&memory(), values.len() as u64, 1, values).unwrap().into()
+}
+
+#[test]
+fn a_mask_restricts_the_receivers() {
+    let mask = vector(vec![1i64, 0, -7, 0]);
+    for reverse in [true, false] {
+        let graph = example(reverse);
+        let masked = |complement| {
+            let gather = Gather {
+                mask: Some(Mask { vector: &mask, complement }),
+                ..Gather::new(Combiner::Collect)
+            };
+            run::<f64>(&graph, &gather, &SENT).unwrap()
+        };
+        assert_eq!(masked(false), [(0, many(&[3.0, 4.0])), (2, many(&[1.0, 2.0]))]);
+        assert_eq!(masked(true), [(1, many(&[1.0]))]);
+    }
+}
+
+#[test]
+fn relations_select_the_edges_messages_travel_along() {
+    let r = reference::relations(3);
+    for reverse in [true, false] {
+        let graph = example(reverse);
+        let only = |relations: &[RelationIndex], direction| {
+            let gather = Gather {
+                direction,
+                relations: RelationSelection::Only(relations),
+                ..Gather::new(Combiner::Collect)
+            };
+            run::<f64>(&graph, &gather, &SENT)
+        };
+        assert_eq!(only(&r[1..2], Direction::In), Ok(vec![(1, many(&[1.0]))]));
+        assert_eq!(only(&r[1..2], Direction::Both), Ok(vec![(0, many(&[2.0])), (1, many(&[1.0]))]));
+        assert_eq!(only(&[r[1], r[0], r[1]], Direction::In), only(&r[..2], Direction::In));
+        assert_eq!(only(&[], Direction::Both), Ok(vec![]));
+        assert_eq!(
+            only(&r[2..], Direction::In),
+            Err(ComputeError::UnknownRelation { relation: 2 })
+        );
+    }
+}
+
+#[test]
+fn senders_and_masks_must_fit_the_graph() {
+    let graph = example(true);
+    let collect = Gather::new(Combiner::Collect);
+    assert_eq!(
+        run::<f64>(&graph, &collect, &[(0, 1.0), (4, 2.0)]),
+        Err(ComputeError::SenderOutsideIdSpace { sender: 4, id_space: 4 })
+    );
+    let short = vector(vec![1.0; 3]);
+    let gather = Gather { mask: Some(Mask { vector: &short, complement: false }), ..collect };
+    assert_eq!(
+        run::<f64>(&graph, &gather, &SENT),
+        Err(ComputeError::IdSpaceMismatch { expected: 4, found: 3 })
+    );
+    let wide = Vector::from_values(&memory(), 4, 2, vec![1.0; 8]).unwrap().into();
+    let gather = Gather { mask: Some(Mask { vector: &wide, complement: false }), ..collect };
+    assert_eq!(
+        run::<f64>(&graph, &gather, &SENT),
+        Err(ComputeError::WidthMismatch { expected: 1, found: 2 })
+    );
+}
+
+#[test]
+fn the_result_is_charged_and_the_scratch_released() {
+    for reverse in [true, false] {
+        let graph = example(reverse);
+        let memory = memory();
+        let messages = messages::<f64>(&memory, &SENT);
+        let gather = Gather { direction: Direction::Both, ..Gather::new(Combiner::Collect) };
+        let gathered =
+            super::gather(workers(), &memory, &mut Uninterrupted, &graph, &gather, &messages)
+                .unwrap();
+        // Three receivers and their ends, and eight collected f64s.
+        assert_eq!(gathered.bytes(), 3 * 8 + 3 * 8 + 8 * 8);
+        assert_eq!(memory.in_use(), messages.bytes() + gathered.bytes());
+        assert_eq!((gathered.len(), gathered.combiner()), (3, Combiner::Collect));
+    }
+}
+
+#[test]
+fn a_gather_past_the_budget_is_an_error_and_charges_nothing() {
+    for reverse in [true, false] {
+        let graph = example(reverse);
+        let budget = ComputeMemory::new(160);
+        let messages = messages::<f64>(&budget, &SENT[..2]);
+        let gather = Gather { direction: Direction::Both, ..Gather::new(Combiner::Collect) };
+        let result =
+            super::gather(workers(), &budget, &mut Uninterrupted, &graph, &gather, &messages);
+        assert!(matches!(result, Err(ComputeError::MemoryLimit { .. })));
+        assert_eq!(budget.in_use(), messages.bytes());
+    }
+}
+
+#[test]
+fn an_interrupt_cancels_the_gather() {
+    struct Stop;
+    impl Interrupts for Stop {
+        fn check(&mut self) -> Result<(), Cancelled> {
+            Err(Cancelled)
+        }
+    }
+    let memory = memory();
+    let messages = messages::<f64>(&memory, &SENT);
+    let result = super::gather(
+        workers(),
+        &memory,
+        &mut Stop,
+        &example(false),
+        &Gather::new(Combiner::Sum),
+        &messages,
+    );
+    assert_eq!(result.unwrap_err(), ComputeError::Cancelled);
 }

@@ -57,17 +57,22 @@ pub(super) struct Neighbourhood<'g> {
 }
 
 impl<'g> Neighbourhood<'g> {
-    /// The neighbourhood `sources` read, scattering the inbox if needed.
+    /// The neighbourhood `sources` read, scattering the inbox for the
+    /// receivers `selects` selects if there are rows to push.
     pub(super) fn new(
         memory: &ComputeMemory,
         cancellation: &Cancellation,
         sources: Sources<'g>,
         outbox: &Outbox,
+        selects: &impl Fn(DenseId) -> bool,
         id_space: u64,
     ) -> Result<Self, ComputeError> {
         let inbox = match sources.push.is_empty() {
             true => None,
-            false => Some(Inbox::new(memory, cancellation, &sources.push, outbox, id_space)?),
+            false => {
+                let push = Push { forward: &sources.push, outbox, selects };
+                Some(Inbox::new(memory, cancellation, push, id_space)?)
+            }
         };
         Ok(Self { rows: sources.pull, inbox })
     }
@@ -80,8 +85,26 @@ impl<'g> Neighbourhood<'g> {
     }
 }
 
-/// Each receiver's in-neighbours that have messages, scattered from the
-/// forward CSRs: a stable counting sort of `(receiver, sender)` pairs, so
+/// What an inbox is scattered from: the forward CSRs, the senders with
+/// messages, and the receivers selected.
+struct Push<'p, S> {
+    forward: &'p [&'p AnyCsr],
+    outbox: &'p Outbox,
+    selects: &'p S,
+}
+
+impl<S: Fn(DenseId) -> bool> Push<'_, S> {
+    /// The selected receivers of `sender`'s messages, if it has any.
+    fn receivers(&self, sender: DenseId) -> impl Iterator<Item = DenseId> + '_ {
+        let sends = !self.outbox.of(sender).is_empty();
+        let rows = self.forward.iter().filter(move |_| sends);
+        let receivers = Senders::new(rows.map(move |csr| Row::Csr(csr.neighbours(sender))));
+        receivers.filter(|&receiver| (self.selects)(receiver))
+    }
+}
+
+/// Each selected receiver's in-neighbours that have messages, scattered
+/// from the forward CSRs: a stable counting sort of `(receiver, sender)` pairs, so
 /// each row lists its senders in ascending order.
 #[derive(Debug)]
 struct Inbox {
@@ -95,19 +118,13 @@ impl Inbox {
     fn new(
         memory: &ComputeMemory,
         cancellation: &Cancellation,
-        forward: &[&AnyCsr],
-        outbox: &Outbox,
+        push: Push<'_, impl Fn(DenseId) -> bool>,
         id_space: u64,
     ) -> Result<Self, ComputeError> {
         let (mut offsets, offsets_charge) = memory.filled(id_space as usize + 1, 0u64)?;
-        let receivers = |sender: DenseId| {
-            let sends = !outbox.of(sender).is_empty();
-            let rows = forward.iter().filter(move |_| sends);
-            Senders::new(rows.map(move |csr| Row::Csr(csr.neighbours(sender))))
-        };
         for sender in 0..id_space {
             check(cancellation, sender as usize)?;
-            for receiver in receivers(sender) {
+            for receiver in push.receivers(sender) {
                 offsets[receiver as usize] += 1;
             }
         }
@@ -121,7 +138,7 @@ impl Inbox {
         let (mut senders, senders_charge) = memory.filled(end as usize, 0 as DenseId)?;
         for sender in (0..id_space).rev() {
             check(cancellation, sender as usize)?;
-            for receiver in receivers(sender) {
+            for receiver in push.receivers(sender) {
                 let offset = &mut offsets[receiver as usize];
                 *offset -= 1;
                 senders[*offset as usize] = sender;

@@ -32,7 +32,7 @@ use gathered::Part;
 use neighbourhood::{Neighbourhood, Sources};
 use outbox::Outbox;
 
-use super::{ComputeError, ComputeMemory, Workers};
+use super::{ComputeError, ComputeMemory, Mask, Workers};
 use crate::graph::{DenseId, Direction, GraphCsr, RelationSelection};
 use crate::interrupts::{Cancelled, Interrupts};
 
@@ -49,12 +49,14 @@ pub struct Gather<'a> {
     pub direction: Direction,
     /// The relations whose edges messages travel along.
     pub relations: RelationSelection<'a>,
+    /// Only receivers the mask selects receive messages.
+    pub mask: Option<Mask<'a>>,
 }
 
 impl Gather<'_> {
     /// Gather with `combiner` from in-neighbours over every relation.
     pub fn new(combiner: Combiner) -> Self {
-        Self { combiner, direction: Direction::In, relations: RelationSelection::All }
+        Self { combiner, direction: Direction::In, relations: RelationSelection::All, mask: None }
     }
 }
 
@@ -74,10 +76,16 @@ pub fn gather<M: Combine, I: Interrupts>(
     let combiner = gather.combiner;
     combiner.check(M::KIND)?;
     let id_space = graph.all_relations().forward().id_space();
+    let mask = gather.mask;
+    if let Some(mask) = mask {
+        mask.check(id_space)?;
+    }
+    let selects = |receiver| mask.is_none_or(|mask: Mask<'_>| mask.selects(receiver));
     let sources = Sources::new(graph, gather.direction, gather.relations)?;
     workers.run(interrupts, |cancellation| {
         let outbox = Outbox::new(memory, cancellation, messages, id_space)?;
-        let neighbourhood = Neighbourhood::new(memory, cancellation, sources, &outbox, id_space)?;
+        let neighbourhood =
+            Neighbourhood::new(memory, cancellation, sources, &outbox, &selects, id_space)?;
         let parts = (0..id_space.div_ceil(RECEIVERS_PER_TASK))
             .into_par_iter()
             .map(|task| {
@@ -86,7 +94,8 @@ pub fn gather<M: Combine, I: Interrupts>(
                 }
                 let mut part = Part::new(memory)?;
                 let first = task * RECEIVERS_PER_TASK;
-                for receiver in first..id_space.min(first + RECEIVERS_PER_TASK) {
+                let receivers = first..id_space.min(first + RECEIVERS_PER_TASK);
+                for receiver in receivers.filter(|&receiver| selects(receiver)) {
                     let received = neighbourhood
                         .senders(receiver)
                         .flat_map(|sender| outbox.of(sender))
