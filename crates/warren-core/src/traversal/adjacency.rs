@@ -2,7 +2,9 @@
 //! in a direction (DESIGN.md §9.2, §9.3).
 
 use super::TraversalError;
-use crate::graph::{AnyCsr, DenseId, GraphCsr, RelationCsr, RelationIndex};
+use std::iter::{FusedIterator, Peekable};
+
+use crate::graph::{AnyCsr, DenseId, GraphCsr, Neighbours, RelationCsr, RelationIndex};
 
 /// Which way a traversal follows edges.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -116,9 +118,25 @@ impl<'g> Adjacency<'g> {
         self.id_space
     }
 
-    /// The nodes one edge away from `node`. A node reached through several
-    /// CSRs (relations, or both directions) appears once per CSR.
-    pub(crate) fn neighbours(&self, node: DenseId) -> impl Iterator<Item = DenseId> + '_ {
+    /// The distinct nodes one edge away from `node` across every selected
+    /// relation (and, for [`Direction::Both`], both directions), in
+    /// ascending dense-id order: a k-way merge of the sorted rows. Empty
+    /// outside the id space.
+    pub fn neighbours(&self, node: DenseId) -> DistinctNeighbours<'g> {
+        DistinctNeighbours {
+            rows: self.rows.iter().map(|csr| csr.neighbours(node).peekable()).collect(),
+        }
+    }
+
+    /// The number of [`Self::neighbours`] of `node`.
+    pub fn degree(&self, node: DenseId) -> u64 {
+        self.neighbours(node).count() as u64
+    }
+
+    /// The row entries of `node` in every CSR read: a node reached through
+    /// several CSRs (relations, or both directions) appears once per CSR.
+    /// Traversals use this; their visited set absorbs the repeats.
+    pub(crate) fn row_entries(&self, node: DenseId) -> impl Iterator<Item = DenseId> + '_ {
         self.rows.iter().flat_map(move |csr| csr.neighbours(node))
     }
 
@@ -136,6 +154,27 @@ impl<'g> Adjacency<'g> {
         })
     }
 }
+
+/// The distinct neighbours of a node, ascending; see
+/// [`Adjacency::neighbours`].
+#[derive(Debug, Clone)]
+pub struct DistinctNeighbours<'g> {
+    rows: Vec<Peekable<Neighbours<'g>>>,
+}
+
+impl Iterator for DistinctNeighbours<'_> {
+    type Item = DenseId;
+
+    fn next(&mut self) -> Option<DenseId> {
+        let smallest = self.rows.iter_mut().filter_map(|row| row.peek().copied()).min()?;
+        for row in &mut self.rows {
+            row.next_if_eq(&smallest);
+        }
+        Some(smallest)
+    }
+}
+
+impl FusedIterator for DistinctNeighbours<'_> {}
 
 /// The CSRs to scan for `relations` in `direction`.
 fn scanned<'g>(
@@ -160,7 +199,7 @@ mod tests {
     use crate::traversal::example::{directed, graph, relations};
 
     fn neighbours(adjacency: &Adjacency<'_>, node: DenseId) -> Vec<DenseId> {
-        let mut found: Vec<DenseId> = adjacency.neighbours(node).collect();
+        let mut found: Vec<DenseId> = adjacency.row_entries(node).collect();
         found.sort_unstable();
         found
     }
@@ -207,6 +246,33 @@ mod tests {
     }
 
     #[test]
+    fn public_neighbours_are_distinct_and_ascending_across_csrs() {
+        // 0 → 1, 1 → 0 (in relation 0 and 1), 1 → 1, 1 → 2, 3 → 1
+        let graph = graph(
+            4,
+            2,
+            &[
+                (0, 0, 1, 1.0),
+                (0, 1, 0, 1.0),
+                (1, 1, 0, 1.0),
+                (0, 1, 1, 1.0),
+                (1, 1, 2, 1.0),
+                (0, 3, 1, 1.0),
+            ],
+            true,
+        );
+        let r = relations(2);
+        let both = Adjacency::new(&graph, Direction::Both, RelationSelection::Only(&r)).unwrap();
+        assert_eq!(both.neighbours(1).collect::<Vec<_>>(), [0, 1, 2, 3]);
+        assert_eq!(both.degree(1), 4);
+        let out = Adjacency::new(&graph, Direction::Out, RelationSelection::Only(&r)).unwrap();
+        assert_eq!(out.neighbours(1).collect::<Vec<_>>(), [0, 1, 2]);
+        assert_eq!(out.degree(1), 3);
+        assert_eq!(out.neighbours(4).count(), 0);
+        assert_eq!(out.degree(u64::MAX), 0);
+    }
+
+    #[test]
     fn an_unknown_relation_is_an_error() {
         let graph = graph(2, 1, &[(0, 0, 1, 1.0)], true);
         let unknown = relations(2)[1];
@@ -244,5 +310,42 @@ mod tests {
         let graph = directed(2, &[(0, 1)]);
         let into = Adjacency::new(&graph, Direction::In, RelationSelection::All).unwrap();
         assert_eq!(into.weighted_neighbours(1).collect::<Vec<_>>(), [(0, 1.0)]);
+    }
+}
+
+#[cfg(test)]
+mod properties {
+    use std::collections::BTreeSet;
+
+    use proptest::prelude::*;
+
+    use super::*;
+    use crate::traversal::reference::{directions, scenarios, selections, Scenario};
+
+    proptest! {
+        #[test]
+        fn neighbours_match_the_distinct_naive_steps(
+            (scenario, selection) in scenarios().prop_flat_map(|scenario| {
+                let relation_count = scenario.relation_count;
+                (Just(scenario), selections(relation_count))
+            }),
+            direction in directions(),
+        ) {
+            let graph = scenario.graph();
+            let indexes = scenario.indexes(&selection);
+            let adjacency = Adjacency::new(&graph, direction, Scenario::selection(&indexes)).unwrap();
+            let steps = scenario.steps(direction, &selection);
+            for node in 0..scenario.id_space {
+                let expected: Vec<DenseId> = steps
+                    .iter()
+                    .filter(|&&(from, _, _)| from == node)
+                    .map(|&(_, to, _)| to)
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                prop_assert_eq!(adjacency.neighbours(node).collect::<Vec<_>>(), expected.clone());
+                prop_assert_eq!(adjacency.degree(node), expected.len() as u64);
+            }
+        }
     }
 }

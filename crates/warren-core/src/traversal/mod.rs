@@ -26,7 +26,7 @@ mod example;
 #[cfg(test)]
 mod reference;
 
-pub use adjacency::{Adjacency, Direction, RelationSelection};
+pub use adjacency::{Adjacency, Direction, DistinctNeighbours, RelationSelection};
 pub use bfs::{bfs, bfs_each, Visit};
 pub use components::components;
 pub use dijkstra::{dijkstra, WeightedPath};
