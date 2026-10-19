@@ -367,6 +367,21 @@ mod tests {
         Ok(())
     }
 
+    #[pg_test]
+    fn the_next_call_sees_a_promoted_version_and_survives_eviction() -> Result<(), Error> {
+        small("t")?;
+        assert_eq!(bfs("'t', ARRAY[5::bigint], 1")?.as_deref(), Some("5:0:-"));
+        Spi::run("INSERT INTO t_edges VALUES (5, 6, 'a', 1); SELECT warren.refresh('t')")?;
+        assert_eq!(bfs("'t', ARRAY[5::bigint], 1")?.as_deref(), Some("5:0:- 6:1:5"));
+        // Evicting while a scan holds the version is safe: it keeps its copy.
+        let found = rows(
+            "SELECT n::text FROM (SELECT warren.reachable_set('t', ARRAY[5::bigint]) n,
+                                         warren.evict('t') e) s",
+        )?;
+        assert_eq!(found.as_deref(), Some("5 6"));
+        Ok(())
+    }
+
     #[pg_test(
         error = "graph \"t\" has node ids of type bigint, but start is of type integer[]; cast it to bigint[]"
     )]
