@@ -20,6 +20,7 @@ pg_test = []
 
 [dependencies]
 pgrx = "=0.19.3"
+thiserror = "2"
 warren-core = { path = "../warren-core" }
 
 [dev-dependencies]

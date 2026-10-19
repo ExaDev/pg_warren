@@ -13,6 +13,23 @@ use pgrx::prelude::*;
 #[pg_schema]
 mod warren {}
 
+/// An error a `warren.*` function reports to its caller as a SQL error.
+pub(crate) trait SqlError: std::fmt::Display {
+    /// The SQLSTATE to report.
+    fn sqlstate(&self) -> PgSqlErrorCode;
+}
+
+/// Unwraps `result`, or raises its error as a SQL `ERROR` (which does not
+/// return: the transaction or subtransaction aborts).
+pub(crate) fn or_raise<T, E: SqlError>(result: Result<T, E>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            ereport!(ERROR, error.sqlstate(), error.to_string());
+        }
+    }
+}
+
 /// `warren.version()`: the version of the installed extension library.
 #[pg_extern(schema = "warren", stable, parallel_safe)]
 pub fn version() -> &'static str {
