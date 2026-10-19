@@ -48,8 +48,9 @@ def operator_matrix(src, dst, nodes, operator):
     return (sp.eye_array(len(active)) - scale @ a @ scale).tocsr()
 
 
-def arpack(matrix, k, which, tol):
-    """`eigsh` with the default basis size, counting operator applications."""
+def arpack(matrix, k, which, tol, seed=1):
+    """`eigsh` with the default basis size and a seeded start vector,
+    counting operator applications."""
     matvecs = 0
 
     def apply(x):
@@ -59,7 +60,8 @@ def arpack(matrix, k, which, tol):
 
     operator = LinearOperator(matrix.shape, matvec=apply, dtype=np.float64)
     start = time.perf_counter()
-    values = eigsh(operator, k=k, which=ARPACK_WHICH[which], tol=tol, return_eigenvectors=False)
+    v0 = np.random.default_rng(seed).uniform(-1.0, 1.0, matrix.shape[0])
+    values = eigsh(operator, k=k, which=ARPACK_WHICH[which], tol=tol, v0=v0, return_eigenvectors=False)
     seconds = time.perf_counter() - start
     order = np.argsort(-np.abs(values)) if which == "largest" else np.argsort(values)
     return {"matvecs": matvecs, "seconds": round(seconds, 3), "eigenvalues": values[order].tolist()}
@@ -85,7 +87,9 @@ def main(argv):
     options.add_argument("--results", type=Path, default=HERE / "results" / "eigen")
     args = options.parse_args(argv)
     name = f"random-{args.nodes}-{args.edges}-seed{args.seed}"
-    report = {"graph": name, "k": args.k, "tol": args.tol, "precision": args.precision, "cases": []}
+    revision = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True, text=True)
+    report = {"graph": name, "k": args.k, "tol": args.tol, "precision": args.precision,
+              "git": revision.stdout.strip() or None, "cases": []}
     with tempfile.TemporaryDirectory(prefix="warren-eigen-") as scratch:
         random_graph.generate(args.nodes, args.edges, args.seed).write(Path(scratch))
         edges = np.loadtxt(Path(scratch) / "edges.csv", delimiter=",", skiprows=1, dtype=np.int64, ndmin=2)
