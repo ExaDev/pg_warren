@@ -4,7 +4,7 @@
 use std::mem::size_of;
 
 use super::{ComputeError, ComputeMemory, Dtype, Element, MemoryCharge};
-use crate::graph::DenseId;
+use crate::graph::{DenseId, Tombstones};
 
 /// A dense vector (or, with `width > 1`, a row-major matrix) of `E`,
 /// charged to the compute memory budget it was allocated from.
@@ -96,6 +96,16 @@ impl<E: Element> Vector<E> {
         &mut self.values
     }
 
+    /// Sets every element of each tombstoned row to zero (`false`).
+    pub fn clear_tombstoned(&mut self, tombstones: &Tombstones) {
+        let width = self.width;
+        for (node, row) in (0..).zip(self.values.chunks_mut(width)) {
+            if tombstones.contains(node) {
+                row.fill(E::default());
+            }
+        }
+    }
+
     /// The row of `node`; empty outside the id space.
     pub fn row(&self, node: DenseId) -> &[E] {
         if node >= self.id_space {
@@ -146,6 +156,17 @@ impl AnyVector {
         }
     }
 
+    /// Sets every element of each tombstoned row to zero (`false`): what
+    /// a vector holds for a node that is no longer in the graph.
+    pub fn clear_tombstoned(&mut self, tombstones: &Tombstones) {
+        match self {
+            Self::F32(vector) => vector.clear_tombstoned(tombstones),
+            Self::F64(vector) => vector.clear_tombstoned(tombstones),
+            Self::I64(vector) => vector.clear_tombstoned(tombstones),
+            Self::Bool(vector) => vector.clear_tombstoned(tombstones),
+        }
+    }
+
     /// The number of elements per row.
     pub fn width(&self) -> usize {
         match self {
@@ -187,6 +208,20 @@ mod tests {
         assert_eq!((any.dtype(), any.id_space(), any.width()), (Dtype::I64, 2, 2));
         assert_eq!(i64::vector(&any).map(Vector::values), Some(&[1, 2, 3, 4][..]));
         assert!(f64::vector(&any).is_none());
+    }
+
+    #[test]
+    fn tombstoned_rows_are_cleared_to_zero() {
+        let mut tombstones = Tombstones::new(3).unwrap();
+        tombstones.insert(1);
+        let mut matrix: AnyVector = Vector::filled(&memory(), 3, 2, f64::NAN).unwrap().into();
+        matrix.clear_tombstoned(&tombstones);
+        let values = f64::vector(&matrix).unwrap().values();
+        assert!(values[0].is_nan() && values[5].is_nan());
+        assert_eq!(values[2..4], [0.0, 0.0]);
+        let mut flags: AnyVector = Vector::filled(&memory(), 3, 1, true).unwrap().into();
+        flags.clear_tombstoned(&tombstones);
+        assert_eq!(bool::vector(&flags).unwrap().values(), [true, false, true]);
     }
 
     #[test]
