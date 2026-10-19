@@ -13,6 +13,7 @@ mod tests {
     use crate::compute_sql::settings::workers;
     use crate::fixture::{failure, refresh, ring};
     use crate::interrupts::PostgresInterrupts;
+    use warren_core::interrupts::{Cancelled, Interrupts};
 
     #[pg_test]
     fn the_compute_memory_cap_is_an_error_not_an_abort() -> Result<(), Error> {
@@ -48,8 +49,6 @@ mod tests {
         Ok(())
     }
 
-    /// Marks a cancel as pending, as `statement_timeout` or
-    /// `pg_cancel_backend` would.
     /// Whether `PERFORM <expression>` raises `query_canceled` (which
     /// `WHEN OTHERS` does not catch).
     fn canceled(expression: &str) -> Result<Option<bool>, Error> {
@@ -63,36 +62,55 @@ mod tests {
         ))
     }
 
-    #[pg_extern]
-    fn mark_cancel_pending() {
-        // SAFETY: sets the flags the SIGINT handler sets; the next
-        // CHECK_FOR_INTERRUPTS processes and clears them.
+    /// Marks a cancel as pending, as `statement_timeout` or
+    /// `pg_cancel_backend` would. Main thread only.
+    fn cancel_pending() {
+        // SAFETY: sets the flags the SIGINT handler sets, on the main
+        // thread; the next CHECK_FOR_INTERRUPTS processes and clears them.
         unsafe {
             pg_sys::QueryCancelPending = 1;
             pg_sys::InterruptPending = 1;
         }
     }
 
+    /// [`cancel_pending`], as a SQL function.
+    #[pg_extern]
+    fn mark_cancel_pending() {
+        cancel_pending();
+    }
+
+    /// The main-thread poll, which marks a cancel as pending at its
+    /// `after`-th poll, as a signal arriving mid-kernel would: so the test
+    /// touches Postgres state from the main thread only, never a worker.
+    struct CancelAfter {
+        after: usize,
+        polls: usize,
+    }
+
+    impl Interrupts for CancelAfter {
+        fn check(&mut self) -> Result<(), Cancelled> {
+            self.polls += 1;
+            if self.polls == self.after {
+                cancel_pending();
+            }
+            PostgresInterrupts.check()
+        }
+    }
+
     /// Whether the job below saw its cancellation flag raised.
     static SAW_CANCELLATION: AtomicBool = AtomicBool::new(false);
 
-    /// Runs a job on the compute pool that, mid-run, marks a cancel as
-    /// pending (as a signal handler would) and then waits for the job's
-    /// cancellation flag: the main thread's poll must raise
-    /// `query_canceled`, and stop the job.
+    /// Runs a job on the compute pool that waits for its cancellation flag
+    /// while the main thread polls; a few polls in, a cancel is marked
+    /// pending (on the main thread): the poll must raise `query_canceled`,
+    /// and stop the job.
     #[pg_extern]
     fn cancel_a_running_job() {
         SAW_CANCELLATION.store(false, Ordering::Relaxed);
         let Ok(pool) = workers() else {
             return;
         };
-        let _ = pool.run(&mut PostgresInterrupts, |cancellation| {
-            // SAFETY: plain stores to the flags a signal handler sets; the
-            // main thread reads them when it polls.
-            unsafe {
-                pg_sys::QueryCancelPending = 1;
-                pg_sys::InterruptPending = 1;
-            }
+        let _ = pool.run(&mut CancelAfter { after: 3, polls: 0 }, |cancellation| {
             let start = Instant::now();
             while !cancellation.is_cancelled() && start.elapsed() < Duration::from_secs(10) {
                 std::thread::yield_now();
