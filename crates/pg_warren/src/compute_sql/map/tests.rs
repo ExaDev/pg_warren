@@ -129,6 +129,24 @@ mod tests {
     }
 
     #[pg_test]
+    fn the_synthetic_row_holds_only_the_vectors_the_expression_names() -> Result<(), Error> {
+        small("t")?;
+        // More vectors than a row may have columns (1664).
+        Spi::run(
+            "DO $$ BEGIN
+                 FOR i IN 1..1700 LOOP
+                     PERFORM warren.vector_const('t', 'v' || i, i, persist := false);
+                 END LOOP;
+             END $$",
+        )?;
+        Spi::run("SELECT warren.vector_map('t', 'sum', 'v1 + v2 * \"v1700\"')")?;
+        assert_eq!(values("sum")?.as_deref(), Some("1:3401 2:3401 3:3401 4:3401 5:3401 6:3401"));
+        let unknown = failure("warren.vector_map('t', 'y', 'v1 + nope')")?;
+        assert_eq!(unknown.as_deref(), Some("42703: column \"nope\" does not exist"));
+        Ok(())
+    }
+
+    #[pg_test]
     fn expressions_that_are_not_one_scalar_expression_are_refused() -> Result<(), Error> {
         appendix_vectors()?;
         let cases = [

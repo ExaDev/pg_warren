@@ -7,15 +7,17 @@
 //!
 //! The expression is first parsed alone, as `SELECT <expr>`, and must be a
 //! single target with no other clause, so it cannot reach outside the
-//! synthetic row. Parse analysis runs under the caller's `search_path`, as
+//! synthetic row; the row's columns are then only the vectors its column
+//! references name. Parse analysis runs under the caller's `search_path`, as
 //! any of the caller's own SQL does. A result of type `integer` or
 //! `smallint` is cast to `bigint`, and a `numeric` one to `double
 //! precision`, as an assignment to a vector of that dtype would; the cast
 //! is part of the analysed tree both evaluation paths run.
 
+use std::collections::HashSet;
 use std::ffi::{CStr, CString};
 
-use pgrx::{pg_sys, PgList};
+use pgrx::{pg_guard, pg_sys, PgList};
 use warren_core::compute::Dtype;
 
 use super::super::ComputeSqlError;
@@ -87,8 +89,10 @@ fn raw_parse(sql: &CString) -> PgList<pg_sys::RawStmt> {
 }
 
 /// Checks that `expr` is one expression: `SELECT <expr>` parses to one
-/// SELECT of one target and no other clause.
-fn check_lone_expression(expr: &str) -> Result<(), ComputeSqlError> {
+/// SELECT of one target and no other clause. Returns the names its column
+/// references use (every field of each, so a superset of the columns it
+/// can mean).
+fn check_lone_expression(expr: &str) -> Result<HashSet<String>, ComputeSqlError> {
     let sql = c_string(&format!("SELECT\n{expr}\n"))?;
     let statements = raw_parse(&sql);
     let not_one = || {
@@ -131,9 +135,48 @@ fn check_lone_expression(expr: &str) -> Result<(), ComputeSqlError> {
         && s.limitCount.is_null()
         && s.withClause.is_null()
         && s.op == pg_sys::SetOperation::SETOP_NONE;
-    match lone {
-        true => Ok(()),
-        false => Err(not_one()),
+    if !lone {
+        return Err(not_one());
+    }
+    let mut names = HashSet::new();
+    // SAFETY: a raw parse tree; the walker only reads it, and `names`
+    // outlives the walk.
+    unsafe {
+        pg_sys::raw_expression_tree_walker(
+            s.targetList.cast(),
+            Some(column_names),
+            std::ptr::from_mut(&mut names).cast(),
+        );
+    }
+    Ok(names)
+}
+
+/// A raw-tree walker that adds the fields of every `ColumnRef` to the
+/// `HashSet<String>` that `context` points to.
+#[pg_guard]
+unsafe extern "C-unwind" fn column_names(
+    node: *mut pg_sys::Node,
+    context: *mut std::ffi::c_void,
+) -> bool {
+    if node.is_null() {
+        return false;
+    }
+    // SAFETY: the walker is given valid raw parse nodes, and `context` is
+    // the set `check_lone_expression` passed.
+    unsafe {
+        if pgrx::is_a(node, pg_sys::NodeTag::T_ColumnRef) {
+            let names = &mut *context.cast::<HashSet<String>>();
+            let fields =
+                PgList::<pg_sys::Node>::from_pg((*node.cast::<pg_sys::ColumnRef>()).fields);
+            for field in fields.iter_ptr() {
+                if pgrx::is_a(field, pg_sys::NodeTag::T_String) {
+                    let name = CStr::from_ptr((*field.cast::<pg_sys::String>()).sval);
+                    names.insert(name.to_string_lossy().into_owned());
+                }
+            }
+            return false;
+        }
+        pg_sys::raw_expression_tree_walker(node, Some(column_names), context)
     }
 }
 
@@ -197,7 +240,11 @@ pub(crate) fn analyse(
     search_path: &str,
 ) -> Result<Analysed, ComputeSqlError> {
     with_search_path(search_path, || {
-        check_lone_expression(expr)?;
+        let named = check_lone_expression(expr)?;
+        // Only the vectors the expression names: analysis cost and the
+        // row's width then do not grow with the vectors bound.
+        let columns: Vec<Column> =
+            columns.into_iter().filter(|column| named.contains(&column.name)).collect();
         let (mut tree, mut oid) = analyse_query(&synthetic(expr, &columns, None)?)?;
         let cast = match oid {
             pg_sys::INT2OID | pg_sys::INT4OID => Some("pg_catalog.int8"),
