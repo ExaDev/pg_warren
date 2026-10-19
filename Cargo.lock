@@ -1181,6 +1181,7 @@ dependencies = [
 name = "pg_warren"
 version = "0.0.1"
 dependencies = [
+ "libc",
  "pgrx",
  "pgrx-tests",
  "serde_json",

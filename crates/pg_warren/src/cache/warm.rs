@@ -9,6 +9,7 @@ use super::CacheError;
 use crate::access::entry;
 use crate::catalog::{GraphDefinition, VersionId};
 use crate::source::with_id_type;
+use crate::vector::evict_vectors;
 
 /// `warren.prewarm`: loads version `version` of graph `name` (its current
 /// version if NULL) into this backend's cache and returns its id. Owners
@@ -25,9 +26,9 @@ fn prewarm_version(name: &str, version: Option<VersionId>) -> Result<VersionId, 
     Ok(resolved.version)
 }
 
-/// `warren.evict`: frees this backend's cached versions of graph `name`
-/// and returns how many there were. It changes nothing but this backend's
-/// memory, so it needs no privilege on the graph.
+/// `warren.evict`: frees this backend's cached versions and vectors of
+/// graph `name` and returns how many there were. It changes nothing but
+/// this backend's memory, so it needs no privilege on the graph.
 #[pg_extern(schema = "warren", volatile, parallel_restricted)]
 fn evict(name: &str) -> i64 {
     entry(|_| evict_versions(name))
@@ -35,7 +36,8 @@ fn evict(name: &str) -> i64 {
 
 fn evict_versions(name: &str) -> Result<i64, CacheError> {
     let graph = GraphDefinition::find(name)?;
-    Ok(i64::try_from(evict_graph(graph.graph_id)).unwrap_or(i64::MAX))
+    let freed = evict_graph(graph.graph_id) + evict_vectors(graph.graph_id);
+    Ok(i64::try_from(freed).unwrap_or(i64::MAX))
 }
 
 #[cfg(any(test, feature = "pg_test"))]
@@ -57,6 +59,17 @@ mod tests {
         assert_eq!(staged, Some(first));
         assert_eq!(Spi::get_one::<i64>("SELECT warren.evict('pw')")?, Some(2));
         assert_eq!(Spi::get_one::<i64>("SELECT warren.evict('pw')")?, Some(0));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn evict_frees_cached_vectors_too() -> Result<(), Error> {
+        ring("pw", 5, 3)?;
+        refresh("pw", true)?;
+        Spi::run(
+            "SELECT warren.vector_const('pw', 'a', 1); SELECT warren.vector_const('pw', 'b', 2)",
+        )?;
+        assert_eq!(Spi::get_one::<i64>("SELECT warren.evict('pw')")?, Some(3));
         Ok(())
     }
 

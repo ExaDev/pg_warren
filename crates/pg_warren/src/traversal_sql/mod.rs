@@ -26,4 +26,5 @@ mod walk;
 mod walk_rows;
 
 pub(crate) use error::{entry, TraversalSqlError};
+pub(crate) use ids::{check_type, external};
 pub(crate) use walk_rows::define_max_walk_paths;

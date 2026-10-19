@@ -6,8 +6,9 @@
 //! `warren.prewarm` / `warren.evict`.
 //!
 //! Depends on `segment` (to read chunks), `catalog` (graphs and versions),
-//! `access` (reader checks) and `source` (id types); `build`,
-//! `version_sql` and `traversal_sql` use it.
+//! `access` (reader checks), `source` (id types) and `vector` (evict frees
+//! cached vectors too); `build`, `version_sql`, `traversal_sql` and
+//! `compute_sql` use it.
 
 mod error;
 mod load;
