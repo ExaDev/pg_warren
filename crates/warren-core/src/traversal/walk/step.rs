@@ -5,8 +5,8 @@
 //! "variable-length segment"; the code says *hop range* instead, so that
 //! "segment" keeps its one meaning, a stored part of a graph version.
 
-use super::super::{Direction, NodeSet, RelationSelection, TraversalError};
-use crate::graph::RelationIndex;
+use super::super::{Direction, NodeSet, TraversalError};
+use crate::graph::{RelationIndex, RelationSelection};
 
 /// How many hops a step takes: any number from `min` to `max` inclusive.
 ///

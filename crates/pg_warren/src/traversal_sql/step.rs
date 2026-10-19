@@ -14,10 +14,11 @@ use pgrx::prelude::*;
 use pgrx::{AllocatedByRust, AnyArray, Array};
 use warren_core::traversal::{HopRange, NodeSet, Step};
 
-use super::args::{direction, relations};
-use super::ids::{element_type, parse};
+use super::ids::parse;
 use super::{entry, TraversalSqlError};
 use crate::cache::LoadedVersion;
+use crate::external_ids::element_type;
+use crate::selection::{direction, relations};
 use crate::source::IdDatum;
 
 pgrx::extension_sql!(

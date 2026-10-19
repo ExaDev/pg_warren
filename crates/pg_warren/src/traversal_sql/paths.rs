@@ -8,15 +8,16 @@ use pgrx::{AnyArray, AnyElement};
 use warren_core::graph::DenseId;
 use warren_core::traversal::{
     dijkstra as cheapest_path, reachable as reaches, shortest_path as shortest, Adjacency,
-    Direction, RelationSelection, TraversalStats,
+    Direction, TraversalStats,
 };
 
-use super::args::{bound, direction, relations};
-use super::ids::{element, element_widened, external_array};
-use super::interrupts::PostgresInterrupts;
+use super::args::bound;
 use super::stats::Recorder;
 use super::{entry, TraversalSqlError};
 use crate::cache::{cached, resolve, LoadedVersion, Resolved};
+use crate::external_ids::{element, element_widened, external_array};
+use crate::interrupts::PostgresInterrupts;
+use crate::selection::{adjacency, direction};
 use crate::source::{with_id_type, IdDatum, IdType};
 
 /// `warren.reachable`: whether `target` is within `max_depth` edges of
@@ -215,9 +216,8 @@ impl Opened<'_> {
         else {
             return Ok(Some(None));
         };
-        let selected = relations(&loaded.relations, self.call.rels.as_deref());
-        let selection = selected.as_deref().map_or(RelationSelection::All, RelationSelection::Only);
-        let adjacency = Adjacency::new(&loaded.graph, self.direction, selection)?;
+        let adjacency =
+            adjacency(&loaded.graph, &loaded.relations, self.direction, self.call.rels.as_deref())?;
         let (result, stats) = search(&loaded, &adjacency, start, target)?;
         recorder.record(stats);
         Ok(Some(Some(result)))

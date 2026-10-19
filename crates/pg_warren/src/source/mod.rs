@@ -15,6 +15,6 @@ mod id_type;
 
 pub(crate) use columns::{check_edge_columns, check_node_columns, ColumnType, SourceError};
 pub(crate) use cursor::{
-    for_each_row, open_read_only, source_columns, type_name, with_pinned_snapshot,
+    describe, for_each_row, open_read_only, source_columns, type_name, with_pinned_snapshot,
 };
 pub(crate) use id_type::{with_id_type, IdDatum, IdType};

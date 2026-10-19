@@ -14,8 +14,9 @@ use std::collections::BinaryHeap;
 
 use super::scratch::{NodeMap, Visited};
 use super::stats::Progress;
-use super::{Adjacency, Interrupts, TraversalError, Traversed};
+use super::{Adjacency, TraversalError, Traversed};
 use crate::graph::{DenseId, GraphError};
+use crate::interrupts::Interrupts;
 
 /// A path with its total weight.
 #[derive(Debug, Clone, PartialEq)]
@@ -119,9 +120,10 @@ impl Eq for Queued {}
 mod tests {
     use super::*;
     use crate::graph::GraphCsr;
+    use crate::graph::RelationSelection;
+    use crate::interrupts::{Cancellation, Uninterrupted};
     use crate::traversal::example::{directed, graph};
-    use crate::traversal::{Cancellation, Uninterrupted};
-    use crate::traversal::{Direction, RelationSelection};
+    use crate::traversal::Direction;
 
     fn cheapest(
         graph: &GraphCsr,
@@ -220,8 +222,8 @@ mod properties {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::interrupts::Uninterrupted;
     use crate::traversal::reference::{directions, scenarios, selections, Scenario};
-    use crate::traversal::Uninterrupted;
 
     /// The cheapest cost of every edge, by `(from, to)`.
     fn cheapest_edges(steps: &[(DenseId, DenseId, f64)]) -> BTreeMap<(DenseId, DenseId), f64> {

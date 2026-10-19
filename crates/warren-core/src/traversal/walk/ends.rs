@@ -3,12 +3,13 @@
 use std::ops::ControlFlow;
 
 use super::super::stats::Progress;
-use super::super::{Interrupts, TraversalError, TraversalStats};
+use super::super::{TraversalError, TraversalStats};
 use super::plan::plan;
 use super::reach::{reach, Level, Observer, Unlabelled};
 use super::tally::tally;
 use super::{RowLimit, Step, WalkOptions};
 use crate::graph::{DenseId, GraphCsr};
+use crate::interrupts::Interrupts;
 
 /// The ends of every walk along `steps` from `starts` (or, in reverse, the
 /// starts of every walk ending in `starts`), each handed to `visitor` as it
@@ -66,10 +67,9 @@ mod tests {
     use super::super::example::{knowledge_graph, step, AFFILIATED_WITH, AUTHORED_BY, CITES};
     use super::super::{walk, walk_ends_each, HopRange, Step, WalkMode, WalkOptions, WalkResult};
     use crate::graph::{DenseId, GraphCsr};
+    use crate::interrupts::Uninterrupted;
     use crate::traversal::example::{directed, graph};
-    use crate::traversal::{
-        Direction, NodeSet, TraversalError, TraversalStats, Traversed, Uninterrupted,
-    };
+    use crate::traversal::{Direction, NodeSet, TraversalError, TraversalStats, Traversed};
 
     fn ends_of(
         graph: &GraphCsr,
@@ -308,7 +308,7 @@ mod tests {
     #[test]
     fn a_raised_cancellation_stops_the_walk() {
         let graph = knowledge_graph();
-        let mut cancelled = crate::traversal::Cancellation::new();
+        let mut cancelled = crate::interrupts::Cancellation::new();
         cancelled.cancel();
         let steps = [step(None, 1, 1, None)];
         assert_eq!(

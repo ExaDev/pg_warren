@@ -14,12 +14,13 @@ use std::ops::ControlFlow;
 
 use super::super::scratch::{NodeMap, Visited};
 use super::super::stats::Progress;
-use super::super::{Interrupts, TraversalError, TraversalStats};
+use super::super::{TraversalError, TraversalStats};
 use super::plan::{plan, WalkPlan};
 use super::reach::{reach, Labelled, Level, Observer};
 use super::tally::{tally, Tally};
 use super::{RowLimit, Step, WalkOptions};
 use crate::graph::{memory, DenseId, GraphCsr, GraphError, RelationIndex};
+use crate::interrupts::Interrupts;
 
 /// One walk, from its start to its end.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -401,8 +402,9 @@ mod tests {
         walk, walk_paths_each, HopRange, Step, WalkMode, WalkOptions, WalkPath, WalkResult,
     };
     use crate::graph::{DenseId, GraphCsr};
+    use crate::interrupts::Uninterrupted;
     use crate::traversal::example::{directed, graph, relations};
-    use crate::traversal::{Direction, Traversed, Uninterrupted};
+    use crate::traversal::{Direction, Traversed};
 
     fn paths_of(
         graph: &GraphCsr,

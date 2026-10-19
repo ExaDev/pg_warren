@@ -15,12 +15,13 @@ use pgrx::{AnyArray, AnyElement};
 use warren_core::graph::{GraphCsr, GraphError, IdMap};
 use warren_core::traversal::{BfsCursor, Limits, NodeSet, TraversalError, Visit};
 
-use super::args::{bound, direction, relations};
-use super::ids::{dense_ids, elements, external};
-use super::interrupts::PostgresInterrupts;
+use super::args::bound;
 use super::stats::Recorder;
 use super::{entry, TraversalSqlError};
 use crate::cache::{cached, resolve, LoadedVersion};
+use crate::external_ids::{dense_ids, elements, external};
+use crate::interrupts::PostgresInterrupts;
+use crate::selection::{direction, relations};
 use crate::source::{with_id_type, IdDatum};
 
 /// A row of `warren.bfs`.

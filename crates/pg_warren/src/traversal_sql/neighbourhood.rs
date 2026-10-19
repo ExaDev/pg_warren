@@ -7,12 +7,12 @@
 use pgrx::prelude::*;
 use pgrx::AnyElement;
 use warren_core::graph::DenseId;
-use warren_core::traversal::{Adjacency, Direction, RelationSelection};
+use warren_core::traversal::{Adjacency, Direction};
 
-use super::args::{direction, relations};
-use super::ids::{element, element_widened, external};
 use super::{entry, TraversalSqlError};
 use crate::cache::{cached, resolve, LoadedVersion, Resolved};
+use crate::external_ids::{element, element_widened, external};
+use crate::selection::{adjacency, direction};
 use crate::source::{with_id_type, IdDatum};
 
 /// `warren.neighbours`: the distinct nodes one edge from `node` in
@@ -162,9 +162,8 @@ impl<'a> NodeQuery<'a> {
             false => element::<E>(self.graph, "node", node)?,
         };
         let loaded = cached::<E>(&self.resolved)?;
-        let selected = relations(&loaded.relations, self.rels.as_deref());
-        let selection = selected.as_deref().map_or(RelationSelection::All, RelationSelection::Only);
-        let adjacency = Adjacency::new(&loaded.graph, self.direction, selection)?;
+        let adjacency =
+            adjacency(&loaded.graph, &loaded.relations, self.direction, self.rels.as_deref())?;
         Ok(loaded.id_map.dense_id(&node).map(|node| f(&loaded, &adjacency, node)))
     }
 }

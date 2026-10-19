@@ -4,7 +4,10 @@
 use super::TraversalError;
 use std::iter::{FusedIterator, Peekable};
 
-use crate::graph::{AnyCsr, DenseId, GraphCsr, GraphError, Neighbours, RelationCsr, RelationIndex};
+use crate::graph::{
+    AnyCsr, DenseId, GraphCsr, GraphError, Neighbours, RelationCsr, RelationIndex,
+    RelationSelection,
+};
 
 /// Which way a traversal follows edges.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -26,15 +29,6 @@ impl Direction {
             Self::Both => Self::Both,
         }
     }
-}
-
-/// Which relations a traversal follows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RelationSelection<'a> {
-    /// Every relation.
-    All,
-    /// Only these relations; repeats are ignored.
-    Only(&'a [RelationIndex]),
 }
 
 /// The CSRs a traversal reads: the selected relations in one direction.

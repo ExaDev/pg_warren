@@ -21,6 +21,15 @@ impl RelationIndex {
     }
 }
 
+/// Which relations a traversal or compute kernel reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelationSelection<'a> {
+    /// Every relation.
+    All,
+    /// Only these relations; repeats are ignored.
+    Only(&'a [RelationIndex]),
+}
+
 /// Relation names in index order. Names are only ever appended, so a
 /// relation keeps its index in every later version of the graph.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

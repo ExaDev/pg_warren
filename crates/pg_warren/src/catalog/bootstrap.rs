@@ -66,6 +66,7 @@ CREATE TABLE warren.vectors (
     width       int  NOT NULL DEFAULT 1,
     length      bigint NOT NULL,
     created_at  timestamptz NOT NULL DEFAULT now(),
+    created_by  regrole NOT NULL,
     UNIQUE (graph_id, version_id, name)
 );
 
@@ -75,6 +76,8 @@ CREATE TABLE warren.vector_chunks (
     data      bytea NOT NULL,
     PRIMARY KEY (vector_id, chunk_no)
 );
+-- IEEE floats rarely compress, so skip pglz's attempt on every write.
+ALTER TABLE warren.vector_chunks ALTER COLUMN data SET STORAGE EXTERNAL;
 
 ALTER TABLE warren.versions
     ADD FOREIGN KEY (label_vector) REFERENCES warren.vectors;
@@ -161,7 +164,7 @@ mod tests {
                 "vector_id bigint not null, graph_id integer not null, \
                  version_id bigint not null, name text not null, dtype text not null, \
                  width integer not null, length bigint not null, \
-                 created_at timestamp with time zone not null"
+                 created_at timestamp with time zone not null, created_by regrole not null"
             )
         );
         assert_eq!(
@@ -172,12 +175,13 @@ mod tests {
     }
 
     #[pg_test]
-    fn segment_data_is_stored_external_uncompressed() -> Result<(), Error> {
+    fn segment_and_vector_data_are_stored_external_uncompressed() -> Result<(), Error> {
         let storage = Spi::get_one::<String>(
-            "SELECT attstorage::text FROM pg_attribute
-             WHERE attrelid = 'warren.segments'::regclass AND attname = 'data'",
+            "SELECT string_agg(attrelid::regclass::text || ':' || attstorage::text, ' ' ORDER BY attrelid::regclass::text)
+             FROM pg_attribute WHERE attname = 'data'
+               AND attrelid IN ('warren.segments'::regclass, 'warren.vector_chunks'::regclass)",
         )?;
-        assert_eq!(storage.as_deref(), Some("e"));
+        assert_eq!(storage.as_deref(), Some("warren.segments:e warren.vector_chunks:e"));
         Ok(())
     }
 
