@@ -44,8 +44,6 @@ The target users are teams building large, evolving knowledge systems on Postgre
 6. **SQL all the way down.** No query language and no vertex-program language. Control flow is the user's PL; per-row expressions are SQL expressions; the engine is kernels behind ordinary functions.
 7. **Small surface area.** Resist feature creep until the core is fast and boring.
 8. **Two styles over one substrate.** Vertex-centric (Pregel-style: `gather`, the library, PL/pgSQL loops) is the first-class, approachable way to write a graph computation and stays so. Sparse linear algebra is the power user's escape hatch for when that is not fast enough. Both run over the same CSR and versions, and both should make the best use of the hardware present, CPU threads now and GPUs later (§6.11). The escape hatch is Postgres-shaped as well: more `warren.*` functions over named matrices in the catalog, as vectors are now, not a matrix datatype or a new language.
-9. **Be honest about where it runs.** Meeting users where they are has a limit: managed Postgres services (RDS, Cloud SQL, Azure) load only extensions on their own allow-lists, and GPUs inside a database server are rarer still. pg_warren runs on self-hosted Postgres, containers and Kubernetes; the README says so, and on a managed service it needs the provider to adopt it.
-
 ## 3. Scope
 
 ### In scope (v1)
