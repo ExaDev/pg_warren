@@ -10,6 +10,7 @@
 mod adjacency;
 mod bfs;
 mod cancellation;
+mod components;
 mod dijkstra;
 mod error;
 mod level;
@@ -28,6 +29,7 @@ mod reference;
 pub use adjacency::{Adjacency, Direction, RelationSelection};
 pub use bfs::{bfs, Visit};
 pub use cancellation::Cancellation;
+pub use components::components;
 pub use dijkstra::{dijkstra, WeightedPath};
 pub use error::TraversalError;
 pub use limits::Limits;
