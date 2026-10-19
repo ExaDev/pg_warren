@@ -19,6 +19,17 @@ pub(crate) fn filled<T: Clone>(len: usize, value: T) -> Result<Vec<T>, GraphErro
     Ok(buffer)
 }
 
+/// Makes room for at least one more element, growing geometrically.
+pub(crate) fn reserve_one<T>(buffer: &mut Vec<T>) -> Result<(), GraphError> {
+    if buffer.len() < buffer.capacity() {
+        return Ok(());
+    }
+    let additional = buffer.len().max(1024);
+    buffer
+        .try_reserve(additional)
+        .map_err(|_| GraphError::OutOfMemory { elements: buffer.len() + additional })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -34,5 +45,12 @@ mod tests {
     #[test]
     fn filled_has_the_requested_length() {
         assert_eq!(filled(3, 7u8), Ok(vec![7, 7, 7]));
+    }
+
+    #[test]
+    fn reserve_one_grows_a_full_buffer() {
+        let mut buffer: Vec<u8> = Vec::new();
+        assert_eq!(reserve_one(&mut buffer), Ok(()));
+        assert!(buffer.capacity() > 0);
     }
 }

@@ -11,4 +11,7 @@ pub enum GraphError {
         /// The number of elements requested.
         elements: usize,
     },
+    /// A relation dictionary can hold at most 2³² relations.
+    #[error("too many relations: a graph has at most 2^32")]
+    TooManyRelations,
 }

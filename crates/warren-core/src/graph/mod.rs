@@ -4,13 +4,17 @@
 //! stable dense ids across versions, and the tombstone bitmap
 //! (DESIGN.md §5.2, §5.3).
 
+mod edge_list;
 mod error;
 mod id_map;
 mod memory;
+mod relation;
 mod tombstones;
 
+pub use edge_list::{EdgeIntake, EdgeList};
 pub use error::GraphError;
 pub use id_map::{ExternalId, IdMap};
+pub use relation::{RelationDictionary, RelationIndex};
 pub use tombstones::Tombstones;
 
 /// A dense id: a node's position in the id space of a graph (DESIGN.md §5.2).
