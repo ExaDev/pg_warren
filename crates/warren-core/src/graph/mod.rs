@@ -24,7 +24,7 @@ pub use edge_list::{EdgeIntake, EdgeList};
 pub use error::GraphError;
 pub use id_map::{ExternalId, IdMap};
 pub use relation::{RelationDictionary, RelationIndex};
-pub use segment::{CsrSegments, SegmentKind};
+pub use segment::CsrSegments;
 pub use tombstones::Tombstones;
 
 /// A dense id: a node's position in the id space of a graph (DESIGN.md §5.2).

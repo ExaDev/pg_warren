@@ -180,4 +180,10 @@ pub enum GraphError {
         /// The caller's budget in bytes.
         budget: u64,
     },
+    /// A segment header's reserved byte must be 0.
+    #[error("segment reserved byte is {found}, expected 0")]
+    SegmentReserved {
+        /// The reserved byte.
+        found: u8,
+    },
 }
