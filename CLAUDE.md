@@ -74,6 +74,16 @@ before changing code. Commands, toolchain setup and environment gotchas are in
 - `#[pg_test]` names are prefixed `pg_` in test output.
 - pgrx tests can't run as root. Use `--runas postgres --pgdata <dir owned by
   postgres>` (see CONTRIBUTING.md).
+- **Errors and panics** (DESIGN.md §6.9, §11; lessons from pgGraph):
+  - Raise SQL errors only through pgrx (`ErrorReport` or `ereport!` with a
+    standard SQLSTATE). Never call `pg_sys` error functions directly.
+  - Never `catch_unwind` around SPI or Postgres calls.
+  - Wrap interrupt checks so that a Postgres ERROR unwinds the Rust frames.
+  - No `unwrap`, `expect` or `panic!` outside tests.
+  - Every `unsafe` block carries a `// SAFETY:` comment.
+- Reserve graph-sized buffers with `try_reserve`; an allocation failure is a
+  SQL error, never an abort.
+- SPI writes need `Spi::connect_mut` + `update()`. `Spi::connect` is read-only.
 - Use pgrx `=0.19.3` (pinned). Upgrade pgrx and cargo-pgrx together, in their
   own change.
 

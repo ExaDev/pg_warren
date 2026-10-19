@@ -30,8 +30,31 @@ Targets PostgreSQL 15–18 (16 is the development baseline).
 
 ## Positioning vs prior art
 
-TODO — what pg_warren adds over pgGraph and OneSparse, and credits for ideas
-taken from them (DESIGN.md §4A).
+pg_warren is a graph index and compute engine for PostgreSQL. It derives a
+compressed-sparse-row adjacency structure from your ordinary tables and runs
+deep traversals and whole-graph linear algebra over it from SQL. It is not the
+first extension to put a CSR beside Postgres tables.
+[pgGraph](https://github.com/evokoa/pggraph) pioneered derived, rebuildable CSR
+traversal behind SQL functions, and
+[OneSparse](https://github.com/OneSparse/OneSparse) brought the GraphBLAS
+semiring model into Postgres as datatypes.
+
+pg_warren's contribution is different:
+- Every build is a versioned snapshot with a stable dense-ID space.
+- Builds are stored transactionally in ordinary tables, so they are WAL-logged,
+  replicated, and rolled back with your transaction.
+- A version can be built *inside* the transaction that changes the data and
+  measured against the current one, structurally or spectrally, before you
+  commit.
+- One CSR serves both traversal and semiring compute (with GraphBLAS operation
+  names).
+- Control flow stays in PL/pgSQL, with per-node logic written as SQL
+  expressions.
+- Contraction gives community-level computation.
+
+pg_warren takes no code from either project. Ideas adopted from them are
+credited in [NOTICE](NOTICE) and in comments where they are used; the reading
+is recorded in [docs/prior-art-notes.md](docs/prior-art-notes.md).
 
 ## Building and contributing
 
