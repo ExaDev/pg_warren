@@ -22,5 +22,9 @@ harness = false
 name = "relation_layout"
 harness = false
 
+[[bench]]
+name = "traversal"
+harness = false
+
 [lints]
 workspace = true

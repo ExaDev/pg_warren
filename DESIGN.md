@@ -684,13 +684,20 @@ Filtered traversal pushes predicates on intermediate nodes into the engine witho
 
 Implementation notes:
 - Traversal is level-synchronous BFS with frontier and next-frontier arrays (parallelisable later).
-- Per-call scratch (visited set, depth and predecessor arrays) is dense when the expected visit budget exceeds about `id_space/16` and sparse (hash or roaring) otherwise, so a small traversal on a big graph does not allocate O(N). Predecessors are stored only when the signature needs them.
+- Per-call scratch (visited set, depth and predecessor arrays) starts sparse (a hash set or map) and turns dense once it holds more than about `id_space/16` nodes, so a small traversal on a big graph does not allocate O(N) and no visit budget has to be guessed up front. Predecessors are stored only when the signature needs them.
 - Truncation is never silent. `truncated = true` is set in `warren.last_stats()`, and a `NOTICE` is raised, exactly when the scan was stopped early by `max_results` or by a GUC ceiling (for example the `paths`-mode cap, §14 item 15). Reaching the caller's own `max_depth` is the requested result, not truncation.
 - Interrupts are checked every ~64K nodes.
 - There is no OFFSET-style pagination: SRFs stream rows (holding an `Arc` to the cached version) and SQL `LIMIT` stops them. Duplicate removal (`distinct_ends`, multi-start BFS) happens before any cap is applied.
 - `shortest_path`'s bidirectional BFS finishes scanning the current level before choosing the meeting node with the minimum combined distance. Taking the first meeting node can return a non-shortest path, a bug pgGraph shipped and fixed. A differential proptest checks it against single-direction BFS.
 - `components` labels each component with its minimum dense ID, so results are deterministic and comparable across versions.
 - Defaults for caps may come from GUCs inside the SQL `DEFAULT` expression (`current_setting('warren.…', true)`).
+- Decisions made in M1 (`warren-core::traversal`, dense ids in and out):
+  - `direction` `in` and `both` read the reverse CSR and raise an error when the graph was built without one. `shortest_path` without a reverse CSR runs a forward-only BFS instead; `components` never needs one.
+  - `node_filter` applies to the nodes a traversal reaches, never to its starts: starts are always admitted at depth 0, and repeated starts count once. `reachable_set` includes the starts.
+  - `last_stats()` counts `nodes_visited` (nodes admitted or settled, starts included) and `edges_traversed` (CSR row entries scanned). Cancellation is polled on the first visited node and every 65,536th after.
+  - `shortest_path` breaks ties between meeting nodes of equal combined distance by the smallest dense ID, so its result is deterministic.
+  - `dijkstra` reads each selected relation's own CSR rather than the merged one, because the merged CSR sums the weights of an edge present in several relations and a cheapest path wants the minimum. Unweighted graphs cost 1 per edge. A negative or NaN weight raises an error when the search scans it.
+  - `components` is union–find over the forward all-relations CSR. The domain labels every dense ID; a tombstoned node has no edges and so is its own component, and the adapter leaves tombstoned nodes out of the result.
 
 ## 10. Future directions (not v1)
 

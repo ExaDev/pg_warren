@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = ["crates/warren-core", "crates/pg_warren"]
+# Needs nightly and cargo-fuzz; see fuzz/Cargo.toml.
+exclude = ["fuzz"]
 # Bare `cargo build` / `cargo test` at the root touch only the Postgres-free
 # domain crate. Use `--workspace` (lint) or `cargo pgrx test` for pg_warren.
 default-members = ["crates/warren-core"]

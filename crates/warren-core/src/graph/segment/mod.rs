@@ -176,7 +176,7 @@ pub(crate) fn decode<E: Element>(kind: SegmentKind, bytes: &[u8]) -> Result<Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{AnyCsr, EdgeList, GraphCsr, IdMap, RelationDictionary, Tombstones};
+    use crate::graph::{AnyCsr, Csr, EdgeList, GraphCsr, IdMap, RelationDictionary, Tombstones};
     use proptest::prelude::*;
 
     fn csr_example() -> AnyCsr {
@@ -238,6 +238,16 @@ mod tests {
         let mut bad = segments.offsets.clone();
         bad[8..16].copy_from_slice(&u64::MAX.to_le_bytes());
         assert!(matches!(decode_offsets(&bad), Err(GraphError::SegmentLength { .. })));
+    }
+
+    #[test]
+    fn decoding_requires_the_target_width_of_the_id_space() {
+        let wide = AnyCsr::U64(Csr::from_parts(3, vec![0, 1, 1, 1], vec![2u64], None).unwrap());
+        let segments = wide.encode().unwrap();
+        assert_eq!(
+            AnyCsr::decode(3, &segments.offsets, &segments.targets, None),
+            Err(GraphError::SegmentWidth { expected: 4, found: 8 })
+        );
     }
 
     #[test]
