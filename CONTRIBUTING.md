@@ -75,6 +75,15 @@ cd crates/pg_warren
 cargo pgrx test pg16 --runas postgres --pgdata /tmp/pgrx-pgdata
 ```
 
+`cargo pgrx test` installs the extension into the shared Postgres tree
+(`$(pg_config --pkglibdir)/pg_warren.so` and the extension SQL), so two
+checkouts or worktrees testing at once overwrite each other's build and get
+confusing failures. When several run on one machine, take a global lock:
+
+```sh
+flock /tmp/pgrx-test.lock cargo pgrx test pg16 --runas postgres --pgdata /tmp/pgrx-pgdata
+```
+
 This needs `sudo` and an existing unprivileged user (the `postgres` user that
 the Debian/Ubuntu packages create works). As root, `cargo pgrx init` against a
 system `pg_config` prints "Skipping initdb as current user is root user"; that
