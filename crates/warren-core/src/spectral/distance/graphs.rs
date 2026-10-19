@@ -66,9 +66,9 @@ pub fn align_ids<E: ExternalId, I: Interrupts>(
 }
 
 /// `other`'s CSRs in the shared ids of `alignment` (made by [`align_ids`]
-/// for `other`), charged to the budget
-/// (the edge list it is rebuilt from and the new CSRs) and polling the
-/// interrupts every 64K rows.
+/// for `other`), charged to the budget (the edge list it is rebuilt from,
+/// the new CSRs and the build's temporaries) and polling the interrupts
+/// every 64K rows.
 pub fn align_graph<E: ExternalId, I: Interrupts>(
     resources: &mut Resources<'_, I>,
     other: &GraphVersion<'_, E>,

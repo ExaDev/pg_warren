@@ -1,8 +1,8 @@
 //! Whether two versions of a graph share an id space: every dense id below
 //! both id spaces names the same external id in each (DESIGN.md §5.2, §7).
 //! Not true across a compaction, between graphs, or between sibling staged
-//! versions built from one version, which hand the same new dense ids to
-//! different nodes.
+//! versions built from one version that hand the same new dense ids to
+//! different nodes. Relations play no part.
 
 use super::VersionError;
 use crate::graph::{ExternalId, IdMap};
