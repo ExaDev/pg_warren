@@ -16,6 +16,12 @@ mod segment;
 mod source;
 mod traversal_sql;
 
+/// Library initialisation: registers the GUCs.
+#[pgrx::pg_guard]
+pub extern "C-unwind" fn _PG_init() {
+    build::define_max_build_memory();
+}
+
 /// Required by `cargo pgrx test`; must be visible at the crate root.
 #[cfg(test)]
 pub mod pg_test {

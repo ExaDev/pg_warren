@@ -8,7 +8,7 @@ use std::ptr;
 
 use pgrx::prelude::*;
 use pgrx::spi::{SpiClient, SpiCursor, SpiHeapTupleData};
-use pgrx::PgTupleDesc;
+use pgrx::{PgList, PgTupleDesc};
 
 use super::{ColumnType, SourceError};
 
@@ -37,7 +37,17 @@ pub(crate) fn source_columns<E>(name: &'static str, query: &str) -> Result<Vec<C
 where
     E: From<SourceError> + From<pgrx::spi::Error>,
 {
-    Spi::connect(|client| open_read_only(client, name, query).map(|(_, columns)| columns))
+    Spi::connect(|client| open_read_only(client, name, query).map(|opened| opened.columns))
+}
+
+/// An open read-only cursor over a source query.
+pub(crate) struct ReadOnlyCursor<'c> {
+    /// The cursor.
+    pub(crate) cursor: SpiCursor<'c>,
+    /// Its result column types.
+    pub(crate) columns: Vec<ColumnType>,
+    /// The planner's estimate of its rows; a hint, often wrong.
+    pub(crate) estimated_rows: u64,
 }
 
 /// Opens `query` as a read-only cursor under the active snapshot and
@@ -47,7 +57,7 @@ pub(crate) fn open_read_only<'c, E>(
     client: &SpiClient<'c>,
     name: &'static str,
     query: &str,
-) -> Result<(SpiCursor<'c>, Vec<ColumnType>), E>
+) -> Result<ReadOnlyCursor<'c>, E>
 where
     E: From<SourceError> + From<pgrx::spi::Error>,
 {
@@ -69,15 +79,35 @@ where
         )
     };
     // SAFETY: `portal` is the open portal just returned; its name is a
-    // NUL-terminated string and its tuple descriptor, set by PortalStart for
-    // a SELECT, lives as long as the portal.
-    let (cursor_name, columns) = unsafe {
+    // NUL-terminated string, and its tuple descriptor (set by PortalStart for
+    // a SELECT) and planned statements live as long as the portal.
+    let (cursor_name, columns, estimated_rows) = unsafe {
         (
             CStr::from_ptr((*portal).name).to_string_lossy().into_owned(),
             column_types((*portal).tupDesc),
+            estimated_rows((*portal).stmts),
         )
     };
-    Ok((client.find_cursor(&cursor_name)?, columns))
+    Ok(ReadOnlyCursor { cursor: client.find_cursor(&cursor_name)?, columns, estimated_rows })
+}
+
+/// The planner's estimate of the rows a plan returns: the top plan node's
+/// `plan_rows` (0 if there is none).
+///
+/// # Safety
+///
+/// `statements` is NULL or a valid list of `PlannedStmt`s.
+unsafe fn estimated_rows(statements: *mut pg_sys::List) -> u64 {
+    // SAFETY: the caller guarantees a valid list (or NULL, an empty list).
+    let statements = unsafe { PgList::<pg_sys::PlannedStmt>::from_pg(statements) };
+    statements
+        .head()
+        // SAFETY: list members are valid PlannedStmts; planTree may be NULL.
+        .map(|statement| unsafe { (*statement).planTree })
+        .filter(|plan| !plan.is_null())
+        // SAFETY: a non-NULL planTree is a valid Plan node. The float to
+        // integer cast saturates.
+        .map_or(0, |plan| unsafe { (*plan).plan_rows } as u64)
 }
 
 /// The column types of a tuple descriptor (none if it is NULL).

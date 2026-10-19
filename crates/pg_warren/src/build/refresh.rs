@@ -4,6 +4,7 @@
 
 use pgrx::prelude::*;
 
+use super::budget::max_build_memory;
 use super::error::BuildError;
 use super::pipeline::{build, RefreshRequest};
 use super::spi_catalog::SpiCatalog;
@@ -31,7 +32,12 @@ fn refresh_graph(name: &str, promote: bool, label: Option<&str>) -> Result<Versi
     require_owner(graph.owner, &graph.name, "refresh")?;
     graph.lock()?;
     with_pinned_snapshot(|| {
-        let request = RefreshRequest { promote, label, chunk_size: CHUNK_SIZE };
+        let request = RefreshRequest {
+            promote,
+            label,
+            chunk_size: CHUNK_SIZE,
+            memory_budget: max_build_memory(),
+        };
         build(
             &graph,
             &request,

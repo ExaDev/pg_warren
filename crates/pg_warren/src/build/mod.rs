@@ -7,6 +7,7 @@
 //! `source`, `segment` and `access`; nothing depends on it but the
 //! operations that also produce versions.
 
+mod budget;
 mod error;
 mod pipeline;
 mod refresh;
@@ -14,3 +15,5 @@ mod source;
 mod spi_catalog;
 mod spi_source;
 mod version;
+
+pub(crate) use budget::define_max_build_memory;

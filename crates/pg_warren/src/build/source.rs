@@ -22,12 +22,19 @@ pub(crate) trait SourceReader<E> {
     /// Every non-NULL external id the node query returns.
     fn node_ids(&mut self) -> Result<Vec<E>, BuildError>;
 
-    /// Passes every row of the edge query to `each`, stopping at its first
-    /// error.
-    fn edges(
-        &mut self,
-        each: &mut dyn FnMut(EdgeRow<'_, E>) -> Result<(), BuildError>,
-    ) -> Result<(), BuildError>;
+    /// Passes every row of the edge query to `sink`, stopping at its first
+    /// error, after telling it roughly how many rows to expect.
+    fn edges(&mut self, sink: &mut dyn EdgeSink<E>) -> Result<(), BuildError>;
+}
+
+/// Takes the rows of an edge query.
+pub(crate) trait EdgeSink<E> {
+    /// A hint, before the first row: about how many rows follow (for
+    /// example the planner's estimate). It may be wrong either way.
+    fn expect_rows(&mut self, rows: u64);
+
+    /// Takes one row.
+    fn row(&mut self, row: EdgeRow<'_, E>) -> Result<(), BuildError>;
 }
 
 #[cfg(test)]
@@ -43,6 +50,8 @@ pub(super) mod tests {
     pub(in crate::build) struct MemorySource {
         pub(in crate::build) nodes: Vec<i64>,
         pub(in crate::build) edges: Vec<OwnedEdgeRow>,
+        /// The row estimate to announce; the true count if `None`.
+        pub(in crate::build) estimated_rows: Option<u64>,
     }
 
     impl SourceReader<i64> for MemorySource {
@@ -50,12 +59,10 @@ pub(super) mod tests {
             Ok(self.nodes.clone())
         }
 
-        fn edges(
-            &mut self,
-            each: &mut dyn FnMut(EdgeRow<'_, i64>) -> Result<(), BuildError>,
-        ) -> Result<(), BuildError> {
+        fn edges(&mut self, sink: &mut dyn EdgeSink<i64>) -> Result<(), BuildError> {
+            sink.expect_rows(self.estimated_rows.unwrap_or(self.edges.len() as u64));
             for (source, target, relation, weight) in &self.edges {
-                each(EdgeRow {
+                sink.row(EdgeRow {
                     source: *source,
                     target: *target,
                     relation: relation.as_deref(),

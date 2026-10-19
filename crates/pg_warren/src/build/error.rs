@@ -46,11 +46,14 @@ impl SqlError for BuildError {
     }
 }
 
-/// The SQLSTATE of a graph error: out of memory, a size limit, or (when
-/// decoding) corrupt data.
+/// The SQLSTATE of a graph error: out of memory, over the build memory
+/// budget, a size limit, or (when decoding) corrupt data.
 pub(crate) fn graph_sqlstate(error: &GraphError) -> PgSqlErrorCode {
     match error {
         GraphError::OutOfMemory { .. } => PgSqlErrorCode::ERRCODE_OUT_OF_MEMORY,
+        GraphError::OffsetsOverBudget { .. } => {
+            PgSqlErrorCode::ERRCODE_CONFIGURATION_LIMIT_EXCEEDED
+        }
         GraphError::TooManyRelations
         | GraphError::IdSpaceTooLarge
         | GraphError::RelationNameTooLong => PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
