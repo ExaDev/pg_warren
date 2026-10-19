@@ -12,6 +12,7 @@ mod compute_sql;
 mod extension;
 #[cfg(any(test, feature = "pg_test"))]
 mod fixture;
+mod interrupts;
 mod segment;
 mod source;
 mod traversal_sql;

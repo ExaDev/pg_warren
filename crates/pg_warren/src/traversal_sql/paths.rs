@@ -13,10 +13,10 @@ use warren_core::traversal::{
 
 use super::args::{bound, direction, relations};
 use super::ids::{element, external_array};
-use super::interrupts::PostgresInterrupts;
 use super::stats::Recorder;
 use super::{entry, TraversalSqlError};
 use crate::cache::{cached, resolve, LoadedVersion, Resolved};
+use crate::interrupts::PostgresInterrupts;
 use crate::source::{with_id_type, IdDatum, IdType};
 
 /// `warren.reachable`: whether `target` is within `max_depth` edges of

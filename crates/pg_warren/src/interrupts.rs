@@ -1,4 +1,7 @@
-//! The `Interrupts` poll on the Postgres main thread (DESIGN.md §6.9).
+//! The Postgres adapter of `warren-core`'s `Interrupts` port: the poll
+//! traversals and compute kernels make on the main thread (DESIGN.md §6.9,
+//! §9.3). Traversal and compute bindings both use it; it depends on no
+//! other feature.
 
 use warren_core::interrupts::{Cancelled, Interrupts};
 

@@ -16,7 +16,6 @@ mod bfs;
 mod components;
 mod error;
 mod ids;
-mod interrupts;
 mod neighbourhood;
 #[cfg(any(test, feature = "pg_test"))]
 mod oracle;

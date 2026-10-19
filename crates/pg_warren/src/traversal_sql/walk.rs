@@ -13,12 +13,12 @@ use warren_core::traversal::{
 
 use super::args::bound;
 use super::ids::{dense_ids, elements, external, external_array};
-use super::interrupts::PostgresInterrupts;
 use super::stats::Recorder;
 use super::step::read_steps;
 use super::walk_rows::{max_walk_paths, DEFAULT_WALK_ROWS};
 use super::{entry, TraversalSqlError};
 use crate::cache::{cached, resolve, LoadedVersion};
+use crate::interrupts::PostgresInterrupts;
 use crate::source::{with_id_type, IdDatum};
 
 /// A row of `warren.walk`.

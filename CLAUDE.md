@@ -37,7 +37,8 @@ before changing code. Commands, toolchain setup and environment gotchas are in
      errors), `access/` (identity switches, privilege checks), `source/`
      (node/edge query columns and read-only cursors), `catalog/`,
      `segment/` (chunked persistence), `cache/` (loader), `build/`,
-     `version_sql/` (compact, diff), `traversal_sql/`, `compute_sql/`.
+     `version_sql/` (compact, diff), `interrupts` (the main-thread poll),
+     `traversal_sql/`, `compute_sql/`.
      Feature dependencies form a DAG: `access`, `source` → `catalog` →
      `segment` → `cache` → `build` → `version_sql`; never the reverse.
    - Each module's `mod.rs` doc comment states its responsibility. Add a

@@ -5,10 +5,10 @@ use pgrx::AnyElement;
 use warren_core::traversal::components as label_components;
 
 use super::ids::{check_type, external};
-use super::interrupts::PostgresInterrupts;
 use super::stats::Recorder;
 use super::{entry, TraversalSqlError};
 use crate::cache::{cached, resolve};
+use crate::interrupts::PostgresInterrupts;
 use crate::source::with_id_type;
 
 /// `warren.components`: every live node with its weakly connected
