@@ -7,6 +7,7 @@
 //! modules place SQL functions in it with `#[pg_extern(schema = "warren")]`.
 
 use pgrx::prelude::*;
+use warren_core::graph::GraphError;
 
 /// The `warren` SQL schema. Intentionally empty: it exists so pgrx creates
 /// the schema; functions live in their feature modules.
@@ -27,6 +28,21 @@ pub(crate) fn or_raise<T, E: SqlError>(result: Result<T, E>) -> T {
         Err(error) => {
             ereport!(ERROR, error.sqlstate(), error.to_string());
         }
+    }
+}
+
+/// The SQLSTATE of a graph error: out of memory, over the build memory
+/// budget, a size limit, or (when decoding) corrupt data.
+pub(crate) fn graph_sqlstate(error: &GraphError) -> PgSqlErrorCode {
+    match error {
+        GraphError::OutOfMemory { .. } => PgSqlErrorCode::ERRCODE_OUT_OF_MEMORY,
+        GraphError::OffsetsOverBudget { .. } => {
+            PgSqlErrorCode::ERRCODE_CONFIGURATION_LIMIT_EXCEEDED
+        }
+        GraphError::TooManyRelations
+        | GraphError::IdSpaceTooLarge
+        | GraphError::RelationNameTooLong => PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+        _ => PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
     }
 }
 

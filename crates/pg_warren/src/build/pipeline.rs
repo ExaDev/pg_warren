@@ -4,18 +4,15 @@
 //! logic is `warren_core::graph`'s; this module only sequences it.
 
 use warren_core::graph::{
-    AnyCsr, EdgeIntake, ExternalId, GraphCsr, IdMap, RelationCsr, RelationDictionary,
-    RelationIndex, Tombstones,
+    EdgeIntake, ExternalId, GraphCsr, IdMap, RelationDictionary, RelationIndex,
 };
 
 use super::error::BuildError;
 use super::source::{EdgeRow, EdgeSink, SourceReader};
 use super::version::Catalog;
-use crate::catalog::{GraphDefinition, VersionId, VersionStats};
-use crate::segment::{
-    csr_segment, read_segment, write_segment, CsrPart, CsrScope, Direction, SegmentStore, ID_MAP,
-    RELATION_DICTIONARY, TOMBSTONES,
-};
+use crate::cache::load_identity;
+use crate::catalog::{GraphDefinition, NewVersion, VersionId, VersionStats};
+use crate::segment::{write_version, SegmentStore};
 
 /// The name of the one relation of a graph without relations.
 const IMPLICIT_RELATION: &str = "";
@@ -43,52 +40,26 @@ pub(crate) fn build<E: ExternalId>(
     catalog: &mut impl Catalog,
 ) -> Result<VersionId, BuildError> {
     let (base, mut relations) = match graph.current_version {
-        Some(version) => base_version(segments, version)?,
+        Some(version) => load_identity(segments, version)?,
         None => (IdMap::new(), RelationDictionary::new()),
     };
     let id_map = base.rebuild(source.node_ids()?)?;
     drop(base);
     let (csr, dropped_edges) =
         adjacency(graph, &id_map, &mut relations, source, request.memory_budget)?;
-    let stats = VersionStats {
-        node_count: id_map.node_count(),
-        id_space: id_map.id_space(),
-        edge_count: csr.relations().iter().map(|r| r.forward().edge_count()).sum(),
-        dropped_edges,
-        deduplicated_edges: csr.deduplicated_edges(),
-        target_width: match csr.all_relations().forward() {
-            AnyCsr::U32(_) => 4,
-            AnyCsr::U64(_) => 8,
-        },
-    };
-    let version = catalog.insert_version(graph.graph_id, &stats, request.label)?;
-    let mut writer = SegmentWriter { segments, version, chunk_size: request.chunk_size, bytes: 0 };
-    writer.write(ID_MAP, &id_map.encode()?)?;
-    writer.write(TOMBSTONES, &id_map.tombstones().encode()?)?;
-    writer.write(RELATION_DICTIONARY, &relations.encode()?)?;
-    for (index, relation) in csr.relations().iter().enumerate() {
-        writer.write_csrs(CsrScope::Relation(index), relation)?;
-    }
-    if let Some(merged) = csr.merged() {
-        writer.write_csrs(CsrScope::Merged, merged)?;
-    }
-    catalog.record_bytes(version, writer.bytes)?;
+    let stats = VersionStats::measure(&id_map, &csr, dropped_edges, csr.deduplicated_edges());
+    let version = catalog.insert_version(&NewVersion {
+        graph_id: graph.graph_id,
+        stats,
+        label: request.label,
+        compacted_from: None,
+    })?;
+    let bytes = write_version(segments, version, &id_map, &relations, &csr, request.chunk_size)?;
+    catalog.record_bytes(version, bytes)?;
     if request.promote {
         catalog.promote(graph, version)?;
     }
     Ok(version)
-}
-
-/// The id map and relation dictionary of the version a build starts from.
-fn base_version<E: ExternalId>(
-    segments: &mut impl SegmentStore,
-    version: VersionId,
-) -> Result<(IdMap<E>, RelationDictionary), BuildError> {
-    let tombstones = Tombstones::decode(&read_segment(segments, version, TOMBSTONES)?)?;
-    let id_map = IdMap::decode(&read_segment(segments, version, ID_MAP)?, tombstones)?;
-    let relations =
-        RelationDictionary::decode(&read_segment(segments, version, RELATION_DICTIONARY)?)?;
-    Ok((id_map, relations))
 }
 
 /// Reads the edge rows into the CSRs, interning new relations. Returns the
@@ -174,45 +145,6 @@ fn relation_and_weight<E>(
         (true, None) => return Ok(None),
     };
     Ok(Some((relation, weight)))
-}
-
-/// Writes the segments of one version, counting their bytes.
-struct SegmentWriter<'s, S> {
-    segments: &'s mut S,
-    version: VersionId,
-    chunk_size: usize,
-    bytes: u64,
-}
-
-impl<S: SegmentStore> SegmentWriter<'_, S> {
-    fn write(&mut self, name: &str, bytes: &[u8]) -> Result<(), BuildError> {
-        self.bytes += write_segment(self.segments, self.version, name, bytes, self.chunk_size)?;
-        Ok(())
-    }
-
-    /// The forward and reverse CSRs of a relation, or of the merged CSR.
-    fn write_csrs(&mut self, scope: CsrScope, csrs: &RelationCsr) -> Result<(), BuildError> {
-        self.write_csr(Direction::Forward, scope, csrs.forward())?;
-        if let Some(reverse) = csrs.reverse() {
-            self.write_csr(Direction::Reverse, scope, reverse)?;
-        }
-        Ok(())
-    }
-
-    fn write_csr(
-        &mut self,
-        direction: Direction,
-        scope: CsrScope,
-        csr: &AnyCsr,
-    ) -> Result<(), BuildError> {
-        let encoded = csr.encode()?;
-        self.write(&csr_segment(direction, CsrPart::Offsets, scope), encoded.offsets())?;
-        self.write(&csr_segment(direction, CsrPart::Targets, scope), encoded.targets())?;
-        if let Some(weights) = encoded.weights() {
-            self.write(&csr_segment(direction, CsrPart::Weights, scope), weights)?;
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]

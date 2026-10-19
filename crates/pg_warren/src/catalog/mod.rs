@@ -21,6 +21,6 @@ pub(crate) use error::CatalogError;
 pub(crate) use graph::GraphDefinition;
 use graph::NewGraph;
 pub(crate) use version::{
-    current_wal_lsn, insert_version, promote_version, record_bytes, require_version, VersionId,
-    VersionStats,
+    compaction_between, current_wal_lsn, insert_version, promote_version, record_bytes,
+    require_version, version_record, NewVersion, VersionId, VersionStats,
 };

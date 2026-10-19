@@ -3,7 +3,7 @@
 
 use super::error::BuildError;
 use super::version::Catalog;
-use crate::catalog::{self, GraphDefinition, VersionId, VersionStats};
+use crate::catalog::{self, GraphDefinition, NewVersion, VersionId};
 
 /// `warren.versions` and `warren.graphs.current_version`.
 pub(crate) struct SpiCatalog {
@@ -15,18 +15,19 @@ impl SpiCatalog {
     /// A catalog whose versions record the current WAL position as
     /// `built_lsn`.
     pub(crate) fn at_current_wal_lsn() -> Result<Self, BuildError> {
-        Ok(Self { built_lsn: catalog::current_wal_lsn()? })
+        Ok(Self::at_lsn(catalog::current_wal_lsn()?))
+    }
+
+    /// A catalog whose versions record `built_lsn`: a compaction records
+    /// the LSN of the version it compacts, whose data it carries.
+    pub(crate) fn at_lsn(built_lsn: String) -> Self {
+        Self { built_lsn }
     }
 }
 
 impl Catalog for SpiCatalog {
-    fn insert_version(
-        &mut self,
-        graph_id: i32,
-        stats: &VersionStats,
-        label: Option<&str>,
-    ) -> Result<VersionId, BuildError> {
-        Ok(catalog::insert_version(graph_id, stats, label, &self.built_lsn)?)
+    fn insert_version(&mut self, version: &NewVersion<'_>) -> Result<VersionId, BuildError> {
+        Ok(catalog::insert_version(version, &self.built_lsn)?)
     }
 
     fn record_bytes(&mut self, version: VersionId, bytes: u64) -> Result<(), BuildError> {

@@ -36,7 +36,7 @@ CREATE TABLE warren.versions (
     dropped_edges bigint NOT NULL,
     deduplicated_edges bigint NOT NULL,
     target_width  smallint NOT NULL CHECK (target_width IN (4, 8)),
-    compacted_from bigint REFERENCES warren.versions,
+    compacted_from bigint REFERENCES warren.versions ON DELETE SET NULL,
     bytes        bigint NOT NULL,
     label        text,
     parent_version bigint REFERENCES warren.versions,

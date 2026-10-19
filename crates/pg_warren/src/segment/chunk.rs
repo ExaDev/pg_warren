@@ -49,6 +49,20 @@ pub(crate) fn write_segment(
     Ok(bytes.len() as u64)
 }
 
+/// The bytes of `segment`, or `None` if the version has no such segment
+/// (for example no `weights` in an unweighted graph).
+pub(crate) fn read_optional_segment(
+    store: &mut impl SegmentStore,
+    version: VersionId,
+    segment: &str,
+) -> Result<Option<Vec<u8>>, SegmentError> {
+    match read_segment(store, version, segment) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(SegmentError::SegmentMissing { .. }) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 /// The bytes of `segment`: its chunks, which must be numbered `0..n`,
 /// concatenated in order.
 pub(crate) fn read_segment(

@@ -2,10 +2,11 @@
 
 use pgrx::PgSqlErrorCode;
 use thiserror::Error;
+use warren_core::graph::GraphError;
 
 use crate::access::AccessError;
 use crate::catalog::VersionId;
-use crate::extension::SqlError;
+use crate::extension::{graph_sqlstate, SqlError};
 
 /// Why a segment could not be stored or read.
 #[derive(Debug, Error)]
@@ -34,6 +35,9 @@ pub(crate) enum SegmentError {
         /// The segment name.
         segment: String,
     },
+    /// A segment could not be encoded or decoded.
+    #[error(transparent)]
+    Graph(#[from] GraphError),
     /// The switch to the extension owner failed.
     #[error(transparent)]
     Access(#[from] AccessError),
@@ -49,6 +53,7 @@ impl SqlError for SegmentError {
                 PgSqlErrorCode::ERRCODE_DATA_CORRUPTED
             }
             Self::TooManyChunks { .. } => PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+            Self::Graph(error) => graph_sqlstate(error),
             Self::Access(error) => error.sqlstate(),
             Self::Spi(_) => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
         }

@@ -17,3 +17,9 @@ mod spi_source;
 mod version;
 
 pub(crate) use budget::define_max_build_memory;
+pub(crate) use error::BuildError;
+pub(crate) use spi_catalog::SpiCatalog;
+pub(crate) use version::Catalog;
+
+#[cfg(test)]
+pub(crate) use version::tests::MemoryCatalog;

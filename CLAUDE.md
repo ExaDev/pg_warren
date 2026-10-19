@@ -34,9 +34,10 @@ before changing code. Commands, toolchain setup and environment gotchas are in
    - `pg_warren/src/`: `extension` (schema + `warren.version()`, SQL
      errors), `access/` (identity switches, privilege checks), `source/`
      (node/edge query columns and read-only cursors), `catalog/`,
-     `segment/` (chunked persistence), `build/`, `cache/`,
-     `traversal_sql/`, `compute_sql/`. Feature dependencies form a DAG:
-     `access`, `source` → `catalog` → `segment` → `build`; never the reverse.
+     `segment/` (chunked persistence), `cache/` (loader), `build/`,
+     `version_sql/` (compact, diff), `traversal_sql/`, `compute_sql/`.
+     Feature dependencies form a DAG: `access`, `source` → `catalog` →
+     `segment` → `cache` → `build` → `version_sql`; never the reverse.
    - Each module's `mod.rs` doc comment states its responsibility. Add a
      submodule when the code exists, not before.
 4. **Ubiquitous language (from DESIGN.md).** Use these terms exactly, in code,

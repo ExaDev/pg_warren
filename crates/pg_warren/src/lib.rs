@@ -15,6 +15,7 @@ mod fixture;
 mod segment;
 mod source;
 mod traversal_sql;
+mod version_sql;
 
 /// Library initialisation: registers the GUCs.
 #[pgrx::pg_guard]

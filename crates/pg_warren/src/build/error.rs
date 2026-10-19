@@ -5,8 +5,9 @@ use thiserror::Error;
 use warren_core::graph::GraphError;
 
 use crate::access::AccessError;
+use crate::cache::LoadError;
 use crate::catalog::CatalogError;
-use crate::extension::SqlError;
+use crate::extension::{graph_sqlstate, SqlError};
 use crate::segment::SegmentError;
 use crate::source::SourceError;
 
@@ -25,6 +26,9 @@ pub(crate) enum BuildError {
     /// A segment could not be stored or read.
     #[error(transparent)]
     Segment(#[from] SegmentError),
+    /// The version a build starts from could not be loaded.
+    #[error(transparent)]
+    Load(#[from] LoadError),
     /// An SPI call failed.
     #[error(transparent)]
     Spi(#[from] pgrx::spi::Error),
@@ -40,23 +44,9 @@ impl SqlError for BuildError {
             Self::Access(error) => error.sqlstate(),
             Self::Source(error) => error.sqlstate(),
             Self::Segment(error) => error.sqlstate(),
+            Self::Load(error) => error.sqlstate(),
             Self::Spi(_) => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
             Self::Graph(error) => graph_sqlstate(error),
         }
-    }
-}
-
-/// The SQLSTATE of a graph error: out of memory, over the build memory
-/// budget, a size limit, or (when decoding) corrupt data.
-pub(crate) fn graph_sqlstate(error: &GraphError) -> PgSqlErrorCode {
-    match error {
-        GraphError::OutOfMemory { .. } => PgSqlErrorCode::ERRCODE_OUT_OF_MEMORY,
-        GraphError::OffsetsOverBudget { .. } => {
-            PgSqlErrorCode::ERRCODE_CONFIGURATION_LIMIT_EXCEEDED
-        }
-        GraphError::TooManyRelations
-        | GraphError::IdSpaceTooLarge
-        | GraphError::RelationNameTooLong => PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
-        _ => PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
     }
 }
