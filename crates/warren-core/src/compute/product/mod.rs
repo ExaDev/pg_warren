@@ -169,14 +169,14 @@ impl<I: Interrupts> Run<'_, '_, I> {
         let y = y.values_mut();
         match matrix.form() {
             Form::Pull => self.workers.run(self.interrupts, |cancellation| {
-                kernel::pull(cancellation, matrix, semiring, x, y, &write)
+                kernel::pull(semiring, cancellation, matrix, x, y, &write)
             }),
             Form::Push => {
                 let (mut sums, _sums) = self.memory.filled(y.len(), E::default())?;
                 let (mut present, _present) = self.memory.filled(x.id_space() as usize, false)?;
                 let scratch = PushScratch { sums: &mut sums, present: &mut present };
                 self.workers.run(self.interrupts, |cancellation| {
-                    kernel::push(cancellation, matrix, semiring, x, y, scratch, &write)
+                    kernel::push(semiring, cancellation, matrix, x, y, scratch, &write)
                 })
             }
         }

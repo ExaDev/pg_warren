@@ -19,11 +19,73 @@ const ROWS_PER_TASK: usize = if cfg!(test) { 3 } else { 4096 };
 /// How often the push scatter checks the cancellation flag, in rows.
 const ROWS_PER_CHECK: u64 = 1 << 16;
 
+/// A semiring's `(⊕, ⊗)` fixed at compile time, so each product's inner
+/// loop is specialised to its semiring.
+pub(super) trait Ops<E>: Sync {
+    /// `a ⊕ b`.
+    fn add(a: E, b: E) -> Result<E, ArithmeticError>;
+
+    /// `⊗(weight, value)`; the weight is cast only if `⊗` reads it.
+    fn multiply(weight: f64, value: E) -> Result<E, ArithmeticError>;
+}
+
+/// The operators `BinaryOp::ALL[ADD]` and `BinaryOp::ALL[MULTIPLY]`.
+pub(super) struct Fixed<const ADD: usize, const MULTIPLY: usize>;
+
+impl<E: SemiringElement, const ADD: usize, const MULTIPLY: usize> Ops<E> for Fixed<ADD, MULTIPLY> {
+    #[inline(always)]
+    fn add(a: E, b: E) -> Result<E, ArithmeticError> {
+        E::apply(BinaryOp::ALL[ADD], a, b)
+    }
+
+    #[inline(always)]
+    fn multiply(weight: f64, value: E) -> Result<E, ArithmeticError> {
+        let multiply = BinaryOp::ALL[MULTIPLY];
+        let weight = match multiply {
+            BinaryOp::Second | BinaryOp::Pair => E::default(),
+            _ => E::from_weight(weight)?,
+        };
+        E::apply(multiply, weight, value)
+    }
+}
+
+/// `$kernel::<$element, Fixed<⊕, ⊗>>(args)` for `$semiring`'s `⊕` and `⊗`.
+macro_rules! specialised {
+    ($semiring:expr, $kernel:ident::<$element:ty>($($arg:expr),*)) => {{
+        use BinaryOp::{Any, First, Land, Lor, Max, Min, Pair, Plus, Second, Times};
+        match $semiring {
+            Semiring::PlusTimes => $kernel::<$element, Fixed<{ Plus as usize }, { Times as usize }>>($($arg),*),
+            Semiring::MinPlus => $kernel::<$element, Fixed<{ Min as usize }, { Plus as usize }>>($($arg),*),
+            Semiring::MaxPlus => $kernel::<$element, Fixed<{ Max as usize }, { Plus as usize }>>($($arg),*),
+            Semiring::MaxTimes => $kernel::<$element, Fixed<{ Max as usize }, { Times as usize }>>($($arg),*),
+            Semiring::MinTimes => $kernel::<$element, Fixed<{ Min as usize }, { Times as usize }>>($($arg),*),
+            Semiring::LorLand => $kernel::<$element, Fixed<{ Lor as usize }, { Land as usize }>>($($arg),*),
+            Semiring::AnyPair => $kernel::<$element, Fixed<{ Any as usize }, { Pair as usize }>>($($arg),*),
+            Semiring::PlusPair => $kernel::<$element, Fixed<{ Plus as usize }, { Pair as usize }>>($($arg),*),
+            Semiring::PlusFirst => $kernel::<$element, Fixed<{ Plus as usize }, { First as usize }>>($($arg),*),
+            Semiring::PlusSecond => $kernel::<$element, Fixed<{ Plus as usize }, { Second as usize }>>($($arg),*),
+            Semiring::MinFirst => $kernel::<$element, Fixed<{ Min as usize }, { First as usize }>>($($arg),*),
+            Semiring::MinSecond => $kernel::<$element, Fixed<{ Min as usize }, { Second as usize }>>($($arg),*),
+            Semiring::MaxSecond => $kernel::<$element, Fixed<{ Max as usize }, { Second as usize }>>($($arg),*),
+        }
+    }};
+}
+
 /// `y = A ⊗ x` row by row, in parallel.
 pub(super) fn pull<E: SemiringElement>(
+    semiring: Semiring,
     cancellation: &Cancellation,
     matrix: &Matrix<'_>,
-    semiring: Semiring,
+    x: &Vector<E>,
+    y: &mut [E],
+    write: &Write<'_, E>,
+) -> Result<(), ComputeError> {
+    specialised!(semiring, pull_with::<E>(cancellation, matrix, x, y, write))
+}
+
+fn pull_with<E: SemiringElement, S: Ops<E>>(
+    cancellation: &Cancellation,
+    matrix: &Matrix<'_>,
     x: &Vector<E>,
     y: &mut [E],
     write: &Write<'_, E>,
@@ -38,11 +100,22 @@ pub(super) fn pull<E: SemiringElement>(
         for (offset, out) in rows.chunks_mut(width).enumerate() {
             let row = (task * ROWS_PER_TASK + offset) as DenseId;
             let mut present = false;
-            matrix.for_each_entry(row, &mut scratch, |column, weight| {
-                fold(semiring, &mut sum, present, weight, x.row(column))?;
-                present = true;
-                Ok(())
-            })?;
+            if width == 1 {
+                // The SpMV fast path: a scalar sum, no row slices.
+                let (values, sum) = (x.values(), &mut sum[0]);
+                matrix.for_each_entry(row, &mut scratch, |column, weight| {
+                    let product = S::multiply(weight, values[column as usize])?;
+                    *sum = if present { S::add(*sum, product)? } else { product };
+                    present = true;
+                    Ok(())
+                })?;
+            } else {
+                matrix.for_each_entry(row, &mut scratch, |column, weight| {
+                    fold::<E, S>(&mut sum, present, weight, x.row(column))?;
+                    present = true;
+                    Ok(())
+                })?;
+            }
             write.row(row, out, present.then_some(&sum))?;
         }
         Ok(())
@@ -60,9 +133,20 @@ pub(super) struct PushScratch<'s, E> {
 /// columns, in ascending row order (so each sum folds its entries in the
 /// order a pull over `Aᵀ` would), then writing every row in parallel.
 pub(super) fn push<E: SemiringElement>(
+    semiring: Semiring,
     cancellation: &Cancellation,
     matrix: &Matrix<'_>,
-    semiring: Semiring,
+    x: &Vector<E>,
+    y: &mut [E],
+    scratch: PushScratch<'_, E>,
+    write: &Write<'_, E>,
+) -> Result<(), ComputeError> {
+    specialised!(semiring, push_with::<E>(cancellation, matrix, x, y, scratch, write))
+}
+
+fn push_with<E: SemiringElement, S: Ops<E>>(
+    cancellation: &Cancellation,
+    matrix: &Matrix<'_>,
     x: &Vector<E>,
     y: &mut [E],
     scratch: PushScratch<'_, E>,
@@ -79,7 +163,7 @@ pub(super) fn push<E: SemiringElement>(
         matrix.for_each_entry(row, &mut entries, |column, weight| {
             let column = column as usize;
             let sum = &mut sums[column * width..(column + 1) * width];
-            fold(semiring, sum, present[column], weight, values)?;
+            fold::<E, S>(sum, present[column], weight, values)?;
             present[column] = true;
             Ok(())
         })?;
@@ -101,22 +185,16 @@ pub(super) fn push<E: SemiringElement>(
 
 /// `sum ⊕= ⊗(weight, values)` elementwise, or `sum = ⊗(weight, values)`
 /// for a row's first entry.
-fn fold<E: SemiringElement>(
-    semiring: Semiring,
+#[inline(always)]
+fn fold<E: SemiringElement, S: Ops<E>>(
     sum: &mut [E],
     present: bool,
     weight: f64,
     values: &[E],
 ) -> Result<(), ArithmeticError> {
-    let multiply = semiring.multiply();
-    let weight = match multiply {
-        BinaryOp::Second | BinaryOp::Pair => E::default(),
-        _ => E::from_weight(weight)?,
-    };
-    let add = semiring.add().op();
     for (sum, &value) in sum.iter_mut().zip(values) {
-        let product = E::apply(multiply, weight, value)?;
-        *sum = if present { E::apply(add, *sum, product)? } else { product };
+        let product = S::multiply(weight, value)?;
+        *sum = if present { S::add(*sum, product)? } else { product };
     }
     Ok(())
 }

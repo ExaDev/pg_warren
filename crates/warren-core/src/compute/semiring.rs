@@ -38,7 +38,8 @@ pub enum BinaryOp {
 }
 
 impl BinaryOp {
-    const ALL: [Self; 10] = [
+    /// Every operator, in declaration order: `ALL[op as usize] == op`.
+    pub(crate) const ALL: [Self; 10] = [
         Self::First,
         Self::Second,
         Self::Pair,
