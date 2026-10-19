@@ -16,6 +16,7 @@ mod error;
 mod ids;
 mod interrupts;
 mod neighbourhood;
+mod oracle;
 mod paths;
 mod stats;
 
