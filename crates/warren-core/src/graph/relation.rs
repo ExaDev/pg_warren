@@ -14,6 +14,11 @@ impl RelationIndex {
     pub fn index(self) -> usize {
         self.0 as usize
     }
+
+    /// The index at `position` in per-relation arrays.
+    pub(crate) fn at(position: usize) -> Result<Self, GraphError> {
+        u32::try_from(position).map(Self).map_err(|_| GraphError::TooManyRelations)
+    }
 }
 
 /// Relation names in index order. Names are only ever appended, so a
@@ -35,9 +40,7 @@ impl RelationDictionary {
         if let Some(&index) = self.indexes.get(name) {
             return Ok(index);
         }
-        let index = u32::try_from(self.names.len())
-            .map(RelationIndex)
-            .map_err(|_| GraphError::TooManyRelations)?;
+        let index = RelationIndex::at(self.names.len())?;
         self.names.push(name.to_owned());
         self.indexes.insert(name.to_owned(), index);
         Ok(index)

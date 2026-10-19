@@ -51,6 +51,7 @@ impl StepPlan<'_> {
 
 /// A whole walk as executed.
 pub(super) struct WalkPlan<'w> {
+    pub(super) id_space: u64,
     pub(super) steps: Vec<StepPlan<'w>>,
     /// The distinct starts, in the order given, that the first executed
     /// step may begin from.
@@ -92,7 +93,7 @@ pub(super) fn plan<'w>(
         true => steps.len().checked_sub(1).and_then(filter),
     };
     let starts = distinct_starts(id_space, starts, allowed)?;
-    Ok(WalkPlan { steps: planned, starts })
+    Ok(WalkPlan { id_space, steps: planned, starts })
 }
 
 /// `starts` without repeats or nodes outside `allowed`, in the order given.

@@ -7,10 +7,14 @@
 //! not paths: a walk may repeat nodes and edges, as a recursive CTE with a
 //! depth column does.
 
+mod count;
 mod ends;
+#[cfg(test)]
+mod example;
 mod plan;
 mod reach;
 mod step;
+mod tally;
 
 use std::ops::ControlFlow;
 
@@ -27,6 +31,8 @@ use crate::graph::{DenseId, GraphCsr};
 pub enum WalkMode {
     /// The end frontier: each node a walk ends on.
     Ends,
+    /// The number of ends, or of walks if ends are not distinct.
+    Count,
 }
 
 /// How a walk reports its result.
@@ -53,10 +59,12 @@ impl Default for WalkOptions {
 pub enum WalkResult {
     /// [`WalkMode::Ends`].
     Ends(Vec<DenseId>),
+    /// [`WalkMode::Count`].
+    Count(u64),
 }
 
 /// Walks `steps` from `starts` over `graph` and collects the result `mode`
-/// asks for. The streaming forms are [`walk_ends_each`].
+/// asks for. `options.max_results` does not apply to a count. The streaming forms are [`walk_ends_each`].
 pub fn walk(
     graph: &GraphCsr,
     starts: &[DenseId],
@@ -71,6 +79,11 @@ pub fn walk(
             let stats =
                 walk_ends_each(graph, starts, steps, options, interrupts, |end| ends.push(end))?;
             Ok(Traversed { result: WalkResult::Ends(ends.finish()?), stats })
+        }
+        WalkMode::Count => {
+            let plan = plan::plan(graph, starts, steps, options.reverse)?;
+            let counted = count::count(&plan, options.distinct_ends, interrupts)?;
+            Ok(Traversed { result: WalkResult::Count(counted.result), stats: counted.stats })
         }
     }
 }

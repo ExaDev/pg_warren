@@ -49,6 +49,9 @@ pub enum TraversalError {
         /// The most hops asked for.
         max: u32,
     },
+    /// A walk has more walks than a `u64` can count.
+    #[error("the walk has more than 2^64 - 1 walks")]
+    WalkCountOverflow,
     /// The traversal's [`Interrupts`](super::Interrupts) poll asked it to stop.
     #[error("traversal cancelled")]
     Cancelled,

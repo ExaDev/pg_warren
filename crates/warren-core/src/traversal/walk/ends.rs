@@ -6,12 +6,14 @@ use super::super::stats::Progress;
 use super::super::{Interrupts, TraversalError, TraversalStats};
 use super::plan::plan;
 use super::reach::{reach, Level, Observer, Unlabelled};
+use super::tally::tally;
 use super::{RowLimit, Step, WalkOptions};
 use crate::graph::{DenseId, GraphCsr};
 
 /// The ends of every walk along `steps` from `starts` (or, in reverse, the
 /// starts of every walk ending in `starts`), each handed to `visitor` as it
-/// is found, once each; returning [`ControlFlow::Break`] stops the walk
+/// is found: once each if `options.distinct_ends`, else once per walk,
+/// after every walk has been counted. Returning [`ControlFlow::Break`] stops the walk
 /// after that end, which is not truncation. Stopping because another end
 /// would exceed `options.max_results` is.
 pub fn walk_ends_each(
@@ -25,7 +27,18 @@ pub fn walk_ends_each(
     let plan = plan(graph, starts, steps, options.reverse)?;
     let mut progress = Progress::new(interrupts);
     let mut ends = Ends { visitor, limit: RowLimit::new(options.max_results) };
-    reach::<Unlabelled>(&plan, &mut progress, &mut ends)?;
+    match options.distinct_ends {
+        true => reach::<Unlabelled>(&plan, &mut progress, &mut ends)?,
+        false => {
+            'ends: for (node, walks) in tally(&plan, &mut progress)?.iter() {
+                for _ in 0..walks {
+                    if ends.ended(None, node)?.is_break() {
+                        break 'ends;
+                    }
+                }
+            }
+        }
+    }
     ends.limit.record(&mut progress);
     Ok(progress.finish())
 }
@@ -50,51 +63,13 @@ impl<V: FnMut(DenseId) -> ControlFlow<()>> Observer<()> for Ends<V> {
 mod tests {
     use std::ops::ControlFlow;
 
+    use super::super::example::{knowledge_graph, step, AFFILIATED_WITH, AUTHORED_BY, CITES};
     use super::super::{walk, walk_ends_each, HopRange, Step, WalkMode, WalkOptions, WalkResult};
     use crate::graph::{DenseId, GraphCsr};
-    use crate::traversal::example::{directed, graph, relations};
+    use crate::traversal::example::{directed, graph};
     use crate::traversal::{
         Direction, NodeSet, TraversalError, TraversalStats, Traversed, Uninterrupted,
     };
-
-    const CITES: usize = 0;
-    const AUTHORED_BY: usize = 1;
-    const AFFILIATED_WITH: usize = 2;
-
-    /// Papers 0–4, people 5–7, institutions 8–9.
-    /// cites: 0 → 1 → 2 → 3, 0 → 4; authored_by: 1 → 5, 2 → 6, 3 → 7,
-    /// 4 → 5; affiliated_with: 5 → 8, 6 → 9, 7 → 8.
-    fn knowledge_graph() -> GraphCsr {
-        let edges = [
-            (CITES, 0, 1),
-            (CITES, 1, 2),
-            (CITES, 2, 3),
-            (CITES, 0, 4),
-            (AUTHORED_BY, 1, 5),
-            (AUTHORED_BY, 2, 6),
-            (AUTHORED_BY, 3, 7),
-            (AUTHORED_BY, 4, 5),
-            (AFFILIATED_WITH, 5, 8),
-            (AFFILIATED_WITH, 6, 9),
-            (AFFILIATED_WITH, 7, 8),
-        ];
-        let edges: Vec<_> = edges.iter().map(|&(r, s, t)| (r, s, t, 1.0)).collect();
-        graph(10, 3, &edges, true)
-    }
-
-    pub(crate) fn step(
-        relation: Option<usize>,
-        min: u32,
-        max: u32,
-        filter: Option<&[DenseId]>,
-    ) -> Step {
-        Step {
-            relations: relation.map(|r| vec![relations(3)[r]]),
-            direction: Direction::Out,
-            filter: filter.map(|f| NodeSet::from_dense_ids(10, f.iter().copied()).unwrap()),
-            hops: HopRange::new(min, max).unwrap(),
-        }
-    }
 
     fn ends_of(
         graph: &GraphCsr,
@@ -103,7 +78,7 @@ mod tests {
         options: WalkOptions,
     ) -> Result<Traversed<Vec<DenseId>>, TraversalError> {
         let found = walk(graph, starts, steps, WalkMode::Ends, options, &mut Uninterrupted)?;
-        let WalkResult::Ends(ends) = found.result;
+        let WalkResult::Ends(ends) = found.result else { panic!("not ends: {found:?}") };
         Ok(Traversed { result: ends, stats: found.stats })
     }
 

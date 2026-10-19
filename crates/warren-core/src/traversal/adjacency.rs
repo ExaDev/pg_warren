@@ -4,7 +4,7 @@
 use super::TraversalError;
 use std::iter::{FusedIterator, Peekable};
 
-use crate::graph::{AnyCsr, DenseId, GraphCsr, Neighbours, RelationCsr, RelationIndex};
+use crate::graph::{AnyCsr, DenseId, GraphCsr, GraphError, Neighbours, RelationCsr, RelationIndex};
 
 /// Which way a traversal follows edges.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -51,6 +51,16 @@ pub struct Adjacency<'g> {
     weighted_relations: Vec<&'g RelationCsr>,
     rows: Vec<&'g AnyCsr>,
     weighted_rows: Vec<&'g AnyCsr>,
+    labelled: Vec<(RelationIndex, &'g RelationCsr)>,
+    labelled_rows: Vec<LabelledRows<'g>>,
+}
+
+/// The CSRs one relation is read from: one, or two for [`Direction::Both`].
+#[derive(Debug, Clone)]
+struct LabelledRows<'g> {
+    relation: RelationIndex,
+    first: &'g AnyCsr,
+    second: Option<&'g AnyCsr>,
 }
 
 impl<'g> Adjacency<'g> {
@@ -60,31 +70,39 @@ impl<'g> Adjacency<'g> {
         direction: Direction,
         relations: RelationSelection<'_>,
     ) -> Result<Self, TraversalError> {
-        let (relations, weighted_relations) = match relations {
+        let (relations, weighted_relations, labelled) = match relations {
             RelationSelection::All => {
                 let each = match graph.relations() {
                     [] => vec![graph.all_relations()],
                     each => each.iter().collect(),
                 };
-                (vec![graph.all_relations()], each)
+                let labelled = graph
+                    .relations()
+                    .iter()
+                    .enumerate()
+                    .map(|(position, csr)| Ok((RelationIndex::at(position)?, csr)))
+                    .collect::<Result<Vec<_>, GraphError>>()?;
+                (vec![graph.all_relations()], each, labelled)
             }
             RelationSelection::Only(indexes) => {
                 let mut indexes = indexes.to_vec();
                 indexes.sort_unstable();
                 indexes.dedup();
-                let selected = indexes
+                let labelled = indexes
                     .into_iter()
                     .map(|relation| {
                         graph
                             .relation(relation)
+                            .map(|csr| (relation, csr))
                             .ok_or(TraversalError::UnknownRelation { relation: relation.index() })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                (selected.clone(), selected)
+                let selected: Vec<_> = labelled.iter().map(|&(_, csr)| csr).collect();
+                (selected.clone(), selected, labelled)
             }
         };
         let id_space = graph.all_relations().forward().id_space();
-        Self::read(direction, id_space, relations, weighted_relations)
+        Self::read(direction, id_space, relations, weighted_relations, labelled)
     }
 
     fn read(
@@ -92,10 +110,24 @@ impl<'g> Adjacency<'g> {
         id_space: u64,
         relations: Vec<&'g RelationCsr>,
         weighted_relations: Vec<&'g RelationCsr>,
+        labelled: Vec<(RelationIndex, &'g RelationCsr)>,
     ) -> Result<Self, TraversalError> {
         let rows = scanned(&relations, direction)?;
         let weighted_rows = scanned(&weighted_relations, direction)?;
-        Ok(Self { direction, id_space, relations, weighted_relations, rows, weighted_rows })
+        let labelled_rows = labelled
+            .iter()
+            .map(|&(relation, csr)| LabelledRows::read(relation, csr, direction))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            direction,
+            id_space,
+            relations,
+            weighted_relations,
+            rows,
+            weighted_rows,
+            labelled,
+            labelled_rows,
+        })
     }
 
     /// The same relations read in the opposite direction.
@@ -105,6 +137,7 @@ impl<'g> Adjacency<'g> {
             self.id_space,
             self.relations.clone(),
             self.weighted_relations.clone(),
+            self.labelled.clone(),
         )
     }
 
@@ -138,6 +171,23 @@ impl<'g> Adjacency<'g> {
     /// Traversals use this; their visited set absorbs the repeats.
     pub(crate) fn row_entries(&self, node: DenseId) -> impl Iterator<Item = DenseId> + '_ {
         self.rows.iter().flat_map(move |csr| csr.neighbours(node))
+    }
+
+    /// The hops from `node`, relation by relation in the selection's index
+    /// order: each `(relation, neighbour)` pair once, so for
+    /// [`Direction::Both`] a neighbour linked both ways by one relation (or
+    /// by a self-loop) is one hop. Walks that report or count paths use
+    /// this; walks that only need the nodes reached use
+    /// [`Self::row_entries`].
+    pub(crate) fn labelled_neighbours(
+        &self,
+        node: DenseId,
+    ) -> impl Iterator<Item = (RelationIndex, DenseId)> + '_ {
+        self.labelled_rows.iter().flat_map(move |rows| {
+            let first = rows.first.neighbours(node).peekable();
+            let second = rows.second.map(|csr| csr.neighbours(node).peekable());
+            UnitedRow { first, second }.map(move |neighbour| (rows.relation, neighbour))
+        })
     }
 
     /// The nodes one edge away from `node` with each edge's weight (1 when
@@ -175,6 +225,47 @@ impl Iterator for DistinctNeighbours<'_> {
 }
 
 impl FusedIterator for DistinctNeighbours<'_> {}
+
+impl<'g> LabelledRows<'g> {
+    fn read(
+        relation: RelationIndex,
+        csr: &'g RelationCsr,
+        direction: Direction,
+    ) -> Result<Self, TraversalError> {
+        let reverse = || csr.reverse().ok_or(TraversalError::ReverseCsrMissing);
+        let (first, second) = match direction {
+            Direction::Out => (csr.forward(), None),
+            Direction::In => (reverse()?, None),
+            Direction::Both => (csr.forward(), Some(reverse()?)),
+        };
+        Ok(Self { relation, first, second })
+    }
+}
+
+/// One sorted row, or the ascending, distinct union of two.
+struct UnitedRow<'g> {
+    first: Peekable<Neighbours<'g>>,
+    second: Option<Peekable<Neighbours<'g>>>,
+}
+
+impl Iterator for UnitedRow<'_> {
+    type Item = DenseId;
+
+    fn next(&mut self) -> Option<DenseId> {
+        let Some(second) = &mut self.second else {
+            return self.first.next();
+        };
+        let smallest = match (self.first.peek(), second.peek()) {
+            (Some(&a), Some(&b)) => a.min(b),
+            (Some(&a), None) => a,
+            (None, Some(&b)) => b,
+            (None, None) => return None,
+        };
+        self.first.next_if_eq(&smallest);
+        second.next_if_eq(&smallest);
+        Some(smallest)
+    }
+}
 
 /// The CSRs to scan for `relations` in `direction`.
 fn scanned<'g>(
@@ -270,6 +361,37 @@ mod tests {
         assert_eq!(out.degree(1), 3);
         assert_eq!(out.neighbours(4).count(), 0);
         assert_eq!(out.degree(u64::MAX), 0);
+    }
+
+    #[test]
+    fn labelled_neighbours_name_each_hop_s_relation_once() {
+        // 0 → 1 in relations 0 and 1, 1 → 0 in relation 0, 0 → 0 in relation 1
+        let graph =
+            graph(2, 2, &[(0, 0, 1, 1.0), (1, 0, 1, 1.0), (0, 1, 0, 1.0), (1, 0, 0, 1.0)], true);
+        let r = relations(2);
+        let labelled = |direction, selection| {
+            let adjacency = Adjacency::new(&graph, direction, selection).unwrap();
+            adjacency.labelled_neighbours(0).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            labelled(Direction::Out, RelationSelection::All),
+            [(r[0], 1), (r[1], 0), (r[1], 1)]
+        );
+        assert_eq!(labelled(Direction::In, RelationSelection::All), [(r[0], 1), (r[1], 0)]);
+        assert_eq!(
+            labelled(Direction::Both, RelationSelection::All),
+            [(r[0], 1), (r[1], 0), (r[1], 1)],
+            "both directions of one relation count each neighbour once"
+        );
+        assert_eq!(
+            labelled(Direction::Both, RelationSelection::Only(&[r[1]])),
+            [(r[1], 0), (r[1], 1)]
+        );
+        let reversed = Adjacency::new(&graph, Direction::Out, RelationSelection::All)
+            .unwrap()
+            .reversed()
+            .unwrap();
+        assert_eq!(reversed.labelled_neighbours(1).collect::<Vec<_>>(), [(r[0], 0), (r[1], 0)]);
     }
 
     #[test]
