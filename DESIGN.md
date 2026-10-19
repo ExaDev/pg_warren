@@ -34,14 +34,17 @@ The target users are teams building large, evolving knowledge systems on Postgre
 
 ### Design principles
 
+**The governing principle: meet Postgres users where they already are.** People who keep their data in Postgres should get a high-performance escape valve for graph workloads without leaving Postgres and without fighting it. Their data stays in their tables, their logic stays in SQL, and their transactions, backups and replicas cover the graph as well. Each principle below is a consequence of this one. When a design choice is unclear, choose the option that asks the user to change least about how they already work. Speed comes from the engine underneath, not from moving the user somewhere else.
+
 1. **Derived, not authoritative.** The graph structure is built *from* relational tables. The tables remain the source of truth. We never have to solve concurrent mutation of a pointer-rich structure under MVCC.
 2. **Compose with SQL, don't replace it.** Traversal functions take node IDs in and return sets of node IDs out; compute functions take and return per-node vectors. Users join those back to their real tables. Postgres does what it's good at on either side; `pg_warren` does what it's good at in the middle.
-3. **One substrate, two uses.** CSR serves both as an adjacency structure for traversal and as a sparse matrix for linear algebra. Everything in the compute layer reduces to sparse-matrix × dense-vector operations, which CSR does natively.
+3. **One substrate, two uses.** CSR serves both as an adjacency structure for traversal and as a sparse matrix for linear algebra. Everything in today's compute layer reduces to sparse-matrix × dense-vector (or dense-matrix) operations, which CSR does natively; §6.11 widens this to sparse × sparse.
 4. **Versions are first-class.** A graph build is an immutable snapshot with a stable node-ID space, so builds can be compared with one another. This is what makes change detection possible.
 5. **Honest consistency semantics.** Users opt in to staleness, and the extension makes staleness observable.
 6. **SQL all the way down.** No query language and no vertex-program language. Control flow is the user's PL; per-row expressions are SQL expressions; the engine is kernels behind ordinary functions.
 7. **Small surface area.** Resist feature creep until the core is fast and boring.
-8. **Two styles over one substrate.** Vertex-centric (Pregel-style: `gather`, the library, PL/pgSQL loops) is the first-class, approachable way to write a graph computation and stays so. Sparse linear algebra is the power user's escape hatch for when that is not fast enough. Both run over the same CSR and versions, and both should make the best use of the hardware present, CPU threads now and GPUs later (§6.11).
+8. **Two styles over one substrate.** Vertex-centric (Pregel-style: `gather`, the library, PL/pgSQL loops) is the first-class, approachable way to write a graph computation and stays so. Sparse linear algebra is the power user's escape hatch for when that is not fast enough. Both run over the same CSR and versions, and both should make the best use of the hardware present, CPU threads now and GPUs later (§6.11). The escape hatch is Postgres-shaped as well: more `warren.*` functions over named matrices in the catalog, as vectors are now, not a matrix datatype or a new language.
+9. **Be honest about where it runs.** Meeting users where they are has a limit: managed Postgres services (RDS, Cloud SQL, Azure) load only extensions on their own allow-lists, and GPUs inside a database server are rarer still. pg_warren runs on self-hosted Postgres, containers and Kubernetes; the README says so, and on a managed service it needs the provider to adopt it.
 
 ## 3. Scope
 
