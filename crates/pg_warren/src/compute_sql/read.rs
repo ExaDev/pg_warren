@@ -65,7 +65,7 @@ fn open<E: IdDatum>(
 CREATE FUNCTION warren.vector_values(graph text, name text, id_type anyelement,
                                      version bigint DEFAULT NULL)
 RETURNS TABLE (node_id anyelement, value float8)
-STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'vector_values_wrapper';
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'vector_values_wrapper';
 "#
 )]
 fn vector_values(
@@ -101,7 +101,7 @@ fn vector_values(
 CREATE FUNCTION warren.matrix_rows(graph text, name text, id_type anyelement,
                                    version bigint DEFAULT NULL)
 RETURNS TABLE (node_id anyelement, "row" float8[])
-STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'matrix_rows_wrapper';
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'matrix_rows_wrapper';
 "#
 )]
 fn matrix_rows(
@@ -134,7 +134,7 @@ fn matrix_rows(
     sql = r#"
 CREATE FUNCTION warren.id_map(graph text, id_type anyelement, version bigint DEFAULT NULL)
 RETURNS TABLE (node_id anyelement, dense_id bigint, live boolean)
-STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'id_map_wrapper';
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'id_map_wrapper';
 "#
 )]
 fn id_map(
@@ -163,6 +163,7 @@ fn id_map(
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;

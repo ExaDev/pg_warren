@@ -6,11 +6,12 @@ use pgrx::JsonB;
 
 use super::{CatalogError, GraphDefinition};
 use crate::access::{as_extension_owner, entry, require_reader};
+use crate::read_only::read_one;
 
 /// `warren.info`: graph `name`'s definition, current version, staleness
 /// (`now() - built_at` of the current version), total bytes, and every
 /// version with its statistics, oldest first.
-#[pg_extern(schema = "warren", stable)]
+#[pg_extern(schema = "warren", stable, parallel_restricted)]
 fn info(name: &str) -> JsonB {
     entry(|_| describe(name))
 }
@@ -19,7 +20,7 @@ fn describe(name: &str) -> Result<JsonB, CatalogError> {
     let graph = GraphDefinition::find(name)?;
     require_reader(graph.owner, &graph.readers, &graph.name, "read")?;
     let info = as_extension_owner(|| {
-        Ok::<_, CatalogError>(Spi::get_one_with_args::<JsonB>(
+        Ok::<_, CatalogError>(read_one::<JsonB>(
             "SELECT jsonb_build_object(
                  'name', g.name, 'owner', g.owner::text, 'readers', to_jsonb(g.readers::text[]),
                  'id_type', g.id_type::text, 'search_path', g.search_path, 'directed', g.directed, 'weighted', g.weighted,
@@ -53,6 +54,7 @@ fn describe(name: &str) -> Result<JsonB, CatalogError> {
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;

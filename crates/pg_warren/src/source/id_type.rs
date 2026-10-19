@@ -134,6 +134,7 @@ macro_rules! with_id_type {
 pub(crate) use with_id_type;
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod tests {
     use super::*;
 

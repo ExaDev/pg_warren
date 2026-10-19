@@ -80,6 +80,7 @@ pub(crate) fn moved_notice(names: &[String], from: VersionId, to: VersionId) -> 
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod tests {
     use super::*;
     use crate::vector::MemoryVectorStore;

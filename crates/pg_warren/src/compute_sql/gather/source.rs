@@ -86,6 +86,7 @@ fn identifier(text: &str) -> Option<&str> {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod tests {
     use super::*;
 

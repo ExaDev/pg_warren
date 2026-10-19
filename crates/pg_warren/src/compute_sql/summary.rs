@@ -23,7 +23,7 @@ use crate::source::with_id_type;
 CREATE FUNCTION warren.vector_topk(graph text, name text, k int, id_type anyelement,
                                    descending bool DEFAULT true, version bigint DEFAULT NULL)
 RETURNS TABLE (node_id anyelement, value float8)
-STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'vector_topk_wrapper';
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'vector_topk_wrapper';
 "#
 )]
 fn vector_topk(
@@ -84,7 +84,7 @@ fn number(value: Option<f64>) -> Value {
 /// `warren.vector_stats`: `{count, min, max, mean, sd, l2, nnz}` over every
 /// element of the live rows of vector `name`. `sd` is the sample standard
 /// deviation (SQL `stddev`); undefined statistics are null.
-#[pg_extern(schema = "warren", stable, parallel_safe)]
+#[pg_extern(schema = "warren", stable, parallel_restricted)]
 fn vector_stats(
     graph: Option<&str>,
     name: Option<&str>,
@@ -113,6 +113,7 @@ fn vector_stats(
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;

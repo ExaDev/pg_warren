@@ -118,11 +118,22 @@ impl GraphDefinition {
     /// refreshes of one graph run one at a time, and re-reads its current
     /// version, which a refresh that held the lock may have changed.
     pub(crate) fn lock(&mut self) -> Result<(), CatalogError> {
+        // A row lock is a write (it assigns a transaction id): only the
+        // functions that build or drop versions take it.
         self.current_version = as_extension_owner(|| {
-            Ok::<_, CatalogError>(Spi::get_one_with_args::<i64>(
-                "SELECT current_version FROM warren.graphs WHERE graph_id = $1 FOR UPDATE",
-                &[self.graph_id.into()],
-            )?)
+            Spi::connect_mut(|client| {
+                Ok::<_, CatalogError>(
+                    client
+                        .update(
+                            "SELECT current_version FROM warren.graphs WHERE graph_id = $1
+                             FOR UPDATE",
+                            Some(1),
+                            &[self.graph_id.into()],
+                        )?
+                        .first()
+                        .get_one::<i64>()?,
+                )
+            })
         })?;
         Ok(())
     }
