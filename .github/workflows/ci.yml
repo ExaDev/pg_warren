@@ -1,0 +1,145 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUSTFLAGS: -D warnings
+  RUSTDOCFLAGS: -D warnings
+  PGRX_VERSION: 0.19.3
+
+jobs:
+  fmt:
+    name: Format (rustfmt)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  core-isolation:
+    name: warren-core has no Postgres dependency (§15.4)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo tree -p warren-core must not mention pgrx / pg-sys
+        run: |
+          set -euo pipefail
+          tree="$(cargo tree -p warren-core -e all --prefix none)"
+          if echo "$tree" | grep -E 'pgrx|pg[-_]sys'; then
+            echo "::error::warren-core depends on a Postgres crate (DESIGN.md §11, §15.4)"
+            exit 1
+          fi
+          echo "ok: warren-core is Postgres-free"
+
+  core-test:
+    name: warren-core unit + property tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: core
+      - run: cargo test -p warren-core --all-targets
+      - run: cargo test -p warren-core --doc
+
+  bench-smoke:
+    name: warren-core benches compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: bench
+      - run: cargo bench -p warren-core --no-run
+
+  lint:
+    name: Clippy + rustdoc (PG 16)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: ./.github/actions/setup-postgres
+        with:
+          pg-major: "16"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: lint
+      - name: clippy (workspace, all targets)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: clippy (pg_warren with pg_test)
+        run: cargo clippy -p pg_warren --all-targets --features pg_test -- -D warnings
+      - name: rustdoc
+        run: cargo doc --workspace --no-deps
+
+  pgrx-test:
+    name: pgrx tests (PG ${{ matrix.pg }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: ["15", "16", "17", "18"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-postgres
+        with:
+          pg-major: ${{ matrix.pg }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: pg${{ matrix.pg }}
+      - name: Cache cargo-pgrx ${{ env.PGRX_VERSION }}
+        id: cargo-pgrx-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-pgrx
+          key: cargo-pgrx-${{ env.PGRX_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Install cargo-pgrx
+        if: steps.cargo-pgrx-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-pgrx --version "$PGRX_VERSION" --locked
+      - name: Let the runner user install into the PG ${{ matrix.pg }} tree
+        run: |
+          sudo chmod a+rwx "$("$PG_CONFIG" --pkglibdir)" "$("$PG_CONFIG" --sharedir)/extension"
+      - name: cargo pgrx init
+        run: cargo pgrx init --pg${{ matrix.pg }} "$PG_CONFIG"
+      - name: cargo pgrx test pg${{ matrix.pg }}
+        working-directory: crates/pg_warren
+        run: cargo pgrx test pg${{ matrix.pg }}
+
+  docker:
+    name: Docker image builds (PG 16)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker build
+        run: docker build -f docker/Dockerfile --build-arg PG_MAJOR=16 -t pg_warren:pg16 .
+      - name: CREATE EXTENSION in the image
+        run: |
+          set -euo pipefail
+          docker run -d --name pgw -e POSTGRES_PASSWORD=postgres pg_warren:pg16
+          for _ in $(seq 1 30); do
+            docker exec pgw pg_isready -U postgres && break
+            sleep 1
+          done
+          docker exec pgw psql -U postgres -v ON_ERROR_STOP=1 \
+            -c 'CREATE EXTENSION pg_warren' -c 'SELECT warren.version()'
