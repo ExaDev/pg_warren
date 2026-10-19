@@ -8,6 +8,7 @@
 mod cast;
 mod dtype;
 mod error;
+mod gather;
 mod map;
 mod mask;
 mod memory;
@@ -23,13 +24,14 @@ mod workers;
 
 pub use dtype::{Dtype, Element};
 pub use error::{ArithmeticError, ComputeError};
+pub use gather::Combiner;
 pub use map::{
     map, AnyExpr, Arithmetic, BoolOp, Comparands, Comparison, Expr, F32Op, F64Op, Function, I64Op,
     Value,
 };
 pub use mask::Mask;
 pub use memory::{ComputeMemory, MemoryCharge};
-pub use message::{Bytes, Message, MessageBuffer, PackedBytes};
+pub use message::{Bytes, Message, MessageBuffer, MessageKind, PackedBytes};
 pub use product::{spmm, spmv, Product};
 pub use reduce::{norm_diff, reduce, Norm, Reduction};
 pub use semiring::{BinaryOp, Monoid, Semiring, SemiringElement};
