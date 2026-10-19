@@ -14,9 +14,6 @@ class Database:
     psql: str
     connection: tuple[str, ...] = ()  # psql connection options; empty means libpq's PG* environment
 
-    def named(self, name):
-        return Database(self.psql, (*self.connection, "-d", name))
-
     def command(self, *arguments):
         return [self.psql, "-X", "-q", "-v", "ON_ERROR_STOP=1", *self.connection, *arguments]
 

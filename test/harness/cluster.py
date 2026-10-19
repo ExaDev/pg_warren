@@ -48,9 +48,6 @@ class Cluster:
     def database(self, name="postgres"):
         return Database(str(self.bindir / "psql"), ("-h", str(self.directory), "-p", PORT, "-U", SUPERUSER, "-d", name))
 
-    def log(self):
-        return (self.directory / "server.log").read_text(errors="replace")
-
     def _run(self, program, *arguments):
         command = [str(self.bindir / program), *map(str, arguments)]
         if self.runas:

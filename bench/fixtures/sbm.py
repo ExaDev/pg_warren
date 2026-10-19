@@ -92,10 +92,10 @@ def fixture(rng, model, seed, relations=()):
     })
 
 
-def edges_table(name, rng, src, dst, relations, **leading):
-    """`name (…leading, src, dst [, rel])`, with `rel` drawn uniformly from
-    `relations` when there are any."""
-    columns = dict(leading, src=("bigint", src), dst=("bigint", dst))
+def edges_table(name, rng, src, dst, relations):
+    """`name (src, dst [, rel])`, with `rel` drawn uniformly from `relations`
+    when there are any."""
+    columns = dict(src=("bigint", src), dst=("bigint", dst))
     if relations:
         columns["rel"] = ("text", rng.choice(list(relations), len(src)).tolist())
     return Table.of(name, **columns)
