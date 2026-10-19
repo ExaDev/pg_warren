@@ -18,8 +18,8 @@ use super::vectors::Vectors;
 use super::{entry, ComputeSqlError};
 use crate::cache::resolve;
 use crate::interrupts::PostgresInterrupts;
+use crate::selection::relations;
 use crate::source::{with_id_type, IdDatum};
-use crate::traversal_sql::relations;
 
 /// Which product a call computes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

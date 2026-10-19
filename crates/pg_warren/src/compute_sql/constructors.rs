@@ -3,16 +3,14 @@
 
 use pgrx::prelude::*;
 use warren_core::compute::{map, AnyExpr, AnyVector, Dtype, Expr, Vector};
-use warren_core::graph::RelationSelection;
-use warren_core::traversal::Adjacency;
 
 use super::settings::workers;
 use super::vectors::Vectors;
 use super::{entry, ComputeSqlError};
 use crate::cache::resolve;
 use crate::interrupts::PostgresInterrupts;
+use crate::selection::{adjacency, direction};
 use crate::source::{with_id_type, IdDatum};
-use crate::traversal_sql::{direction, relations, TraversalSqlError};
 
 /// `value` as an expression of `dtype`: a `double precision` literal, cast
 /// as SQL casts it.
@@ -105,11 +103,8 @@ fn vector_degree(
         with_id_type!(resolved.graph.id_type, E => {
             let mut vectors = Vectors::<E>::open(resolved)?;
             let loaded = &vectors.loaded;
-            let selected = relations(&loaded.relations, rels.as_deref());
-            let selection =
-                selected.as_deref().map_or(RelationSelection::All, RelationSelection::Only);
-            let adjacency = Adjacency::new(&loaded.graph, direction, selection)
-                .map_err(TraversalSqlError::from)?;
+            let adjacency =
+                adjacency(&loaded.graph, &loaded.relations, direction, rels.as_deref())?;
             let id_space = vectors.id_space();
             let mut degrees = Vector::filled(&vectors.memory, id_space, 1, 0i64)?;
             for (node, degree) in (0..).zip(degrees.values_mut()) {

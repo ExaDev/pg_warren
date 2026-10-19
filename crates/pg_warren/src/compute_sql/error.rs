@@ -8,7 +8,8 @@ use warren_core::compute::{ArithmeticError, ComputeError};
 use crate::access::{self, AccessError, SqlError};
 use crate::cache::{CacheError, LoadError};
 use crate::catalog::{CatalogError, VersionId};
-use crate::traversal_sql::TraversalSqlError;
+use crate::external_ids::ExternalIdError;
+use crate::selection::SelectionError;
 use crate::vector::VectorError;
 
 /// Why a compute function could not answer.
@@ -60,9 +61,12 @@ pub(crate) enum ComputeSqlError {
     /// A vector could not be stored or read.
     #[error(transparent)]
     Vector(#[from] VectorError),
-    /// An id argument or relation did not fit the graph.
+    /// An id argument did not fit the graph.
     #[error(transparent)]
-    Traversal(#[from] TraversalSqlError),
+    ExternalId(#[from] ExternalIdError),
+    /// The direction or relations could not be selected.
+    #[error(transparent)]
+    Selection(#[from] SelectionError),
     /// A query does not fit.
     #[error(transparent)]
     Source(#[from] crate::source::SourceError),
@@ -96,7 +100,8 @@ impl SqlError for ComputeSqlError {
             Self::Catalog(error) => error.sqlstate(),
             Self::Cache(error) => error.sqlstate(),
             Self::Vector(error) => error.sqlstate(),
-            Self::Traversal(error) => error.sqlstate(),
+            Self::ExternalId(error) => error.sqlstate(),
+            Self::Selection(error) => error.sqlstate(),
             Self::Source(error) => error.sqlstate(),
             Self::Compute(error) => compute_sqlstate(error),
             Self::Spi(_) => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,

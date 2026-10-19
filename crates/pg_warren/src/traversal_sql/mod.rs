@@ -8,8 +8,8 @@
 //! Each call opens its version through `cache` (reader check, current
 //! version re-read), maps external ids to dense ids, delegates to
 //! `warren_core::traversal` with a main-thread interrupt poll, and maps the
-//! result back. Depends on `cache`, `catalog`, `interrupts` and `source`;
-//! `compute_sql` reuses its id and argument helpers.
+//! result back. Depends on `cache`, `catalog`, `external_ids`,
+//! `interrupts`, `selection` and `source`; nothing depends on it.
 
 mod args;
 mod bfs;
@@ -25,7 +25,5 @@ mod step;
 mod walk;
 mod walk_rows;
 
-pub(crate) use args::{direction, relations};
 pub(crate) use error::{entry, TraversalSqlError};
-pub(crate) use ids::{check_type, external};
 pub(crate) use walk_rows::define_max_walk_paths;

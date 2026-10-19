@@ -38,11 +38,14 @@ before changing code. Commands, toolchain setup and environment gotchas are in
      (node/edge query columns and read-only cursors), `catalog/`,
      `segment/` (chunked persistence), `cache/` (loader), `build/`,
      `version_sql/` (compact, diff), `interrupts` (the main-thread poll),
-     `traversal_sql/`, `vector/` (persistence and cache of named vectors),
-     `compute_sql/`.
+     `external_ids/` (id arguments ↔ dense ids), `selection/` (direction and
+     relations), `traversal_sql/`, `vector/` (persistence and cache of named
+     vectors), `compute_sql/`.
      Feature dependencies form a DAG: `access`, `source` → `catalog` →
-     `segment` → `vector` → `cache` → `build` → `version_sql`, and `cache`,
-     `interrupts` → `traversal_sql` → `compute_sql`; never the reverse.
+     `segment` → `vector` → `cache` → `build` → `version_sql`; `cache` →
+     `external_ids`, `selection`; and `external_ids`, `selection`,
+     `interrupts` → `traversal_sql`, `compute_sql` (siblings: neither depends
+     on the other); never the reverse.
    - Each module's `mod.rs` doc comment states its responsibility. Add a
      submodule when the code exists, not before.
 4. **Ubiquitous language (from DESIGN.md).** Use these terms exactly, in code,

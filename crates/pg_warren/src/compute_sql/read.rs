@@ -16,8 +16,8 @@ use warren_core::graph::DenseId;
 use super::vectors::Vectors;
 use super::{entry, ComputeSqlError};
 use crate::cache::{resolve, LoadedVersion};
+use crate::external_ids::{check_type, external};
 use crate::source::{with_id_type, IdDatum};
-use crate::traversal_sql::{check_type, external};
 
 /// Element `index` of `vector` as a `double precision`.
 pub(super) fn element(vector: &AnyVector, index: usize) -> f64 {

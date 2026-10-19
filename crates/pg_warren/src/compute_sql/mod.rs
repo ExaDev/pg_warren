@@ -9,9 +9,8 @@
 //! re-read), reads and writes the vectors bound to it through `vector`,
 //! and runs `warren_core::compute` kernels on the compute pool with a
 //! main-thread interrupt poll, within a fresh `warren.max_compute_memory`
-//! budget. Depends on `access`, `cache`, `catalog`, `interrupts`, `vector`,
-//! `source` and the id and argument helpers of `traversal_sql`; nothing
-//! depends on it.
+//! budget. Depends on `access`, `cache`, `catalog`, `external_ids`,
+//! `interrupts`, `selection`, `source` and `vector`; nothing depends on it.
 
 mod constructors;
 mod drop;
