@@ -5,8 +5,12 @@
 //! Every buffer a kernel allocates is charged to a [`ComputeMemory`]
 //! budget, the domain side of the `warren.max_compute_memory` GUC.
 
+mod dtype;
 mod error;
 mod memory;
+mod vector;
 
+pub use dtype::{Dtype, Element};
 pub use error::ComputeError;
 pub use memory::{ComputeMemory, MemoryCharge};
+pub use vector::{AnyVector, Vector};

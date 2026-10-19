@@ -2,6 +2,7 @@
 //! is charged to it, and a charge past its limit is an error rather than an
 //! out-of-memory abort (DESIGN.md §6.9, `warren.max_compute_memory`).
 
+use std::mem::size_of;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -47,6 +48,30 @@ impl ComputeMemory {
                 limit: budget.limit,
             })?;
         Ok(MemoryCharge { memory: self.clone(), bytes })
+    }
+}
+
+impl ComputeMemory {
+    /// Charges the bytes of `len` elements of `E`.
+    pub(crate) fn charge_elements<E>(&self, len: usize) -> Result<MemoryCharge, ComputeError> {
+        let bytes = (len as u64).saturating_mul(size_of::<E>() as u64);
+        self.charge(bytes)
+    }
+
+    /// `len` copies of `value` in a buffer reserved with `try_reserve` and
+    /// charged to the budget before it is allocated.
+    pub(crate) fn filled<E: Clone>(
+        &self,
+        len: usize,
+        value: E,
+    ) -> Result<(Vec<E>, MemoryCharge), ComputeError> {
+        let charge = self.charge_elements::<E>(len)?;
+        let mut buffer = Vec::new();
+        buffer
+            .try_reserve_exact(len)
+            .map_err(|_| ComputeError::OutOfMemory { bytes: charge.bytes() })?;
+        buffer.resize(len, value);
+        Ok((buffer, charge))
     }
 }
 
@@ -101,5 +126,20 @@ mod tests {
         let _held = memory.clone().charge(10).unwrap();
         assert_eq!(memory.in_use(), 10);
         assert!(memory.charge(1).is_err());
+    }
+
+    #[test]
+    fn a_buffer_is_charged_before_it_is_allocated() {
+        let memory = ComputeMemory::new(64);
+        let (buffer, charge) = memory.filled(8, 1u64).unwrap();
+        assert_eq!(buffer, [1; 8]);
+        assert_eq!(charge.bytes(), 64);
+        assert!(matches!(memory.filled(1, 0u8), Err(ComputeError::MemoryLimit { .. })));
+        let unlimited = ComputeMemory::new(u64::MAX);
+        assert_eq!(
+            unlimited.filled(usize::MAX / 2, 0u64).unwrap_err(),
+            ComputeError::OutOfMemory { bytes: u64::MAX }
+        );
+        assert_eq!(unlimited.in_use(), 0);
     }
 }

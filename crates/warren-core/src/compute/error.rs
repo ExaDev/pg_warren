@@ -17,4 +17,24 @@ pub enum ComputeError {
         /// The budget's limit in bytes.
         limit: u64,
     },
+    /// The allocator could not provide a buffer, or its size overflows.
+    #[error("out of memory allocating {bytes} bytes")]
+    OutOfMemory {
+        /// The bytes requested (saturated at 2⁶⁴ − 1).
+        bytes: u64,
+    },
+    /// A dtype name is not one of `f32`, `f64`, `i64`, `bool`.
+    #[error("unknown dtype \"{0}\": expected f32, f64, i64 or bool")]
+    UnknownDtype(String),
+    /// A vector needs at least one element per row.
+    #[error("a vector's width must be at least 1")]
+    ZeroWidth,
+    /// A vector's values must fill `id_space × width` elements.
+    #[error("vector has {found} values, expected {expected}")]
+    VectorLength {
+        /// `id_space × width`.
+        expected: u64,
+        /// The number of values given.
+        found: u64,
+    },
 }
