@@ -89,8 +89,8 @@ impl<E: ExternalId> IdMap<E> {
         externals.sort_unstable();
         externals.dedup();
         let mut by_external = memory::with_capacity(self.by_external.len() + externals.len())?;
-        let mut fresh = Vec::new();
-        let mut tombstones = self.tombstones.clone();
+        let mut fresh = memory::with_capacity(externals.len())?;
+        let mut tombstones = self.tombstones.try_clone()?;
         let mut next_dense = self.id_space();
         let mut previous = self.by_external.iter().peekable();
         let mut current = externals.into_iter().peekable();
@@ -156,10 +156,11 @@ impl<E: ExternalId> IdMap<E> {
                 _ => return Err(GraphError::IdMapNotPermutation),
             }
         }
-        let by_dense = by_dense
-            .into_iter()
-            .collect::<Option<Vec<E>>>()
-            .ok_or(GraphError::IdMapNotPermutation)?;
+        let mut dense_to_external = memory::with_capacity(by_dense.len())?;
+        for external in by_dense {
+            dense_to_external.push(external.ok_or(GraphError::IdMapNotPermutation)?);
+        }
+        let by_dense = dense_to_external;
         Ok(Self { by_external, by_dense, tombstones })
     }
 

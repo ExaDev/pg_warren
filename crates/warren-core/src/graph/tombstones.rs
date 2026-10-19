@@ -18,6 +18,13 @@ impl Tombstones {
         Ok(Self { id_space, words: memory::filled(word_count(id_space), 0)? })
     }
 
+    /// A copy of the bitmap, failing rather than aborting if memory is short.
+    pub(crate) fn try_clone(&self) -> Result<Self, GraphError> {
+        let mut words = memory::with_capacity(self.words.len())?;
+        words.extend_from_slice(&self.words);
+        Ok(Self { id_space: self.id_space, words })
+    }
+
     /// The number of dense ids the bitmap covers.
     pub fn id_space(&self) -> u64 {
         self.id_space
@@ -128,6 +135,13 @@ mod tests {
         tombstones.insert(3);
         assert!(!tombstones.contains(3));
         assert_eq!(tombstones.count(), 0);
+    }
+
+    #[test]
+    fn a_fallible_clone_equals_the_original() {
+        let mut tombstones = Tombstones::new(70).unwrap();
+        tombstones.insert(69);
+        assert_eq!(tombstones.try_clone(), Ok(tombstones));
     }
 
     #[test]
