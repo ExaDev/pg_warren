@@ -3,4 +3,5 @@
 # numpy's Generator streams may change between numpy releases.
 numpy==2.5.3
 networkx==3.7
+scipy==1.18.1  # networkx.pagerank
 pytest==9.1.1
