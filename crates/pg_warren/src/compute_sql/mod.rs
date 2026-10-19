@@ -3,7 +3,7 @@
 //! `vector_dense_id`, `vector_values`, `matrix_rows`, `vector_topk`,
 //! `vector_stats`, `id_map`, `drop_vector`), semiring products (`spmv`,
 //! `spmm`), `vector_map` with `explain_map`, `vector_reduce` and
-//! `vector_norm_diff`, and the compute GUCs.
+//! `vector_norm_diff`, `gather`, and the compute GUCs.
 //!
 //! Each call opens a version through `cache` (reader check, current version
 //! re-read), reads and writes the vectors bound to it through `vector`,
