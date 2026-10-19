@@ -38,8 +38,10 @@ before changing code. Commands, toolchain setup and environment gotchas are in
 4. **Ubiquitous language (from DESIGN.md).** Use these terms exactly, in code,
    tests and docs: *graph, version (staged / promoted / current), dense id,
    external id, id map, id space, tombstone, segment, chunk, relation, CSR
-   (offsets / targets / weights, forward / reverse), frontier, step, walk,
-   vector, matrix, semiring, message, combiner, gather, label.* Don't invent
+   (offsets / targets / weights, forward / reverse / merged), frontier, step,
+   walk, vector, matrix, semiring, message, combiner, gather, label,
+   dropped edges, deduplicated edges.* *Merged* means only the all-relations
+   CSR; parallel edges folded at build time are *deduplicated*. Don't invent
    synonyms ("node index", "snapshot id", "edge type"). Don't use "version"
    for anything except a graph version or a software version, and say which.
 5. **Small, focused files and functions. No dead code**: nothing unused,
@@ -75,18 +77,18 @@ before changing code. Commands, toolchain setup and environment gotchas are in
   schema outside the extension, and the script's `CREATE SCHEMA IF NOT EXISTS`
   then fails with "schema warren is not a member of extension"
   (CVE-2022-2625 hardening).
-- `#[pg_test]` names are prefixed `pg_` in test output. Clippy does not see
-  them as tests, so they return `Result<(), pgrx::spi::Error>` and use `?`
-  rather than `unwrap`.
-- pgrx tests can't run as root. Use `--runas postgres --pgdata <dir owned by
-  postgres>` (see CONTRIBUTING.md).
+- `#[pg_test]` names are prefixed `pg_` in test output. Running them as root
+  (`--runas`) and their `Result` return convention are covered in
+  CONTRIBUTING.md.
 - **Errors and panics** (DESIGN.md §6.9, §11; lessons from pgGraph):
   - Raise SQL errors only through pgrx (`ErrorReport` or `ereport!` with a
     standard SQLSTATE). Never call `pg_sys` error functions directly.
   - Never `catch_unwind` around SPI or Postgres calls.
-  - Wrap interrupt checks so that a Postgres ERROR unwinds the Rust frames.
-  - No `unwrap`, `expect` or `panic!` outside tests.
-  - Every `unsafe` block carries a `// SAFETY:` comment.
+  - Use `pgrx::check_for_interrupts!()`. pgrx's `pg_sys` FFI is
+    `#[pg_guard]`ed, so an ERROR unwinds the Rust frames. Never call unguarded
+    FFI.
+  - `unwrap`/`expect`/`panic!` and undocumented `unsafe` are lint errors
+    (policy in CONTRIBUTING.md "Lints").
 - Reserve graph-sized buffers with `try_reserve`; an allocation failure is a
   SQL error, never an abort.
 - SPI writes need `Spi::connect_mut` + `update()`. `Spi::connect` is read-only.

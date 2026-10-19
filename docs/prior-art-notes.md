@@ -1,4 +1,4 @@
-# Prior-art notes (DESIGN.MD §4A)
+# Prior-art notes (DESIGN.md §4A)
 
 Mandatory pre-M1 reading, done October 2026. Source code was read only; none of it was built or run, and no code was copied into this repository.
 
@@ -157,23 +157,24 @@ These were found by reading only, not confirmed by running.
 
 ## 3. Concrete recommendations for pg_warren
 
+*These are the proposals as written at reading time. DESIGN.md v0.6 is authoritative wherever they differ; for example, the interrupt wrapper, the cache-allocator rationale, the column name `deduplicated_edges` and the access model were all revised in review.*
+
 ### 3.1 pgrx patterns to copy (paraphrased, not copied)
 
 1. **Pin the toolchain exactly.** `pgrx = "=0.19.1"`, `pgrx-tests = "=0.19.1"` (re-check the latest 0.19.x at M0; this is what pgGraph ships against PG14–18), plus `rust-toolchain.toml`. Use features `pg15`…`pg18` with `default = ["pg17"]`, and build per major with `--no-default-features --features pgNN`. Set `panic = "unwind"` in all profiles.
 2. **Run CI against distro Postgres.** Install `postgresql-NN` and `postgresql-server-dev-NN` from apt.postgresql.org, run `cargo pgrx init --pgNN=/usr/lib/postgresql/NN/bin/pg_config` for each major, and `cargo install cargo-pgrx --version <pin> --locked`. Run `cargo pgrx test pgNN` with `RUST_TEST_THREADS=1`. This is faster than letting pgrx compile Postgres.
 3. **Lints.** `unsafe_op_in_unsafe_fn = "deny"`, `clippy::undocumented_unsafe_blocks = "deny"`, and deny `unwrap_used`/`expect_used`/`panic` outside `cfg(test)`. Run Miri on `warren-core`'s unsafe slice code.
 4. **One error path.** Use a `WarrenError` enum with `fn report(self) -> !` that builds a pgrx `ErrorReport` with a standard SQLSTATE plus DETAIL/HINT. Never call `pg_sys::errfinish`/`elog` directly, and never `catch_unwind` around SPI.
-5. **Interrupts.** On the main thread, between kernel chunks, call `pgrx::check_for_interrupts!()` inside a `PgTryBuilder` wrapper that turns the longjmp into `resume_unwind`, so destructors and `RefCell` borrows release before Postgres handles the error. Worker threads check only the atomic cancel flag (as §6.9 already says).
+5. **Interrupts.** On the main thread, between kernel chunks, call `pgrx::check_for_interrupts!()`. pgrx's `pg_sys` FFI is `#[pg_guard]`ed, so an ERROR unwinds the Rust frames; never call unguarded FFI. pgGraph's extra `PgTryBuilder` → `resume_unwind` wrapper is not needed. Worker threads check only the atomic cancel flag (as §6.9 already says).
 6. **Fallible allocation.** Call `try_reserve`/`try_reserve_exact` on every graph-sized buffer and map failures to a `53200 out_of_memory` error accounted against `warren.max_compute_memory`.
 7. **Pin one snapshot for a refresh.**
    ```text
-   PgTryBuilder::new(|| {
-       CommandCounterIncrement();                              // see own earlier writes
-       PushActiveSnapshot(GetTransactionSnapshot());
-       let nodes = SPI_cursor_open_with_args(.., read_only = true, ..);
-       let edges = SPI_cursor_open_with_args(.., read_only = true, ..);
-       ... stream both ...
-   }).finally(|| PopActiveSnapshot()).execute()
+   CommandCounterIncrement();                              // see own earlier writes
+   PushActiveSnapshot(GetTransactionSnapshot());
+   let nodes = SPI_cursor_open_with_args(.., read_only = true, ..);
+   let edges = SPI_cursor_open_with_args(.., read_only = true, ..);
+   ... stream both ...
+   PopActiveSnapshot();                                    // on error, (sub)xact abort releases it
    ```
    Under READ COMMITTED, separate non-read-only SPI statements each take a fresh snapshot, which would make `node_query` and `edge_query` inconsistent. Writes to `warren.segments` then go through `Spi::connect_mut` + `update()`.
 8. **GUC-backed defaults in the SQL signature.** For example, `max_results default!(Option<i64>, "NULLIF(current_setting('warren.max_results', true), '')::bigint")` lets an operator change defaults without a new release.
@@ -185,18 +186,18 @@ These were found by reading only, not confirmed by running.
 - **Reverse CSR by transpose, not by a second sort.** Build the reverse CSR from the finished forward CSR with a counting-sort transpose: count in-degrees, prefix-sum, scatter while scanning sources in order. Rows come out sorted by source, and the extra pass is O(N+M).
 - **Forward CSR without a comparison sort.** Dense IDs are known before edges are read, so `warren-core` can do: remap → counting sort by `src` → per-row sort of `(rel, dst)` → deduplicate within the row. The tuplesort FFI (not wrapped by pgrx) is then not needed for v1; add an external-run spill only if the M2 memory measurements require it. Peak memory at 100M weighted edges is about 1.8 GB for the edge list plus 1.2 GB forward; the edge list is freed before the transpose.
 - **ID remapping in Rust.** Resolve IDs by binary search or a hash over the typed `id_map`. Avoid text keys and SQL joins: pgGraph's text-keyed join resolution runs at about 100K edges/s, and §12's target (100M edges in under 8 min) needs at least 2× that.
-- **Count everything dropped.** `dropped_edges` covers unknown endpoints and NULL endpoints; add `merged_edges` for parallel edges folded by dedup.
+- **Count everything dropped.** `dropped_edges` covers unknown endpoints and NULL endpoints; add `deduplicated_edges` for parallel edges folded by dedup.
 - **Bidirectional BFS:** finish the level, then pick the meeting node with the minimum combined distance. Add a differential proptest against single-direction BFS.
 - **Adaptive per-call scratch:** dense visited/parent/depth arrays when the expected visit budget exceeds about `id_space/16`, otherwise sparse (hash or roaring).
 - **Breakers must be visible.** When `max_results`/`max_depth` truncates, set `truncated = true` in `warren.last_stats()` and raise a `NOTICE`. Never truncate silently.
 - **No OFFSET pagination.** Stream from the SRF and let SQL `LIMIT` stop it. The SRF iterator holds an `Arc` to the cached version, so a concurrent `warren.evict` cannot invalidate it.
 - **Canonical component IDs.** After union-find, relabel each component to its minimum dense ID, so results are deterministic and comparable across versions (pgGraph's union-find roots are not; `connected_components.rs:3-14`).
 - **Validate segments on load.** Check monotonic offsets, final offset = M, targets < `id_space`, and alignment before forming slices (O(N+M), cheap next to a detoast). Add a `cargo fuzz` target for the segment decoder.
-- **Cache memory.** Use the Rust allocator (or an anonymous mapping for page alignment), **not** `TopMemoryContext`. `palloc` caps a single chunk at 1 GB (`MaxAllocSize`), the forward `targets` of a 100M-edge graph is 0.4–0.8 GB and grows past 1 GB, and memory reached from worker threads should not be palloc-owned.
+- **Cache memory.** Use the Rust allocator (or an anonymous mapping for page alignment), **not** `TopMemoryContext`. Compute worker threads read these buffers, `Arc` ownership makes eviction during a scan safe, and the Rust allocator gives explicit alignment control.
 - **Direction-optimising BFS** (push/pull switch when the frontier exceeds about N/20 and reverse CSR exists) for `reachable_set` and `components`. This is how GraphBLAS reaches multi-GTEPS; schedule it in M7 rather than M1.
 - **Security:** follow REFRESH MATERIALIZED VIEW semantics. `refresh` runs the stored `node_query`/`edge_query` as the **graph owner** (`SetUserIdAndSecContext`), never as a SECURITY DEFINER extension owner. Traversal functions require a graph-level privilege, because topology can leak past source-table RLS. pgGraph spent many commits (`a9d18b5`, `e186df9`, `63f768d`, `f69771c`) on definer and ACL holes.
 
-### 3.3 DESIGN.MD sections that should change (proposed wording)
+### 3.3 DESIGN.md sections that should change (proposed wording)
 
 1. **§4A table, pgGraph row, "What it is" and "Divergence"**. Append to "What it is":
    > "1.2.1 also ships bounded GQL/openCypher profiles (`graph.gql`, `graph.cypher`), trigger-based sync into backend-local overlays, RLS/tenant-scoped results, union-find components and integer-weighted Dijkstra."
@@ -222,7 +223,7 @@ These were found by reading only, not confirmed by running.
    > "Push one snapshot for the whole build (`CommandCounterIncrement` then `PushActiveSnapshot(GetTransactionSnapshot())`) and run `node_query` and `edge_query` as read-only SPI cursors under it, executing them with the graph owner's privileges. No locks are taken on source tables."
 
    In steps 2–4 replace "stream … into a `tuplesort`" / "Tuplesort on `(rel, src, dst)`" with:
-   > "counting-sort by dense `src` in `warren-core`, then sort and deduplicate each row by `(rel, dst)`; NULL or unknown endpoints are counted in `dropped_edges`, merged parallel edges in a new `merged_edges` column."
+   > "counting-sort by dense `src` in `warren-core`, then sort and deduplicate each row by `(rel, dst)`; NULL or unknown endpoints are counted in `dropped_edges`, deduplicated parallel edges in a new `deduplicated_edges` column."
 
    And replace "Repeat sorted on `(rel, dst, src)` for reverse CSR" with:
    > "Build the reverse CSR by transposing the forward CSR (counting sort over targets, O(N+M), rows emerge sorted)."
@@ -268,7 +269,7 @@ These were found by reading only, not confirmed by running.
     > "pgGraph evidence (§4A notes): its file artifacts are now copied and validated on every load anyway, needed MVCC catalog publication bolted on later, and lack standby support. Keep `bytea`. Measure cold load in M2 and revisit only if below ~300 MB/s. Linux sealed-memfd sharing is an alternative to DSM for v1.1."
 
 15. **§14 item 4.** Append:
-    > "Record merged duplicates in `versions.merged_edges`. pgGraph keeps duplicates only because it returns edge identities, which pg_warren does not."
+    > "Record deduplicated parallel edges in `versions.deduplicated_edges`. pgGraph keeps duplicates only because it returns edge identities, which pg_warren does not."
 
 16. **§14 item 16.** Mark done:
     > "Done 2026-10: see `docs/prior-art-notes.md` (pgGraph `b0f53df`, OneSparse `79a57cd`). Sections changed: §4A, §5.1, §5.3, §5.4, §5.5, §6.3, §6.9, §7, §9.3, §11, §12, §13, §14 items 2 and 4."
