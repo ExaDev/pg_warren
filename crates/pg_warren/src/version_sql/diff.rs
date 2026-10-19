@@ -18,7 +18,7 @@ use crate::source::with_id_type;
 /// relation and over all relations, and the shift of the out- and in-degree
 /// distributions. Refused across a compaction boundary. Owners and readers
 /// may call it.
-#[pg_extern(schema = "warren", stable)]
+#[pg_extern(schema = "warren", stable, parallel_restricted)]
 fn diff(name: &str, v1: i64, v2: i64) -> JsonB {
     entry(|_| diff_versions(name, v1, v2))
 }

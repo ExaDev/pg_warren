@@ -10,6 +10,7 @@ use warren_core::compute::Dtype;
 use super::{Binding, ChunkSource, ChunkVisitor, VectorError, VectorId, VectorRecord, VectorStore};
 use crate::access::as_extension_owner;
 use crate::catalog::VersionId;
+use crate::read_only::read_one;
 
 /// `warren.vectors` and `warren.vector_chunks`.
 pub(crate) struct SpiVectorStore;
@@ -177,7 +178,7 @@ impl VectorStore for SpiVectorStore {
         }
         as_extension_owner(|| {
             Ok::<_, VectorError>(
-                Spi::get_one_with_args::<Vec<VectorId>>(
+                read_one::<Vec<VectorId>>(
                     "SELECT coalesce(array_agg(vector_id), '{}') FROM warren.vectors
                      WHERE vector_id = ANY ($1)",
                     &[vectors.to_vec().into()],
