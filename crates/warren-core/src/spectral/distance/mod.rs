@@ -9,10 +9,12 @@
 mod degree;
 mod edit;
 mod eigenvalues;
+mod embedding;
 mod rows;
 mod subspace;
 
 pub use degree::{degree_distance, DegreeDistance};
 pub use edit::{edit_distance, EdgeSetChange, EditDistance};
 pub use eigenvalues::{spectral_distance, SpectralDistance};
+pub use embedding::{embedding_distance, EmbeddingDistance};
 pub use subspace::{subspace_distance, SubspaceDistance};
