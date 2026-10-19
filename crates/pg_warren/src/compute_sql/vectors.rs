@@ -11,6 +11,7 @@ use warren_core::graph::Tombstones;
 
 use super::settings::compute_memory;
 use super::ComputeSqlError;
+use crate::access::require_creator_or_owner;
 use crate::cache::{cached, LoadedVersion, Resolved};
 use crate::catalog::{GraphDefinition, VersionId};
 use crate::segment::CHUNK_SIZE;
@@ -120,8 +121,9 @@ impl<E: IdDatum> Vectors<E> {
         Ok(Some(load(&mut SpiVectorStore, cache_memory(), graph_id, &record)?))
     }
 
-    /// Stores `vector` as `name`, replacing any vector of that name, after
-    /// clearing its tombstoned rows; returns its vector id.
+    /// Stores `vector` as `name`, replacing any vector of that name (which
+    /// the caller must have written, or own the graph), after clearing its
+    /// tombstoned rows; returns its vector id.
     pub(super) fn save(
         &mut self,
         name: &str,
@@ -130,10 +132,11 @@ impl<E: IdDatum> Vectors<E> {
         if name.is_empty() {
             return Err(ComputeSqlError::EmptyName);
         }
-        vector.clear_tombstoned(self.tombstones());
-        if let Some(old) = self.record(name).map(|record| record.vector) {
-            forget(old);
+        if let Some(old) = self.record(name) {
+            require_creator_or_owner(old.created_by, self.graph.owner, &self.graph.name, name)?;
+            forget(old.vector);
         }
+        vector.clear_tombstoned(self.tombstones());
         let graph_id = self.graph.graph_id;
         // SAFETY: reads the backend's current user id: the caller's role.
         let caller = unsafe { pgrx::pg_sys::GetUserId() };

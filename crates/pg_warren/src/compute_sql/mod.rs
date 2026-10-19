@@ -21,6 +21,8 @@ mod limits;
 mod map;
 #[cfg(any(test, feature = "pg_test"))]
 mod oracle;
+#[cfg(any(test, feature = "pg_test"))]
+mod ownership;
 mod product;
 mod read;
 mod reduce;
