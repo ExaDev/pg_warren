@@ -5,6 +5,7 @@
 //! Every buffer a kernel allocates is charged to a [`ComputeMemory`]
 //! budget, the domain side of the `warren.max_compute_memory` GUC.
 
+mod cast;
 mod dtype;
 mod error;
 mod memory;

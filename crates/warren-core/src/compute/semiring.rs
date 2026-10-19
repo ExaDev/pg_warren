@@ -7,6 +7,7 @@ use std::cmp::Ordering;
 use std::fmt::{self, Display};
 use std::str::FromStr;
 
+use super::cast::SqlCast;
 use super::{ArithmeticError, ComputeError, Element};
 
 /// A binary operator on elements of one type, as GraphBLAS names it.
@@ -219,7 +220,7 @@ fn greatest<E: Element>(a: E, b: E) -> E {
 }
 
 macro_rules! float_semiring {
-    ($type:ty, $from_weight:expr) => {
+    ($type:ty) => {
         impl SemiringElement for $type {
             fn apply(op: BinaryOp, a: Self, b: Self) -> Result<Self, ArithmeticError> {
                 let flag = |set: bool| if set { 1.0 } else { 0.0 };
@@ -245,38 +246,14 @@ macro_rules! float_semiring {
             }
 
             fn from_weight(weight: f64) -> Result<Self, ArithmeticError> {
-                $from_weight(weight)
+                weight.sql_cast()
             }
         }
     };
 }
 
-float_semiring!(f64, Ok);
-float_semiring!(f32, float4_from_float8);
-
-/// Postgres's `float8 → float4` cast: an error rather than a silent
-/// infinity or zero.
-fn float4_from_float8(value: f64) -> Result<f32, ArithmeticError> {
-    let narrowed = value as f32;
-    if narrowed.is_infinite() && !value.is_infinite() {
-        return Err(ArithmeticError::FloatOverflow);
-    }
-    if narrowed == 0.0 && value != 0.0 {
-        return Err(ArithmeticError::FloatUnderflow);
-    }
-    Ok(narrowed)
-}
-
-/// Postgres's `float8 → int8` cast: round half to even, then range-check.
-fn int8_from_float8(value: f64) -> Result<i64, ArithmeticError> {
-    let rounded = value.round_ties_even();
-    // -2⁶³ is exact as a float; 2⁶³ is the first value past the range.
-    let fits = (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&rounded);
-    match fits {
-        true => Ok(rounded as i64),
-        false => Err(ArithmeticError::BigintOutOfRange),
-    }
-}
+float_semiring!(f64);
+float_semiring!(f32);
 
 impl SemiringElement for i64 {
     fn apply(op: BinaryOp, a: Self, b: Self) -> Result<Self, ArithmeticError> {
@@ -303,7 +280,7 @@ impl SemiringElement for i64 {
     }
 
     fn from_weight(weight: f64) -> Result<Self, ArithmeticError> {
-        int8_from_float8(weight)
+        weight.sql_cast()
     }
 }
 
@@ -323,7 +300,7 @@ impl SemiringElement for bool {
     }
 
     fn from_weight(weight: f64) -> Result<Self, ArithmeticError> {
-        Ok(weight != 0.0)
+        weight.sql_cast()
     }
 }
 
