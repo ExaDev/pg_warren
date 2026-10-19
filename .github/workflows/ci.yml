@@ -81,6 +81,26 @@ jobs:
       - run: cargo "+$MIRI_NIGHTLY" miri setup
       - run: cargo "+$MIRI_NIGHTLY" miri test -p warren-core
 
+  fuzz:
+    name: Segment decoder fuzzing (pinned nightly, 30 s per target)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [decode_csr, decode_id_map, decode_tombstones, decode_relation_dictionary]
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install "$MIRI_NIGHTLY" --profile minimal
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: fuzz
+          workspaces: fuzz
+      - working-directory: fuzz
+        run: cargo "+$MIRI_NIGHTLY" fuzz run ${{ matrix.target }} -- -max_total_time=30
+
   lint:
     name: Clippy + rustdoc (PG 16)
     runs-on: ubuntu-latest
