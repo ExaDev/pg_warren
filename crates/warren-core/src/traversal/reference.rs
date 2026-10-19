@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use proptest::prelude::*;
 
 use super::example::relations;
-use super::Direction;
+use crate::graph::Direction;
 use crate::graph::RelationSelection;
 use crate::graph::{AnyCsr, DenseId, EdgeList, GraphCsr, RelationIndex};
 

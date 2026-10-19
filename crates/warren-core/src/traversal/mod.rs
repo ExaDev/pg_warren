@@ -3,7 +3,7 @@
 //! from dense ids is the adapter's job.
 //!
 //! A traversal starts from an [`Adjacency`]: the CSRs of the selected
-//! relations, read in one [`Direction`]. It reports [`TraversalStats`]
+//! relations, read in one [`Direction`](crate::graph::Direction). It reports [`TraversalStats`]
 //! alongside its result, and stops with [`TraversalError::Cancelled`] when
 //! its [`Interrupts`](crate::interrupts::Interrupts) poll says so.
 
@@ -25,7 +25,7 @@ mod example;
 #[cfg(test)]
 mod reference;
 
-pub use adjacency::{Adjacency, Direction, DistinctNeighbours};
+pub use adjacency::{Adjacency, DistinctNeighbours};
 pub use bfs::{bfs, bfs_each, Visit};
 pub use components::components;
 pub use dijkstra::{dijkstra, WeightedPath};

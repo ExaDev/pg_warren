@@ -95,9 +95,9 @@ mod properties {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::graph::Direction;
     use crate::interrupts::Uninterrupted;
     use crate::traversal::reference::{scenarios, Scenario};
-    use crate::traversal::Direction;
 
     proptest! {
         #[test]

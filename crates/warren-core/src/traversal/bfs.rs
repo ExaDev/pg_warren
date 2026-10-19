@@ -80,11 +80,12 @@ pub fn bfs_each(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph::Direction;
     use crate::graph::GraphCsr;
     use crate::graph::RelationSelection;
     use crate::interrupts::{Cancellation, Uninterrupted};
     use crate::traversal::example::directed;
-    use crate::traversal::{Direction, TraversalStats};
+    use crate::traversal::TraversalStats;
 
     // 0 → 1 → 2 → 3, 0 → 4 → 3, 2 → 2, 5 isolated
     fn example() -> GraphCsr {
@@ -245,10 +246,10 @@ mod properties {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::graph::Direction;
     use crate::graph::RelationSelection;
     use crate::interrupts::Uninterrupted;
     use crate::traversal::reference::{directions, scenarios, selections, Scenario};
-    use crate::traversal::Direction;
 
     proptest! {
         #[test]
