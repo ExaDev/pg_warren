@@ -6,15 +6,18 @@ as a table the SQL test compares against.
 |---|---|---|
 | components | oracle_components | node_id, component: the component's smallest node id (weakly connected if directed) |
 | pagerank | oracle_pagerank | node_id, score (sums to 1; `--damping`, default 0.85) |
+| spectrum | oracle_spectrum | i, eigenvalue: the `--k` eigenvalues of `--matrix` (adjacency, laplacian, normalized_laplacian) at the `--which` end (largest magnitude, or smallest), by a dense solver over the nodes with an edge (undirected), as `warren.eigen` defines them |
 """
 
 import argparse
 
 import networkx as nx
+import numpy as np
 
 TABLES = {
     "components": ("oracle_components", "node_id bigint, component bigint"),
     "pagerank": ("oracle_pagerank", "node_id bigint, score float8"),
+    "spectrum": ("oracle_spectrum", "i int, eigenvalue float8"),
 }
 
 
@@ -36,7 +39,31 @@ def compute(computation, graph, arguments):
         options.add_argument("--damping", type=float, default=0.85)
         damping = options.parse_args(arguments).damping
         return list(nx.pagerank(graph, alpha=damping, tol=1e-12, max_iter=1000).items())
+    if computation == "spectrum":
+        return spectrum(graph, arguments)
     raise ValueError(f"unknown oracle computation {computation!r}; expected one of {sorted(TABLES)}")
+
+
+def spectrum(graph, arguments):
+    options = argparse.ArgumentParser(prog="spectrum")
+    options.add_argument("--matrix", default="adjacency",
+                         choices=("adjacency", "laplacian", "normalized_laplacian"))
+    options.add_argument("--which", default="largest", choices=("largest", "smallest"))
+    options.add_argument("--k", type=int, default=1)
+    args = options.parse_args(arguments)
+    active = sorted(node for node in graph.nodes if graph.degree(node) > 0)
+    a = nx.to_numpy_array(graph.to_undirected(), nodelist=active, weight=None)
+    a[a > 0] = 1.0
+    degrees = a.sum(axis=1)
+    if args.matrix == "laplacian":
+        a = np.diag(degrees) - a
+    elif args.matrix == "normalized_laplacian":
+        scale = 1 / np.sqrt(degrees)
+        a = np.eye(len(active)) - scale[:, None] * a * scale[None, :]
+    values = np.linalg.eigvalsh(a)
+    if args.which == "largest":
+        values = sorted(values, key=lambda v: (-abs(v), -v))
+    return [(i + 1, float(v)) for i, v in enumerate(values[:args.k])]
 
 
 def write(database, computation, rows):
