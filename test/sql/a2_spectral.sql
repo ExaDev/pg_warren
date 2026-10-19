@@ -1,7 +1,8 @@
 -- Appendix A.2 / §8 at reduced scale: corpus ingest gated by structural
 -- change, through the whole §8 workflow (ingest in a transaction, staged
 -- refresh, diff, eigen on both versions, distance('subspace'), ROLLBACK),
--- for each ingest variant; then the shadow-schema pattern (a second graph,
+-- for each ingest variant, with distance('embedding') on neighbour-aggregated
+-- embeddings; then the shadow-schema pattern (a second graph,
 -- compared by external id) gives the same scalars.
 --
 -- The robust finding at this scale: added volume barely turns the
@@ -18,17 +19,27 @@ SELECT warren.refresh('kg') AS base \gset
 \set variant volume
 \ir include/a2_spectral.sql
 \set d_volume :distance
+\set e_volume :drift
 \set variant novel
 \ir include/a2_spectral.sql
 \set d_novel :distance
+\set e_novel :drift
 \set variant bridge
 \ir include/a2_spectral.sql
 \set d_bridge :distance
+\set e_bridge :drift
 
 SELECT :d_volume AS volume, :d_novel AS novel, :d_bridge AS bridge;
+SELECT :e_volume AS volume_drift, :e_novel AS novel_drift, :e_bridge AS bridge_drift;
 SELECT assert.that(:d_volume < 0.5, 'volume barely turns the subspace: ' || :d_volume);
 SELECT assert.that(:d_novel > 2 * :d_volume, 'a novel community turns it further: ' || :d_novel);
 SELECT assert.that(:d_bridge > 2 * :d_volume, 'a bridge turns it further: ' || :d_bridge);
+-- A.2: after aggregate_neighbours, the bridge's merged communities drift
+-- towards each other, so it moves the shared entities' embeddings most
+-- (here 0.16 against 0.13 for volume and 0.02 for a novel community, which
+-- barely touches the base graph).
+SELECT assert.that(:e_bridge > :e_volume AND :e_bridge > :e_novel,
+                   'the bridge moves embeddings most: ' || :e_bridge || ' vs ' || :e_volume || ', ' || :e_novel);
 
 -- The shadow-schema pattern: the bridge corpus in tables of its own, a
 -- second graph over them, compared with kg's base by external id. The
