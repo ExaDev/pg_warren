@@ -122,7 +122,11 @@ fn rebuild_bytes(edges: u64, relation_count: usize, id_space: u64, reverse: bool
     ))
 }
 
+// Not under Miri: these tests build the compute pool, whose work stealing
+// runs through crossbeam-epoch, which Miri's Stacked Borrows model rejects
+// (see compute::workers).
 #[cfg(test)]
+#[cfg(not(miri))]
 mod tests {
     use super::*;
     use crate::compute::{ComputeError, ComputeMemory, Workers};
