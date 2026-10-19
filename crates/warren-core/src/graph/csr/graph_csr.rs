@@ -41,6 +41,11 @@ impl RelationCsr {
     fn csrs(&self) -> impl Iterator<Item = &AnyCsr> {
         std::iter::once(&self.forward).chain(&self.reverse)
     }
+
+    /// The heap bytes its CSRs hold.
+    pub fn bytes(&self) -> u64 {
+        self.csrs().map(AnyCsr::bytes).sum()
+    }
 }
 
 /// Checks that two CSRs of one graph version agree on id space, target
@@ -252,6 +257,11 @@ impl GraphCsr {
         }
     }
 
+    /// The heap bytes every CSR holds, the merged CSRs included.
+    pub fn bytes(&self) -> u64 {
+        self.relations().iter().chain(self.merged()).map(RelationCsr::bytes).sum()
+    }
+
     /// The all-relations CSRs: the merged CSR, or the only relation's.
     pub fn all_relations(&self) -> &RelationCsr {
         match &self.layout {
@@ -333,6 +343,21 @@ mod tests {
         assert_eq!(rows(merged.forward()), Naive::from([((0, 1), 3.0), ((1, 0), 3.0)]));
         assert_eq!(rows(merged.reverse().unwrap()), Naive::from([((1, 0), 3.0), ((0, 1), 3.0)]));
         assert_eq!(graph.deduplicated_edges(), 0);
+    }
+
+    #[test]
+    fn a_graph_holds_the_bytes_of_every_csr_in_both_directions() {
+        let (_, a, b) = two_relations();
+        let mut edges = EdgeList::new(true);
+        edges.push(b, 0, 1, 1.0).unwrap();
+        edges.push(a, 1, 0, 3.0).unwrap();
+        let graph = GraphCsr::build(edges, 2, 2, true).unwrap();
+        let relation =
+            |csr: &RelationCsr| csr.forward().bytes() + csr.reverse().map_or(0, AnyCsr::bytes);
+        let expected: u64 =
+            graph.relations().iter().chain(graph.merged()).map(relation).sum::<u64>();
+        assert_eq!(graph.bytes(), expected);
+        assert!(graph.bytes() >= 3 * 2 * (3 * 8 + 4 + 8), "three CSRs and their reverses");
     }
 
     #[test]

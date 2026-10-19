@@ -18,6 +18,7 @@ pub use any::{AnyCsr, Neighbours};
 pub use graph_csr::{GraphCsr, RelationCsr};
 pub use target::{Target, TargetWidth};
 
+use super::memory::held;
 use super::{DenseId, GraphError};
 
 /// The CSR of one relation in one direction, with targets of width `T`.
@@ -114,6 +115,11 @@ impl<T: Target> Csr<T> {
         self.weights.as_deref()
     }
 
+    /// The heap bytes its offsets, targets and weights hold.
+    pub fn bytes(&self) -> u64 {
+        held(&self.offsets) + held(&self.targets) + self.weights.as_ref().map_or(0, held)
+    }
+
     /// The targets of `source`'s row in ascending order; empty outside the
     /// id space.
     pub fn neighbours(&self, source: DenseId) -> &[T] {
@@ -195,6 +201,14 @@ mod tests {
         }
         assert_eq!(narrow.neighbour_weights(0), Some(&[0.5, 1.5][..]));
         assert_eq!(wide.neighbour_weights(0), None);
+    }
+
+    #[test]
+    fn a_csr_holds_the_bytes_of_its_offsets_targets_and_weights() {
+        assert_eq!(example().bytes(), 4 * 8 + 4 * 4 + 4 * 8);
+        let wide = Csr::from_parts(3, vec![0, 2, 2, 4], vec![1u64, 2, 0, 2], None).unwrap();
+        assert_eq!(AnyCsr::U64(wide).bytes(), 4 * 8 + 4 * 8);
+        assert_eq!(AnyCsr::U32(example()).bytes(), example().bytes());
     }
 
     fn invalid(offsets: Vec<u64>, targets: Vec<u32>, weights: Option<Vec<f64>>) -> GraphError {

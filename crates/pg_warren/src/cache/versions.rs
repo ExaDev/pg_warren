@@ -1,21 +1,31 @@
 //! The backend-local map of loaded versions, keyed by version id
 //! (DESIGN.md §5.5). A version is immutable once built, so an entry never
 //! goes stale; it only becomes unreachable when its version is dropped,
-//! and is then pruned.
+//! and is then pruned, or evicted to fit `warren.max_cache_memory`.
 
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use warren_core::graph::ExternalId;
 
+use super::lru::Held;
 use super::LoadedVersion;
 use crate::catalog::VersionId;
+
+thread_local! {
+    /// This backend's loaded versions.
+    pub(super) static CACHE: RefCell<VersionCache> = RefCell::new(VersionCache::default());
+}
 
 /// One cached version: an `Arc<LoadedVersion<E>>` for the graph's id type.
 struct Entry {
     graph_id: i32,
     version: Arc<dyn Any + Send + Sync>,
+    bytes: u64,
+    last_used: Instant,
 }
 
 /// Loaded versions by version id. Callers hold `Arc` clones, so evicting a
@@ -26,13 +36,16 @@ pub(crate) struct VersionCache {
 }
 
 impl VersionCache {
-    /// Version `version`, if it is cached with external id type `E`.
+    /// Version `version`, if it is cached with external id type `E`; the
+    /// lookup marks it used.
     pub(crate) fn get<E: ExternalId + Send + Sync + 'static>(
-        &self,
+        &mut self,
         version: VersionId,
     ) -> Option<Arc<LoadedVersion<E>>> {
-        let entry = self.entries.get(&version)?;
-        Arc::clone(&entry.version).downcast().ok()
+        let entry = self.entries.get_mut(&version)?;
+        let loaded = Arc::clone(&entry.version).downcast().ok()?;
+        entry.last_used = Instant::now();
+        Some(loaded)
     }
 
     /// Caches `loaded` as `version` of graph `graph_id`, replacing any
@@ -43,10 +56,37 @@ impl VersionCache {
         version: VersionId,
         loaded: LoadedVersion<E>,
     ) -> Arc<LoadedVersion<E>> {
+        let bytes = loaded.bytes();
         let loaded = Arc::new(loaded);
         let shared: Arc<dyn Any + Send + Sync> = loaded.clone();
-        self.entries.insert(version, Entry { graph_id, version: shared });
+        let entry = Entry { graph_id, version: shared, bytes, last_used: Instant::now() };
+        self.entries.insert(version, entry);
         loaded
+    }
+
+    /// The heap bytes the cached versions hold.
+    pub(crate) fn bytes(&self) -> u64 {
+        self.entries.values().map(|entry| entry.bytes).sum()
+    }
+
+    /// Each cached version's bytes and last use, by version id.
+    pub(crate) fn held(&self) -> Vec<Held<VersionId>> {
+        let mut held: Vec<_> = self
+            .entries
+            .iter()
+            .map(|(version, entry)| Held {
+                key: *version,
+                bytes: entry.bytes,
+                last_used: entry.last_used,
+            })
+            .collect();
+        held.sort_unstable_by_key(|entry| entry.key);
+        held
+    }
+
+    /// Drops version `version`, if cached. A caller holding it keeps it.
+    pub(crate) fn remove(&mut self, version: VersionId) {
+        self.entries.remove(&version);
     }
 
     /// The cached version ids, ascending.
@@ -106,6 +146,23 @@ mod tests {
         assert_eq!(loaded.id_map.dense_id(&2), Some(1));
         let cached = cache.get::<i64>(1).unwrap();
         assert!(Arc::ptr_eq(&loaded, &cached));
+    }
+
+    #[test]
+    fn a_lookup_marks_a_version_used_and_held_reports_its_bytes() {
+        let mut store = store();
+        let mut cache = VersionCache::default();
+        let first = cache.insert(10, 1, load::<i64>(&mut store, 1).unwrap());
+        cache.insert(10, 2, load::<i64>(&mut store, 2).unwrap());
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        assert!(cache.get::<i64>(1).is_some());
+        let held = cache.held();
+        assert_eq!(held.iter().map(|entry| entry.key).collect::<Vec<_>>(), [1, 2]);
+        assert_eq!(held[0].bytes, first.bytes());
+        assert!(held[0].bytes > 0);
+        assert!(held[0].last_used > held[1].last_used, "the lookup marked version 1 used");
+        cache.remove(1);
+        assert_eq!(cache.versions(), [2]);
     }
 
     #[test]

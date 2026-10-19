@@ -16,6 +16,14 @@ pub enum AnyCsr {
 }
 
 impl AnyCsr {
+    /// The heap bytes its offsets, targets and weights hold.
+    pub fn bytes(&self) -> u64 {
+        match self {
+            Self::U32(csr) => csr.bytes(),
+            Self::U64(csr) => csr.bytes(),
+        }
+    }
+
     /// The number of rows: the id space of the graph version.
     pub fn id_space(&self) -> u64 {
         match self {
