@@ -30,7 +30,7 @@ before changing code. Commands, toolchain setup and environment gotchas are in
    concepts, not technical layers. No `utils`, `helpers`, `common`, `models`,
    `types` or `misc` modules.
    - `warren-core/src/`: `graph/` (csr, id_map, tombstones), `traversal/`,
-     `compute/` (semiring, kernels, message), `spectral/`.
+     `compute/` (semiring, kernels, message), `spectral/`, `version/` (diff, compaction across versions).
    - `pg_warren/src/`: `extension` (schema + `warren.version()`), `catalog/`,
      `build/`, `cache/`, `traversal_sql/`, `compute_sql/`.
    - Each module's `mod.rs` doc comment states its responsibility. Add a
