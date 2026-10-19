@@ -12,9 +12,11 @@ mod compute_sql;
 mod extension;
 mod external_ids;
 #[cfg(any(test, feature = "pg_test"))]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod fixture;
 mod interrupts;
 #[cfg(any(test, feature = "pg_test"))]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod parallel_labels;
 mod read_only;
 mod segment;

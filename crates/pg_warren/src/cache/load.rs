@@ -127,6 +127,7 @@ fn csr(
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod tests {
     use super::*;
     use crate::segment::{write_version, MemorySegmentStore};

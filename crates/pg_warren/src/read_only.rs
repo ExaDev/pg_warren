@@ -1,13 +1,17 @@
-//! Read-only statements: single-row SPI reads, run read-only under the
-//! statement's snapshot (DESIGN.md §6.9, §9.3).
+//! Read-only statements: single-row SPI reads that never assign a
+//! transaction id (DESIGN.md §6.9, §9.3).
 //!
 //! pgrx's `Spi::get_one*` and `get_two*` run their query through
 //! `SpiClient::update`, which marks the transaction as writing by calling
 //! `GetCurrentTransactionId()`: that assigns a transaction id, which
 //! Postgres refuses in parallel mode ("cannot assign XIDs during a
 //! parallel operation"). Every read on a path a query function takes goes
-//! through here instead, so reading a graph never assigns a transaction id
-//! and works while a parallel plan runs. Depends on no other feature.
+//! through here instead: `SpiClient::select` never calls `mark_mutable`, so
+//! reading a graph never assigns a transaction id and works while a
+//! parallel plan runs. It promises nothing about snapshots: as for any SPI
+//! read, once the transaction has written, pgrx runs the select
+//! non-read-only (a command counter increment and a fresh snapshot).
+//! Depends on no other feature.
 
 use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;

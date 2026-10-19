@@ -3,3 +3,21 @@
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true
+
+# pgrx's Spi convenience calls run their query through SpiClient::update,
+# which assigns a transaction id: refused in parallel mode, so never on a
+# read path (DESIGN.md §9.3). Read with read_only::read_one/read_two or
+# Spi::connect + select; write with Spi::connect_mut + update. Tests, and
+# writer paths that need them, allow this on the smallest item, with a
+# comment.
+disallowed-methods = [
+    { path = "pgrx::spi::Spi::get_one", reason = "assigns a transaction id; use read_only::read_one" },
+    { path = "pgrx::spi::Spi::get_one_with_args", reason = "assigns a transaction id; use read_only::read_one" },
+    { path = "pgrx::spi::Spi::get_two", reason = "assigns a transaction id; use read_only::read_two" },
+    { path = "pgrx::spi::Spi::get_two_with_args", reason = "assigns a transaction id; use read_only::read_two" },
+    { path = "pgrx::spi::Spi::get_three", reason = "assigns a transaction id; use Spi::connect + select" },
+    { path = "pgrx::spi::Spi::get_three_with_args", reason = "assigns a transaction id; use Spi::connect + select" },
+    { path = "pgrx::spi::Spi::run", reason = "assigns a transaction id; use Spi::connect_mut + update on a writer path" },
+    { path = "pgrx::spi::Spi::run_with_args", reason = "assigns a transaction id; use Spi::connect_mut + update on a writer path" },
+    { path = "pgrx::spi::Spi::explain", reason = "assigns a transaction id" },
+]

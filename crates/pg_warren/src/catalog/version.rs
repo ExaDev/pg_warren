@@ -335,6 +335,7 @@ fn bigint(count: u64, column: &'static str) -> Result<i64, CatalogError> {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod notices {
     use super::kept_notice;
 
