@@ -41,6 +41,7 @@ The target users are teams building large, evolving knowledge systems on Postgre
 5. **Honest consistency semantics.** Users opt in to staleness, and the extension makes staleness observable.
 6. **SQL all the way down.** No query language and no vertex-program language. Control flow is the user's PL; per-row expressions are SQL expressions; the engine is kernels behind ordinary functions.
 7. **Small surface area.** Resist feature creep until the core is fast and boring.
+8. **Two styles over one substrate.** Vertex-centric (Pregel-style: `gather`, the library, PL/pgSQL loops) is the first-class, approachable way to write a graph computation and stays so. Sparse linear algebra is the power user's escape hatch for when that is not fast enough. Both run over the same CSR and versions, and both should make the best use of the hardware present, CPU threads now and GPUs later (§6.11).
 
 ## 3. Scope
 
@@ -601,11 +602,24 @@ For state that must be per-vertex and bytes-shaped with logic that neither SQL n
 - Errors are raised only through pgrx (`ErrorReport` with a standard SQLSTATE; detail and hint as needed), never by calling `pg_sys` error functions directly. Nothing in `pg_warren` uses `catch_unwind` around SPI; pgrx already installs the boundary at each `#[pg_extern]`.
 - Memory for vectors, message buffers and work buffers is allocated with the Rust allocator, not `palloc`, and accounted against a `warren.max_compute_memory` GUC; exceeding it raises an error rather than OOMing the server (*M4:* per call, §6.2). Graph-sized buffers are reserved with `try_reserve`, so allocator failure is also an error (`53200`), not an abort.
 - v1.1: a **compute background worker** that owns the DSM-resident graph and runs jobs submitted by backends via a shared queue, so compute does not compete with query backends and large jobs can outlive a client session. Results land in `warren.vectors`; `warren.job_status()` reports progress.
-- GPU: the semiring/SpMV formulation is what cuSPARSE/GraphBLAST expect; a GPU backend for `warren-core` is a contained future addition.
+- GPU: the semiring/SpMV formulation is what cuSPARSE/GraphBLAST expect; a GPU backend for `warren-core` is a contained future addition behind the kernel seam of §6.11.
 
 ### 6.10 GraphBLAS: bind or build?
 
-SuiteSparse:GraphBLAS is the mature implementation of the semiring model (masks, SpMV/SpMM, OpenMP parallel). Binding it would save implementing the tier-1 kernels but adds a large C dependency, a second allocator and threading model inside the backend, licence considerations (Apache-2.0 for recent versions, LGPL historically — verify), and it does not cover tier 2's variable-width messages at all. The v1 lean is to **implement the kernels natively in Rust** (SpMV, SpMM, elementwise map/reduce over a handful of semirings, plus `gather`), keeping `warren-core` dependency-free, with the API designed so a GraphBLAS backend could be slotted in for harder operations (masked SpMM, SpGEMM) if benchmarks justify it. Record the decision in §14 once M6 benchmarks exist.
+SuiteSparse:GraphBLAS is the mature implementation of the semiring model (masks, SpMV/SpMM, OpenMP parallel). Binding it would save implementing the tier-1 kernels but adds a large C dependency, a second allocator and threading model inside the backend, licence considerations (Apache-2.0 for recent versions, LGPL historically — verify), and it does not cover tier 2's variable-width messages at all. The v1 lean is to **implement the kernels natively in Rust** (SpMV, SpMM, elementwise map/reduce over a handful of semirings, plus `gather`), keeping `warren-core` dependency-free, with the API designed so a GraphBLAS backend could be slotted in for harder operations (masked SpMM, SpGEMM) if benchmarks justify it. Record the decision in §14 once M6 benchmarks exist. The question is now framed by §6.11: whichever is chosen must reach the full sparse-algebra operation set listed there, on CPU, without closing the GPU route.
+
+### 6.11 End state: Pregel and sparse matrix algebra, on CPU and GPU
+
+*Direction (set 2026-10-19; not scheduled beyond the M7 decision).* Any graph computation can be written as operations on the adjacency matrix, and on accelerators that is usually the fastest form. Message passing is more expressive and easier to approach. pg_warren's end destination offers both, over one substrate:
+
+- **Pregel-style is first-class and stays so.** `gather` with SQL-typed messages, the PL/pgSQL library and tier-1 loops are how most users write graph programs. Matrix algebra is added beside them, never in place of them.
+- **Sparse matrix algebra for power users**, for when the vertex-centric form is not fast enough. Today's tier 1 covers adjacency × dense vector or dense matrix (`spmv`, `spmm`) under 13 fixed semirings, with masks, accumulation, transpose and relation selection, plus elementwise maps and reductions. What arbitrary sparse algebra still needs, in rough priority order:
+  1. **SpGEMM**, including masked `C⟨M⟩ = A ⊕.⊗ B` (triangles, k-truss, two-hop neighbourhoods, and contraction's `PᵀAP`, §6.6).
+  2. **Sparse vectors** and push/pull switching, so small frontiers do not cost O(N) per step (§10, direction-optimising BFS).
+  3. **Matrices as values**: the result of a product stored and reused as a derived graph version, by the same catalog mechanism contraction needs (§6.6 obligation 1), plus selection, elementwise add/multiply of matrices and submatrix extraction.
+  4. Possibly user-defined semirings or operators, if a need appears that the fixed set cannot express.
+- **Hardware.** Kernels live behind one seam in `warren-core` (plain slices in, plain buffers out, already true), so a native CPU implementation, a SuiteSparse:GraphBLAS binding and a GPU backend (cuSPARSE/GraphBLAST-style) can each serve the operations they do best, chosen per operation and per machine. Results must not depend on the backend beyond floating-point reassociation, which is documented where it applies. The §6.9 rule stands: only the main thread calls Postgres, whatever runs the kernel.
+- **No rush on GPU.** The obligation now is only to keep the seam clean and the operation vocabulary GraphBLAS-shaped so a GPU backend stays a contained addition.
 
 ## 7. Versions, retention, and staging
 
@@ -866,7 +880,7 @@ Implementation notes:
 - **Arnoldi** for non-symmetric spectra; **randomised SVD**; **spectral clustering** as a library algorithm (eigen → k-means over rows).
 - **Pattern sugar, if ever.** `warren.walk` covers typed chains. What a pattern *language* would add, in ascending order of value: joins within a pattern (cycles, shared neighbours) and variable binding of intermediate nodes — both expressible today by intersecting walks in SQL — and **selectivity-aware start selection**, which is the real reason graph query planners exist and which `reverse` only approximates. If a language is ever added it should be SQL/PGQ (`GRAPH_TABLE`, SQL:2023) rather than Cypher: it is the standard, composes with SQL rather than sitting beside it, and Postgres has no implementation yet. The shape would be `warren.match('MATCH (a:paper)-[:cites*1..3]->(b)-[:authored_by]->(p) ...')` parsing to `warren.step[]` and a small join plan over walks — sugar over the existing IR, not a second engine. Not before v1 has demonstrated that users hit the limits of `walk`.
 - **Custom scan node** so joins with traversals get cardinality estimates from version statistics.
-- **GPU backend** for `warren-core` kernels.
+- **Sparse matrix algebra beyond SpMV** (SpGEMM, sparse vectors, matrices as values) and a **GPU backend** for `warren-core` kernels, both behind the kernel seam (§6.11).
 
 ## 11. Implementation language and tooling
 
@@ -948,9 +962,9 @@ Each milestone leaves `main` green and demonstrable.
 
 **M6 — Spectral and distance.** Lanczos `eigen` with f32/f64 modes; `distance` with all five methods; evolving-graph benchmark; the §8 workflow and Appendix A.2 as integration tests end-to-end. Tag `v0.2.0`.
 
-**M7 — Hardening.** A size-bounded LRU for the backend-local cache (`warren.max_cache_memory`, §5.5); 100M-edge soak; memory-context and allocator hygiene; docs for semantics, staleness, retention, the two change-detection patterns, and limits. Decide §6.10 from benchmarks. Tag `v0.3.0`.
+**M7 — Hardening.** A size-bounded LRU for the backend-local cache (`warren.max_cache_memory`, §5.5); 100M-edge soak; memory-context and allocator hygiene; docs for semantics, staleness, retention, the two change-detection patterns, and limits. Decide §6.10 from benchmarks, against §6.11's operation set (masked SpGEMM and sparse vectors included), and define the kernel seam it implies. Tag `v0.3.0`.
 
-Post-v0.3: contraction/project/lift and Louvain (§6.6), DSM cache + compute worker, incremental maintenance, WASM programs, in roughly that order.
+Post-v0.3: contraction/project/lift and Louvain (§6.6, whose `PᵀAP` is the first SpGEMM), sparse matrix algebra (§6.11), DSM cache + compute worker, incremental maintenance, WASM programs, in roughly that order; a GPU backend when there is demand.
 
 ## 14. Open decisions (make a call, record it in DESIGN.md, move on)
 
@@ -962,7 +976,7 @@ Post-v0.3: contraction/project/lift and Louvain (§6.6), DSM cache + compute wor
 6. **Undirected weighted**: duplicate weight both directions. **Decided (M1): yes**, both directions carry the same weight.
 7. **Default `max_depth`** on `reachable_set`: unbounded vs. cap. Lean: unbounded, documented. **Decided (M3): unbounded** (`max_depth DEFAULT NULL`); the visited set bounds the work at O(N + M), and SQL `LIMIT` in the select list stops it early (§9.3).
 8. **Lanczos precision default**: f32 vectors/f64 accumulate vs. all f64. **Decided (M6): f32 by default**, every sum accumulated in f64, `Precision::F64` as the option; residuals floor near 10⁻⁷·‖M‖ in f32 (§6.5). On the 100K-node baseline f32 and f64 take the same steps (1,037 and 1,342) and their step times are within the noise; f32 halves the basis memory, which is what binds at 10⁷ nodes.
-9. **Native kernels vs. SuiteSparse:GraphBLAS** (§6.10). Lean: native for v1; revisit after M6. M4 implements the kernels natively in `warren-core` (§6.3).
+9. **Native kernels vs. SuiteSparse:GraphBLAS** (§6.10). Lean: native for v1; revisit after M6. M4 implements the kernels natively in `warren-core` (§6.3). The M7 decision is judged against §6.11's end state (Pregel and sparse algebra side by side, CPU and GPU behind one kernel seam), not against tier 1's current operations alone.
 10. **Compute threads inside the backend vs. requiring the background worker from day one.** Lean: in-backend threads for v1 (simpler lifecycle), worker in v1.1. M4 implements in-backend threads: a dedicated `rayon` pool per `compute::Workers` (§6.9). **Decided (M4):** in-backend, one pool per backend sized by `warren.threads`, its threads blocking every signal.
 11. **`distance` summary statistics**: which scalar(s) each method returns by default. **Decided (M6): several per method**, returned as `jsonb` (§8): `edit` counts and Jaccard distance per relation and overall; `degree` W₁ and KS; `spectral` L2, relative and max; `subspace` projection-Frobenius distance, max angle and the angles; `embedding` mean/max L2 and cosine and the rows compared.
 12. **`vector_map` executor fallback.** Build it in v1 or raise "not in compiled subset" until v1.1? Lean: build it in v1 — the one-language guarantee is the point. **Decided (M4): built** — row-wise `ExecEvalExpr` over the same analysed tree, JIT-compiled per the `jit` settings, agreeing with the compiled path bit for bit (§6.3).
