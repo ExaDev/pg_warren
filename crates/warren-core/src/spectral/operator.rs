@@ -17,7 +17,7 @@
 
 use std::str::FromStr;
 
-use super::{dense, random, Resources, SpectralError};
+use super::{components, dense, random, Resources, SpectralError};
 use crate::compute::{spmv, AnyVector, ComputeError, MemoryCharge, Product, Semiring, Vector};
 use crate::graph::{GraphCsr, RelationSelection};
 use crate::interrupts::Interrupts;
@@ -162,6 +162,14 @@ impl<'g> LinearOperator<'g> {
     /// The number of active nodes: the dimension of the eigenproblem.
     pub(super) fn dimension(&self) -> u64 {
         self.dimension
+    }
+
+    /// The connected components of the active nodes.
+    pub(super) fn components<I: Interrupts>(
+        &self,
+        resources: &mut Resources<'_, I>,
+    ) -> Result<u64, SpectralError> {
+        components::components(resources, self.graph, self.forward.relations, &self.active)
     }
 
     /// The vector [`Self::apply`] multiplies, to be filled by the caller.

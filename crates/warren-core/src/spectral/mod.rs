@@ -3,6 +3,7 @@
 //! (DESIGN.md §6.5, §8).
 
 mod basis;
+mod components;
 mod dense;
 mod distance;
 mod error;
