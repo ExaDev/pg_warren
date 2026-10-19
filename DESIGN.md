@@ -746,7 +746,7 @@ pg_warren/
 ├── test/                   ← integration tests not expressible in cargo pgrx test
 ├── docker/                 ← Dockerfile per supported PG major
 └── .github/workflows/      ← fmt, clippy, unit, Miri (warren-core), pgrx tests PG 15–18 on PGDG packages
-                               (cargo pgrx init --pgNN=<pg_config>), schema-drift + upgrade-path checks, bench smoke test
+                               (cargo pgrx init --pgNN=<pg_config>), schema-drift + upgrade-path checks (added in M2, once the catalog exists), bench smoke test
 ```
 
 Each milestone leaves `main` green and demonstrable.

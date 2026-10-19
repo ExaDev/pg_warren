@@ -21,13 +21,16 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:$PATH
-RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+WORKDIR /src
+# Install the toolchain pinned in rust-toolchain.toml before the cached layers.
+COPY rust-toolchain.toml .
+RUN rustup toolchain install
 RUN cargo install cargo-pgrx --version "${PGRX_VERSION}" --locked
 
 # Point pgrx at the image's pg_config instead of running `cargo pgrx init`.
 ENV PGRX_PG_CONFIG_PATH=/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config
 
-WORKDIR /src
 COPY . .
 RUN cargo pgrx package \
       --manifest-path crates/pg_warren/Cargo.toml \

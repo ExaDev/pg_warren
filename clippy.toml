@@ -1,0 +1,5 @@
+# unwrap/expect/panic are denied in library code (Cargo.toml [workspace.lints])
+# but allowed in #[test] functions and #[cfg(test)] modules.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

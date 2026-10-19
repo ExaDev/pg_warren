@@ -9,7 +9,9 @@ pg_warren is a Rust workspace with two crates (DESIGN.md §11):
 
 ## Prerequisites
 
-- Rust stable (pinned by `rust-toolchain.toml`; rustup picks it up).
+- Rust 1.97.0, pinned exactly in `rust-toolchain.toml`. Run `rustup toolchain install`
+  in the repo to get it. For Miri you also need nightly:
+  `rustup toolchain install nightly --component miri,rust-src`.
 - PostgreSQL 15–18 with server dev headers (`postgresql-server-dev-NN` on
   Debian/Ubuntu), plus `clang` / `libclang-dev` for pgrx's bindgen.
 - cargo-pgrx, at exactly the version the extension uses:
@@ -37,6 +39,9 @@ cargo test -p warren-core            # a bare `cargo test` at the root does the 
 
 # Tier 2: in-database tests (#[pg_test]) against a real Postgres
 cd crates/pg_warren && cargo pgrx test pg16
+
+# Domain tests under Miri (nightly), for unsafe slice code (DESIGN.md §11)
+PROPTEST_CASES=16 PROPTEST_DISABLE_FAILURE_PERSISTENCE=true cargo +nightly miri test -p warren-core
 
 # Benches compile (micro-benchmarks run with `cargo bench -p warren-core`)
 cargo bench -p warren-core --no-run
@@ -76,6 +81,16 @@ installs the extension into the system tree, so make it writable once:
 ```sh
 sudo chmod a+rwx "$(pg_config --pkglibdir)" "$(pg_config --sharedir)/extension"
 ```
+
+### Lints
+
+The lint policy lives in `[workspace.lints]` in the root `Cargo.toml`, and every
+crate opts in with `[lints] workspace = true`. It denies `unwrap`, `expect`,
+`panic!`, `todo!`, `unimplemented!` and `dbg!`, unsafe blocks without a
+`// SAFETY:` comment, and unsafe operations inside `unsafe fn` without their
+own `unsafe` block. `clippy.toml` allows `unwrap`, `expect` and `panic!` in
+`#[test]` functions and `#[cfg(test)]` code. Clippy does not treat `#[pg_test]`
+functions as tests, so they return `Result<(), pgrx::spi::Error>` and use `?`.
 
 ## Other PostgreSQL majors
 

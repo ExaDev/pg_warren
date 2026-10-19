@@ -26,9 +26,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
+      - name: Install pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
       - run: cargo fmt --all --check
 
   core-isolation:
@@ -36,7 +35,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
       - name: cargo tree -p warren-core must not mention pgrx / pg-sys
         run: |
           set -euo pipefail
@@ -52,19 +52,38 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: core
       - run: cargo test -p warren-core --all-targets
       - run: cargo test -p warren-core --doc
 
+  miri:
+    name: warren-core under Miri (nightly)
+    runs-on: ubuntu-latest
+    env:
+      # Miri is slow: keep property tests small and off the filesystem.
+      PROPTEST_CASES: "16"
+      PROPTEST_DISABLE_FAILURE_PERSISTENCE: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nightly with Miri
+        run: rustup toolchain install nightly --profile minimal --component miri,rust-src
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: miri
+      - run: cargo +nightly miri setup
+      - run: cargo +nightly miri test -p warren-core
+
   bench-smoke:
     name: warren-core benches compile
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: bench
@@ -75,9 +94,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+      - name: Install pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
       - uses: ./.github/actions/setup-postgres
         with:
           pg-major: "16"
@@ -100,7 +118,8 @@ jobs:
         pg: ["15", "16", "17", "18"]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
       - uses: ./.github/actions/setup-postgres
         with:
           pg-major: ${{ matrix.pg }}
