@@ -81,8 +81,12 @@ mod unit {
         let options = solver_options(Some(3), "smallest", 1e-6, Some(50), "f64").unwrap();
         assert_eq!((options.k, options.which, options.max_iter), (3, Which::Smallest, Some(50)));
         assert_eq!((options.tol, options.precision), (1e-6, Precision::F64));
-        let invalid = |k, tol, max_iter| {
-            solver_options(k, "largest", tol, max_iter, "f32").unwrap_err().to_string()
+        // The messages, not the error's Display: through ComputeSqlError it
+        // can name SQL types, which needs a backend.
+        let invalid = |k, tol, max_iter| match solver_options(k, "largest", tol, max_iter, "f32") {
+            Err(SpectralSqlError::NullArgument(argument)) => format!("{argument} must not be NULL"),
+            Err(SpectralSqlError::InvalidArgument(message)) => message,
+            other => panic!("{other:?}"),
         };
         assert_eq!(invalid(None, 0.0, None), "k must not be NULL");
         assert_eq!(invalid(Some(0), 0.0, None), "k must be positive, not 0");
