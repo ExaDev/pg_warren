@@ -10,7 +10,7 @@ use super::matrix::{solver_options, OperatorArguments};
 use super::SpectralSqlError;
 use crate::access::entry;
 use crate::cache::resolve;
-use crate::compute_sql::{workers, Vectors};
+use crate::compute_sql::{drop_named, workers, Vectors};
 use crate::interrupts::PostgresInterrupts;
 use crate::source::{with_id_type, IdDatum};
 
@@ -18,7 +18,10 @@ use crate::source::{with_id_type, IdDatum};
 type Row = (i32, f64, f64);
 
 /// Solves `operator` on `vectors`' version and stores the eigenvectors as
-/// `<prefix>_1..k` if a prefix is given (transient unless `persist`).
+/// `<prefix>_1..k` if a prefix is given (transient unless `persist`),
+/// dropping `<prefix>_<i>` for `i > k` left by an earlier, larger solve.
+/// Whether the caller may write (and drop) those vectors is checked before
+/// solving.
 fn solve<E: IdDatum>(
     mut vectors: Vectors<E>,
     operator: &OperatorArguments,
@@ -26,18 +29,47 @@ fn solve<E: IdDatum>(
     prefix: Option<&str>,
     persist: bool,
 ) -> Result<Vec<Row>, SpectralSqlError> {
+    let (names, stale) = match prefix {
+        Some(prefix) => {
+            let names: Vec<String> = (1..=options.k).map(|i| format!("{prefix}_{i}")).collect();
+            let stale: Vec<String> = vectors
+                .names()?
+                .into_iter()
+                .map(|bound| bound.name)
+                .filter(|name| index(prefix, name).is_some_and(|i| i > options.k))
+                .collect();
+            (names, stale)
+        }
+        None => (Vec::new(), Vec::new()),
+    };
+    for name in &names {
+        vectors.check_writable(name, persist)?;
+    }
+    for name in &stale {
+        vectors.check_writable(name, false)?;
+    }
     let eigen = eigenpairs(&vectors, operator, options)?;
     for warning in caveats(&eigen) {
         pgrx::warning!("{warning}");
     }
     let mut rows = Vec::with_capacity(eigen.pairs.len());
+    let mut names = names.into_iter();
     for (i, pair) in (1..).zip(eigen.pairs) {
-        if let Some(prefix) = prefix {
-            vectors.save(&format!("{prefix}_{i}"), pair.vector, persist)?;
+        if let Some(name) = names.next() {
+            vectors.save(&name, pair.vector, persist)?;
         }
         rows.push((i, pair.value, pair.residual));
     }
+    for name in &stale {
+        drop_named(&vectors.graph, vectors.version, name)?;
+    }
     Ok(rows)
+}
+
+/// `i` if `name` is `<prefix>_<i>`, `i` written as `format!` writes it.
+fn index(prefix: &str, name: &str) -> Option<usize> {
+    let i: usize = name.strip_prefix(prefix)?.strip_prefix('_')?.parse().ok()?;
+    (name.len() == prefix.len() + 1 + i.to_string().len()).then_some(i)
 }
 
 /// `warren.eigen`: the `k` eigenpairs of `matrix` (adjacency, laplacian,
@@ -102,6 +134,20 @@ pub(super) fn eigenpairs<E: IdDatum>(
     Ok(spectral::eigen(&mut resources, &loaded.graph, &matrix, options)?)
 }
 
+#[cfg(test)]
+mod unit {
+    use super::index;
+
+    #[test]
+    fn an_eigenvector_name_is_the_prefix_and_an_index() {
+        assert_eq!(index("lap", "lap_12"), Some(12));
+        assert_eq!(index("lap", "lap_012"), None);
+        assert_eq!(index("lap", "lap_x"), None);
+        assert_eq!(index("lap", "lap12"), None);
+        assert_eq!(index("lap", "laplace_1"), None);
+    }
+}
+
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 #[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
@@ -158,6 +204,34 @@ mod tests {
         assert_eq!(persisted, Some(0));
         let transient = Spi::get_one::<f64>("SELECT warren.vector_reduce('p', 'tmp_1', 'l2')")?;
         assert!(transient.is_some_and(|norm| (norm - 1.0).abs() < 1e-12));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_smaller_k_drops_the_eigenvectors_it_no_longer_writes() -> Result<(), Error> {
+        path()?;
+        Spi::run("SELECT * FROM warren.eigen('p', 3, vectors_prefix := 'lap')")?;
+        Spi::run("SELECT warren.vector_const('p', 'lap_x', 1)")?;
+        Spi::run("SELECT * FROM warren.eigen('p', 2, vectors_prefix := 'lap')")?;
+        let names = rows("SELECT name FROM warren.vectors ORDER BY name")?;
+        assert_eq!(names.as_deref(), Some("lap_1 lap_2 lap_x"));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn vectors_it_may_not_replace_are_refused_before_solving() -> Result<(), Error> {
+        // lap_1 belongs to the session user; a reader cannot replace it, and
+        // is told so although the solve would not fit the memory cap.
+        path()?;
+        Spi::run(
+            "SELECT * FROM warren.eigen('p', 1, vectors_prefix := 'lap');
+             CREATE ROLE p_reader; SELECT warren.grant('p', 'p_reader');
+             CREATE TEMP TABLE IF NOT EXISTS failure (what text); GRANT ALL ON failure TO p_reader;
+             SET LOCAL warren.max_compute_memory = '64kB'; SET ROLE p_reader",
+        )?;
+        let found = failure("warren.eigen('p', 1, vectors_prefix := 'lap')")?.unwrap_or_default();
+        Spi::run("RESET ROLE")?;
+        assert!(found.starts_with("42501: "), "{found}");
         Ok(())
     }
 
