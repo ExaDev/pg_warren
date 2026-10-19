@@ -2,7 +2,12 @@
 //!
 //! Owns forward/reverse CSR per relation, the external-id ↔ dense-id map with
 //! stable dense ids across versions, and the tombstone bitmap
-//! (DESIGN.md §5.2, §5.3).
+//! (DESIGN.md §5.2, §5.3), and their encoding as segments.
+//!
+//! A build runs: [`IdMap::rebuild`] over the node ids → an [`EdgeIntake`]
+//! over the edge rows (dropping and counting dangling edges) →
+//! [`GraphCsr::build`] → `encode` on each part. Loading runs the matching
+//! `decode`s, which validate everything before the structure is used.
 
 mod csr;
 mod edge_list;

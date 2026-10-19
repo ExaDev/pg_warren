@@ -59,7 +59,10 @@ fn grouped_by_source<T: Target>(
     relation_count: usize,
     id_space: u64,
 ) -> Result<Rows<T>, GraphError> {
-    let row_count = id_space.checked_add(1).ok_or(GraphError::IdSpaceTooLarge)? as usize - 1;
+    if id_space == u64::MAX {
+        return Err(GraphError::IdSpaceTooLarge);
+    }
+    let row_count = id_space as usize;
     let mut offsets = memory::filled(row_count + 1, 0u64)?;
     for ((&source, &target), relation) in
         edges.sources().iter().zip(edges.targets()).zip(edges.relations())
