@@ -4,12 +4,24 @@
 
 ::pgrx::pg_module_magic!(name, version);
 
+mod access;
 mod build;
 mod cache;
 mod catalog;
 mod compute_sql;
 mod extension;
+#[cfg(any(test, feature = "pg_test"))]
+mod fixture;
+mod segment;
+mod source;
 mod traversal_sql;
+mod version_sql;
+
+/// Library initialisation: registers the GUCs.
+#[pgrx::pg_guard]
+pub extern "C-unwind" fn _PG_init() {
+    build::define_max_build_memory();
+}
 
 /// Required by `cargo pgrx test`; must be visible at the crate root.
 #[cfg(test)]

@@ -158,13 +158,14 @@ CREATE TABLE warren.graphs (
     source           text NOT NULL DEFAULT 'query',   -- 'query' | 'contraction' (§6.6)
     node_query       text,              -- SELECT <id> ...                       (source = 'query')
     edge_query       text,              -- SELECT <src>, <dst> [, <rel>] [, <weight>] ...
+    search_path      text NOT NULL,     -- the creator's search_path; the source queries always run under it (§5.4)
     id_type          regtype NOT NULL,  -- int4 | int8 | uuid  (text: v1.1)
     directed         boolean NOT NULL DEFAULT true,
     build_reverse    boolean NOT NULL DEFAULT true,
     weighted         boolean NOT NULL DEFAULT false,
     has_relations    boolean NOT NULL DEFAULT false,
-    retain_versions  int NOT NULL DEFAULT 2,       -- promoted versions kept, ≥1
-    current_version  bigint                        -- FK to versions; NULL until first promote
+    retain_versions  int NOT NULL DEFAULT 2 CHECK (retain_versions >= 1),  -- promoted versions kept
+    current_version  bigint                        -- FK to versions (added by ALTER TABLE); NULL until first promote
 );
 
 CREATE TABLE warren.versions (
@@ -176,21 +177,21 @@ CREATE TABLE warren.versions (
     built_lsn    pg_lsn NOT NULL,
     node_count   bigint NOT NULL,          -- live nodes
     id_space     bigint NOT NULL,          -- dense ID high-water mark (incl. tombstones)
-    edge_count   bigint NOT NULL,
-    dropped_edges bigint NOT NULL,         -- edges with a NULL or unknown endpoint
+    edge_count   bigint NOT NULL,          -- stored edges summed over relations, after deduplication; undirected edges count twice
+    dropped_edges bigint NOT NULL,         -- edge rows dropped: a NULL relation/weight the graph needs, or a NULL, unknown or tombstoned endpoint
     deduplicated_edges bigint NOT NULL,    -- parallel edges folded by deduplication (§14 item 4)
-    target_width  smallint NOT NULL,       -- 4 (u32 targets) or 8 (u64), §5.3
-    compacted_from bigint REFERENCES warren.versions,  -- set by warren.compact: new ID space (§5.2)
+    target_width  smallint NOT NULL CHECK (target_width IN (4, 8)),  -- 4 (u32 targets) or 8 (u64), §5.3
+    compacted_from bigint REFERENCES warren.versions ON DELETE SET NULL,  -- set by warren.compact: new ID space (§5.2)
     bytes        bigint NOT NULL,
     label        text,                     -- optional user label, e.g. 'corpus-2026-10-17'
     parent_version bigint REFERENCES warren.versions,  -- set when derived by warren.contract (§6.6)
-    label_vector   bigint REFERENCES warren.vectors,   -- the label vector it was contracted on
+    label_vector   bigint REFERENCES warren.vectors,   -- the label vector it was contracted on (FK added by ALTER TABLE)
     UNIQUE (graph_id, seq)
 );
 
 CREATE TABLE warren.segments (
     version_id  bigint NOT NULL REFERENCES warren.versions ON DELETE CASCADE,
-    segment     text   NOT NULL,   -- 'id_map' | 'tombstones' | 'rel_dict' | 'offsets:<rel>' | 'targets:<rel>' | 'weights:<rel>' | 'rev_offsets:<rel>' | ...
+    segment     text   NOT NULL,   -- 'id_map' | 'tombstones' | 'rel_dict' | 'offsets:<r>' | 'targets:<r>' | 'weights:<r>' | 'rev_offsets:<r>' | ...  (<r>: rel_dict index, or 'merged'; §5.3)
     chunk_no    int    NOT NULL,
     data        bytea  NOT NULL,
     PRIMARY KEY (version_id, segment, chunk_no)
@@ -216,11 +217,11 @@ CREATE TABLE warren.vector_chunks (
 );
 ```
 
-Chunks are fixed-size (default 8 MB) so a multi-GB graph is many TOASTed rows. Because all of this is ordinary tables, it is WAL-logged, backed up, replicated to standbys, and — crucially for §8 — **transactional**: a version built inside a transaction that then rolls back simply disappears.
+Chunks are fixed-size (8 MiB, `CHUNK_SIZE` in `pg_warren/src/build/chunk.rs`; 1 KiB in `pg_test` builds so that small test graphs span several chunks), numbered from 0 per segment, so a multi-GB graph is many TOASTed rows. Reading a segment concatenates its chunks in order and rejects a gap. Because all of this is ordinary tables, it is WAL-logged, backed up, replicated to standbys, and — crucially for §8 — **transactional**: a version built inside a transaction that then rolls back simply disappears.
 
 The bootstrap SQL registers every `warren.*` table and sequence with `pg_extension_config_dump`. Without that, `pg_dump` omits extension-member data, and graph definitions, versions and vectors would silently be missing from logical dumps.
 
-The bootstrap SQL also runs `REVOKE ALL … FROM PUBLIC` on every `warren.*` table and sequence. No role except the extension owner can read or write the catalog, segments or vectors directly; all access goes through `warren.*` functions. This is what makes the access check in §7 meaningful: segment and vector bytes are reachable only through functions that perform it.
+The bootstrap SQL also runs `REVOKE ALL … FROM PUBLIC` on every `warren.*` table and sequence. No role except the extension owner can read or write the catalog, segments or vectors directly; all access goes through `warren.*` functions. This is what makes the access check in §7 meaningful: segment and vector bytes are reachable only through functions that perform it. The schema itself grants `USAGE` to `PUBLIC`, so any role can call `warren.*` functions (each checks access itself).
 
 ### 5.2 Node identity — stable dense IDs
 
@@ -231,13 +232,13 @@ CSR wants dense `0..N-1` integer IDs. User tables have `bigint`, `uuid`, etc.
 - The first build assigns dense IDs `0..N-1` in `id_type` sort order.
 - Each subsequent build starts from the previous promoted version's `id_map`. Nodes present in both keep their dense ID. New nodes are appended at the high-water mark in sort order. Nodes that have disappeared keep their dense ID but are marked in a `tombstones` bitmap; their adjacency rows are empty. Dense IDs are never reused. A node that reappears after being tombstoned gets its old dense ID back and its tombstone cleared.
 - `id_space` (high-water mark) therefore grows monotonically; `node_count` is live nodes. Vectors are allocated at `id_space` length; tombstoned slots hold zero/NaN per dtype.
-- `warren.compact(name)` is an explicit operation that renumbers to remove tombstones, producing a new version with a **new ID space** that is incompatible with earlier versions for vector comparison (recorded as `compacted_from` on the version row; `warren.distance` refuses to compare across a compaction boundary). Run it when the tombstone fraction is high and no cross-version comparisons are pending.
+- `warren.compact(name)` is an explicit operation that renumbers to remove tombstones, producing a new version with a **new ID space** that is incompatible with earlier versions for vector comparison (recorded as `compacted_from` on the version row; `warren.distance` refuses to compare across a compaction boundary). Run it when the tombstone fraction is high and no cross-version comparisons are pending. *Implemented (M2, `warren_core::version::compact`):* live nodes get dense IDs `0..node_count` in `id_type` order (as a first build would), the relation dictionary is unchanged, every CSR is rebuilt from the per-relation forward edges through the normal build (weights and `build_reverse` kept; `deduplicated_edges` is 0, since nothing is folded), and the old→new mapping is returned so bound vectors can be carried across. *SQL (M2):* `warren.compact(name) RETURNS bigint` compacts the current version, records the result as a new version with `compacted_from` set (its `dropped_edges`, `deduplicated_edges` and `built_lsn` carried over from the source, since it holds the same edges as of the same snapshot), promotes it with retention, and returns its id; later refreshes continue in the new ID space. **Lineage (M2):** a version whose `seq` is below that of the graph's latest compacted version (`compacted_from IS NOT NULL`) is in a replaced ID space: `promote` refuses to make it current, and `refresh` refuses to build on it, with `object_not_in_prerequisite_state` naming the compaction. A graph therefore never returns to an ID space a compaction replaced, which vectors and `distance` (aligned by dense ID) rely on. Carrying bound vectors across is M4. Dropping the source version later sets `compacted_from` to NULL; `diff` then still refuses through `warren-core`'s dense-ID check.
 - `id_map` is stored as (external ID, dense ID) pairs sorted by external ID so external→dense is a binary search; an inverse array gives dense→external in O(1).
 - Traversal and compute functions accept and return **external IDs** by default; vector materialisation to tables goes through `id_map`.
 
 ### 5.3 CSR layout
 
-Per relation *r* (a single implicit relation if `has_relations = false`):
+Per relation *r* (a single implicit relation, named `''` in `rel_dict`, if `has_relations = false`). In segment names *r* is the relation's index in `rel_dict`, which is append-only across versions, so a relation keeps its segment names; the merged CSR's segments use `merged` (`offsets:merged`, …) and are stored only when there is not exactly one relation:
 
 | Segment | Type | Length | Notes |
 |---|---|---|---|
@@ -272,21 +273,23 @@ Every segment is validated on load, before any unchecked slice is formed: alignm
 
 `warren.refresh(name, promote bool DEFAULT true, label text DEFAULT NULL)`:
 
-1. Pin one snapshot for the whole build: `CommandCounterIncrement()`, then `PushActiveSnapshot(GetTransactionSnapshot())`, popped on the normal path. Transaction or subtransaction abort releases it on error. Both queries run as **read-only** SPI cursors (`SPI_cursor_open_with_args(…, read_only = true, …)`) under that snapshot. Under READ COMMITTED, non-read-only SPI statements would each take a fresh snapshot, and `node_query` and `edge_query` could disagree. The queries execute with the graph owner's privileges (`SetUserIdAndSecContext`, as `REFRESH MATERIALIZED VIEW` does; see §7 for both identity switches in `refresh`). No locks are taken on source tables beyond the `AccessShareLock` the queries themselves take; pgGraph, by contrast, takes `SHARE NOWAIT` on every source. Record `pg_current_wal_lsn()`.
-2. Stream `node_query` through the cursor into `warren-core`. Sort the external IDs in memory, and merge-walk against the previous promoted version's `id_map` (if any) to assign dense IDs per §5.2. Write `id_map` and `tombstones`.
-3. Stream `edge_query`. Map `src` and `dst` to dense IDs in `warren-core` (binary search over the typed `id_map`, never text keys or SQL joins). Map `rel` through `rel_dict`, appending new relations. Edges with a NULL, unknown or tombstoned endpoint are dropped and counted in `dropped_edges`. If `directed = false`, emit both directions with the same weight (a self-loop once).
+Before the build, `refresh` checks that the caller is a member of the owner role (§7) and locks the graph's `warren.graphs` row `FOR UPDATE`, so refreshes of one graph run one at a time, and re-reads `current_version` under that lock.
+
+1. Pin one snapshot for the whole build: `CommandCounterIncrement()`, then `PushActiveSnapshot(GetTransactionSnapshot())`, popped on the normal path. Transaction or subtransaction abort releases it on error. Both queries run as **read-only** SPI cursors (`SPI_cursor_open_with_args(…, read_only = true, …)`) under that snapshot. Under READ COMMITTED, non-read-only SPI statements would each take a fresh snapshot, and `node_query` and `edge_query` could disagree. The queries execute with the graph owner's privileges and under the `search_path` captured from the creator by `create_graph` (`graphs.search_path`), so a caller cannot redirect their unqualified names (`SetUserIdAndSecContext`, as `REFRESH MATERIALIZED VIEW` does; see §7 for both identity switches in `refresh`). No locks are taken on source tables beyond the `AccessShareLock` the queries themselves take; pgGraph, by contrast, takes `SHARE NOWAIT` on every source. Record `pg_current_wal_lsn()`. Each query's result columns are checked against the definition on every refresh (`int8` ids, then `text` relation and `float8` weight per the flags), so a source whose types changed since `create_graph` fails with `datatype_mismatch`.
+2. Stream `node_query` through the cursor into `warren-core`. Sort the external IDs in memory, and merge-walk against the previous promoted version's `id_map` (if any) to assign dense IDs per §5.2. NULL node ids are ignored.
+3. Stream `edge_query`. Map `src` and `dst` to dense IDs in `warren-core` (binary search over the typed `id_map`, never text keys or SQL joins). Map `rel` through `rel_dict`, appending new relations. Edges with a NULL, unknown or tombstoned endpoint, or with a NULL relation (if `has_relations`) or NULL weight (if `weighted`), are dropped and counted in `dropped_edges`. If `directed = false`, emit both directions with the same weight (a self-loop once).
 4. Build the forward CSR with no comparison sort, since dense IDs are already known: counting-sort the edge list by `src`, then sort each row by `(rel, dst)` and deduplicate parallel edges within the row (sum weights if weighted; count in `deduplicated_edges`; see §14). Split per relation, and build the merged CSR if there are multiple relations (a target reached through several relations appears once, weights summed); with one relation, its CSR is the all-relations CSR. Free the edge list, then build the reverse CSR by **transposing** the forward CSR: count in-degrees, prefix-sum, scatter while scanning sources in order. That is O(N + M), and rows come out sorted by source.
-5. Write segments under a new `versions` row with `staged = true`.
+5. Insert a new `versions` row with `staged = true` and the version's stats (`seq` is the graph's highest plus one), then write `id_map`, `tombstones`, `rel_dict` and the CSR segments in chunks under it, and record their total `bytes`.
 6. If `promote`: set `graphs.current_version`, set `staged = false`, and delete promoted versions beyond `retain_versions` (never delete a version that has named vectors bound to it unless `warren.drop_version` is called explicitly — see §7).
 
 Because the build runs under the caller's snapshot, **it sees the caller's uncommitted writes**. This is the mechanism behind staged evaluation (§8).
 
-Memory discipline: a 100M-edge graph (~1.2 GB forward + ~1.2 GB reverse) should build in under 4 GB of backend RAM. The edge list stores endpoints at the target width (20 B per weighted edge below 2³² nodes: `u32` source, target and relation, `f64` weight; the adapter passes the edge count to `EdgeIntake::reserve` so it is allocated once). The counting sort scatters it into rows one column at a time, freeing each input column as it goes, so the peak is about 28 B per weighted edge; the rows are freed once the per-relation CSRs exist, and the merged CSR is built from those. Measured peak (M1, 10M weighted edges over 1M nodes, scaled ×10): **~2.9 GB for one relation with reverse**, within the cap. With several relations the stored merged CSR doubles the result (~5.8 GB weighted with reverse, ~2.6 GB unweighted), so a weighted multi-relation graph of 100M edges exceeds the cap; the lever is not storing the merged CSR (§5.3). All graph-sized buffers use `try_reserve`. An external-sort spill is added only if M2 measurements show it is needed.
+Memory discipline: a 100M-edge graph (~1.2 GB forward + ~1.2 GB reverse) should build in under 4 GB of backend RAM. The edge list stores endpoints at the target width (20 B per weighted edge below 2³² nodes: `u32` source, target and relation, `f64` weight; the adapter passes the edge count to `EdgeIntake::reserve` so it is allocated once). The counting sort scatters it into rows one column at a time, freeing each input column as it goes, so the peak is about 28 B per weighted edge; the rows are freed once the per-relation CSRs exist, and the merged CSR is built from those. Measured peak (M1, 10M weighted edges over 1M nodes, scaled ×10): **~2.9 GB for one relation with reverse**, within the cap. With several relations the stored merged CSR doubles the result (~5.8 GB weighted with reverse, ~2.6 GB unweighted), so a weighted multi-relation graph of 100M edges exceeds the cap; the lever is not storing the merged CSR (§5.3). All graph-sized buffers use `try_reserve`. The edge list is reserved once, up front, for the planner's row estimate of `edge_query` (the cursor's top plan node), so it does not overshoot its final size by geometric growth; a reservation that fails (a stale overestimate) is ignored and the list grows as rows arrive. An external-sort spill is added only if M2 measurements show it is needed.
 
 ### 5.5 Backend-local cache
 
 On first use of a `version_id` in a backend:
-- read the chunks via SPI;
+- read the chunks via SPI (*M2:* the loader exists — `cache::load` decodes a version's segments over the segment-store port and validates them together through `GraphCsr::from_parts` and `GraphVersion::new`; `diff`, `compact` and `refresh`'s base version use it);
 - copy them into contiguous, 64-byte-aligned segment buffers allocated with the **Rust allocator**, not `palloc`. Compute worker threads read these buffers (§6.9), `Arc` ownership makes eviction during a scan safe, and the allocator gives explicit control over alignment;
 - validate the segments (§5.3);
 - keep them in an `Arc<VersionData>` in a backend-local map keyed by `version_id`.
@@ -523,13 +526,13 @@ SuiteSparse:GraphBLAS is the mature implementation of the semiring model (masks,
 
 - A graph has zero or more versions. Exactly one is `current` (promoted). Any call that takes `version bigint DEFAULT NULL` operates on `current` when NULL.
 - `warren.refresh(name, promote := false)` builds a **staged** version: fully built, loadable, queryable by explicit `version`, but not visible to callers that use the default. `warren.promote(name, version)` makes it current; `warren.drop_version(name, version)` discards it.
-- `retain_versions` controls how many promoted versions are kept; staged versions are never auto-deleted. A version with bound vectors is not auto-deleted either (a `NOTICE` reports what was retained and why).
+- `retain_versions` controls how many promoted versions are kept; staged versions are never auto-deleted. A version with bound vectors is not auto-deleted either (a `NOTICE` reports what was retained and why). *Implemented (M2):* every promotion (`refresh(promote := true)` and `promote`) keeps the current version plus the `retain_versions − 1` newest other promoted versions by `seq` (so the current version counts towards the limit and is kept even when it is an older one promoted back), and deletes the rest unless vectors are bound to them; deleting a version cascades to its segments. `drop_version` deletes any version but the current one (vectors included); `drop_graph` deletes the graph and everything built from it.
 - Versions share the dense ID space (until `compact`), so any vector bound to version *n* can be read against version *m* for comparison — `warren.vector_norm_diff` and `warren.distance` (§8) accept vectors from different versions of the same graph and align by dense ID, treating nodes absent from either side as zero.
 - **Access.** A graph exposes topology computed with its owner's visibility, exactly like a materialised view; source-table RLS does not apply to what traversal reveals. Traversal and compute functions therefore require the caller to be a member of the owner or of a role in `graphs.readers`. `warren.grant(name, role)` and `warren.revoke(name, role)` maintain that list. Management functions (`refresh`, `promote`, `drop_*`, `compact`, `grant`, `revoke`) require membership in the owner role. `owner` is set to `current_user` by `warren.create_graph` and no function changes it; ownership transfer is out of scope for v1.
-- **Catalog writes and identity switches.** All `warren.*` functions are `SECURITY INVOKER`. Because the tables are revoked from `PUBLIC` (§5.1), each catalog, segment or vector SPI statement runs inside an internal switch to the **extension owner**: `GetUserIdAndSecContext`, then `SetUserIdAndSecContext(extowner, SECURITY_LOCAL_USERID_CHANGE | SECURITY_RESTRICTED_OPERATION)`, then restore. The extension owner is read once per backend from `pg_extension.extowner`, and an `ERROR` inside the switch is undone by (sub)transaction abort. This is preferred over `SECURITY DEFINER` functions because the elevation then covers only extension-written SQL against fixed, schema-qualified tables. With `SECURITY DEFINER`, everything the function evaluates would run elevated: user-supplied `node_query`/`edge_query`, `gather` message SQL and `vector_map` executor-fallback expressions. Avoiding that would need a switch back to the invoker at each of those points, which is easier to get wrong.
+- **Catalog writes and identity switches.** All `warren.*` functions are `SECURITY INVOKER`. Because the tables are revoked from `PUBLIC` (§5.1), each catalog, segment or vector SPI statement runs inside an internal switch to the **extension owner**: `GetUserIdAndSecContext`, then `SetUserIdAndSecContext(extowner, SECURITY_LOCAL_USERID_CHANGE | SECURITY_RESTRICTED_OPERATION)`, then restore. The extension owner is read once per backend from `pg_extension.extowner`, and an `ERROR` inside the switch is undone by (sub)transaction abort. This is preferred over `SECURITY DEFINER` functions because the elevation then covers only extension-written SQL. Schema-qualifying the tables is not enough to make that SQL fixed: operators (`=`, `||`), functions and catalog relations (`pg_roles`, `pg_has_role`) resolve through `search_path`, so a caller could put its own `=` ahead of `pg_catalog` and have it run as the extension owner, or shadow `pg_roles`/`pg_has_role` to pass an access check (both reproduced in review, M2). **Every `warren.*` entry point therefore runs its whole body under `access::entry`, which pins `search_path = pg_catalog, pg_temp`** (`pg_temp` explicitly last) the way `fmgr` applies `SECURITY DEFINER … SET search_path`: `NewGUCNestLevel`, `set_config_option(…, PGC_S_SESSION, GUC_ACTION_SAVE)`, and `AtEOXact_GUC` on return, with (sub)transaction abort restoring it on error. This covers the access checks that run as the caller as well as the elevated statements; the checks also schema-qualify `pg_catalog` objects. The caller's own `search_path` is captured before pinning and used only for the caller's own SQL (a new graph's source queries, checked by `create_graph`). A test calls every function in schema `warren` with a hostile `search_path` and fails if the hostile operator runs or the access checks give way. With `SECURITY DEFINER`, everything the function evaluates would run elevated: user-supplied `node_query`/`edge_query`, `gather` message SQL and `vector_map` executor-fallback expressions. Avoiding that would need a switch back to the invoker at each of those points, which is easier to get wrong.
 - `refresh` therefore makes two identity switches: to the **graph owner** while `node_query` and `edge_query` run (§5.4), and to the **extension owner** for the catalog and segment writes. User SQL never runs as the extension owner.
-- **Dropped roles.** `owner` and `readers` are `regrole` values, which are bare OIDs with no `pg_shdepend` entries, so `DROP ROLE` does not see them. `refresh`, and every function that checks access, raise an error if the owner role no longer exists. Reader OIDs that no longer resolve to a role are ignored by access checks and pruned by `grant` and `revoke`. A `DROP ROLE` event trigger that cleans these up is a v1.1 item.
-- `warren.diff(name, v1, v2)` returns structural deltas: nodes added/removed, edges added/removed per relation, degree-distribution shift — computed by merging the two CSRs row-wise, O(N + M).
+- **Dropped roles.** `owner` and `readers` are `regrole` values, which are bare OIDs with no `pg_shdepend` entries, so `DROP ROLE` does not see them. `refresh`, and every function that checks access, raise an error if the owner role no longer exists. Reader OIDs that no longer resolve to a role are ignored by access checks and pruned by `grant` and `revoke`. A graph whose owner was dropped can still be removed: `drop_graph` lets a superuser drop it. A `DROP ROLE` event trigger that cleans these up is a v1.1 item.
+- `warren.diff(name, v1, v2)` returns structural deltas: nodes added/removed, edges added/removed per relation, degree-distribution shift — computed by merging the two CSRs row-wise, O(N + M). *Implemented (M2, `warren_core::version::diff`):* an edge is a (src, dst) pair, so a weight change alone is not counted; relations are aligned by name (later dictionary's order, then relations only in the earlier one); an all-relations delta comes from the merged CSR. The degree shift is per direction (out, and in counted from the forward CSR, so no reverse is needed) over live nodes: a sparse histogram, the means, and the exact two-sample KS statistic (NULL when a side has no live nodes). `diff` refuses when the later id space is smaller or any shared dense ID names a different external ID, which catches comparisons across a compaction boundary. Benchmark: ~25 ms single-threaded at 100K nodes / 1M edges (`benches/version_diff.rs`). *SQL (M2):* `warren.diff(name, v1, v2) RETURNS jsonb`, chosen over rows because the degree histograms nest: `{from, to, nodes: {before, after, added, removed}, relations: [{relation, before, after, added, removed}], all_relations: {…}, out_degree: {mean_before, mean_after, ks_statistic, histogram: [{degree, before, after}]}, in_degree: {…}}`. Owners and readers may call it. It refuses (`invalid_parameter_value`) when a version with `compacted_from` set lies after the earlier and at or before the later of the two by `seq`, naming the compaction, before loading anything.
 
 ## 8. Change detection workflow
 
@@ -663,11 +666,19 @@ warren.walk(graph, start anyarray, steps warren.step[], mode DEFAULT 'ends', ...
 -- management
 warren.create_graph(name, node_query, edge_query, directed DEFAULT true, weighted DEFAULT false,
                     has_relations DEFAULT false, build_reverse DEFAULT true, retain_versions DEFAULT 2);
-warren.refresh(name, promote DEFAULT true, label DEFAULT NULL) RETURNS bigint;
-warren.promote(name, version); warren.drop_version(name, version); warren.compact(name);
+                    -- owner := current_user; both queries are opened (not run) as read-only cursors to check
+                    -- their columns; id_type is the node query's column type (M2: int8 only; int4/uuid in M3)
+warren.refresh(name, promote DEFAULT true, label DEFAULT NULL) RETURNS bigint;   -- the new version_id
+warren.promote(name, version); warren.drop_version(name, version); warren.compact(name) RETURNS bigint;
+warren.diff(name, v1, v2) RETURNS jsonb;   -- §7
 warren.drop_graph(name); warren.prewarm(name); warren.evict(name);
-warren.grant(name, role regrole); warren.revoke(name, role regrole);   -- §7 access
-warren.info(name) RETURNS jsonb;   -- current version, stats, staleness (now() - built_at), bytes, versions list
+warren.grant(name, role regrole); warren.revoke(name, role regrole);   -- §7 access; both RETURN void
+-- promote, drop_version, drop_graph RETURN void; promote applies retention (§7)
+warren.info(name) RETURNS jsonb;   -- current version, stats, staleness (now() - built_at), bytes, versions list;
+                                   -- owners and readers may call it. Keys: name, owner, readers, id_type, the flags,
+                                   -- retain_versions, current_version, staleness, bytes, versions[{version, seq, staged,
+                                   -- current, label, built_at, built_lsn, staleness, node_count, id_space, edge_count,
+                                   -- dropped_edges, deduplicated_edges, target_width, bytes, compacted_from, vectors}]
 warren.last_stats() RETURNS jsonb; -- nodes visited, edges traversed, path taken, for the session's last call (Appendix A.6)
 warren.explain_map(graph, expr) RETURNS jsonb;  -- 'compiled' | 'executor', and why (§6.3)
 ```
@@ -738,7 +749,7 @@ Workspace split, non-negotiable:
 - Integration tests (`cargo pgrx test`): every SQL function; every `id_type`; directed/undirected; weighted/unweighted; relations present/absent; reverse present/absent; filters; refresh with a prior version loaded; staged → promote → retention → drop; vectors bound to retained versions; `compact` and the refusal to compare across it; rollback of a transaction containing a staged build leaves no rows; cancellation of long traversals and compute; memory cap enforcement.
 - **Oracle tests:** every traversal function against an equivalent recursive CTE; PageRank and components against NetworkX on exported fixtures; `gather(... 'collect')` against a plain SQL join + `array_agg`; `diff` against SQL `EXCEPT`. Exact match on random graphs of ~10K nodes. This suite is the most valuable thing in the repository.
 - Robustness: a `cargo fuzz` target for the segment decoder (§5.3); a differential proptest of bidirectional against single-direction shortest path (§9.3).
-- Extension lifecycle: `cargo pgrx schema` output diffed against the committed `sql/pg_warren--X.Y.Z.sql`. From the first release on, install the previous release, run `ALTER EXTENSION pg_warren UPDATE`, and assert the resulting `pg_proc`/`pg_class` signatures equal a fresh install's. A `pg_dump`/restore round trip preserves `warren.*` rows (§5.1).
+- Extension lifecycle: `cargo pgrx schema` output diffed against the committed `sql/pg_warren--X.Y.Z.sql` (*M2:* `sql/schema-drift.sh`, in CI on PG 16; both sides are normalised — comments dropped, entity blocks sorted — because pgrx's order is unstable and its comments carry source lines). From the first release on, install the previous release, run `ALTER EXTENSION pg_warren UPDATE`, and assert the resulting `pg_proc`/`pg_class` signatures equal a fresh install's. A `pg_dump`/restore round trip preserves `warren.*` rows (§5.1).
 - Cross-version tests: build v1, mutate tables (add/remove nodes and edges), build v2, assert dense IDs of surviving nodes unchanged, assert `distance` is zero when nothing changed and monotone in perturbation size for `edit`.
 
 ### Performance
@@ -775,7 +786,7 @@ pg_warren/
 ├── test/                   ← integration tests not expressible in cargo pgrx test
 ├── docker/                 ← one Dockerfile, parameterised by a PG_MAJOR build arg
 └── .github/workflows/      ← fmt, clippy, unit, Miri (warren-core), pgrx tests PG 15–18 on PGDG packages
-                               (cargo pgrx init --pgNN=<pg_config>), schema-drift + upgrade-path checks (added in M2, once the catalog exists); bench targets compile+run once in core tests
+                               (cargo pgrx init --pgNN=<pg_config>), schema-drift check (added in M2); upgrade-path check from the first release (v0.1.0) on, when there is a previous release to upgrade from; bench targets compile+run once in core tests
 ```
 
 Each milestone leaves `main` green and demonstrable.
@@ -816,7 +827,7 @@ Post-v0.3: contraction/project/lift and Louvain (§6.6), DSM cache + compute wor
 14. **`warren.step` as a composite type vs. `jsonb`.** Composite gives type-checking and a clean `warren.s()` constructor; `jsonb` is easier to generate from application code. Lean: composite as the canonical IR with a `jsonb → warren.step[]` cast for convenience.
 15. **`walk` path enumeration limits.** Hard cap on `max_results` for `mode = 'paths'` (lean: default 100,000, error above a GUC ceiling) and whether to support `'count'` exactly or approximately for variable-length segments (lean: exact).
 16. **Prior-art reading complete** (§4A). **Done (M0, 2026-10-19):** see [`docs/prior-art-notes.md`](docs/prior-art-notes.md) (pgGraph `b0f53df`, OneSparse `79a57cd`). Sections changed as a result (v0.6): §4A, §5.1, §5.3, §5.4, §5.5, §6.3, §6.7, §6.9, §7, §9.3, §10, §11, §12, §13, §14 items 2 and 4. Not a reuse decision (the policy is to build in full), but a gate.
-17. **Relation count × node count.** Per-relation offsets grow as R·N (§5.3). **Decided (M1):** no fixed relation limit; a build is refused up front when its offsets would exceed the memory budget the adapter passes (`warren.max_build_memory` or the compute cap, settled in M2). Revisit with sparse per-relation offsets if graphs with many relations appear.
+17. **Relation count × node count.** Per-relation offsets grow as R·N (§5.3). **Decided (M1):** no fixed relation limit; a build is refused up front when its offsets would exceed the memory budget the adapter passes. **Decided (M2):** the budget is the `warren.max_build_memory` GUC (kB units, default `4GB`, minimum `1MB`, `USERSET` like `maintenance_work_mem`); `refresh` passes it to `GraphCsr::build_within`, and an over-budget build fails with `configuration_limit_exceeded` before anything is allocated or written. It bounds the offsets (the R·N term) only; the edge list and targets are bounded by fallible allocation. Revisit with sparse per-relation offsets if graphs with many relations appear.
 
 ## 15. Instructions to the implementing agent
 

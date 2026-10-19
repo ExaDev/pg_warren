@@ -51,6 +51,11 @@ MIRIFLAGS=-Zmiri-disable-isolation PROPTEST_CASES=16 PROPTEST_DISABLE_FAILURE_PE
 # Optional: run the micro-benchmarks (CI only builds and smoke-runs them)
 cargo bench -p warren-core
 
+# The generated extension SQL must match the committed snapshot (needs
+# cargo pgrx init for pg16). After a deliberate schema change, regenerate it
+# with sql/schema-drift.sh --update and commit the result.
+sql/schema-drift.sh
+
 # warren-core must never depend on Postgres (DESIGN.md §15.4); this must print nothing
 cargo tree -p warren-core -e all | grep -E 'pgrx|pg[-_]sys'
 ```
@@ -73,6 +78,15 @@ directory that user owns:
 install -d -o postgres -g postgres /tmp/pgrx-pgdata
 cd crates/pg_warren
 cargo pgrx test pg16 --runas postgres --pgdata /tmp/pgrx-pgdata
+```
+
+`cargo pgrx test` installs the extension into the shared Postgres tree
+(`$(pg_config --pkglibdir)/pg_warren.so` and the extension SQL), so two
+checkouts or worktrees testing at once overwrite each other's build and get
+confusing failures. When several run on one machine, take a global lock:
+
+```sh
+flock /tmp/pgrx-test.lock cargo pgrx test pg16 --runas postgres --pgdata /tmp/pgrx-pgdata
 ```
 
 This needs `sudo` and an existing unprivileged user (the `postgres` user that
