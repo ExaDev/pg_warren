@@ -43,7 +43,7 @@ impl Method<'_> {
     /// The distance between the versions of `pair`.
     fn measure<E: IdDatum>(&self, pair: &mut Pair<E>) -> Result<Value, SpectralSqlError> {
         match self {
-            Self::Edit => Ok(methods::edit(pair)),
+            Self::Edit => methods::edit(pair),
             Self::Degree => methods::degree(pair),
             Self::Spectral(operator, eigenvalues) => methods::spectral(pair, operator, eigenvalues),
             Self::Subspace { prefix, k, compared } => {

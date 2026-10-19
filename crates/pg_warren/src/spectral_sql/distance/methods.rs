@@ -6,8 +6,8 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use warren_core::compute::AnyVector;
 use warren_core::spectral::{
-    degree_distance, edit_distance, embedding_distance, rayleigh_quotients, spectral_distance,
-    subspace_distance, ComparedRows, EdgeSetChange, EigenOptions, Resources,
+    degree_distance, embedding_distance, rayleigh_quotients, spectral_distance, subspace_distance,
+    ComparedRows, EdgeSetChange, EigenOptions, Resources,
 };
 
 use super::super::eigen::eigenpairs;
@@ -19,9 +19,8 @@ use crate::interrupts::PostgresInterrupts;
 use crate::source::IdDatum;
 
 /// `edit`: per relation (matched by name) and overall.
-pub(super) fn edit<E: IdDatum>(pair: &Pair<E>) -> Value {
-    let before = (&pair.before.loaded.relations, &pair.before.loaded.graph);
-    let distance = edit_distance(before, pair.after_relations());
+pub(super) fn edit<E: IdDatum>(pair: &Pair<E>) -> Result<Value, SpectralSqlError> {
+    let distance = pair.edit_distance()?;
     let relations: Vec<Value> = distance
         .relations
         .iter()
@@ -31,7 +30,7 @@ pub(super) fn edit<E: IdDatum>(pair: &Pair<E>) -> Value {
             entry
         })
         .collect();
-    json!({ "relations": relations, "overall": change_json(&distance.overall) })
+    Ok(json!({ "relations": relations, "overall": change_json(&distance.overall) }))
 }
 
 fn change_json(change: &EdgeSetChange) -> Value {

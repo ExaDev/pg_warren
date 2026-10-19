@@ -1,6 +1,6 @@
 //! Alignment of a vector of one graph to the id space of another, for
 //! comparing across graphs (DESIGN.md §8: the shadow-schema pattern). The
-//! dense-id mapping comes from [`crate::version::align`]; this moves the
+//! dense-id mapping comes from [`super::align_ids`]; this moves the
 //! rows.
 
 use super::super::SpectralError;

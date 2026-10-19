@@ -33,7 +33,7 @@ pub(super) fn components<I: Interrupts>(
     }
     for csr in csrs {
         for source in 0..csr.id_space() {
-            if source % ROWS_PER_POLL == 0 {
+            if source.is_multiple_of(ROWS_PER_POLL) {
                 resources.interrupts.check().map_err(ComputeError::from)?;
             }
             for target in csr.neighbours(source) {
