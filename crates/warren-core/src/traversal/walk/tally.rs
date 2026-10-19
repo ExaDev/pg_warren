@@ -10,6 +10,7 @@ use super::super::scratch::NodeMap;
 use super::super::stats::Progress;
 use super::super::TraversalError;
 use super::plan::WalkPlan;
+use super::reach::Level;
 use crate::graph::{memory, DenseId};
 
 /// The number of walks reaching each node of one level.
@@ -47,12 +48,13 @@ impl Tally {
     }
 }
 
-/// Counts the walks of `plan` level by level, and returns the walks ending
-/// on each end. Distinct
+/// Counts the walks of `plan` level by level, handing each finished level
+/// to `level_done`, and returns the walks ending on each end. Distinct
 /// starts count as visited nodes; so does each node new to a level.
 pub(super) fn tally(
     plan: &WalkPlan<'_>,
     progress: &mut Progress<'_>,
+    mut level_done: impl FnMut(Level, Tally) -> Result<(), TraversalError>,
 ) -> Result<Tally, TraversalError> {
     let id_space = plan.id_space;
     let mut inputs = Tally::new(id_space);
@@ -60,7 +62,7 @@ pub(super) fn tally(
         progress.node_visited()?;
         inputs.add(start, 1)?;
     }
-    for step in &plan.steps {
+    for (index, step) in plan.steps.iter().enumerate() {
         let (min, max) = (step.hops.min(), step.hops.max());
         let mut ends = Tally::new(id_space);
         let mut level = inputs;
@@ -89,6 +91,7 @@ pub(super) fn tally(
                     }
                 }
             }
+            level_done(Level { step: index, depth }, level)?;
             if next.is_empty() {
                 break;
             }

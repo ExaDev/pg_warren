@@ -30,7 +30,7 @@ pub fn walk_ends_each(
     match options.distinct_ends {
         true => reach::<Unlabelled>(&plan, &mut progress, &mut ends)?,
         false => {
-            'ends: for (node, walks) in tally(&plan, &mut progress)?.iter() {
+            'ends: for (node, walks) in tally(&plan, &mut progress, |_, _| Ok(()))?.iter() {
                 for _ in 0..walks {
                     if ends.ended(None, node)?.is_break() {
                         break 'ends;

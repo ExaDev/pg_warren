@@ -11,6 +11,7 @@ mod count;
 mod ends;
 #[cfg(test)]
 mod example;
+mod paths;
 mod plan;
 mod reach;
 mod step;
@@ -19,6 +20,7 @@ mod tally;
 use std::ops::ControlFlow;
 
 pub use ends::walk_ends_each;
+pub use paths::{walk_paths_each, WalkPath};
 pub use step::{HopRange, Step};
 
 use super::scratch::Rows;
@@ -33,6 +35,9 @@ pub enum WalkMode {
     Ends,
     /// The number of ends, or of walks if ends are not distinct.
     Count,
+    /// The walks, node by node with each hop's relation: one per distinct
+    /// end, or every walk if ends are not distinct.
+    Paths,
 }
 
 /// How a walk reports its result.
@@ -61,6 +66,8 @@ pub enum WalkResult {
     Ends(Vec<DenseId>),
     /// [`WalkMode::Count`].
     Count(u64),
+    /// [`WalkMode::Paths`].
+    Paths(Vec<WalkPath>),
 }
 
 /// Walks `steps` from `starts` over `graph` and collects the result `mode`
@@ -79,6 +86,12 @@ pub fn walk(
             let stats =
                 walk_ends_each(graph, starts, steps, options, interrupts, |end| ends.push(end))?;
             Ok(Traversed { result: WalkResult::Ends(ends.finish()?), stats })
+        }
+        WalkMode::Paths => {
+            let mut paths = Rows::new();
+            let stats =
+                walk_paths_each(graph, starts, steps, options, interrupts, |p| paths.push(p))?;
+            Ok(Traversed { result: WalkResult::Paths(paths.finish()?), stats })
         }
         WalkMode::Count => {
             let plan = plan::plan(graph, starts, steps, options.reverse)?;

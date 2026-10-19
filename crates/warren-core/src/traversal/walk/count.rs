@@ -24,9 +24,11 @@ pub(super) fn count(
             reach::<Unlabelled>(plan, &mut progress, &mut ends)?;
             ends.0
         }
-        false => tally(plan, &mut progress)?.iter().try_fold(0u64, |sum, (_, walks)| {
-            sum.checked_add(walks).ok_or(TraversalError::WalkCountOverflow)
-        })?,
+        false => tally(plan, &mut progress, |_, _| Ok(()))?
+            .iter()
+            .try_fold(0u64, |sum, (_, walks)| {
+                sum.checked_add(walks).ok_or(TraversalError::WalkCountOverflow)
+            })?,
     };
     Ok(progress.traversed(count))
 }

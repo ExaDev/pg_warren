@@ -56,6 +56,8 @@ pub(super) struct WalkPlan<'w> {
     /// The distinct starts, in the order given, that the first executed
     /// step may begin from.
     pub(super) starts: Vec<DenseId>,
+    /// Whether the steps run last to first.
+    pub(super) reverse: bool,
 }
 
 /// Plans `steps` from `starts` over `graph`, forwards or in reverse.
@@ -93,7 +95,7 @@ pub(super) fn plan<'w>(
         true => steps.len().checked_sub(1).and_then(filter),
     };
     let starts = distinct_starts(id_space, starts, allowed)?;
-    Ok(WalkPlan { id_space, steps: planned, starts })
+    Ok(WalkPlan { id_space, steps: planned, starts, reverse })
 }
 
 /// `starts` without repeats or nodes outside `allowed`, in the order given.

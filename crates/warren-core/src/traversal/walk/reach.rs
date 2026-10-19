@@ -14,7 +14,7 @@ use super::super::scratch::Visited;
 use super::super::stats::Progress;
 use super::super::{Adjacency, TraversalError};
 use super::plan::{StepPlan, WalkPlan};
-use crate::graph::{memory, DenseId};
+use crate::graph::{memory, DenseId, RelationIndex};
 
 /// A level of a walk: a step, and a depth (hops taken) within it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +48,26 @@ impl Hops for Unlabelled {
     ) -> Result<ControlFlow<()>, TraversalError> {
         for neighbour in adjacency.row_entries(node) {
             if hop((), neighbour)?.is_break() {
+                return Ok(ControlFlow::Break(()));
+            }
+        }
+        Ok(ControlFlow::Continue(()))
+    }
+}
+
+/// Every `(relation, neighbour)` hop once: for reporting walks.
+pub(super) struct Labelled;
+
+impl Hops for Labelled {
+    type Label = RelationIndex;
+
+    fn scan(
+        adjacency: &Adjacency<'_>,
+        node: DenseId,
+        mut hop: impl FnMut(RelationIndex, DenseId) -> Result<ControlFlow<()>, TraversalError>,
+    ) -> Result<ControlFlow<()>, TraversalError> {
+        for (relation, neighbour) in adjacency.labelled_neighbours(node) {
+            if hop(relation, neighbour)?.is_break() {
                 return Ok(ControlFlow::Break(()));
             }
         }
