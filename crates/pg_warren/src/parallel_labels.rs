@@ -141,14 +141,20 @@ mod tests {
         Ok(())
     }
 
+    /// The setting that forces parallel mode; PG 16 renamed it.
+    #[cfg(feature = "pg15")]
+    const FORCE_PARALLEL: &str = "force_parallel_mode";
+    #[cfg(not(feature = "pg15"))]
+    const FORCE_PARALLEL: &str = "debug_parallel_query";
+
     #[pg_test]
     fn every_read_runs_in_parallel_mode() -> Result<(), Error> {
         let version = graph_with_a_vector()?;
-        Spi::run("SET debug_parallel_query = on")?;
+        Spi::run(&format!("SET {FORCE_PARALLEL} = on"))?;
         for read in READS {
             in_subtransaction(&read.replace("{v}", &version.to_string()))?;
         }
-        Spi::run("RESET debug_parallel_query")
+        Spi::run(&format!("RESET {FORCE_PARALLEL}"))
     }
 
     #[pg_test]
