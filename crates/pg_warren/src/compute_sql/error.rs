@@ -27,6 +27,9 @@ pub(crate) enum ComputeSqlError {
         /// The version.
         version: VersionId,
     },
+    /// `vector_from_query`'s query returned two rows for one node.
+    #[error("query returns more than one row for node {0}")]
+    DuplicateNode(String),
     /// A vector name must not be empty.
     #[error("a vector name must not be empty")]
     EmptyName,
@@ -48,6 +51,9 @@ pub(crate) enum ComputeSqlError {
     /// An id argument or relation did not fit the graph.
     #[error(transparent)]
     Traversal(#[from] TraversalSqlError),
+    /// A query does not fit.
+    #[error(transparent)]
+    Source(#[from] crate::source::SourceError),
     /// The kernel failed.
     #[error("{0}")]
     Compute(#[from] ComputeError),
@@ -67,6 +73,7 @@ impl SqlError for ComputeSqlError {
         match self {
             Self::NullArgument(_) => PgSqlErrorCode::ERRCODE_NULL_VALUE_NOT_ALLOWED,
             Self::VectorNotFound { .. } => PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT,
+            Self::DuplicateNode(_) => PgSqlErrorCode::ERRCODE_CARDINALITY_VIOLATION,
             Self::EmptyName | Self::InvalidArgument(_) => {
                 PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE
             }
@@ -75,6 +82,7 @@ impl SqlError for ComputeSqlError {
             Self::Cache(error) => error.sqlstate(),
             Self::Vector(error) => error.sqlstate(),
             Self::Traversal(error) => error.sqlstate(),
+            Self::Source(error) => error.sqlstate(),
             Self::Compute(error) => compute_sqlstate(error),
             Self::Spi(_) => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
         }

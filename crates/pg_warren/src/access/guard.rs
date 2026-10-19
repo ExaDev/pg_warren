@@ -235,6 +235,7 @@ mod tests {
         ("vector_const", "warren.vector_const('victim', 'c', 1)"),
         ("vector_degree", "warren.vector_degree('victim', 'd')"),
         ("vector_dense_id", "warren.vector_dense_id('victim', 'i')"),
+        ("vector_from_query", "warren.vector_from_query('victim', 'q', 'SELECT 1::bigint, 1')"),
         ("vector_norm_diff", "warren.vector_norm_diff('victim', 'c', 'c')"),
         ("vector_reduce", "warren.vector_reduce('victim', 'c', 'sum')"),
         ("vector_stats", "warren.vector_stats('victim', 'c')"),

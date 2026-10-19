@@ -15,6 +15,7 @@
 mod constructors;
 mod drop;
 mod error;
+mod from_query;
 mod read;
 mod reduce;
 mod settings;
