@@ -20,10 +20,29 @@ transactionally in extension tables. A version can be built inside the
 transaction that changes the data, compared with the current one, and
 committed or rolled back with it.
 
+## The principle: meet Postgres users where they are
+
+pg_warren is an escape valve for graph workloads that Postgres alone handles
+badly, without leaving Postgres or fighting it. Your data stays in your
+tables. Vertex programs are SQL: PL/pgSQL loops over whole-graph calls, with
+per-node logic as SQL expressions. Transactions, backups and replicas cover
+the graph like everything else, because its versions are ordinary rows.
+
+Pregel-style computation (`gather`, the algorithm library, PL/pgSQL loops
+over `spmv` and `vector_map`) is the first-class way in. Sparse matrix
+algebra beyond `spmv`/`spmm` (SpGEMM, sparse vectors, and CPU and later GPU
+backends) is **planned** as the power-user path; it is not there yet.
+
 ## Install
 
 pg_warren supports PostgreSQL 15, 16, 17 and 18 (16 is the development
 baseline). `CREATE EXTENSION pg_warren` needs a superuser.
+
+It runs wherever you can install extensions: self-hosted Postgres, and
+containers or Kubernetes (with the Dockerfile below). Managed services (RDS,
+Cloud SQL, Azure Database for PostgreSQL) load only extensions on their own
+allow-lists, so pg_warren is not available there unless the provider adopts
+it.
 
 **From source**, with Rust (the toolchain pinned in `rust-toolchain.toml`),
 the server headers (`postgresql-server-dev-NN`), `clang`/`libclang-dev`, and
@@ -138,15 +157,20 @@ Every SQL example in the README and `docs/` runs in CI, in
 
 ## Status
 
-Version **0.2.0** is in development (milestones M4–M6 of DESIGN.md §13:
-vectors, compute, `gather`, the algorithm library, spectral analysis and
-`distance`); **0.1.0** is released (versioned graphs and traversal). See
-[CHANGELOG.md](CHANGELOG.md). This is pre-1.0 software: the SQL surface may
-still change between minor versions, with an upgrade script each time.
+- **0.1.0** (released): versioned graphs and traversal, milestones M0–M3
+  of DESIGN.md §13.
+- **0.2.0** (milestones M4–M6, all landed; release being cut): vectors,
+  semiring compute, `gather`, the algorithm library, `eigen` and
+  `distance`.
+- **0.3.0** (in progress, M7): hardening, including a size bound on the
+  backend-local cache (planned, not shipped) and these docs.
 
-Not there yet: a shared-memory cache across backends, a size bound on the
-backend-local cache, incremental maintenance, contraction (community-level
-graphs), and text ids ([docs/limits.md](docs/limits.md)).
+See [CHANGELOG.md](CHANGELOG.md). This is pre-1.0 software: the SQL surface
+may still change between minor versions, with an upgrade script each time.
+
+Not there yet: a size bound on the backend-local cache (planned for 0.3.0),
+a shared-memory cache across backends, incremental maintenance, contraction
+(community-level graphs), and text ids ([docs/limits.md](docs/limits.md)).
 
 ## Positioning vs prior art
 

@@ -254,6 +254,23 @@ SELECT assert.equal((SELECT array_agg(value ORDER BY node_id)
                     ARRAY[80, 20, 50, 110, 80]::bigint[], 'sum over lanes');
 SELECT assert.raises($$SELECT * FROM warren.gather('roads', 'SELECT id, name FROM city', NULL::int, NULL::text)$$,
                      'a wrong witness names the right one', '42804');
+-- compute.md "gather": message-source rules and read-only state
+CREATE TABLE pop (id int, pop int);                                  -- same name as vector 'pop'
+SELECT assert.raises($$SELECT * FROM warren.gather('roads', 'pop', NULL::int, NULL::float8, 'max')$$,
+                     'a name that is both a vector and a relation', '42725');
+SELECT assert.equal((SELECT count(*) FROM warren.gather('roads', 'TABLE pop', NULL::int, NULL::int, 'max')),
+                    0::bigint, 'TABLE <name> means the relation');
+DROP TABLE pop;
+SELECT assert.raises($$SELECT * FROM warren.gather('roads', 'WITH d AS (DELETE FROM city RETURNING id, pop) SELECT * FROM d',
+                                                   NULL::int, NULL::bigint, 'sum')$$,
+                     'a data-modifying CTE is refused', '0A000');
+CREATE FUNCTION docs_writes(i int) RETURNS int LANGUAGE plpgsql AS $$
+BEGIN DELETE FROM city WHERE id = i; RETURN i; END $$;
+SELECT assert.raises($$SELECT * FROM warren.gather('roads', 'SELECT docs_writes(id), pop FROM city', NULL::int, NULL::bigint, 'sum')$$,
+                     'a write through a called function is refused', '25006');
+SELECT assert.raises($$SELECT warren.vector_from_query('roads', 'w', 'SELECT docs_writes(id), pop FROM city')$$,
+                     'vector_from_query is read-only too', '25006');
+SELECT assert.equal((SELECT count(*) FROM city), 5::bigint, 'nothing was deleted');
 
 -- "The algorithm library"
 SELECT warren.pagerank('roads', 'pr', weighted := false);
@@ -272,6 +289,12 @@ SELECT assert.equal((SELECT row FROM warren.matrix_rows('roads', 'emb_nbr', NULL
                     ARRAY[80, 20]::float8[], 'mean of neighbour rows');
 SELECT assert.equal((SELECT count(DISTINCT value) FROM warren.vector_values('roads', 'comp', NULL::int)),
                     1::bigint, 'one component');
+-- compute.md: intermediates are dropped; the _warren_ prefix is reserved
+SELECT assert.raises($$SELECT warren.vector_values('roads', '_warren_pagerank_one', NULL::int)$$,
+                     'no intermediate left behind', '42704');
+SELECT assert.raises($$SELECT warren.vector_const('roads', '_warren_mine', 1)$$, 'reserved prefix', '42939');
+SELECT assert.raises($$SELECT * FROM warren.eigen('roads', 1, vectors_prefix := '_warren_e')$$,
+                     'reserved eigen prefix', '42939');
 
 -- "eigen"
 SELECT * FROM warren.eigen('roads', 2, 'laplacian', 'smallest', vectors_prefix := 'lap', dtype := 'f64');
@@ -355,3 +378,12 @@ SELECT (warren.last_stats() ->> 'nodes_visited')::int AS nodes_select_list \gset
 SELECT * FROM warren.reachable_set('roads', ARRAY[1]) LIMIT 2;        -- FROM: runs to completion
 SELECT (warren.last_stats() ->> 'nodes_visited')::int AS nodes_from \gset
 SELECT assert.that(:nodes_select_list < :nodes_from, 'LIMIT stops a select-list SRF early');
+-- semantics.md "Parallel query labels": restricted reads work in parallel plans
+CREATE TABLE big AS SELECT g FROM generate_series(1, 100000) g;
+ANALYZE big;
+SET parallel_setup_cost = 0; SET parallel_tuple_cost = 0; SET min_parallel_table_scan_size = 0;
+SELECT assert.equal((SELECT count(*) FROM big WHERE g < (SELECT warren.vector_reduce('roads', 'pop', 'sum'))),
+                    259::bigint, 'a warren read in a parallel plan');
+SELECT assert.equal((SELECT count(*) FROM big b JOIN warren.vector_values('roads', 'pop', NULL::int) v ON v.node_id = b.g),
+                    5::bigint, 'a join with a vector read in a parallel plan');
+RESET parallel_setup_cost; RESET parallel_tuple_cost; RESET min_parallel_table_scan_size;

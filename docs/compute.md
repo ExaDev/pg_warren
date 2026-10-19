@@ -55,12 +55,14 @@ Rules:
   `f64` column) and its function returns its id. A **transient** vector
   (`persist := false`) lives only in this backend, for this role, returns
   NULL, costs no WAL, is not transactional, does not pin its version, and is
-  freed at session end or by `evict` or `drop_vector`. Keep loop scratch
-  transient and persist results.
+  freed at session end or by `evict` or `drop_vector` (`if_exists := true`
+  makes a missing name a no-op). Keep loop scratch transient and persist
+  results.
 - A name resolves to this role's transient vector first, then the persisted
   one. Writing a name replaces the vector of that name; a persisted vector
   may be replaced only by its writer or the graph owner.
-- `vector_from_query` runs the query as you, under your `search_path`. It
+- `vector_from_query` runs the query as you, under your `search_path`, in
+  read-only transaction state (see [semantics.md](semantics.md#access)). It
   returns `(id, value)`; the id must cast *implicitly* to the id type (so
   ids are never rounded), and the value converts with SQL's own cast (2.5
   becomes 3 in `i64`). An array value makes a matrix row; all rows must have
@@ -217,11 +219,20 @@ warren.gather(graph, messages, NULL::<id type>, NULL::<result type>,
   RETURNS TABLE (node_id, value)
 ```
 
-- `messages` is the name of a vector of the version (every live node sends
-  its value), else a table or view name, else a query. A table or query
-  returns `(id, message)` and runs as you, under your `search_path`; a node
-  may send several messages, or none. Rows with a NULL, unknown or
-  tombstoned id, or a NULL message, send nothing.
+- `messages` is read by its form:
+  - Text that is not an identifier (or `schema.identifier`) is a **query**.
+  - An identifier is a **vector** bound to the version, if one has exactly
+    that name (every live node sends its value), else a **table or view** on
+    your `search_path`. A name that is both is an error
+    (42725): vector names are shared by the graph's
+    writers, so one could otherwise redirect your `gather`.
+  - `TABLE <name>` always means the relation.
+- A table or query returns `(id, message)`, runs as you under your
+  `search_path`, and is read in read-only transaction state: a data-modifying
+  CTE is refused (0A000), and so is a write by a function it calls (25006).
+  You must be a reader of the graph. A node may send several messages, or
+  none; rows with a NULL, unknown or tombstoned id, or a NULL message, send
+  nothing.
 - Each receiver gets one copy of each message from each of its **senders**:
   its distinct neighbours in `direction` (`in`: nodes with an edge to it;
   `out`; `both`) over `rels`. Weights are not read. Receivers with no
@@ -265,7 +276,7 @@ intermediates transient, and persists only `out`.
 | `pagerank(graph, out, damping := 0.85, tol := 1e-6, max_iter := 100, seed := NULL, rels, weighted)` | PageRank as NetworkX computes it; `seed` (a vector) personalises it; `out` sums to 1 | iterations |
 | `components_vector(graph, out, rels)` | each node's component, as the minimum dense id in it (min-label propagation, both directions) | iterations |
 | `label_propagation(graph, out, seed := NULL, max_iter := 100, mask := NULL, rels)` | min-label propagation from `seed` labels, restricted to `mask` | iterations |
-| `sssp_vector(graph, out, source, rels, weighted, max_iter)` | distance from `source` (Bellman-Ford); unreachable is `Infinity` | iterations |
+| `sssp_vector(graph, out, source, rels, weighted, max_iter)` | distance from `source` (Bellman-Ford); unreachable is `Infinity`; a negative cycle reachable from `source` is an error (22023) | iterations |
 | `degree_vector(graph, out, direction := 'out', rels)` | distinct-neighbour degree | vector id |
 | `aggregate_neighbours(graph, x, out, agg := 'mean', hops := 1, rels, direction := 'out')` | `mean`, `sum` or `max` of neighbours' rows of matrix `x` (a "one-layer GNN") | void |
 | `triangles(graph, out, rels := NULL, persist := true)` | per-node triangle count in the undirected simple graph | vector id |
@@ -282,9 +293,13 @@ SELECT warren.aggregate_neighbours('roads', 'emb', 'emb_nbr');
 SELECT * FROM warren.matrix_rows('roads', 'emb_nbr', NULL::int);       -- elm: {80,20}
 ```
 
-The library names its transient intermediates `_warren_<function>_<part>`;
-do not use names starting with `_warren_` for your own vectors. A failed run
-leaves them in the session until `evict`.
+The library's intermediates are transient vectors named
+`_warren_<function>_<part>`. They are dropped when the function returns, and
+also when it fails or is cancelled, so a run leaves nothing behind but `out`.
+The `_warren_` prefix is **reserved**: no persisted vector may have such a
+name (`reserved_name`, 42939), including `eigen`'s `<vectors_prefix>_i`, and
+the library refuses it for `out` and its inputs. Transient vectors of your
+own may still use it, but there is no reason to.
 
 ## `eigen`
 
@@ -308,7 +323,8 @@ Top-k eigenpairs by Lanczos with full reorthogonalisation and thick restart.
   memory and goes further.
 - `vectors_prefix := 'lap'` stores the eigenvectors as vectors `lap_1 …
   lap_k` (persisted unless `persist := false`). Persisted eigenvectors pin
-  their version against retention.
+  their version against retention. A prefix starting with `_warren_` is
+  refused (42939) unless `persist := false`.
 - The problem is over **active** nodes (those with an edge under `rels`);
   eigenvectors are 0 at isolated and tombstoned nodes, and `k` may not
   exceed the active node count.

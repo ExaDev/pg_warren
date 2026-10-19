@@ -225,11 +225,21 @@ graph's owner. Transient vectors are private to the role that wrote them.
 | SQL | Runs as | `search_path` |
 |---|---|---|
 | `node_query`, `edge_query` (in `refresh`) | the graph owner | the creator's, captured at `create_graph` (`info() ->> 'search_path'`) |
-| `vector_from_query` and `gather` queries, `vector_map` expressions | the caller | the caller's |
+| `vector_from_query` and `gather` queries | the caller | the caller's |
+| `vector_map` expressions on the executor path | the caller | the caller's |
 | pg_warren's own catalog SQL | the extension owner | pinned to `pg_catalog, pg_temp` |
 
 So a caller cannot redirect a graph's unqualified table names with their
-own `search_path`, and no user SQL runs with elevated rights. Schema-qualify
+own `search_path`, and no user SQL runs with elevated rights.
+
+Source queries, `vector_from_query`'s query and `gather`'s messages run in
+Postgres's **read-only transaction state**, as under `SET TRANSACTION READ
+ONLY`. A function they call cannot write (25006), and a data-modifying CTE is
+refused (0A000). This guards the integrity of what a build or kernel reads;
+it is **not a sandbox**. Writes to existing temporary tables, `pg_notify`,
+`LOCK`, `COPY … TO PROGRAM` for roles allowed it, and writes over another
+connection (`dblink_exec`) still work. None of these gains privilege, since
+the SQL runs as the caller (or, for source queries, as the owner). Schema-qualify
 names in source queries if you will change the creator's `search_path`
 later. Functions are `SECURITY INVOKER`.
 
@@ -277,14 +287,15 @@ tombstoned node's row holds zero.
 
 ## Parallel query labels
 
-pg_warren's cache is per backend, and a parallel worker starts with an empty
-one, so:
+pg_warren's cache is per backend: a parallel worker would start with an
+empty one (and cold-load the whole version), could not see transient
+vectors, and could not hand `last_stats()` back. So:
 
-- Traversal functions are `STABLE PARALLEL RESTRICTED`: they run in the
-  leader, never in a worker.
-- Functions that write vectors, and `eigen`, `distance`, `gather`, are
-  `VOLATILE PARALLEL UNSAFE`.
-- Vector reads (`vector_values`, `matrix_rows`, `vector_topk`,
-  `vector_stats`, `vector_reduce`, `vector_norm_diff`, `id_map`,
-  `explain_map`) are labelled `PARALLEL SAFE`. See the known issue on
-  parallel mode in [limits.md](limits.md).
+| Label | Functions |
+|---|---|
+| `PARALLEL RESTRICTED` (run in the leader, never in a worker) | everything that reads a graph or a vector: traversal, `info`, `diff`, `distance`, `prewarm`, `evict`, `last_stats`, `vector_values`, `matrix_rows`, `vector_topk`, `vector_stats`, `vector_reduce`, `vector_norm_diff`, `id_map`, `explain_map` |
+| `PARALLEL UNSAFE` (no parallel plan) | everything that writes or may persist: graph management, the vector constructors, `spmv`, `spmm`, `vector_map`, `gather`, `triangles`, `eigen`, the library, `drop_vector` |
+| `PARALLEL SAFE` | `version`, `s`, `steps` (they read no graph) |
+
+Restricted functions work inside parallel plans: the rest of the query runs
+in parallel, and the warren call runs in the leader.

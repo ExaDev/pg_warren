@@ -130,13 +130,6 @@ c times; when that matters, run `eigen` on a graph defined over the
 largest component only. `symmetrize := false` (non-symmetric spectra) is accepted
 only when the graph is already symmetric.
 
-**Graph-reading functions fail in parallel mode.** When a query runs in
-parallel mode (a `Gather` in its plan), calls that read a graph or its
-vectors, including in an `InitPlan` evaluated by the leader, fail with
-`cannot assign XIDs during a parallel operation`. Calls on their own, or in
-queries the planner does not parallelise, are unaffected. Workaround: `SET
-max_parallel_workers_per_gather = 0` for the statement.
-
 **Stable functions in a `WHERE` clause are called per row.** Write
 `WHERE x < (SELECT warren.vector_reduce(…))`, not `WHERE x <
 warren.vector_reduce(…)`, so the call runs once.
@@ -152,8 +145,9 @@ can still `drop_graph`); per-role quotas on readers' vectors.
 
 **Cost shapes to know.**
 
-- `triangles` costs Σ over edges of the two endpoints' degrees: near-linear
-  on sparse graphs, quadratic around hubs.
+- `triangles` costs about Σ over edges of min(d_u, d_v) · log max(d_u, d_v):
+  near-linear on sparse graphs, and a hub costs about its degree × log, not
+  its degree squared.
 - `gather(…, 'collect')` of growing sets costs memory O(N × neighbourhood);
   it suits local neighbourhoods, not community-wide state.
 - A persisted vector write costs WAL (8 bytes × id_space per `f64` column)
