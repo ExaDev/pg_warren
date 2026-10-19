@@ -9,3 +9,6 @@ crates/pg_warren/tests/pg_regress/regression.diffs
 crates/pg_warren/tests/pg_regress/regression.out
 # benchmark scratch output (committed results live in bench/results/)
 bench/tmp/
+# Python (bench/, test/)
+__pycache__/
+.pytest_cache/

@@ -1,0 +1,22 @@
+{
+  "graphs": {
+    "smoke": {"generate": ["random", "--nodes", "2000", "--edges", "10000", "--seed", "1"]},
+    "random-100k": {"generate": ["random", "--nodes", "100000", "--edges", "1000000", "--seed", "1"]},
+    "power-law-100k": {"generate": ["power-law", "--nodes", "100000", "--attachments", "10", "--seed", "1"]},
+    "grid-316": {"generate": ["grid", "--rows", "316", "--cols", "316"]}
+  },
+  "setup": [
+    "CREATE INDEX ON edges (src)",
+    "CREATE INDEX ON edges (dst)",
+    "ANALYZE edges",
+    "SELECT warren.create_graph('g', 'SELECT id FROM nodes', 'SELECT src, dst FROM edges', directed := false)"
+  ],
+  "params": "SELECT src AS source FROM (SELECT src FROM edges UNION ALL SELECT dst FROM edges) e(src) GROUP BY src ORDER BY count(*) DESC, src LIMIT 1",
+  "workloads": [
+    {"name": "refresh", "sql": "SELECT warren.refresh('g')", "repeat": 3},
+    {"name": "diff", "sql": "SELECT warren.diff('g', (SELECT min(version_id) FROM warren.versions), (SELECT max(version_id) FROM warren.versions))"},
+    {"name": "bfs_depth6_cte", "sql": "WITH RECURSIVE r (id, depth) AS (SELECT {source}::bigint, 0 UNION SELECT n.id, r.depth + 1 FROM r CROSS JOIN LATERAL (SELECT dst FROM edges WHERE src = r.id UNION ALL SELECT src FROM edges WHERE dst = r.id) n (id) WHERE r.depth < 6) SELECT count(DISTINCT id) FROM r"},
+    {"name": "bfs_depth6", "requires": ["warren.bfs"], "sql": "SELECT count(*) FROM warren.bfs('g', ARRAY[{source}::bigint], 6)"},
+    {"name": "components", "requires": ["warren.components"], "sql": "SELECT count(DISTINCT component_id) FROM warren.components('g', NULL::bigint)"}
+  ]
+}
