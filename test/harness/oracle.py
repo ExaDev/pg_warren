@@ -7,6 +7,7 @@ as a table the SQL test compares against.
 | components | oracle_components | node_id, component: the component's smallest node id (weakly connected if directed) |
 | pagerank | oracle_pagerank | node_id, score (sums to 1; `--damping`, default 0.85) |
 | spectrum | oracle_spectrum | i, eigenvalue: the `--k` eigenvalues of `--matrix` (adjacency, laplacian, normalized_laplacian) at the `--which` end (largest magnitude, or smallest), by a dense solver over the nodes with an edge (undirected), as `warren.eigen` defines them |
+| triangles | oracle_triangles | node_id, triangles: the node's triangles in the undirected graph without self-loops |
 """
 
 import argparse
@@ -18,6 +19,7 @@ TABLES = {
     "components": ("oracle_components", "node_id bigint, component bigint"),
     "pagerank": ("oracle_pagerank", "node_id bigint, score float8"),
     "spectrum": ("oracle_spectrum", "i int, eigenvalue float8"),
+    "triangles": ("oracle_triangles", "node_id bigint, triangles bigint"),
 }
 
 
@@ -41,6 +43,10 @@ def compute(computation, graph, arguments):
         return list(nx.pagerank(graph, alpha=damping, tol=1e-12, max_iter=1000).items())
     if computation == "spectrum":
         return spectrum(graph, arguments)
+    if computation == "triangles":
+        simple = nx.Graph(graph.to_undirected() if graph.is_directed() else graph)
+        simple.remove_edges_from(list(nx.selfloop_edges(simple)))
+        return list(nx.triangles(simple).items())
     raise ValueError(f"unknown oracle computation {computation!r}; expected one of {sorted(TABLES)}")
 
 

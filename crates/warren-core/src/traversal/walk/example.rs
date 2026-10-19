@@ -1,9 +1,10 @@
 //! A small knowledge graph and a step constructor for the walk tests.
 
 use super::{HopRange, Step};
+use crate::graph::Direction;
 use crate::graph::{DenseId, GraphCsr};
 use crate::traversal::example::{graph, relations};
-use crate::traversal::{Direction, NodeSet};
+use crate::traversal::NodeSet;
 
 pub(crate) const CITES: usize = 0;
 pub(crate) const AUTHORED_BY: usize = 1;

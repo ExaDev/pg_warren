@@ -5,15 +5,35 @@
 //! for messages of any SQL type, stored packed as `(offsets, bytes)`.
 
 use std::collections::TryReserveError;
-use std::fmt::Debug;
+use std::fmt::{self, Debug, Display};
 use std::mem::size_of;
 
-use super::{ComputeError, ComputeMemory, Element, MemoryCharge};
+use super::{ComputeError, ComputeMemory, Dtype, Element, MemoryCharge};
+
+/// What a message type holds, as type errors name it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MessageKind {
+    /// One vector element per message: the fast path.
+    Element(Dtype),
+    /// A byte string per message: the general path.
+    Bytes,
+}
+
+impl Display for MessageKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Element(dtype) => Display::fmt(dtype, f),
+            Self::Bytes => f.write_str("bytes"),
+        }
+    }
+}
 
 /// A message type: how a buffer stores messages and hands them back.
 pub trait Message {
+    /// What the messages hold.
+    const KIND: MessageKind;
     /// A message as it is pushed and read back.
-    type View<'a>: Copy;
+    type View<'a>: Copy + Debug;
     /// Where a buffer keeps its messages.
     type Storage: Default + Debug + Send + Sync;
 
@@ -34,6 +54,7 @@ pub trait Message {
 
 /// The fast path: one element per message, in a plain array.
 impl<E: Element> Message for E {
+    const KIND: MessageKind = MessageKind::Element(E::DTYPE);
     type View<'a> = E;
     type Storage = Vec<E>;
 
@@ -69,6 +90,7 @@ pub struct PackedBytes {
 }
 
 impl Message for Bytes {
+    const KIND: MessageKind = MessageKind::Bytes;
     type View<'a> = &'a [u8];
     type Storage = PackedBytes;
 
@@ -109,13 +131,13 @@ fn grown_capacity<T>(buffer: &Vec<T>, additional: usize) -> usize {
 }
 
 /// The bytes `buffer` reserves beyond its capacity to fit `additional`.
-fn growth<T>(buffer: &Vec<T>, additional: usize) -> u64 {
+pub(crate) fn growth<T>(buffer: &Vec<T>, additional: usize) -> u64 {
     let elements = grown_capacity(buffer, additional) - buffer.capacity();
     (elements as u64).saturating_mul(size_of::<T>() as u64)
 }
 
 /// Grows `buffer` to exactly [`grown_capacity`].
-fn reserve<T>(buffer: &mut Vec<T>, additional: usize) -> Result<(), TryReserveError> {
+pub(crate) fn reserve<T>(buffer: &mut Vec<T>, additional: usize) -> Result<(), TryReserveError> {
     let target = grown_capacity(buffer, additional);
     buffer.try_reserve_exact(target - buffer.len())
 }
@@ -170,9 +192,41 @@ impl<M: Message> MessageBuffer<M> {
     }
 }
 
+impl PackedBytes {
+    /// The bytes [`Self::push_concatenation`] reserves for a message of
+    /// `len` bytes, beyond what is already reserved.
+    pub(crate) fn concatenation_growth(&self, len: usize) -> u64 {
+        growth(&self.ends, 1) + growth(&self.bytes, len)
+    }
+
+    /// Appends one message, the concatenation of `parts`, whose lengths sum
+    /// to `len`, reserving exactly [`Self::concatenation_growth`].
+    pub(crate) fn push_concatenation<'a>(
+        &mut self,
+        parts: impl Iterator<Item = &'a [u8]>,
+        len: usize,
+    ) -> Result<(), TryReserveError> {
+        reserve(&mut self.ends, 1)?;
+        reserve(&mut self.bytes, len)?;
+        for part in parts {
+            self.bytes.extend_from_slice(part);
+        }
+        self.ends.push(self.bytes.len() as u64);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_message_type_names_its_kind() {
+        assert_eq!(<f32 as Message>::KIND, MessageKind::Element(Dtype::F32));
+        assert_eq!(<bool as Message>::KIND.to_string(), "bool");
+        assert_eq!(Bytes::KIND, MessageKind::Bytes);
+        assert_eq!(Bytes::KIND.to_string(), "bytes");
+    }
 
     #[test]
     fn fixed_width_messages_come_back_in_push_order() {
@@ -204,6 +258,18 @@ mod tests {
         assert_eq!(buffer.get(3), None);
         // Reserved: 4 end offsets of 8 bytes, and 10 bytes (5, then doubled).
         assert_eq!(buffer.bytes(), 4 * 8 + 10);
+    }
+
+    #[test]
+    fn a_concatenation_is_one_message() {
+        let mut packed = PackedBytes::default();
+        packed.push_concatenation([&b"ab"[..], b"", b"c"].into_iter(), 3).unwrap();
+        Bytes::push(&mut packed, b"d").unwrap();
+        assert_eq!(
+            (Bytes::get(&packed, 0), Bytes::get(&packed, 1)),
+            (Some(&b"abc"[..]), Some(&b"d"[..]))
+        );
+        assert_eq!(Bytes::len(&packed), 2);
     }
 
     #[test]

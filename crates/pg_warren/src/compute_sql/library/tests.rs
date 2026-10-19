@@ -1,0 +1,170 @@
+//! In-database tests of the algorithm library.
+
+#[pgrx::pg_schema]
+mod tests {
+    use pgrx::prelude::*;
+    use pgrx::spi::Error;
+
+    use super::super::super::map::executor_maps;
+    use crate::fixture::{failure, refresh, ring, rows, small};
+
+    /// `name`'s values, as `node:value` text, rounded to `digits`.
+    fn values(graph: &str, name: &str, digits: i32) -> Result<Option<String>, Error> {
+        rows(&format!(
+            "SELECT node_id || ':' || round(value::numeric, {digits})
+             FROM warren.vector_values('{graph}', '{name}', NULL::bigint)"
+        ))
+    }
+
+    /// Runs `sql` and checks that every vector_map it made was compiled and
+    /// that it left no intermediate vector of `algorithm` behind.
+    fn compiled(graph: &str, algorithm: &str, sql: &str) -> Result<(), Error> {
+        let before = executor_maps();
+        Spi::run(sql)?;
+        assert_eq!(executor_maps(), before, "{algorithm}: a vector_map took the executor path");
+        let left = failure(&format!("warren.explain_map('{graph}', '_warren_{algorithm}_x')"))?;
+        assert!(left.is_some(), "{algorithm} left its intermediates");
+        Ok(())
+    }
+
+    #[pg_test]
+    fn pagerank_is_uniform_on_a_ring_and_personalised_by_a_seed() -> Result<(), Error> {
+        ring("r", 4, 2)?;
+        refresh("r", true)?;
+        compiled("r", "pagerank", "SELECT warren.pagerank('r', 'pr', tol := 1e-12)")?;
+        assert_eq!(
+            values("r", "pr", 6)?.as_deref(),
+            Some("1:0.250000 2:0.250000 3:0.250000 4:0.250000")
+        );
+        Spi::run("SELECT warren.vector_from_query('r', 'seed', 'SELECT 1::bigint, 1')")?;
+        compiled(
+            "r",
+            "pagerank",
+            "SELECT warren.pagerank('r', 'ppr', seed := 'seed', tol := 1e-12)",
+        )?;
+        let sum = Spi::get_one::<f64>("SELECT warren.vector_reduce('r', 'ppr', 'sum')")?
+            .unwrap_or_default();
+        assert!((sum - 1.0).abs() < 1e-9, "{sum}");
+        let top =
+            rows("SELECT node_id::text FROM warren.vector_topk('r', 'ppr', 1, NULL::bigint)")?;
+        assert_eq!(top.as_deref(), Some("1"));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn pagerank_returns_its_iterations_and_stops_at_max_iter() -> Result<(), Error> {
+        small("t")?;
+        let iterations =
+            Spi::get_one::<i32>("SELECT warren.pagerank('t', 'pr', max_iter := 3, tol := 0)")?;
+        assert_eq!(iterations, Some(3));
+        let sum = Spi::get_one::<f64>("SELECT warren.vector_reduce('t', 'pr', 'sum')")?
+            .unwrap_or_default();
+        assert!((sum - 1.0).abs() < 1e-9, "dangling node 6's rank is redistributed: {sum}");
+        Ok(())
+    }
+
+    #[pg_test]
+    fn degree_vector_counts_distinct_neighbours() -> Result<(), Error> {
+        small("t")?;
+        Spi::run("SELECT warren.degree_vector('t', 'deg'); SELECT warren.degree_vector('t', 'in_a', 'in', ARRAY['a'])")?;
+        assert_eq!(values("t", "deg", 0)?.as_deref(), Some("1:2 2:1 3:1 4:1 5:1 6:0"));
+        assert_eq!(values("t", "in_a", 0)?.as_deref(), Some("1:1 2:1 3:1 4:0 5:0 6:0"));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn components_vector_labels_weak_components_as_components_does() -> Result<(), Error> {
+        small("t")?;
+        compiled("t", "components_vector", "SELECT warren.components_vector('t', 'cc')")?;
+        let differs = rows(
+            "SELECT c.node_id::text FROM warren.components('t', NULL::bigint) c
+             JOIN warren.vector_values('t', 'cc', NULL::bigint) v USING (node_id)
+             WHERE v.value <> c.component_id",
+        )?;
+        assert_eq!(differs.as_deref(), Some(""));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn label_propagation_spreads_the_smallest_label_within_the_mask() -> Result<(), Error> {
+        small("t")?;
+        Spi::run("SELECT warren.vector_from_query('t', 'keep', 'SELECT id, id <> 2 FROM t_nodes', 'bool')")?;
+        compiled(
+            "t",
+            "label_propagation",
+            "SELECT warren.label_propagation('t', 'lp', mask := 'keep')",
+        )?;
+        assert_eq!(values("t", "lp", 0)?.as_deref(), Some("1:0 2:1 3:0 4:0 5:4 6:5"));
+        Spi::run(
+            "SELECT warren.vector_from_query('t', 'seed', 'SELECT id, 10 - id FROM t_nodes')",
+        )?;
+        compiled(
+            "t",
+            "label_propagation",
+            "SELECT warren.label_propagation('t', 'lp', seed := 'seed', max_iter := 1)",
+        )?;
+        assert_eq!(values("t", "lp", 0)?.as_deref(), Some("1:6 2:7 3:6 4:6 5:5 6:4"));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn sssp_vector_matches_dijkstra() -> Result<(), Error> {
+        small("t")?;
+        compiled("t", "sssp_vector", "SELECT warren.sssp_vector('t', 'd', 1::bigint)")?;
+        assert_eq!(values("t", "d", 0)?.as_deref(), Some("1:0 2:1 3:2 4:3 5:Infinity 6:Infinity"));
+        let differs = rows(
+            "SELECT v.node_id::text FROM warren.vector_values('t', 'd', NULL::bigint) v
+             LEFT JOIN LATERAL warren.dijkstra('t', 1::bigint, v.node_id) p ON true
+             WHERE v.value IS DISTINCT FROM coalesce(p.cost, 'Infinity')",
+        )?;
+        assert_eq!(differs.as_deref(), Some(""));
+        Spi::run("SELECT warren.sssp_vector('t', 'hops', 1::bigint, weighted := false)")?;
+        assert_eq!(
+            values("t", "hops", 0)?.as_deref(),
+            Some("1:0 2:1 3:2 4:1 5:Infinity 6:Infinity")
+        );
+        let unknown = failure("warren.sssp_vector('t', 'd', 99::bigint)")?.unwrap_or_default();
+        assert!(unknown.starts_with("22023: node 99 is not a node of graph \"t\""), "{unknown}");
+        Ok(())
+    }
+
+    #[pg_test]
+    fn aggregate_neighbours_averages_sums_or_maxes_neighbour_rows() -> Result<(), Error> {
+        small("t")?;
+        Spi::run("SELECT warren.vector_from_query('t', 'e', 'SELECT id, ARRAY[id, 10 * id] FROM t_nodes', 'f32')")?;
+        let matrix = |name: &str| {
+            rows(&format!("SELECT node_id || ':' || row::text FROM warren.matrix_rows('t', '{name}', NULL::bigint)"))
+        };
+        compiled(
+            "t",
+            "aggregate_neighbours",
+            "SELECT warren.aggregate_neighbours('t', 'e', 'mean')",
+        )?;
+        assert_eq!(
+            matrix("mean")?.as_deref(),
+            Some("1:{3,30} 2:{3,30} 3:{4,40} 4:{1,10} 5:{5,50} 6:{NaN,NaN}")
+        );
+        Spi::run(
+            "SELECT warren.aggregate_neighbours('t', 'e', 'sum', 'sum');
+             SELECT warren.aggregate_neighbours('t', 'e', 'max', 'max', rels := ARRAY['a']);
+             SELECT warren.aggregate_neighbours('t', 'e', 'two', 'sum', hops := 2, direction := 'in')",
+        )?;
+        assert_eq!(
+            matrix("sum")?.as_deref(),
+            Some("1:{6,60} 2:{3,30} 3:{4,40} 4:{1,10} 5:{5,50} 6:{0,0}")
+        );
+        assert_eq!(
+            matrix("max")?.as_deref(),
+            Some("1:{2,20} 2:{3,30} 3:{-Infinity,-Infinity} 4:{1,10} 5:{-Infinity,-Infinity} 6:{-Infinity,-Infinity}")
+        );
+        // In-neighbours of in-neighbours: 1 ← 4 ← {1, 3}; 2 ← 1 ← 4; …
+        assert_eq!(
+            matrix("two")?.as_deref(),
+            Some("1:{4,40} 2:{4,40} 3:{1,10} 4:{6,60} 5:{5,50} 6:{0,0}")
+        );
+        let bad =
+            failure("warren.aggregate_neighbours('t', 'e', 'x', 'median')")?.unwrap_or_default();
+        assert!(bad.starts_with("22023: agg must be mean, sum or max"), "{bad}");
+        Ok(())
+    }
+}

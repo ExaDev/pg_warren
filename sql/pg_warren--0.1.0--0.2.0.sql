@@ -233,3 +233,259 @@ CREATE  FUNCTION warren."eigen"(
 VOLATILE PARALLEL UNSAFE 
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'eigen_wrapper';
+
+-- gather (M5, DESIGN.md §6.4).
+
+CREATE FUNCTION warren.gather(graph text, messages text, id_type anyelement,
+                              value_type anycompatible, combine text DEFAULT 'collect',
+                              direction text DEFAULT 'in', rels text[] DEFAULT NULL,
+                              mask text DEFAULT NULL, mask_complement boolean DEFAULT false,
+                              version bigint DEFAULT NULL)
+RETURNS TABLE (node_id anyelement, value anycompatible)
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'gather_wrapper';
+
+-- The algorithm library (M5, DESIGN.md §6.7).
+
+-- warren.pagerank (DESIGN.md §6.7): PageRank by power iteration, as
+-- NetworkX computes it. Rank flows along edges, split by out-weight (the
+-- edge count when unweighted); dangling nodes' rank, and the 1 - damping
+-- teleport, go to the personalisation: uniform, or proportional to vector
+-- `seed`. Stops when the L1 change falls below (live nodes) × tol, or after
+-- max_iter iterations. Writes vector `out` (f64, summing to 1) and returns
+-- the iterations run.
+CREATE FUNCTION warren.pagerank(graph text, "out" text, damping float8 DEFAULT 0.85,
+                                tol float8 DEFAULT 1e-6, max_iter int DEFAULT 100,
+                                seed text DEFAULT NULL, rels text[] DEFAULT NULL,
+                                weighted boolean DEFAULT NULL, version bigint DEFAULT NULL)
+RETURNS int LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+  v bigint := coalesce(version, (warren.info(graph) ->> 'current_version')::bigint);
+  nodes float8;
+  dangling float8;
+  delta float8;
+  i int := 0;
+BEGIN
+  -- Every live node's out-weight: the row sums of A.
+  PERFORM warren.vector_const(graph, '_warren_pagerank_one', 1, persist := false, version := v);
+  PERFORM warren.spmv(graph, '_warren_pagerank_one', '_warren_pagerank_out', 'plus_first',
+                      rels := rels, weighted := weighted, persist := false, version := v);
+  nodes := warren.vector_reduce(graph, '_warren_pagerank_one', 'sum', v);
+  IF seed IS NULL THEN
+    PERFORM warren.vector_map(graph, '_warren_pagerank_p', format('_warren_pagerank_one / %s', nodes), false, v);
+  ELSE
+    PERFORM warren.vector_map(graph, '_warren_pagerank_p',
+                              format('%I / %s', seed, warren.vector_reduce(graph, seed, 'sum', v)), false, v);
+  END IF;
+  PERFORM warren.vector_map(graph, '_warren_pagerank_x', format('_warren_pagerank_one / %s', nodes), false, v);
+  WHILE i < max_iter LOOP
+    i := i + 1;
+    PERFORM warren.vector_map(graph, '_warren_pagerank_msg',
+      'CASE WHEN _warren_pagerank_out > 0 THEN _warren_pagerank_x / _warren_pagerank_out ELSE 0 END', false, v);
+    PERFORM warren.vector_map(graph, '_warren_pagerank_dangling',
+      'CASE WHEN _warren_pagerank_out > 0 THEN 0 ELSE _warren_pagerank_x END', false, v);
+    dangling := warren.vector_reduce(graph, '_warren_pagerank_dangling', 'sum', v);
+    PERFORM warren.spmv(graph, '_warren_pagerank_msg', '_warren_pagerank_y', transpose := true,
+                        rels := rels, weighted := weighted, persist := false, version := v);
+    PERFORM warren.vector_map(graph, '_warren_pagerank_next',
+      format('%s * (_warren_pagerank_y + %s * _warren_pagerank_p) + %s * _warren_pagerank_p',
+             damping, dangling, 1 - damping), false, v);
+    delta := warren.vector_norm_diff(graph, '_warren_pagerank_next', '_warren_pagerank_x', 'l1', v, v);
+    PERFORM warren.vector_map(graph, '_warren_pagerank_x', '_warren_pagerank_next', false, v);
+    EXIT WHEN delta < nodes * tol;
+  END LOOP;
+  PERFORM warren.vector_map(graph, "out", '_warren_pagerank_x', true, v);
+  PERFORM warren.drop_vector(graph, '_warren_pagerank_' || part, v)
+  FROM unnest(ARRAY['one', 'out', 'p', 'x', 'msg', 'dangling', 'y', 'next']) part;
+  RETURN i;
+END $$;
+
+-- warren.degree_vector (DESIGN.md §6.7): each node's degree in `direction`
+-- over `rels`, as vector `out` (f64); returns its vector id.
+CREATE FUNCTION warren.degree_vector(graph text, "out" text, direction text DEFAULT 'out',
+                                     rels text[] DEFAULT NULL, version bigint DEFAULT NULL)
+RETURNS bigint LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+  RETURN warren.vector_degree(graph, "out", direction, rels, 'f64', true, version);
+END $$;
+
+-- warren.components_vector (DESIGN.md §6.7): weakly connected components by
+-- min-label propagation (min_second SpMV both ways, accumulating min) until
+-- no label changes. Each component is labelled by its smallest dense id,
+-- as warren.components labels it. Writes vector `out` (i64) and returns
+-- the iterations run.
+CREATE FUNCTION warren.components_vector(graph text, "out" text, rels text[] DEFAULT NULL,
+                                         version bigint DEFAULT NULL)
+RETURNS int LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+  v bigint := coalesce(version, (warren.info(graph) ->> 'current_version')::bigint);
+  delta float8;
+  i int := 0;
+BEGIN
+  PERFORM warren.vector_dense_id(graph, '_warren_components_vector_x', 'i64', false, v);
+  LOOP
+    i := i + 1;
+    PERFORM warren.vector_map(graph, '_warren_components_vector_next', '_warren_components_vector_x', false, v);
+    PERFORM warren.spmv(graph, '_warren_components_vector_x', '_warren_components_vector_next', 'min_second',
+                        rels := rels, accumulate := 'min', persist := false, version := v);
+    PERFORM warren.spmv(graph, '_warren_components_vector_x', '_warren_components_vector_next', 'min_second',
+                        transpose := true, rels := rels, accumulate := 'min', persist := false, version := v);
+    delta := warren.vector_norm_diff(graph, '_warren_components_vector_next', '_warren_components_vector_x',
+                                     'l1', v, v);
+    PERFORM warren.vector_map(graph, '_warren_components_vector_x', '_warren_components_vector_next', false, v);
+    EXIT WHEN delta = 0;
+  END LOOP;
+  PERFORM warren.vector_map(graph, "out", '_warren_components_vector_x', true, v);
+  PERFORM warren.drop_vector(graph, '_warren_components_vector_' || part, v) FROM unnest(ARRAY['x', 'next']) part;
+  RETURN i;
+END $$;
+
+-- warren.label_propagation (DESIGN.md §6.7, A.1): min-label propagation.
+-- Labels start as vector `seed` (default: each node's dense id); each
+-- iteration every node takes the smallest label among itself and its
+-- neighbours (both directions, over `rels`), until no label changes or
+-- after max_iter iterations. With `mask`, only the nodes it selects (a
+-- non-zero value, GraphBLAS semantics) send or take labels; the others
+-- keep theirs. It is deterministic min-propagation, not majority-vote
+-- label propagation. Writes vector `out` (f64) and returns the iterations
+-- run.
+CREATE FUNCTION warren.label_propagation(graph text, "out" text, seed text DEFAULT NULL,
+                                         max_iter int DEFAULT 100, mask text DEFAULT NULL,
+                                         rels text[] DEFAULT NULL, version bigint DEFAULT NULL)
+RETURNS int LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+  v bigint := coalesce(version, (warren.info(graph) ->> 'current_version')::bigint);
+  selected text;
+  delta float8;
+  i int := 0;
+BEGIN
+  IF seed IS NULL THEN
+    PERFORM warren.vector_dense_id(graph, '_warren_label_propagation_x', 'f64', false, v);
+  ELSE
+    PERFORM warren.vector_map(graph, '_warren_label_propagation_x', format('%I::float8', seed), false, v);
+  END IF;
+  IF mask IS NOT NULL THEN
+    selected := CASE warren.explain_map(graph, format('%I', mask), v) ->> 'dtype'
+                  WHEN 'bool' THEN format('%I', mask) ELSE format('%I <> 0', mask) END;
+  END IF;
+  WHILE i < max_iter LOOP
+    i := i + 1;
+    -- Unselected nodes send NULL (NaN), which min never picks over a label.
+    PERFORM warren.vector_map(graph, '_warren_label_propagation_msg',
+      CASE WHEN selected IS NULL THEN '_warren_label_propagation_x'
+           ELSE format('CASE WHEN %s THEN _warren_label_propagation_x END', selected) END, false, v);
+    PERFORM warren.vector_map(graph, '_warren_label_propagation_next', '_warren_label_propagation_x', false, v);
+    PERFORM warren.spmv(graph, '_warren_label_propagation_msg', '_warren_label_propagation_next', 'min_second',
+                        rels := rels, mask := mask, accumulate := 'min', persist := false, version := v);
+    PERFORM warren.spmv(graph, '_warren_label_propagation_msg', '_warren_label_propagation_next', 'min_second',
+                        transpose := true, rels := rels, mask := mask, accumulate := 'min', persist := false,
+                        version := v);
+    delta := warren.vector_norm_diff(graph, '_warren_label_propagation_next', '_warren_label_propagation_x',
+                                     'l1', v, v);
+    PERFORM warren.vector_map(graph, '_warren_label_propagation_x', '_warren_label_propagation_next', false, v);
+    EXIT WHEN delta = 0;
+  END LOOP;
+  PERFORM warren.vector_map(graph, "out", '_warren_label_propagation_x', true, v);
+  PERFORM warren.drop_vector(graph, '_warren_label_propagation_' || part, v)
+  FROM unnest(ARRAY['x', 'msg', 'next']) part;
+  RETURN i;
+END $$;
+
+-- warren.sssp_vector (DESIGN.md §6.7): single-source shortest-path
+-- distances by Bellman-Ford relaxation (min_plus SpMV along edges,
+-- accumulating min) until no distance falls, or after max_iter iterations
+-- (default: the live node count). Weights as spmv reads them (1 if unweighted);
+-- unreachable nodes are Infinity. Writes vector `out` (f64) and returns
+-- the iterations run.
+CREATE FUNCTION warren.sssp_vector(graph text, "out" text, source anyelement,
+                                   rels text[] DEFAULT NULL, weighted boolean DEFAULT NULL,
+                                   max_iter int DEFAULT NULL, version bigint DEFAULT NULL)
+RETURNS int LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+  v bigint := coalesce(version, (warren.info(graph) ->> 'current_version')::bigint);
+  limit_ int;
+  falling float8;
+  i int := 0;
+BEGIN
+  PERFORM warren.vector_from_query(graph, '_warren_sssp_vector_x',
+                                   format('SELECT %L::%s, 0', source, pg_typeof(source)),
+                                   fill := 'Infinity', persist := false, version := v);
+  IF warren.vector_reduce(graph, '_warren_sssp_vector_x', 'min', v) <> 0 THEN
+    PERFORM warren.drop_vector(graph, '_warren_sssp_vector_x', v);
+    RAISE EXCEPTION 'node % is not a node of graph "%"', source, graph USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+  limit_ := coalesce(max_iter, (warren.vector_stats(graph, '_warren_sssp_vector_x', v) ->> 'count')::int);
+  WHILE i < limit_ LOOP
+    i := i + 1;
+    PERFORM warren.vector_map(graph, '_warren_sssp_vector_next', '_warren_sssp_vector_x', false, v);
+    PERFORM warren.spmv(graph, '_warren_sssp_vector_x', '_warren_sssp_vector_next', 'min_plus',
+                        transpose := true, rels := rels, weighted := weighted, accumulate := 'min',
+                        persist := false, version := v);
+    PERFORM warren.vector_map(graph, '_warren_sssp_vector_fell',
+      'CASE WHEN _warren_sssp_vector_next < _warren_sssp_vector_x THEN 1 ELSE 0 END', false, v);
+    falling := warren.vector_reduce(graph, '_warren_sssp_vector_fell', 'sum', v);
+    PERFORM warren.vector_map(graph, '_warren_sssp_vector_x', '_warren_sssp_vector_next', false, v);
+    EXIT WHEN falling = 0;
+  END LOOP;
+  PERFORM warren.vector_map(graph, "out", '_warren_sssp_vector_x', true, v);
+  PERFORM warren.drop_vector(graph, '_warren_sssp_vector_' || part, v) FROM unnest(ARRAY['x', 'next', 'fell']) part;
+  RETURN i;
+END $$;
+
+-- warren.aggregate_neighbours (DESIGN.md §6.7, A.5): each node's row of
+-- matrix `x` replaced by the mean, sum or max of its neighbours' rows
+-- (out-neighbours, or in-neighbours with direction := 'in'; distinct
+-- neighbours over `rels`; weights are not read), `hops` times over. A node
+-- with no neighbours gets NaN for mean (SQL's AVG of nothing), 0 for sum
+-- and -Infinity (the least bigint) for max. mean needs an f32 or f64
+-- matrix; the result keeps x's dtype. Writes matrix `out`.
+CREATE FUNCTION warren.aggregate_neighbours(graph text, x text, "out" text, agg text DEFAULT 'mean',
+                                            hops int DEFAULT 1, rels text[] DEFAULT NULL,
+                                            direction text DEFAULT 'out', version bigint DEFAULT NULL)
+RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+  v bigint := coalesce(version, (warren.info(graph) ->> 'current_version')::bigint);
+  semiring text := CASE agg WHEN 'mean' THEN 'plus_second' WHEN 'sum' THEN 'plus_second'
+                            WHEN 'max' THEN 'max_second' END;
+  dtype text := warren.explain_map(graph, format('%I', x), v) ->> 'dtype';
+BEGIN
+  IF semiring IS NULL THEN
+    RAISE EXCEPTION 'agg must be mean, sum or max, not %', agg USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+  IF direction NOT IN ('out', 'in') THEN
+    RAISE EXCEPTION 'direction must be ''out'' or ''in'', not %', direction USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+  IF agg = 'mean' AND dtype NOT IN ('f32', 'f64') THEN
+    RAISE EXCEPTION 'mean needs an f32 or f64 matrix, not %', dtype USING ERRCODE = 'datatype_mismatch';
+  END IF;
+  PERFORM warren.vector_map(graph, '_warren_aggregate_neighbours_x', format('%I', x), false, v);
+  IF agg = 'mean' THEN
+    PERFORM warren.vector_degree(graph, '_warren_aggregate_neighbours_degree', direction, rels, dtype, false, v);
+  END IF;
+  FOR i IN 1..hops LOOP
+    PERFORM warren.spmm(graph, '_warren_aggregate_neighbours_x', '_warren_aggregate_neighbours_x', semiring,
+                        transpose := direction = 'in', rels := rels, weighted := false, persist := false,
+                        version := v);
+    IF agg = 'mean' THEN
+      PERFORM warren.vector_map(graph, '_warren_aggregate_neighbours_x',
+        'CASE WHEN _warren_aggregate_neighbours_degree > 0
+              THEN _warren_aggregate_neighbours_x / _warren_aggregate_neighbours_degree END', false, v);
+    END IF;
+  END LOOP;
+  PERFORM warren.vector_map(graph, "out", '_warren_aggregate_neighbours_x', true, v);
+  PERFORM warren.drop_vector(graph, '_warren_aggregate_neighbours_' || part, v)
+  FROM unnest(ARRAY['x', 'degree']) part
+  WHERE part = 'x' OR agg = 'mean';
+END $$;
+
+-- triangles (M5, DESIGN.md §6.7).
+
+CREATE  FUNCTION warren."triangles"(
+	"graph" TEXT, /* Option < & str > */
+	"out" TEXT, /* Option < & str > */
+	"rels" TEXT[] DEFAULT NULL, /* :: std :: option :: Option < Vec < Option < String > > > */
+	"persist" bool DEFAULT true, /* Option < bool > */
+	"version" bigint DEFAULT NULL /* Option < i64 > */
+) RETURNS bigint /* Option < i64 > */
+VOLATILE PARALLEL UNSAFE 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'triangles_wrapper';

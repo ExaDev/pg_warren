@@ -6,9 +6,10 @@ use std::collections::BTreeSet;
 use proptest::prelude::*;
 
 use super::super::reference::{directions, selections, Scenario};
-use super::super::{Direction, NodeSet};
+use super::super::NodeSet;
 use super::{HopRange, Step};
 use crate::graph::DenseId;
+use crate::graph::Direction;
 
 /// A walk as node ids and relation positions.
 pub(crate) type NaivePath = (Vec<DenseId>, Vec<usize>);

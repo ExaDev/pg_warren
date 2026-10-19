@@ -2,7 +2,7 @@
 
 use thiserror::Error;
 
-use super::Dtype;
+use super::{Combiner, Dtype, MessageKind};
 use crate::interrupts::Cancelled;
 
 /// Why a compute kernel could not run to completion.
@@ -97,6 +97,28 @@ pub enum ComputeError {
     /// A norm name is not one of `l1|l2|linf`.
     #[error("unknown norm \"{0}\": expected l1, l2 or linf")]
     UnknownNorm(String),
+    /// A combiner name is not one of the `gather` combiners.
+    #[error(
+        "unknown combiner \"{0}\": expected collect, count, sum, min, max, first, concat, \
+         bool_or or bool_and"
+    )]
+    UnknownCombiner(String),
+    /// A combiner does not accept the messages' kind.
+    #[error("combine := {combiner} does not accept {message} messages")]
+    CombinerType {
+        /// The combiner.
+        combiner: Combiner,
+        /// The messages' kind.
+        message: MessageKind,
+    },
+    /// A message's sender is not a dense id of the graph.
+    #[error("message sender {sender} is outside the id space {id_space}")]
+    SenderOutsideIdSpace {
+        /// The sender's dense id.
+        sender: u64,
+        /// The graph's id space.
+        id_space: u64,
+    },
     /// An expression refers to an operand vector that was not given.
     #[error("expression refers to operand {index}, but {operands} were given")]
     UnknownOperand {
