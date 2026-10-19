@@ -7,8 +7,12 @@
 #   sql/schema-drift.sh --update   # regenerate the committed file
 #
 # Needs cargo-pgrx initialised for $PG (default pg16). pgrx orders entities
-# unstably and annotates them with source lines and Rust types, so both
-# sides are normalised before comparing: comments dropped, blocks sorted.
+# unstably and annotates them, so both sides are normalised before
+# comparing: entity blocks are sorted, pgrx's `-- crates/...` and
+# `-- pg_warren::...` source lines are dropped, and `/* ... */` spans (pgrx's
+# block markers, header and Rust-type annotations) are removed. Assumption:
+# the extension's own SQL never puts `/*` inside a string literal; other
+# `--` comments are kept and compared.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -32,7 +36,8 @@ import re, sys
 text = open(sys.argv[1]).read()
 blocks = []
 for block in text.split("/* <begin connected objects> */"):
-    lines = [line for line in block.splitlines() if not line.lstrip().startswith("--")]
+    lines = [line for line in block.splitlines()
+             if not re.match(r"\s*-- (crates/|pg_warren::)", line)]
     body = re.sub(r"/\*.*?\*/", "", "\n".join(lines), flags=re.S)
     body = "\n".join(line.rstrip() for line in body.splitlines() if line.strip())
     if body:
