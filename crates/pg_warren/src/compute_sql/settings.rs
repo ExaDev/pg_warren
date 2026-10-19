@@ -39,7 +39,7 @@ pub(crate) fn define_compute_settings() {
     unsafe { *THREADS.as_ptr() = default_threads() };
     GucRegistry::define_int_guc(
         c"warren.threads",
-        c"Threads a compute kernel (spmv, spmm, vector_map, reductions) runs on.",
+        c"Threads a compute kernel (spmv, spmm, vector_map, reductions, gather, triangles) runs on.",
         c"Defaults to half the cores. Compute threads never call into Postgres.",
         &THREADS,
         1,

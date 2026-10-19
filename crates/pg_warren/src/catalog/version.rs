@@ -175,14 +175,22 @@ pub(crate) fn promote_version(
         ereport!(
             NOTICE,
             PgSqlErrorCode::ERRCODE_SUCCESSFUL_COMPLETION,
-            format!(
-                "version {kept} of graph \"{}\" is kept beyond retain_versions: {vectors} \
-                 vectors are bound to it",
-                graph.name
-            )
+            kept_notice(kept, vectors, &graph.name)
         );
     }
     Ok(())
+}
+
+/// The `NOTICE` for version `kept` of `graph`, kept beyond retention
+/// because `vectors` vectors are bound to it.
+fn kept_notice(kept: VersionId, vectors: i64, graph: &str) -> String {
+    let bound = match vectors {
+        1 => "1 vector is".to_owned(),
+        n => format!("{n} vectors are"),
+    };
+    format!(
+        "version {kept} of graph \"{graph}\" is kept beyond retain_versions: {bound} bound to it"
+    )
 }
 
 /// The recorded statistics of `version` and its `built_lsn` (as text).
@@ -324,4 +332,21 @@ pub(crate) fn drop_version(
 /// `count` as a `bigint` column value.
 fn bigint(count: u64, column: &'static str) -> Result<i64, CatalogError> {
     i64::try_from(count).map_err(|_| CatalogError::TooLarge(column))
+}
+
+#[cfg(test)]
+mod notices {
+    use super::kept_notice;
+
+    #[test]
+    fn the_retention_notice_counts_vectors_in_the_singular_and_plural() {
+        assert_eq!(
+            kept_notice(3, 1, "g"),
+            "version 3 of graph \"g\" is kept beyond retain_versions: 1 vector is bound to it"
+        );
+        assert_eq!(
+            kept_notice(3, 2, "g"),
+            "version 3 of graph \"g\" is kept beyond retain_versions: 2 vectors are bound to it"
+        );
+    }
 }
