@@ -52,6 +52,62 @@ mod tests {
     }
 
     #[pg_test]
+    fn pagerank_does_not_depend_on_extra_float_digits() -> Result<(), Error> {
+        small("t")?;
+        Spi::run(
+            "SELECT warren.vector_from_query('t', 'seed', 'SELECT id, id / 3.0 FROM t_nodes');
+             SELECT warren.pagerank('t', 'pr', seed := 'seed', tol := 1e-12);
+             SET LOCAL extra_float_digits = -10;
+             SELECT warren.pagerank('t', 'pr_short', seed := 'seed', tol := 1e-12);
+             RESET extra_float_digits",
+        )?;
+        let differ = Spi::get_one::<i64>(
+            "SELECT count(*) FROM warren.vector_values('t', 'pr', NULL::bigint) a
+             JOIN warren.vector_values('t', 'pr_short', NULL::bigint) b USING (node_id)
+             WHERE a.value <> b.value",
+        )?;
+        assert_eq!(differ, Some(0));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_failed_run_drops_its_intermediates() -> Result<(), Error> {
+        small("t")?;
+        let failed = failure("warren.pagerank('t', 'pr', seed := 'nope')")?.unwrap_or_default();
+        assert!(failed.starts_with("42704: graph \"t\" has no vector \"nope\""), "{failed}");
+        for part in ["one", "out", "x"] {
+            let left = failure(&format!("warren.explain_map('t', '_warren_pagerank_{part}')"))?;
+            assert!(left.is_some(), "_warren_pagerank_{part} was left behind");
+        }
+        Ok(())
+    }
+
+    #[pg_test]
+    fn library_names_are_reserved() -> Result<(), Error> {
+        small("t")?;
+        Spi::run("SELECT warren.vector_const('t', 'e', 1)")?;
+        let calls = [
+            "warren.pagerank('t', '_warren_pagerank_x')",
+            "warren.pagerank('t', 'pr', seed := '_warren_seed')",
+            "warren.components_vector('t', '_warren_cc')",
+            "warren.label_propagation('t', 'lp', mask := '_warren_m')",
+            "warren.label_propagation('t', 'lp', seed := '_warren_s')",
+            "warren.sssp_vector('t', '_warren_d', 1::bigint)",
+            "warren.degree_vector('t', '_warren_deg')",
+            "warren.aggregate_neighbours('t', '_warren_x', 'a')",
+            "warren.aggregate_neighbours('t', 'e', '_warren_a')",
+        ];
+        for call in calls {
+            let refused = failure(call)?.unwrap_or_default();
+            assert!(
+                refused.starts_with("42939: vector names beginning with _warren_ are reserved"),
+                "{call}: {refused}"
+            );
+        }
+        Ok(())
+    }
+
+    #[pg_test]
     fn pagerank_returns_its_iterations_and_stops_at_max_iter() -> Result<(), Error> {
         small("t")?;
         let iterations =
@@ -123,6 +179,17 @@ mod tests {
             values("t", "hops", 0)?.as_deref(),
             Some("1:0 2:1 3:2 4:1 5:Infinity 6:Infinity")
         );
+        Spi::run(
+            "CREATE TABLE neg_nodes (id bigint); INSERT INTO neg_nodes VALUES (1), (2), (3), (4);
+             CREATE TABLE neg_edges (src bigint, dst bigint, w float8);
+             INSERT INTO neg_edges VALUES (1, 2, 1), (2, 3, -1), (3, 4, -1), (4, 2, -1);
+             SELECT warren.create_graph('neg', 'SELECT id FROM neg_nodes', 'SELECT src, dst, w FROM neg_edges',
+                                        weighted := true);
+             SELECT warren.refresh('neg')",
+        )?;
+        let cycle = failure("warren.sssp_vector('neg', 'd', 1::bigint)")?.unwrap_or_default();
+        assert!(cycle.starts_with("22023: a negative cycle is reachable from node 1"), "{cycle}");
+        Spi::run("SELECT warren.sssp_vector('neg', 'd', 1::bigint, max_iter := 2)")?;
         let unknown = failure("warren.sssp_vector('t', 'd', 99::bigint)")?.unwrap_or_default();
         assert!(unknown.starts_with("22023: node 99 is not a node of graph \"t\""), "{unknown}");
         Ok(())

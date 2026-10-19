@@ -84,6 +84,13 @@ pub(crate) enum ComputeSqlError {
         /// The version the vector is bound to.
         version: VersionId,
     },
+    /// Persisted vector names, and the library's arguments, must not use
+    /// the prefix of its intermediates.
+    #[error(
+        "vector names beginning with _warren_ are reserved for the library's intermediates, and \
+         are only ever transient: \"{0}\""
+    )]
+    ReservedName(String),
     /// A vector name must not be empty.
     #[error("a vector name must not be empty")]
     EmptyName,
@@ -138,6 +145,7 @@ impl SqlError for ComputeSqlError {
                 PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH
             }
             Self::AmbiguousMessages { .. } => PgSqlErrorCode::ERRCODE_AMBIGUOUS_FUNCTION,
+            Self::ReservedName(_) => PgSqlErrorCode::ERRCODE_RESERVED_NAME,
             Self::EmptyName | Self::InvalidArgument(_) => {
                 PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE
             }
