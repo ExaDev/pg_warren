@@ -12,7 +12,7 @@ use std::collections::BinaryHeap;
 
 use super::scratch::{NodeMap, Visited};
 use super::stats::Progress;
-use super::{Adjacency, Cancellation, TraversalError, Traversed};
+use super::{Adjacency, Interrupts, TraversalError, Traversed};
 use crate::graph::{DenseId, GraphError};
 
 /// A path with its total weight.
@@ -31,14 +31,14 @@ pub fn dijkstra(
     adjacency: &Adjacency<'_>,
     start: DenseId,
     target: DenseId,
-    cancellation: &Cancellation,
+    interrupts: &mut dyn Interrupts,
 ) -> Result<Traversed<Option<WeightedPath>>, TraversalError> {
     for node in [start, target] {
         if node >= adjacency.id_space() {
             return Err(TraversalError::NodeOutsideIdSpace { node });
         }
     }
-    let mut progress = Progress::new(cancellation);
+    let mut progress = Progress::new(interrupts);
     let mut labels = NodeMap::new(adjacency.id_space(), UNREACHED);
     let mut settled = Visited::new(adjacency.id_space());
     let mut queue = BinaryHeap::new();
@@ -115,6 +115,7 @@ mod tests {
     use super::*;
     use crate::graph::GraphCsr;
     use crate::traversal::example::{directed, graph};
+    use crate::traversal::{Cancellation, Uninterrupted};
     use crate::traversal::{Direction, RelationSelection};
 
     fn cheapest(
@@ -124,7 +125,7 @@ mod tests {
         target: DenseId,
     ) -> Result<Option<WeightedPath>, TraversalError> {
         let adjacency = Adjacency::new(graph, direction, RelationSelection::All)?;
-        Ok(dijkstra(&adjacency, start, target, &Cancellation::new())?.result)
+        Ok(dijkstra(&adjacency, start, target, &mut Uninterrupted)?.result)
     }
 
     fn weighted_path(path: &[DenseId], cost: f64) -> Option<WeightedPath> {
@@ -188,9 +189,9 @@ mod tests {
     fn a_raised_cancellation_stops_the_search() {
         let graph = example();
         let adjacency = Adjacency::new(&graph, Direction::Out, RelationSelection::All).unwrap();
-        let cancellation = Cancellation::new();
+        let mut cancellation = Cancellation::new();
         cancellation.cancel();
-        assert_eq!(dijkstra(&adjacency, 0, 3, &cancellation), Err(TraversalError::Cancelled));
+        assert_eq!(dijkstra(&adjacency, 0, 3, &mut cancellation), Err(TraversalError::Cancelled));
     }
 }
 
@@ -202,6 +203,7 @@ mod properties {
 
     use super::*;
     use crate::traversal::reference::{directions, scenarios, selections, Scenario};
+    use crate::traversal::Uninterrupted;
 
     /// The cheapest cost of every edge, by `(from, to)`.
     fn cheapest_edges(steps: &[(DenseId, DenseId, f64)]) -> BTreeMap<(DenseId, DenseId), f64> {
@@ -241,7 +243,7 @@ mod properties {
             let graph = scenario.graph();
             let indexes = scenario.indexes(&selection);
             let adjacency = Adjacency::new(&graph, direction, Scenario::selection(&indexes)).unwrap();
-            let found = dijkstra(&adjacency, start, target, &Cancellation::new()).unwrap().result;
+            let found = dijkstra(&adjacency, start, target, &mut Uninterrupted).unwrap().result;
 
             let steps = scenario.steps(direction, &selection);
             let expected = distances(scenario.id_space, &steps, start)[target as usize];

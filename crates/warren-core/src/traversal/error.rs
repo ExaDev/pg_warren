@@ -41,7 +41,7 @@ pub enum TraversalError {
         /// The offending weight.
         weight: f64,
     },
-    /// The caller raised the traversal's cancellation flag.
+    /// The traversal's [`Interrupts`](super::Interrupts) poll asked it to stop.
     #[error("traversal cancelled")]
     Cancelled,
     /// A graph-sized scratch buffer could not be allocated.

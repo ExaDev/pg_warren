@@ -4,7 +4,7 @@
 
 use super::level::{Admission, LevelSearch};
 use super::stats::Progress;
-use super::{Adjacency, Cancellation, TraversalError, Traversed, Visit};
+use super::{Adjacency, Interrupts, TraversalError, Traversed, Visit};
 use crate::graph::{memory, DenseId};
 
 /// Whether `target` is within `max_depth` edges of `start` along
@@ -15,7 +15,7 @@ pub fn reachable(
     start: DenseId,
     target: DenseId,
     max_depth: Option<u32>,
-    cancellation: &Cancellation,
+    interrupts: &mut dyn Interrupts,
 ) -> Result<Traversed<bool>, TraversalError> {
     if target >= adjacency.id_space() {
         return Err(TraversalError::NodeOutsideIdSpace { node: target });
@@ -25,7 +25,7 @@ pub fn reachable(
         found = visit.node == target;
         Ok(if found { Admission::AdmitAndStop } else { Admission::Admit })
     };
-    search(adjacency, &[start], max_depth, cancellation, &mut admit)
+    search(adjacency, &[start], max_depth, interrupts, &mut admit)
         .map(|progress| progress.traversed(found))
 }
 
@@ -35,7 +35,7 @@ pub fn reachable_set(
     adjacency: &Adjacency<'_>,
     starts: &[DenseId],
     max_depth: Option<u32>,
-    cancellation: &Cancellation,
+    interrupts: &mut dyn Interrupts,
 ) -> Result<Traversed<Vec<DenseId>>, TraversalError> {
     let mut nodes = Vec::new();
     let mut admit = |visit: Visit| {
@@ -43,7 +43,7 @@ pub fn reachable_set(
         nodes.push(visit.node);
         Ok(Admission::Admit)
     };
-    search(adjacency, starts, max_depth, cancellation, &mut admit)
+    search(adjacency, starts, max_depth, interrupts, &mut admit)
         .map(|progress| progress.traversed(nodes))
 }
 
@@ -52,10 +52,10 @@ fn search<'c>(
     adjacency: &Adjacency<'_>,
     starts: &[DenseId],
     max_depth: Option<u32>,
-    cancellation: &'c Cancellation,
+    interrupts: &'c mut dyn Interrupts,
     admit: &mut impl FnMut(Visit) -> Result<Admission, TraversalError>,
 ) -> Result<Progress<'c>, TraversalError> {
-    let mut progress = Progress::new(cancellation);
+    let mut progress = Progress::new(interrupts);
     LevelSearch::new(adjacency, None)?.run(starts, max_depth, &mut progress, admit)?;
     Ok(progress)
 }
@@ -65,6 +65,7 @@ mod tests {
     use super::*;
     use crate::graph::GraphCsr;
     use crate::traversal::example::directed;
+    use crate::traversal::Uninterrupted;
     use crate::traversal::{Direction, RelationSelection};
 
     // 0 → 1 → 2 → 3, 4 → 3, 5 isolated
@@ -80,19 +81,19 @@ mod tests {
     fn reachable_follows_edges_within_the_depth() {
         let graph = example();
         let out = out(&graph);
-        let never = Cancellation::new();
-        assert!(reachable(&out, 0, 3, None, &never).unwrap().result);
-        assert!(reachable(&out, 0, 3, Some(3), &never).unwrap().result);
-        assert!(!reachable(&out, 0, 3, Some(2), &never).unwrap().result);
-        assert!(!reachable(&out, 3, 0, None, &never).unwrap().result);
-        assert!(!reachable(&out, 0, 4, None, &never).unwrap().result);
-        assert!(reachable(&out, 5, 5, Some(0), &never).unwrap().result);
+        let mut never = Uninterrupted;
+        assert!(reachable(&out, 0, 3, None, &mut never).unwrap().result);
+        assert!(reachable(&out, 0, 3, Some(3), &mut never).unwrap().result);
+        assert!(!reachable(&out, 0, 3, Some(2), &mut never).unwrap().result);
+        assert!(!reachable(&out, 3, 0, None, &mut never).unwrap().result);
+        assert!(!reachable(&out, 0, 4, None, &mut never).unwrap().result);
+        assert!(reachable(&out, 5, 5, Some(0), &mut never).unwrap().result);
     }
 
     #[test]
     fn reachable_stops_once_the_target_is_reached() {
         let graph = directed(4, &[(0, 1), (0, 2), (2, 3)]);
-        let found = reachable(&out(&graph), 0, 1, None, &Cancellation::new()).unwrap();
+        let found = reachable(&out(&graph), 0, 1, None, &mut Uninterrupted).unwrap();
         assert_eq!(found.stats.nodes_visited, 2);
         assert!(!found.stats.truncated);
     }
@@ -101,7 +102,7 @@ mod tests {
     fn reachable_rejects_a_target_outside_the_id_space() {
         let graph = example();
         assert_eq!(
-            reachable(&out(&graph), 0, 6, None, &Cancellation::new()).unwrap_err(),
+            reachable(&out(&graph), 0, 6, None, &mut Uninterrupted).unwrap_err(),
             TraversalError::NodeOutsideIdSpace { node: 6 }
         );
     }
@@ -110,10 +111,10 @@ mod tests {
     fn reachable_set_holds_the_starts_and_everything_they_reach() {
         let graph = example();
         let out = out(&graph);
-        let never = Cancellation::new();
-        assert_eq!(reachable_set(&out, &[1, 4], None, &never).unwrap().result, [1, 4, 2, 3]);
-        assert_eq!(reachable_set(&out, &[0], Some(1), &never).unwrap().result, [0, 1]);
-        assert_eq!(reachable_set(&out, &[], None, &never).unwrap().result, [] as [DenseId; 0]);
+        let mut never = Uninterrupted;
+        assert_eq!(reachable_set(&out, &[1, 4], None, &mut never).unwrap().result, [1, 4, 2, 3]);
+        assert_eq!(reachable_set(&out, &[0], Some(1), &mut never).unwrap().result, [0, 1]);
+        assert_eq!(reachable_set(&out, &[], None, &mut never).unwrap().result, [] as [DenseId; 0]);
     }
 }
 
@@ -125,6 +126,7 @@ mod properties {
 
     use super::*;
     use crate::traversal::reference::{directions, scenarios, selections, Scenario};
+    use crate::traversal::Uninterrupted;
 
     proptest! {
         #[test]
@@ -140,7 +142,7 @@ mod properties {
             let graph = scenario.graph();
             let indexes = scenario.indexes(&selection);
             let adjacency = Adjacency::new(&graph, direction, Scenario::selection(&indexes)).unwrap();
-            let never = Cancellation::new();
+            let mut never = Uninterrupted;
             let depths = Scenario::depths(&scenario.steps(direction, &selection), &starts, None);
             let expected: BTreeSet<DenseId> = depths
                 .iter()
@@ -148,7 +150,7 @@ mod properties {
                 .map(|(&node, _)| node)
                 .collect();
 
-            let set = reachable_set(&adjacency, &starts, max_depth, &never).unwrap().result;
+            let set = reachable_set(&adjacency, &starts, max_depth, &mut never).unwrap().result;
             prop_assert_eq!(set.len(), expected.len());
             prop_assert_eq!(set.into_iter().collect::<BTreeSet<_>>(), expected.clone());
 
@@ -156,7 +158,7 @@ mod properties {
             let depths = Scenario::depths(&scenario.steps(direction, &selection), &from, None);
             for target in 0..scenario.id_space {
                 let within = depths.get(&target).is_some_and(|&d| max_depth.is_none_or(|max| d <= max));
-                let found = reachable(&adjacency, from[0], target, max_depth, &never).unwrap();
+                let found = reachable(&adjacency, from[0], target, max_depth, &mut never).unwrap();
                 prop_assert_eq!(found.result, within, "target {}", target);
             }
         }

@@ -6,7 +6,7 @@
 //! dense id of its component and every node's parent is at most the node.
 
 use super::stats::Progress;
-use super::{Cancellation, TraversalError, Traversed};
+use super::{Interrupts, TraversalError, Traversed};
 use crate::graph::{memory, DenseId, GraphCsr};
 
 /// The component id of every dense id in the id space, indexed by dense
@@ -18,11 +18,11 @@ use crate::graph::{memory, DenseId, GraphCsr};
 /// adapter's job.
 pub fn components(
     graph: &GraphCsr,
-    cancellation: &Cancellation,
+    interrupts: &mut dyn Interrupts,
 ) -> Result<Traversed<Vec<DenseId>>, TraversalError> {
     let forward = graph.all_relations().forward();
     let id_space = forward.id_space();
-    let mut progress = Progress::new(cancellation);
+    let mut progress = Progress::new(interrupts);
     let mut parents = memory::with_capacity(id_space as usize)?;
     parents.extend(0..id_space);
     for source in 0..id_space {
@@ -60,12 +60,13 @@ mod tests {
     use super::*;
     use crate::traversal::example::{directed, graph};
     use crate::traversal::TraversalStats;
+    use crate::traversal::{Cancellation, Uninterrupted};
 
     #[test]
     fn each_node_is_labelled_with_the_smallest_dense_id_in_its_component() {
         // {0, 2, 4} via 4 → 2 → 0, {1, 3, 5} via 3 → 1 and 5 → 1, 6 alone
         let graph = directed(7, &[(4, 2), (2, 0), (3, 1), (5, 1), (6, 6)]);
-        let found = components(&graph, &Cancellation::new()).unwrap();
+        let found = components(&graph, &mut Uninterrupted).unwrap();
         assert_eq!(found.result, [0, 1, 0, 1, 0, 1, 6]);
         assert_eq!(
             found.stats,
@@ -76,15 +77,15 @@ mod tests {
     #[test]
     fn components_need_no_reverse_csr_and_unite_all_relations() {
         let graph = graph(4, 2, &[(0, 3, 2, 1.0), (1, 2, 1, 1.0)], false);
-        assert_eq!(components(&graph, &Cancellation::new()).unwrap().result, [0, 1, 1, 1]);
+        assert_eq!(components(&graph, &mut Uninterrupted).unwrap().result, [0, 1, 1, 1]);
     }
 
     #[test]
     fn a_raised_cancellation_stops_the_labelling() {
         let graph = directed(2, &[(0, 1)]);
-        let cancellation = Cancellation::new();
+        let mut cancellation = Cancellation::new();
         cancellation.cancel();
-        assert_eq!(components(&graph, &cancellation), Err(TraversalError::Cancelled));
+        assert_eq!(components(&graph, &mut cancellation), Err(TraversalError::Cancelled));
     }
 }
 
@@ -95,11 +96,12 @@ mod properties {
     use super::*;
     use crate::traversal::reference::{scenarios, Scenario};
     use crate::traversal::Direction;
+    use crate::traversal::Uninterrupted;
 
     proptest! {
         #[test]
         fn components_match_a_naive_undirected_search(scenario in scenarios()) {
-            let found = components(&scenario.graph(), &Cancellation::new()).unwrap().result;
+            let found = components(&scenario.graph(), &mut Uninterrupted).unwrap().result;
             prop_assert_eq!(found.len() as u64, scenario.id_space);
             let steps = scenario.steps(Direction::Both, &None);
             for node in 0..scenario.id_space {

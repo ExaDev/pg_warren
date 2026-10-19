@@ -1,9 +1,9 @@
 //! What a traversal did: nodes visited, edges traversed, whether a limit cut
 //! it short (DESIGN.md §9.3, `warren.last_stats()`).
 
-use super::{Cancellation, TraversalError};
+use super::{Interrupts, TraversalError};
 
-/// How often, in visited nodes, a traversal polls its cancellation flag.
+/// How often, in visited nodes, a traversal polls for interrupts.
 const CANCELLATION_INTERVAL: u32 = 1 << 16;
 
 /// The work a traversal did, recorded for `warren.last_stats()`.
@@ -28,26 +28,24 @@ pub struct Traversed<T> {
     pub stats: TraversalStats,
 }
 
-/// Running stats plus the cancellation poll, threaded through a traversal.
+/// Running stats plus the interrupt poll, threaded through a traversal.
 pub(crate) struct Progress<'c> {
     stats: TraversalStats,
-    cancellation: &'c Cancellation,
+    interrupts: &'c mut dyn Interrupts,
     until_poll: u32,
 }
 
 impl<'c> Progress<'c> {
-    pub(crate) fn new(cancellation: &'c Cancellation) -> Self {
-        Self { stats: TraversalStats::default(), cancellation, until_poll: 0 }
+    pub(crate) fn new(interrupts: &'c mut dyn Interrupts) -> Self {
+        Self { stats: TraversalStats::default(), interrupts, until_poll: 0 }
     }
 
-    /// Counts a visited node, polling the cancellation flag on the first
+    /// Counts a visited node, polling for interrupts on the first
     /// and then every [`CANCELLATION_INTERVAL`]th.
     pub(crate) fn node_visited(&mut self) -> Result<(), TraversalError> {
         self.stats.nodes_visited += 1;
         if self.until_poll == 0 {
-            if self.cancellation.is_cancelled() {
-                return Err(TraversalError::Cancelled);
-            }
+            self.interrupts.check()?;
             self.until_poll = CANCELLATION_INTERVAL;
         }
         self.until_poll -= 1;
@@ -76,12 +74,12 @@ impl<'c> Progress<'c> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::traversal::{Cancellation, TraversalError};
+    use crate::traversal::{Cancellation, TraversalError, Uninterrupted};
 
     #[test]
     fn progress_counts_nodes_and_edges() {
-        let cancellation = Cancellation::new();
-        let mut progress = Progress::new(&cancellation);
+        let mut uninterrupted = Uninterrupted;
+        let mut progress = Progress::new(&mut uninterrupted);
         progress.node_visited().unwrap();
         progress.edge_traversed();
         progress.edge_traversed();
@@ -95,7 +93,8 @@ mod tests {
     #[test]
     fn progress_polls_the_cancellation_on_the_first_node_and_every_64k_after() {
         let cancellation = Cancellation::new();
-        let mut progress = Progress::new(&cancellation);
+        let mut polled = cancellation.clone();
+        let mut progress = Progress::new(&mut polled);
         progress.node_visited().unwrap();
         cancellation.cancel();
         for _ in 1..CANCELLATION_INTERVAL {
@@ -103,7 +102,8 @@ mod tests {
         }
         assert_eq!(progress.node_visited(), Err(TraversalError::Cancelled));
 
-        let mut cancelled = Progress::new(&cancellation);
+        let mut polled = cancellation.clone();
+        let mut cancelled = Progress::new(&mut polled);
         assert_eq!(cancelled.node_visited(), Err(TraversalError::Cancelled));
     }
 }
