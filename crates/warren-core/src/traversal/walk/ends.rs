@@ -287,6 +287,48 @@ mod tests {
         assert!(!stats.truncated);
     }
 
+    fn reversed(graph: &GraphCsr, ends: &[DenseId], steps: &[Step]) -> Vec<DenseId> {
+        let options = WalkOptions { reverse: true, ..WalkOptions::default() };
+        let mut starts = ends_of(graph, ends, steps, options).unwrap().result;
+        starts.sort_unstable();
+        starts
+    }
+
+    #[test]
+    fn in_reverse_the_starts_are_allowed_ends_and_the_would_be_starts_are_reported() {
+        let graph = knowledge_graph();
+        let mut steps = vec![
+            step(Some(CITES), 1, 3, None),
+            step(Some(AUTHORED_BY), 1, 1, None),
+            step(Some(AFFILIATED_WITH), 1, 1, None),
+        ];
+        assert_eq!(reversed(&graph, &[8], &steps), [0, 1, 2]);
+        steps[1].filter = Some(NodeSet::from_dense_ids(10, [5]).unwrap());
+        assert_eq!(reversed(&graph, &[8], &steps), [0]);
+        steps[2].filter = Some(NodeSet::from_dense_ids(10, [9]).unwrap());
+        assert_eq!(reversed(&graph, &[8], &steps), [] as [DenseId; 0], "8 is not an allowed end");
+    }
+
+    #[test]
+    fn in_reverse_a_filter_still_applies_to_the_nodes_its_step_reaches() {
+        let graph = knowledge_graph();
+        // Forwards, only 2 → 3 keeps every node it reaches in {1, 3, 4}.
+        let steps = [step(Some(CITES), 1, 3, Some(&[1, 3, 4]))];
+        assert_eq!(reversed(&graph, &[3], &steps), [2]);
+        let steps = [step(Some(CITES), 0, 1, Some(&[2, 3]))];
+        assert_eq!(reversed(&graph, &[2, 3], &steps), [1, 2, 3]);
+    }
+
+    #[test]
+    fn in_reverse_a_step_with_no_hops_hands_on_only_nodes_both_filters_allow() {
+        let graph = knowledge_graph();
+        let steps =
+            [step(Some(CITES), 0, 0, Some(&[1, 2])), step(Some(CITES), 0, 1, Some(&[2, 3]))];
+        // Forwards from s: s ∈ {1, 2}, then s itself (∈ {2, 3}) or s → t.
+        assert_eq!(reversed(&graph, &[2, 3], &steps), [1, 2]);
+        assert_eq!(ends(&graph, &[0, 1, 2, 3], &steps), [2, 3]);
+    }
+
     #[test]
     fn a_raised_cancellation_stops_the_walk() {
         let graph = knowledge_graph();
