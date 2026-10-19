@@ -277,7 +277,7 @@ Every segment is validated on load, before any unchecked slice is formed: alignm
 
 Because the build runs under the caller's snapshot, **it sees the caller's uncommitted writes**. This is the mechanism behind staged evaluation (§8).
 
-Memory discipline: a 100M-edge graph (~1.2 GB forward + ~1.2 GB reverse) should build in under 4 GB of backend RAM. Peak usage is the edge list (~1.8 GB weighted) plus the forward CSR, and the edge list is freed before the transpose. All graph-sized buffers use `try_reserve`. An external-sort spill is added only if M2 measurements show it is needed.
+Memory discipline: a 100M-edge graph (~1.2 GB forward + ~1.2 GB reverse) should build in under 4 GB of backend RAM. The edge list stores endpoints at the target width (20 B per weighted edge below 2³² nodes: `u32` source, target and relation, `f64` weight; the adapter passes the edge count to `EdgeIntake::reserve` so it is allocated once). The counting sort scatters it into rows one column at a time, freeing each input column as it goes, so the peak is about 28 B per weighted edge; the rows are freed once the per-relation CSRs exist, and the merged CSR is built from those. Measured peak (M1, 10M weighted edges over 1M nodes, scaled ×10): **~2.9 GB for one relation with reverse**, within the cap. With several relations the stored merged CSR doubles the result (~5.8 GB weighted with reverse, ~2.6 GB unweighted), so a weighted multi-relation graph of 100M edges exceeds the cap; the lever is not storing the merged CSR (§5.3). All graph-sized buffers use `try_reserve`. An external-sort spill is added only if M2 measurements show it is needed.
 
 ### 5.5 Backend-local cache
 

@@ -18,7 +18,7 @@ pub fn random_edges(weighted: bool) -> Result<EdgeList, GraphError> {
             state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
         state >> 33
     };
-    let mut edges = EdgeList::new(weighted);
+    let mut edges = EdgeList::for_id_space(ID_SPACE, weighted);
     for _ in 0..EDGES {
         let (source, target) = (next() % ID_SPACE, next() % ID_SPACE);
         edges.push(relation, source, target, 1.0)?;

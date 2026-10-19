@@ -11,7 +11,7 @@
 //! [`GraphCsr::from_parts`], which validate the segments against each other.
 
 mod csr;
-mod edge_list;
+pub(crate) mod edge_list;
 mod error;
 mod id_map;
 pub(crate) mod memory;

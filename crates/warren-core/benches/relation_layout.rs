@@ -29,7 +29,7 @@ fn random_edges() -> Result<EdgeList, GraphError> {
             state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
         state >> 33
     };
-    let mut edges = EdgeList::new(true);
+    let mut edges = EdgeList::for_id_space(ID_SPACE, true);
     for _ in 0..EDGES {
         let relation = relations[next() as usize % RELATIONS];
         let (source, target) = (next() % ID_SPACE, next() % ID_SPACE);
@@ -60,7 +60,7 @@ impl Tagged {
     fn build(edges: &EdgeList) -> Self {
         let rows = ID_SPACE as usize;
         let mut offsets = vec![0u64; rows + 1];
-        for &source in edges.sources() {
+        for (_, source, _) in edges.edges() {
             offsets[source as usize + 1] += 1;
         }
         for row in 1..=rows {
@@ -69,13 +69,12 @@ impl Tagged {
         let mut cursor = offsets[..rows].to_vec();
         let mut entries = vec![(0u32, 0u8, 0.0f64); edges.len()];
         let weights = edges.weights().unwrap_or(&[]);
-        for edge in 0..edges.len() {
-            let source = edges.sources()[edge] as usize;
+        for (edge, (relation, source, target)) in edges.edges().enumerate() {
+            let source = source as usize;
             let position = cursor[source] as usize;
             cursor[source] += 1;
             let weight = weights.get(edge).copied().unwrap_or(1.0);
-            entries[position] =
-                (edges.targets()[edge] as u32, edges.relations()[edge].index() as u8, weight);
+            entries[position] = (target as u32, relation.index() as u8, weight);
         }
         let mut tagged = Self {
             offsets: vec![0; rows + 1],
