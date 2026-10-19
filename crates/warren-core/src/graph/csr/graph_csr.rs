@@ -97,9 +97,42 @@ pub struct GraphCsr {
 }
 
 impl GraphCsr {
+    /// The bytes of every offsets array a build allocates: `8·(id_space + 1)`
+    /// per CSR, for each relation plus the merged CSR (unless there is
+    /// exactly one relation), twice with reverse CSRs. This term grows with
+    /// relations × nodes, independently of the edge count (DESIGN.md §5.3).
+    /// Saturates at `u64::MAX`.
+    pub fn offsets_bytes(relation_count: usize, id_space: u64, build_reverse: bool) -> u64 {
+        let merged = usize::from(relation_count != 1);
+        let directions: u64 = if build_reverse { 2 } else { 1 };
+        (relation_count as u64)
+            .saturating_add(merged as u64)
+            .saturating_mul(directions)
+            .saturating_mul(id_space.saturating_add(1))
+            .saturating_mul(8)
+    }
+
+    /// [`Self::build`], refused with [`GraphError::OffsetsOverBudget`] before
+    /// anything is allocated if [`Self::offsets_bytes`] exceeds `budget`.
+    pub fn build_within(
+        edges: EdgeList,
+        relation_count: usize,
+        id_space: u64,
+        build_reverse: bool,
+        budget: u64,
+    ) -> Result<Self, GraphError> {
+        let required = Self::offsets_bytes(relation_count, id_space, build_reverse);
+        if required > budget {
+            return Err(GraphError::OffsetsOverBudget { required, budget });
+        }
+        Self::build(edges, relation_count, id_space, build_reverse)
+    }
+
     /// Builds the CSRs of `edges`, whose relations index a dictionary of
     /// `relation_count` relations and whose dense ids lie in `id_space`.
     /// Targets are `u32` when `id_space < 2³²`, else `u64` ([`TargetWidth`]).
+    /// No memory budget applies beyond fallible allocation; the adapter
+    /// uses [`Self::build_within`].
     pub fn build(
         edges: EdgeList,
         relation_count: usize,
@@ -418,6 +451,27 @@ mod tests {
             RelationCsr::new(forward, Some(csr(2, &[&[1], &[]], false))),
             Err(GraphError::ReverseNotTranspose)
         );
+    }
+
+    #[test]
+    fn offsets_bytes_counts_every_offsets_array() {
+        // 1 relation, no merged CSR: 1 forward + 1 reverse array of 4 offsets.
+        assert_eq!(GraphCsr::offsets_bytes(1, 3, true), 2 * 4 * 8);
+        // 3 relations + merged, forward only.
+        assert_eq!(GraphCsr::offsets_bytes(3, 3, false), 4 * 4 * 8);
+        assert_eq!(GraphCsr::offsets_bytes(0, 3, false), 4 * 8);
+        assert_eq!(GraphCsr::offsets_bytes(usize::MAX, u64::MAX - 1, true), u64::MAX);
+    }
+
+    #[test]
+    fn a_build_over_its_offsets_budget_is_rejected_before_allocating() {
+        let required = GraphCsr::offsets_bytes(1000, 1 << 40, true);
+        assert_eq!(
+            GraphCsr::build_within(EdgeList::new(false), 1000, 1 << 40, true, 1 << 30),
+            Err(GraphError::OffsetsOverBudget { required, budget: 1 << 30 })
+        );
+        let budget = GraphCsr::offsets_bytes(2, 3, true);
+        assert!(GraphCsr::build_within(EdgeList::new(false), 2, 3, true, budget).is_ok());
     }
 
     #[derive(Debug, Clone)]

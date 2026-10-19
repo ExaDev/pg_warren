@@ -172,4 +172,12 @@ pub enum GraphError {
         /// The number of relations.
         relations: usize,
     },
+    /// The offsets arrays of a build would exceed the caller's budget.
+    #[error("CSR offsets need {required} bytes, over the budget of {budget}")]
+    OffsetsOverBudget {
+        /// Bytes the offsets arrays need.
+        required: u64,
+        /// The caller's budget in bytes.
+        budget: u64,
+    },
 }

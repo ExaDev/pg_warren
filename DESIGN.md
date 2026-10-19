@@ -260,7 +260,11 @@ Per-relation CSRs are stored separately so a traversal or SpMV can be restricted
 | BFS, 1 / 2 / 3 / 5 of 5 relations | 2.0 / 4.9 / 7.2 / 5.3 ms | 5.4 / 8.7 / 9.3 / 6.0 ms |
 | weighted row sums, 1 / 2 / 3 / 5 of 5 | 0.88 / 1.8 / 2.7 / 1.7 ms | 3.0 / 5.0 / 4.4 / 2.2 ms |
 
-Masked traversal and SpMV are 1.1–3.4× faster per relation, which is the hot path; the cost is about 2× storage and a build that stays well inside the §12 `refresh()` budget. Revisit if the memory cap (not speed) becomes the binding constraint; dropping the stored merged CSR is the first lever. Alignment: every segment starts on a 64-byte boundary when loaded.
+Masked traversal and SpMV are 1.1–3.4× faster per relation, which is the hot path; the cost is about 2× storage and a build that stays well inside the §12 `refresh()` budget. Revisit if the memory cap (not speed) becomes the binding constraint; dropping the stored merged CSR is the first lever.
+
+Every per-relation CSR has a full `id_space + 1` offsets array, so offsets cost 8·(N+1)·(R + 1) bytes per direction regardless of edge count (1,000 relations over 10M nodes would need 80 GB forward). `GraphCsr::build_within` computes this (`GraphCsr::offsets_bytes`) and refuses the build before allocating when it exceeds the caller's budget; the adapter passes its memory cap (§14 item 17). Sparse per-relation offsets are the longer-term lever.
+
+Alignment: every segment starts on a 64-byte boundary when loaded.
 
 Every segment is validated on load, before any unchecked slice is formed: alignment and lengths, `offsets[0] = 0`, offsets monotonic, `offsets[id_space] = M`, every target `< id_space`, and `id_map` sorted. The check is O(N + M), which is cheap next to the detoast. The segment decoder has a fuzz target (§12). Each segment is encoded as a 16-byte little-endian header (magic `WRSG`, format, kind, element width, element count) followed by its payload, so a decoder can reject a segment of the wrong kind or width before reading it.
 
@@ -810,6 +814,7 @@ Post-v0.3: contraction/project/lift and Louvain (§6.6), DSM cache + compute wor
 14. **`warren.step` as a composite type vs. `jsonb`.** Composite gives type-checking and a clean `warren.s()` constructor; `jsonb` is easier to generate from application code. Lean: composite as the canonical IR with a `jsonb → warren.step[]` cast for convenience.
 15. **`walk` path enumeration limits.** Hard cap on `max_results` for `mode = 'paths'` (lean: default 100,000, error above a GUC ceiling) and whether to support `'count'` exactly or approximately for variable-length segments (lean: exact).
 16. **Prior-art reading complete** (§4A). **Done (M0, 2026-10-19):** see [`docs/prior-art-notes.md`](docs/prior-art-notes.md) (pgGraph `b0f53df`, OneSparse `79a57cd`). Sections changed as a result (v0.6): §4A, §5.1, §5.3, §5.4, §5.5, §6.3, §6.7, §6.9, §7, §9.3, §10, §11, §12, §13, §14 items 2 and 4. Not a reuse decision (the policy is to build in full), but a gate.
+17. **Relation count × node count.** Per-relation offsets grow as R·N (§5.3). **Decided (M1):** no fixed relation limit; a build is refused up front when its offsets would exceed the memory budget the adapter passes (`warren.max_build_memory` or the compute cap, settled in M2). Revisit with sparse per-relation offsets if graphs with many relations appear.
 
 ## 15. Instructions to the implementing agent
 
