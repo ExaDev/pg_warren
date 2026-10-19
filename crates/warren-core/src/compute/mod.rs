@@ -22,6 +22,7 @@ mod reduce;
 mod reference;
 mod semiring;
 mod summary;
+mod triangles;
 mod vector;
 mod workers;
 
@@ -41,5 +42,6 @@ pub use ranking::top_k;
 pub use reduce::{norm_diff, reduce, reduce_live, Norm, Reduction};
 pub use semiring::{BinaryOp, Monoid, Semiring, SemiringElement};
 pub use summary::{summarise, Summary};
+pub use triangles::triangles;
 pub use vector::{AnyVector, Vector};
 pub use workers::Workers;
