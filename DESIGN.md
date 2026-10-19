@@ -963,7 +963,12 @@ Each milestone leaves `main` green and demonstrable.
 
 **M6 — Spectral and distance.** Lanczos `eigen` with f32/f64 modes; `distance` with all five methods; evolving-graph benchmark; the §8 workflow and Appendix A.2 as integration tests end-to-end. Tag `v0.2.0`.
 
-**M7 — Hardening.** A size-bounded LRU for the backend-local cache (`warren.max_cache_memory`, §5.5); 100M-edge soak; memory-context and allocator hygiene; docs for semantics, staleness, retention, the two change-detection patterns, and limits. Decide §6.10 from benchmarks, against §6.11's operation set (masked SpGEMM and sparse vectors included), and define the kernel seam it implies. Tag `v0.3.0`.
+**M7 — Hardening.** A size-bounded LRU for the backend-local cache (`warren.max_cache_memory`, §5.5); 100M-edge soak; memory-context and allocator hygiene; docs for semantics, staleness, retention, the two change-detection patterns, and limits. Decide §6.10 from benchmarks, against §6.11's operation set (masked SpGEMM and sparse vectors included), and define the kernel seam it implies. **Install without a superuser:** make pg_warren a *trusted* extension (`trusted = true` in the control file), so a role with `CREATE` on the database can run `CREATE EXTENSION pg_warren`. Hosted Postgres providers generally require this before they offer an extension to customers. The work has three parts:
+- Check every statement in the install and upgrade scripts against what a trusted extension script may run.
+- Re-check §7's extension-owner identity switch. In a trusted install, the script runs as the bootstrap superuser while `pg_extension.extowner` is the calling role, so the role that owns the `warren.*` tables and the one the switch elevates to may differ.
+- Keep later features within those rules: the v1.1 `DROP ROLE` event trigger needs a superuser, so it must be optional or done another way.
+
+Test it by installing as a non-superuser in CI and running the suite. Tag `v0.3.0`.
 
 Post-v0.3: contraction/project/lift and Louvain (§6.6, whose `PᵀAP` is the first SpGEMM), sparse matrix algebra (§6.11), DSM cache + compute worker, incremental maintenance, WASM programs, in roughly that order; a GPU backend when there is demand.
 
