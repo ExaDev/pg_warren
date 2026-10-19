@@ -43,3 +43,30 @@ pub(crate) fn versions(name: &str) -> Result<Option<String>, Error> {
 pub(crate) fn current(name: &str) -> Result<Option<i64>, Error> {
     Spi::get_one::<i64>(&format!("SELECT current_version FROM warren.graphs WHERE name = '{name}'"))
 }
+
+/// Graph `name` over `int8` ids, owned by role `<name>_owner`: nodes 1–6
+/// and edges 1 → 2 (`a`, weight 1), 2 → 3 (`a`, 1), 3 → 4 (`b`, 1),
+/// 1 → 4 (`b`, 5), 4 → 1 (`a`, 1); 5 → 5 (`b`, 2); 6 isolated. Weighted,
+/// with relations and a reverse CSR, and refreshed.
+pub(crate) fn small(name: &str) -> Result<i64, Error> {
+    Spi::run(&format!(
+        "CREATE ROLE {name}_owner;
+         CREATE TABLE {name}_nodes (id bigint);
+         CREATE TABLE {name}_edges (src bigint, dst bigint, rel text, w float8);
+         INSERT INTO {name}_nodes SELECT generate_series(1, 6);
+         INSERT INTO {name}_edges VALUES (1, 2, 'a', 1), (2, 3, 'a', 1), (3, 4, 'b', 1),
+                                         (1, 4, 'b', 5), (4, 1, 'a', 1), (5, 5, 'b', 2);
+         GRANT SELECT ON {name}_nodes, {name}_edges TO {name}_owner;
+         SET ROLE {name}_owner;
+         SELECT warren.create_graph('{name}', 'SELECT id FROM {name}_nodes',
+                                    'SELECT src, dst, rel, w FROM {name}_edges',
+                                    weighted := true, has_relations := true);
+         RESET ROLE"
+    ))?;
+    refresh(name, true)
+}
+
+/// The rows of `query`, each formatted by `format`, joined by spaces.
+pub(crate) fn rows(query: &str) -> Result<Option<String>, Error> {
+    Spi::get_one::<String>(&format!("SELECT coalesce(string_agg(r, ' '), '') FROM ({query}) q(r)"))
+}

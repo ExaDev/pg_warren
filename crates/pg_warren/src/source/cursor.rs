@@ -132,7 +132,7 @@ unsafe fn column_types(descriptor: pg_sys::TupleDesc) -> Vec<ColumnType> {
 }
 
 /// A type's SQL name, as `format_type` prints it.
-fn type_name(oid: pg_sys::Oid) -> String {
+pub(crate) fn type_name(oid: pg_sys::Oid) -> String {
     // SAFETY: format_type_be returns a palloc'd NUL-terminated string for
     // any oid (or raises an ERROR).
     unsafe { CStr::from_ptr(pg_sys::format_type_be(oid)) }.to_string_lossy().into_owned()

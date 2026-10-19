@@ -17,3 +17,4 @@ mod warm;
 
 pub(crate) use error::CacheError;
 pub(crate) use load::{load, load_identity, LoadError, LoadedVersion};
+pub(crate) use open::{cached, resolve, Resolved};

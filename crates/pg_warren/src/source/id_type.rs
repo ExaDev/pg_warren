@@ -47,12 +47,15 @@ impl IdType {
 
 /// An external id type with its Postgres value type: what the adapter
 /// reads from source rows and SQL arguments and returns to SQL.
-pub(crate) trait IdDatum: ExternalId + 'static {
+pub(crate) trait IdDatum: ExternalId + Send + Sync + 'static {
     /// The Rust type pgrx reads and writes the SQL value as.
     type Sql: FromDatum + IntoDatum;
 
     /// The external id of a SQL value.
     fn from_sql(value: Self::Sql) -> Self;
+
+    /// The SQL value of an external id.
+    fn to_sql(self) -> Self::Sql;
 }
 
 impl IdDatum for i32 {
@@ -60,6 +63,10 @@ impl IdDatum for i32 {
 
     fn from_sql(value: i32) -> Self {
         value
+    }
+
+    fn to_sql(self) -> i32 {
+        self
     }
 }
 
@@ -69,6 +76,10 @@ impl IdDatum for i64 {
     fn from_sql(value: i64) -> Self {
         value
     }
+
+    fn to_sql(self) -> i64 {
+        self
+    }
 }
 
 impl IdDatum for [u8; 16] {
@@ -76,6 +87,10 @@ impl IdDatum for [u8; 16] {
 
     fn from_sql(value: Uuid) -> Self {
         *value.as_bytes()
+    }
+
+    fn to_sql(self) -> Uuid {
+        Uuid::from_bytes(self)
     }
 }
 
@@ -115,10 +130,10 @@ mod tests {
     }
 
     #[test]
-    fn external_ids_are_read_from_their_sql_values() {
-        assert_eq!(i32::from_sql(7), 7);
-        assert_eq!(i64::from_sql(-7), -7);
-        assert_eq!(<[u8; 16]>::from_sql(Uuid::from_bytes([9; 16])), [9; 16]);
+    fn external_ids_round_trip_through_their_sql_values() {
+        assert_eq!(i32::from_sql(7_i32.to_sql()), 7);
+        assert_eq!(i64::from_sql((-7_i64).to_sql()), -7);
+        assert_eq!(<[u8; 16]>::from_sql([9; 16].to_sql()), [9; 16]);
     }
 
     #[test]
