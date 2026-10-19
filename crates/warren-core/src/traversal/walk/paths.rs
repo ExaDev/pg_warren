@@ -19,7 +19,7 @@ use super::plan::{plan, WalkPlan};
 use super::reach::{reach, Labelled, Level, Observer};
 use super::tally::{tally, Tally};
 use super::{RowLimit, Step, WalkOptions};
-use crate::graph::{memory, DenseId, GraphCsr, RelationIndex};
+use crate::graph::{memory, DenseId, GraphCsr, GraphError, RelationIndex};
 
 /// One walk, from its start to its end.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +33,18 @@ pub struct WalkPath {
 }
 
 impl WalkPath {
+    /// Appends a hop along `relation` to `node`. Paths are short, so they
+    /// grow by doubling rather than by [`memory::reserve_one`]'s
+    /// graph-sized steps.
+    fn push(&mut self, relation: RelationIndex, node: DenseId) -> Result<(), TraversalError> {
+        let out_of_memory = |elements| GraphError::OutOfMemory { elements };
+        self.nodes.try_reserve(1).map_err(|_| out_of_memory(self.nodes.len() + 1))?;
+        self.relations.try_reserve(1).map_err(|_| out_of_memory(self.relations.len() + 1))?;
+        self.nodes.push(node);
+        self.relations.push(relation);
+        Ok(())
+    }
+
     /// A copy, or an error if there is no memory for it.
     fn try_clone(&self) -> Result<Self, TraversalError> {
         let mut nodes = memory::with_capacity(self.nodes.len())?;
@@ -125,10 +137,7 @@ impl<R: FnMut(WalkPath) -> ControlFlow<()>> Recorder<R> {
         while let Some(level) = at {
             at = match self.came(level, node) {
                 Some(Came::Hop { via, relation }) => {
-                    memory::reserve_one(&mut path.nodes)?;
-                    memory::reserve_one(&mut path.relations)?;
-                    path.nodes.push(via);
-                    path.relations.push(relation);
+                    path.push(relation, via)?;
                     node = via;
                     Some(Level { step: level.step, depth: level.depth.saturating_sub(1) })
                 }
@@ -354,10 +363,7 @@ impl<'p, 'w> Live<'p, 'w> {
                     self.push(&mut stack, next, node, false, progress)?;
                 }
                 Choice::Hop(relation, neighbour) => {
-                    memory::reserve_one(&mut path.nodes)?;
-                    memory::reserve_one(&mut path.relations)?;
-                    path.nodes.push(neighbour);
-                    path.relations.push(relation);
+                    path.push(relation, neighbour)?;
                     let deeper = Level { step: level.step, depth: level.depth + 1 };
                     self.push(&mut stack, deeper, neighbour, true, progress)?;
                 }
