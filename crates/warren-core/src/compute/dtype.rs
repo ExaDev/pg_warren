@@ -72,6 +72,9 @@ pub trait Element:
     /// (`NaN` is non-zero), as a GraphBLAS value mask reads it.
     fn is_nonzero(self) -> bool;
 
+    /// The element as a `double precision` (`bool` as 0 or 1).
+    fn to_f64(self) -> f64;
+
     /// The vector, if `vector` holds this element type.
     fn vector(vector: &AnyVector) -> Option<&Vector<Self>>;
 
@@ -80,7 +83,7 @@ pub trait Element:
 }
 
 macro_rules! element {
-    ($type:ty, $dtype:ident, $zero:expr, $cmp:expr) => {
+    ($type:ty, $dtype:ident, $zero:expr, $cmp:expr, $to_f64:expr) => {
         impl Element for $type {
             const DTYPE: Dtype = Dtype::$dtype;
 
@@ -90,6 +93,10 @@ macro_rules! element {
 
             fn is_nonzero(self) -> bool {
                 self != $zero
+            }
+
+            fn to_f64(self) -> f64 {
+                $to_f64(self)
             }
 
             fn vector(vector: &AnyVector) -> Option<&Vector<Self>> {
@@ -115,10 +122,22 @@ macro_rules! element {
     };
 }
 
-element!(f32, F32, 0.0, |a: f32, b: f32| float_cmp(a.is_nan(), b.is_nan(), a.partial_cmp(&b)));
-element!(f64, F64, 0.0, |a: f64, b: f64| float_cmp(a.is_nan(), b.is_nan(), a.partial_cmp(&b)));
-element!(i64, I64, 0, |a: i64, b: i64| a.cmp(&b));
-element!(bool, Bool, false, |a: bool, b: bool| a.cmp(&b));
+element!(
+    f32,
+    F32,
+    0.0,
+    |a: f32, b: f32| float_cmp(a.is_nan(), b.is_nan(), a.partial_cmp(&b)),
+    f64::from
+);
+element!(
+    f64,
+    F64,
+    0.0,
+    |a: f64, b: f64| float_cmp(a.is_nan(), b.is_nan(), a.partial_cmp(&b)),
+    |a| a
+);
+element!(i64, I64, 0, |a: i64, b: i64| a.cmp(&b), |a| a as f64);
+element!(bool, Bool, false, |a: bool, b: bool| a.cmp(&b), |a| f64::from(u8::from(a)));
 
 /// SQL float order from the operands' NaN-ness and IEEE comparison.
 fn float_cmp(a_nan: bool, b_nan: bool, ieee: Option<Ordering>) -> Ordering {

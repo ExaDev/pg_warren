@@ -82,6 +82,12 @@ pub enum ComputeError {
     /// A binary operator name is not a GraphBLAS binary operator.
     #[error("unknown binary operator \"{0}\"")]
     UnknownBinaryOp(String),
+    /// A reduction name is not one of `sum|max|min|l1|l2|nnz`.
+    #[error("unknown reduction \"{0}\": expected sum, max, min, l1, l2 or nnz")]
+    UnknownReduction(String),
+    /// A norm name is not one of `l1|l2|linf`.
+    #[error("unknown norm \"{0}\": expected l1, l2 or linf")]
+    UnknownNorm(String),
     /// Arithmetic failed as the same SQL arithmetic would.
     #[error(transparent)]
     Arithmetic(#[from] ArithmeticError),
