@@ -12,6 +12,7 @@
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
@@ -76,6 +77,10 @@ mod tests {
     /// A call of every function that is not `PARALLEL UNSAFE`, on graph
     /// `pp` with vector `c`; `{v}` is its current version.
     const READS: &[&str] = &[
+        // Transient vectors live only in the leader's backend (and before
+        // `evict`, which frees them).
+        "warren.vector_reduce('pp', 't', 'sum')",
+        "warren.vector_values('pp', 't', NULL::bigint)",
         "warren.bfs('pp', ARRAY[1::bigint], 2)",
         "warren.components('pp', NULL::bigint)",
         "warren.degree('pp', 1::bigint)",
@@ -104,12 +109,15 @@ mod tests {
         "warren.walk('pp', ARRAY[1::bigint], ARRAY[warren.s(NULL)])",
     ];
 
-    /// Graph `pp` (a ring of 5) with a persisted vector `c`; returns its
-    /// current version.
+    /// Graph `pp` (a ring of 5) with a persisted vector `c` and a transient
+    /// vector `t`; returns its current version.
     fn graph_with_a_vector() -> Result<i64, Error> {
         ring("pp", 5, 2)?;
         let version = refresh("pp", true)?;
-        Spi::run("SELECT warren.vector_const('pp', 'c', 1)")?;
+        Spi::run(
+            "SELECT warren.vector_const('pp', 'c', 1);
+             SELECT warren.vector_const('pp', 't', 2, persist := false)",
+        )?;
         Ok(version)
     }
 
@@ -152,9 +160,25 @@ mod tests {
         let version = graph_with_a_vector()?;
         Spi::run(&format!("SET {FORCE_PARALLEL} = on"))?;
         for read in READS {
-            in_subtransaction(&read.replace("{v}", &version.to_string()))?;
+            let read = read.replace("{v}", &version.to_string());
+            // Without a transaction id: assigning one would fail.
+            in_subtransaction(&read)?;
+            // In the test's transaction, which holds one: SPI then reads
+            // non-read-only (a command counter increment, a new snapshot).
+            Spi::run(&format!("SELECT {read}"))?;
         }
         Spi::run(&format!("RESET {FORCE_PARALLEL}"))
+    }
+
+    #[test]
+    fn every_function_that_is_not_unsafe_has_a_read() {
+        for (name, label) in LABELS.iter().filter(|(_, label)| *label != "u") {
+            let call = format!("warren.{name}(");
+            assert!(
+                READS.iter().any(|read| read.starts_with(&call)),
+                "{name} ({label}) has no read"
+            );
+        }
     }
 
     #[pg_test]

@@ -116,7 +116,9 @@ before changing code. Commands, toolchain setup and environment gotchas are in
   `GetCurrentTransactionId()`; in parallel mode (a `PARALLEL RESTRICTED`
   function in the leader of a parallel plan) that raises "cannot assign
   XIDs during a parallel operation". Outside tests, read with
-  `read_only::read_one`/`read_two` or `Spi::connect` + `select`.
+  `read_only::read_one`/`read_two` or `Spi::connect` + `select`, and write
+  with `Spi::connect_mut` + `update`. Clippy's `disallowed-methods`
+  (`clippy.toml`) enforces this; test modules allow it on the `mod` item.
 - **Parallel labels** (DESIGN.md §9.3): writers and anything that may persist
   are `PARALLEL UNSAFE`; anything that reads a graph or vector is `PARALLEL
   RESTRICTED`; only functions that read no graph are `PARALLEL SAFE`.

@@ -66,6 +66,7 @@ pub(crate) fn extension_owner() -> Result<pg_sys::Oid, AccessError> {
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod tests {
     use super::*;
     use pgrx::spi::Error;

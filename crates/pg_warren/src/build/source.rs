@@ -38,6 +38,7 @@ pub(crate) trait EdgeSink<E> {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 pub(super) mod tests {
     use super::*;
 
