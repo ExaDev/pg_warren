@@ -1,20 +1,26 @@
 //! Operations across versions of a graph: the structural [`diff`] of two
-//! versions in the same id space (DESIGN.md §7) and [`compact`], which
+//! versions in the same id space (DESIGN.md §7), [`compact`], which
 //! renumbers a version into a new id space without tombstones (DESIGN.md
-//! §5.2).
+//! §5.2), and [`shared_dense_ids`], whether two versions share an id
+//! space.
 //!
 //! `graph` owns the structure of one version; this module only reads
 //! [`GraphVersion`]s and produces values (or, for compaction, a new version
 //! built through [`GraphCsr::build`]).
 
 mod compaction;
+mod dense_ids;
 mod diff;
 mod error;
 #[cfg(test)]
-mod history;
+pub(crate) mod history;
 
 pub use compaction::{compact, Compaction, Renumbering};
-pub use diff::{diff, DegreeCount, DegreeShift, EdgeDelta, NodeDelta, RelationDelta, VersionDiff};
+pub use dense_ids::shared_dense_ids;
+pub use diff::{
+    diff, relation_deltas, DegreeCount, DegreeShift, EdgeDelta, NodeDelta, RelationDelta,
+    VersionDiff,
+};
 pub use error::VersionError;
 
 use crate::graph::{ExternalId, GraphCsr, IdMap, RelationDictionary};

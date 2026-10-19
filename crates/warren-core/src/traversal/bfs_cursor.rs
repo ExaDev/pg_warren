@@ -120,6 +120,7 @@ mod tests {
 
     use super::*;
     use crate::graph::Direction;
+    use crate::graph::RelationSelection;
     use crate::graph::{DenseId, GraphCsr};
     use crate::interrupts::{Cancellation, Uninterrupted};
     use crate::traversal::example::directed;

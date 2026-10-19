@@ -8,6 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+nalgebra = { version = "0.35.0", default-features = false, features = ["std"] }
 rayon = "1.10"
 thiserror = "2"
 
@@ -29,6 +30,10 @@ harness = false
 
 [[bench]]
 name = "relation_layout"
+harness = false
+
+[[bench]]
+name = "spectral"
 harness = false
 
 [[bench]]

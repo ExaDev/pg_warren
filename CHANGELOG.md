@@ -18,6 +18,12 @@
   (personalised by a seed vector), `components_vector`,
   `label_propagation`, `sssp_vector`, `degree_vector`,
   `aggregate_neighbours`; and `triangles`, a per-node triangle count.
+- Spectral analysis and version distance: `eigen` (Lanczos top-k
+  eigenpairs of the adjacency, Laplacian, normalised Laplacian or random
+  walk, eigenvectors stored as `<prefix>_1..k` vectors, `f32` or `f64`) and
+  `distance` (`edit`, `degree`, `spectral`, `subspace`, `embedding`, as
+  `jsonb`), between versions of a graph or, with `graph2`, of two graphs
+  aligned by external id.
 - Behaviour change: SQL a user wrote now runs in Postgres's read-only
   transaction state while warren reads it, so a graph's source queries
   (at `refresh`), `vector_from_query`'s query and `gather`'s message query

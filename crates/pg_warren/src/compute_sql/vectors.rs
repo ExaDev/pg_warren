@@ -47,11 +47,11 @@ const RESERVED_PREFIX: &str = "_warren_";
 
 /// A vector name bound to a version, and its element type.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct BoundName {
+pub(crate) struct BoundName {
     /// The name.
-    pub(super) name: String,
+    pub(crate) name: String,
     /// Its dtype.
-    pub(super) dtype: Dtype,
+    pub(crate) dtype: Dtype,
 }
 
 /// The names of the vectors bound to `version` of graph `graph_id` that a
@@ -75,15 +75,15 @@ pub(super) fn bound_names(
 }
 
 /// A version, the vectors bound to it, and the call's compute memory.
-pub(super) struct Vectors<E> {
+pub(crate) struct Vectors<E> {
     /// The graph.
-    pub(super) graph: GraphDefinition,
+    pub(crate) graph: GraphDefinition,
     /// The version.
-    pub(super) version: VersionId,
+    pub(crate) version: VersionId,
     /// The loaded version.
-    pub(super) loaded: Arc<LoadedVersion<E>>,
+    pub(crate) loaded: Arc<LoadedVersion<E>>,
     /// The call's compute memory budget.
-    pub(super) memory: ComputeMemory,
+    pub(crate) memory: ComputeMemory,
     records: Vec<VectorRecord>,
     held: HashMap<String, MemoryCharge>,
 }
@@ -91,13 +91,13 @@ pub(super) struct Vectors<E> {
 impl<E: IdDatum> Vectors<E> {
     /// Opens `resolved`'s version and lists its vectors, with a fresh call
     /// budget of `warren.max_compute_memory`.
-    pub(super) fn open(resolved: Resolved) -> Result<Self, ComputeSqlError> {
+    pub(crate) fn open(resolved: Resolved) -> Result<Self, ComputeSqlError> {
         Self::open_within(resolved, &compute_memory())
     }
 
     /// Opens `resolved`'s version and lists its vectors, charging what the
     /// call reads to `memory` (a budget shared with other versions).
-    pub(super) fn open_within(
+    pub(crate) fn open_within(
         resolved: Resolved,
         memory: &ComputeMemory,
     ) -> Result<Self, ComputeSqlError> {
@@ -114,17 +114,17 @@ impl<E: IdDatum> Vectors<E> {
     }
 
     /// The version's id space: every vector's row count.
-    pub(super) fn id_space(&self) -> u64 {
+    pub(crate) fn id_space(&self) -> u64 {
         self.loaded.id_map.id_space()
     }
 
     /// The version's tombstones.
-    pub(super) fn tombstones(&self) -> &Tombstones {
+    pub(crate) fn tombstones(&self) -> &Tombstones {
         self.loaded.id_map.tombstones()
     }
 
     /// The names of the vectors bound to the version that this call sees.
-    pub(super) fn names(&self) -> Result<Vec<BoundName>, ComputeSqlError> {
+    pub(crate) fn names(&self) -> Result<Vec<BoundName>, ComputeSqlError> {
         bound_names(self.graph.graph_id, self.version)
     }
 
@@ -134,7 +134,7 @@ impl<E: IdDatum> Vectors<E> {
     }
 
     /// Vector `name`, which must be bound to the version.
-    pub(super) fn get(&mut self, name: &str) -> Result<Arc<AnyVector>, ComputeSqlError> {
+    pub(crate) fn get(&mut self, name: &str) -> Result<Arc<AnyVector>, ComputeSqlError> {
         self.find(name)?.ok_or_else(|| ComputeSqlError::VectorNotFound {
             graph: self.graph.name.clone(),
             name: name.to_owned(),
@@ -167,6 +167,23 @@ impl<E: IdDatum> Vectors<E> {
         Ok(Some(load(&mut SpiVectorStore, cache_memory(), graph_id, &record)?))
     }
 
+    /// Whether the caller may store a vector as `name` (persisted if
+    /// `persist`): a non-empty name, reserved only if transient, and any
+    /// persisted vector of that name written by the caller or the caller a
+    /// member of the graph's owner role.
+    pub(crate) fn check_writable(&self, name: &str, persist: bool) -> Result<(), ComputeSqlError> {
+        if name.is_empty() {
+            return Err(ComputeSqlError::EmptyName);
+        }
+        if persist && name.starts_with(RESERVED_PREFIX) {
+            return Err(ComputeSqlError::ReservedName(name.to_owned()));
+        }
+        if let Some(old) = self.record(name) {
+            require_creator_or_owner(old.created_by, self.graph.owner, &self.graph.name, name)?;
+        }
+        Ok(())
+    }
+
     /// Stores `vector` as `name` (which may be reserved only if not
     /// `persist`) after clearing its tombstoned rows:
     /// persisted (returning its vector id) or, if not `persist`, as a
@@ -174,23 +191,15 @@ impl<E: IdDatum> Vectors<E> {
     /// any vector of that name of either kind; a persisted one replaced
     /// must have been written by the caller, or the caller must own the
     /// graph.
-    pub(super) fn save(
+    pub(crate) fn save(
         &mut self,
         name: &str,
         mut vector: AnyVector,
         persist: bool,
     ) -> Result<Option<VectorId>, ComputeSqlError> {
-        if name.is_empty() {
-            return Err(ComputeSqlError::EmptyName);
-        }
-        if persist && name.starts_with(RESERVED_PREFIX) {
-            return Err(ComputeSqlError::ReservedName(name.to_owned()));
-        }
+        self.check_writable(name, persist)?;
         let graph_id = self.graph.graph_id;
         let old = self.record(name).map(|old| (old.vector, old.created_by));
-        if let Some((_, created_by)) = old {
-            require_creator_or_owner(created_by, self.graph.owner, &self.graph.name, name)?;
-        }
         let replacing = old.map(|(vector, _)| vector);
         vector.clear_tombstoned(self.tombstones());
         self.held.remove(name);
