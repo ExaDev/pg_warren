@@ -33,7 +33,7 @@ fn cache_memory() -> &'static ComputeMemory {
 }
 
 /// The bytes of a vector of `dtype` with `length` rows of `width`.
-fn bytes(dtype: Dtype, width: usize, length: u64) -> u64 {
+pub(crate) fn vector_bytes(dtype: Dtype, width: usize, length: u64) -> u64 {
     let element = match dtype {
         Dtype::F32 => size_of::<f32>(),
         Dtype::F64 | Dtype::I64 => size_of::<f64>(),
@@ -159,13 +159,13 @@ impl<E: IdDatum> Vectors<E> {
     pub(super) fn find(&mut self, name: &str) -> Result<Option<Arc<AnyVector>>, ComputeSqlError> {
         let graph_id = self.graph.graph_id;
         if let Some(vector) = transient(graph_id, self.version, name) {
-            self.charge(name, bytes(vector.dtype(), vector.width(), vector.id_space()))?;
+            self.charge(name, vector_bytes(vector.dtype(), vector.width(), vector.id_space()))?;
             return Ok(Some(vector));
         }
         let Some(record) = self.record(name).cloned() else {
             return Ok(None);
         };
-        self.charge(name, bytes(record.dtype, record.width, record.length))?;
+        self.charge(name, vector_bytes(record.dtype, record.width, record.length))?;
         let vector = load(&mut SpiVectorStore, cache_memory(), graph_id, &record)?;
         trim();
         Ok(Some(vector))
@@ -186,6 +186,28 @@ impl<E: IdDatum> Vectors<E> {
             require_creator_or_owner(old.created_by, self.graph.owner, &self.graph.name, name)?;
         }
         Ok(())
+    }
+
+    /// Refuses, before anything is written, keeping transient vectors
+    /// `names` of `bytes` each, if they would take this backend's transient
+    /// vectors past `warren.max_cache_memory`. The current role's transient
+    /// vectors of `names` (which they replace) and of `released` (which the
+    /// caller drops before writing) are not counted.
+    pub(crate) fn admit_transients(
+        &self,
+        names: &[String],
+        released: &[String],
+        bytes: u64,
+    ) -> Result<(), ComputeSqlError> {
+        let (graph_id, version) = (self.graph.graph_id, self.version);
+        let replaced = names
+            .iter()
+            .chain(released)
+            .filter_map(|name| transient(graph_id, version, name))
+            .map(|vector| vector.bytes())
+            .sum();
+        let added = bytes.saturating_mul(names.len() as u64);
+        Ok(admit_transient(replaced, added)?)
     }
 
     /// Stores `vector` as `name` (which may be reserved only if not
