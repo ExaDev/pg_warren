@@ -4,6 +4,7 @@
 
 mod basis;
 mod dense;
+mod distance;
 mod error;
 mod lanczos;
 mod operator;
@@ -14,6 +15,9 @@ mod reference;
 mod resources;
 mod ritz;
 
+pub use distance::{
+    edit_distance, spectral_distance, EdgeSetChange, EditDistance, SpectralDistance,
+};
 pub use error::SpectralError;
 pub use lanczos::{eigen, Eigen, EigenOptions, Eigenpair, Precision, Which};
 pub use operator::{GraphMatrix, Operator};
