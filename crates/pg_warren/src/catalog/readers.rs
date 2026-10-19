@@ -85,7 +85,7 @@ mod tests {
         Ok(())
     }
 
-    #[pg_test(error = "must be a member of role \"postgres\" to grant graph \"r\"")]
+    #[pg_test(error = "must be a member of role \"r_owner\" to grant graph \"r\"")]
     fn only_the_owner_may_grant() -> Result<(), Error> {
         ring("r", 3, 2)?;
         Spi::run("CREATE ROLE granter; SET ROLE granter; SELECT warren.grant('r', 'granter')")

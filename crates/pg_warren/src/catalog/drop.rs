@@ -101,7 +101,7 @@ mod tests {
         Ok(())
     }
 
-    #[pg_test(error = "must be a member of role \"postgres\" to drop graph \"d\"")]
+    #[pg_test(error = "must be a member of role \"d_owner\" to drop graph \"d\"")]
     fn only_the_owner_may_drop_a_graph() -> Result<(), Error> {
         ring("d", 5, 2)?;
         Spi::run("CREATE ROLE dropper; SET ROLE dropper; SELECT warren.drop_graph('d')")

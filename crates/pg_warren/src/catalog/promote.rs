@@ -87,7 +87,7 @@ mod tests {
         Spi::run("SELECT warren.promote('p', 999)")
     }
 
-    #[pg_test(error = "must be a member of role \"postgres\" to promote graph \"p\"")]
+    #[pg_test(error = "must be a member of role \"p_owner\" to promote graph \"p\"")]
     fn only_the_owner_may_promote() -> Result<(), Error> {
         ring("p", 5, 2)?;
         let version = refresh("p", false)?;

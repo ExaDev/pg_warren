@@ -6,16 +6,22 @@ use pgrx::spi::Error;
 
 /// Graph `name`: a directed ring `1 → 2 → … → nodes → 1` over tables
 /// `<name>_nodes (id bigint)` and `<name>_edges (src bigint, dst bigint)`,
-/// keeping `retain_versions` promoted versions.
+/// keeping `retain_versions` promoted versions. The graph is owned by role
+/// `<name>_owner`, created here, so that tests do not depend on the session
+/// user; the session user stays a superuser and so a member of it.
 pub(crate) fn ring(name: &str, nodes: i64, retain_versions: i32) -> Result<(), Error> {
     Spi::run(&format!(
-        "CREATE TABLE {name}_nodes (id bigint);
+        "CREATE ROLE {name}_owner;
+         CREATE TABLE {name}_nodes (id bigint);
          CREATE TABLE {name}_edges (src bigint, dst bigint);
          INSERT INTO {name}_nodes SELECT generate_series(1, {nodes});
          INSERT INTO {name}_edges SELECT g, g % {nodes} + 1 FROM generate_series(1, {nodes}) g;
+         GRANT SELECT ON {name}_nodes, {name}_edges TO {name}_owner;
+         SET ROLE {name}_owner;
          SELECT warren.create_graph('{name}', 'SELECT id FROM {name}_nodes',
                                     'SELECT src, dst FROM {name}_edges',
-                                    retain_versions := {retain_versions})"
+                                    retain_versions := {retain_versions});
+         RESET ROLE"
     ))
 }
 

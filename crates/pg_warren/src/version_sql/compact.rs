@@ -221,7 +221,7 @@ mod tests {
         Spi::run("SELECT warren.compact('c')")
     }
 
-    #[pg_test(error = "must be a member of role \"postgres\" to compact graph \"c\"")]
+    #[pg_test(error = "must be a member of role \"c_owner\" to compact graph \"c\"")]
     fn only_the_owner_may_compact() -> Result<(), Error> {
         tombstoned()?;
         Spi::run("CREATE ROLE compacter; SET ROLE compacter; SELECT warren.compact('c')")

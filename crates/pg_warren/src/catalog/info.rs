@@ -70,7 +70,7 @@ mod tests {
         let promoted = refresh("i", true)?;
         let staged = refresh("i", false)?;
         assert_eq!(info("{name}")?.as_deref(), Some("\"i\""));
-        assert_eq!(info("{owner}")?.as_deref(), Some("\"postgres\""));
+        assert_eq!(info("{owner}")?.as_deref(), Some("\"i_owner\""));
         assert_eq!(info("{id_type}")?.as_deref(), Some("\"bigint\""));
         assert_eq!(info("{readers}")?.as_deref(), Some("[]"));
         assert_eq!(info("{retain_versions}")?.as_deref(), Some("2"));
@@ -110,7 +110,7 @@ mod tests {
     }
 
     #[pg_test(
-        error = "must be a member of role \"postgres\" or of a reader role to read graph \"i\""
+        error = "must be a member of role \"i_owner\" or of a reader role to read graph \"i\""
     )]
     fn a_role_neither_owner_nor_reader_may_not_call_info() -> Result<(), Error> {
         ring("i", 4, 2)?;
