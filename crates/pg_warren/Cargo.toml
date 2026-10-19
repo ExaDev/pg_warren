@@ -24,3 +24,6 @@ warren-core = { path = "../warren-core" }
 
 [dev-dependencies]
 pgrx-tests = "=0.19.3"
+
+[lints]
+workspace = true

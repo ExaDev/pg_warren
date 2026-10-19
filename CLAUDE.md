@@ -38,13 +38,18 @@ before changing code. Commands, toolchain setup and environment gotchas are in
 4. **Ubiquitous language (from DESIGN.md).** Use these terms exactly, in code,
    tests and docs: *graph, version (staged / promoted / current), dense id,
    external id, id map, id space, tombstone, segment, chunk, relation, CSR
-   (offsets / targets / weights, forward / reverse), frontier, step, walk,
-   vector, matrix, semiring, message, combiner, gather, label.* Don't invent
+   (offsets / targets / weights, forward / reverse / merged), frontier, step,
+   walk, vector, matrix, semiring, message, combiner, gather, label,
+   dropped edges, deduplicated edges.* *Merged* means only the all-relations
+   CSR; parallel edges folded at build time are *deduplicated*. Don't invent
    synonyms ("node index", "snapshot id", "edge type"). Don't use "version"
    for anything except a graph version or a software version, and say which.
 5. **Small, focused files and functions. No dead code**: nothing unused,
    commented out or speculative. Empty feature modules may hold only their
    responsibility doc comment.
+   Lints are set once in `[workspace.lints]` (root `Cargo.toml`). Every crate
+   opts in, and a lint is never allowed crate-wide. If a macro trips a lint,
+   allow it on the smallest possible item and add a comment saying why.
 6. **Main stays green; CI is the gate.** Every commit passes fmt, clippy
    `-D warnings`, rustdoc `-D warnings`, the core tests, the core-isolation
    check and pgrx tests on PG 15–18. Don't merge on red, and don't weaken a
@@ -60,6 +65,7 @@ before changing code. Commands, toolchain setup and environment gotchas are in
 | Adapter logic behind ports, against fakes | `pg_warren`, plain `#[test]` | `cargo pgrx test pgNN` (crate needs the pgrx harness) |
 | In-database (`#[pg_test]`): SQL surface, SPI adapters, transactions | `pg_warren`, `#[pg_schema] mod tests` per feature module | `cargo pgrx test pgNN` |
 | Integration / oracle / Appendix A use cases | `test/` | TBD (M2+) |
+| Domain tests under Miri | `warren-core` (same tests) | `cargo +$MIRI_NIGHTLY miri test -p warren-core` (pinned nightly, see `ci.yml`) |
 | Micro-benchmarks (`criterion`) | `warren-core/benches/` | `cargo bench -p warren-core` |
 
 ## pgrx specifics (learned in M0)
@@ -71,16 +77,18 @@ before changing code. Commands, toolchain setup and environment gotchas are in
   schema outside the extension, and the script's `CREATE SCHEMA IF NOT EXISTS`
   then fails with "schema warren is not a member of extension"
   (CVE-2022-2625 hardening).
-- `#[pg_test]` names are prefixed `pg_` in test output.
-- pgrx tests can't run as root. Use `--runas postgres --pgdata <dir owned by
-  postgres>` (see CONTRIBUTING.md).
+- `#[pg_test]` names are prefixed `pg_` in test output. Running them as root
+  (`--runas`) and their `Result` return convention are covered in
+  CONTRIBUTING.md.
 - **Errors and panics** (DESIGN.md §6.9, §11; lessons from pgGraph):
   - Raise SQL errors only through pgrx (`ErrorReport` or `ereport!` with a
     standard SQLSTATE). Never call `pg_sys` error functions directly.
   - Never `catch_unwind` around SPI or Postgres calls.
-  - Wrap interrupt checks so that a Postgres ERROR unwinds the Rust frames.
-  - No `unwrap`, `expect` or `panic!` outside tests.
-  - Every `unsafe` block carries a `// SAFETY:` comment.
+  - Use `pgrx::check_for_interrupts!()`. pgrx's `pg_sys` FFI is
+    `#[pg_guard]`ed, so an ERROR unwinds the Rust frames. Never call unguarded
+    FFI.
+  - `unwrap`/`expect`/`panic!` and undocumented `unsafe` are lint errors
+    (policy in CONTRIBUTING.md "Lints").
 - Reserve graph-sized buffers with `try_reserve`; an allocation failure is a
   SQL error, never an abort.
 - SPI writes need `Spi::connect_mut` + `update()`. `Spi::connect` is read-only.

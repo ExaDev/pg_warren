@@ -14,7 +14,7 @@ use pgrx::prelude::*;
 mod warren {}
 
 /// `warren.version()`: the version of the installed extension library.
-#[pg_extern(schema = "warren", immutable, parallel_safe)]
+#[pg_extern(schema = "warren", stable, parallel_safe)]
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
@@ -23,26 +23,42 @@ pub fn version() -> &'static str {
 #[pg_schema]
 mod tests {
     use pgrx::prelude::*;
+    use pgrx::spi::Error;
+
+    // `#[pg_test]` functions are not `#[test]` to clippy, so they propagate
+    // SPI errors with `?` instead of unwrapping (workspace lints deny unwrap).
 
     #[pg_test]
-    fn warren_version_returns_crate_version() {
-        let v = Spi::get_one::<String>("SELECT warren.version()").unwrap();
+    fn warren_version_returns_crate_version() -> Result<(), Error> {
+        let v = Spi::get_one::<String>("SELECT warren.version()")?;
         assert_eq!(v.as_deref(), Some(env!("CARGO_PKG_VERSION")));
+        Ok(())
     }
 
     #[pg_test]
-    fn warren_version_lives_in_warren_schema() {
-        let schema = Spi::get_one::<String>(
-            "SELECT n.nspname::text FROM pg_proc p
-             JOIN pg_namespace n ON n.oid = p.pronamespace
-             WHERE p.proname = 'version' AND n.nspname = 'warren'",
-        )
-        .unwrap();
-        assert_eq!(schema.as_deref(), Some("warren"));
+    fn warren_version_lives_in_warren_schema() -> Result<(), Error> {
+        let in_warren = Spi::get_one::<bool>(
+            "SELECT pronamespace = 'warren'::regnamespace
+             FROM pg_proc WHERE oid = 'warren.version()'::regprocedure",
+        )?;
+        assert_eq!(in_warren, Some(true));
+        Ok(())
     }
 
     #[pg_test]
-    fn extension_creates_warren_schema() {
+    fn warren_version_is_stable_not_immutable() -> Result<(), Error> {
+        // The answer changes when the library is upgraded in place, so it must
+        // not be constant-folded into stored plans or index expressions.
+        let volatility = Spi::get_one::<String>(
+            "SELECT provolatile::text FROM pg_proc
+             WHERE oid = 'warren.version()'::regprocedure",
+        )?;
+        assert_eq!(volatility.as_deref(), Some("s"));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn extension_creates_warren_schema() -> Result<(), Error> {
         let owns = Spi::get_one::<bool>(
             "SELECT EXISTS (
                  SELECT 1 FROM pg_depend d
@@ -50,18 +66,18 @@ mod tests {
                  JOIN pg_namespace n ON n.oid = d.objid
                  WHERE e.extname = 'pg_warren' AND n.nspname = 'warren'
                    AND d.classid = 'pg_namespace'::regclass)",
-        )
-        .unwrap();
+        )?;
         assert_eq!(owns, Some(true), "schema warren must be created by the extension");
+        Ok(())
     }
 
     #[pg_test]
-    fn drop_extension_drops_warren_schema() {
-        Spi::run("DROP EXTENSION pg_warren CASCADE").unwrap();
+    fn drop_extension_drops_warren_schema() -> Result<(), Error> {
+        Spi::run("DROP EXTENSION pg_warren CASCADE")?;
         let exists = Spi::get_one::<bool>(
             "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'warren')",
-        )
-        .unwrap();
+        )?;
         assert_eq!(exists, Some(false));
+        Ok(())
     }
 }

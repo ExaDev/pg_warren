@@ -1,4 +1,6 @@
+# Exact toolchain pin (DESIGN.md §11). CI installs it from this file with
+# `rustup toolchain install`; bump it in its own change.
 [toolchain]
-channel = "stable"
+channel = "1.97.0"
 components = ["rustfmt", "clippy"]
 profile = "minimal"
