@@ -43,3 +43,10 @@ def test_an_unknown_computation_is_refused():
 def test_each_computation_names_its_result_table_and_columns():
     assert oracle.TABLES["components"] == ("oracle_components", "node_id bigint, component bigint")
     assert oracle.TABLES["pagerank"] == ("oracle_pagerank", "node_id bigint, score float8")
+    assert oracle.TABLES["triangles"] == ("oracle_triangles", "node_id bigint, triangles bigint")
+
+
+def test_triangles_count_each_nodes_triangles_ignoring_direction_and_self_loops():
+    rows = oracle.compute("triangles", graph([(1, 2), (2, 3), (3, 1), (1, 3), (3, 4), (4, 4)], nodes=[5],
+                                             directed=True), [])
+    assert sorted(rows) == [(1, 1), (2, 1), (3, 1), (4, 0), (5, 0)]
