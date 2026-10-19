@@ -38,4 +38,4 @@ pub use node_set::NodeSet;
 pub use reachable::{reachable, reachable_set, reachable_set_each};
 pub use shortest_path::shortest_path;
 pub use stats::{TraversalStats, Traversed};
-pub use walk::{HopRange, Step};
+pub use walk::{walk, walk_ends_each, HopRange, Step, WalkMode, WalkOptions, WalkResult};
