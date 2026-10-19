@@ -29,7 +29,9 @@ impl<E: Element> Vector<E> {
     }
 
     /// A vector of `id_space` rows of `width` elements from `values`,
-    /// row-major.
+    /// row-major. This adopts a buffer the caller has already allocated, so
+    /// unlike [`Vector::filled`] it is charged after the allocation; the
+    /// charge covers the buffer's whole capacity.
     pub fn from_values(
         memory: &ComputeMemory,
         id_space: u64,
@@ -43,7 +45,7 @@ impl<E: Element> Vector<E> {
                 found: values.len() as u64,
             });
         }
-        let charge = memory.charge_elements::<E>(len)?;
+        let charge = memory.charge_elements::<E>(values.capacity())?;
         Ok(Self { id_space, width, values, _charge: charge })
     }
 
@@ -222,6 +224,17 @@ mod tests {
         let mut flags: AnyVector = Vector::filled(&memory(), 3, 1, true).unwrap().into();
         flags.clear_tombstoned(&tombstones);
         assert_eq!(bool::vector(&flags).unwrap().values(), [true, false, true]);
+    }
+
+    #[test]
+    fn an_adopted_buffer_is_charged_for_its_capacity() {
+        let memory = memory();
+        let mut values = Vec::with_capacity(8);
+        values.extend([1i64, 2, 3, 4]);
+        let vector = Vector::from_values(&memory, 4, 1, values).unwrap();
+        assert_eq!(memory.in_use(), 64);
+        drop(vector);
+        assert_eq!(memory.in_use(), 0);
     }
 
     #[test]

@@ -83,7 +83,8 @@ pub(crate) fn product<E: SemiringElement>(
                 let reads_weight =
                     !matches!(semiring.multiply(), BinaryOp::Second | BinaryOp::Pair);
                 let weight = if reads_weight { E::from_weight(weight)? } else { E::default() };
-                let p = E::apply(semiring.multiply(), weight, x[j * width + k])?;
+                let x = x[j * width + k];
+                let p = E::multiply(semiring.add().op(), semiring.multiply(), weight, x)?;
                 t = Some(match t {
                     None => p,
                     Some(t) => E::apply(semiring.add().op(), t, p)?,
