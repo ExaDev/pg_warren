@@ -5,10 +5,10 @@
 
 use pgrx::prelude::*;
 use pgrx::{AnyArray, AnyElement};
-use warren_core::graph::DenseId;
+use warren_core::graph::{DenseId, Direction};
 use warren_core::traversal::{
     dijkstra as cheapest_path, reachable as reaches, shortest_path as shortest, Adjacency,
-    Direction, TraversalStats,
+    TraversalStats,
 };
 
 use super::args::bound;

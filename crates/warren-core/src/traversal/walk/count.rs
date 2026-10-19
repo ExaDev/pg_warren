@@ -54,10 +54,11 @@ mod tests {
 
     use super::super::example::{knowledge_graph, step, AUTHORED_BY, CITES};
     use super::super::{walk, walk_ends_each, HopRange, Step, WalkMode, WalkOptions, WalkResult};
+    use crate::graph::Direction;
     use crate::graph::{DenseId, GraphCsr};
     use crate::interrupts::Uninterrupted;
     use crate::traversal::example::{directed, graph};
-    use crate::traversal::{Direction, TraversalError};
+    use crate::traversal::TraversalError;
 
     fn count(graph: &GraphCsr, starts: &[DenseId], steps: &[Step], options: WalkOptions) -> u64 {
         match walk(graph, starts, steps, WalkMode::Count, options, &mut Uninterrupted) {

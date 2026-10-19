@@ -5,31 +5,9 @@ use super::TraversalError;
 use std::iter::{FusedIterator, Peekable};
 
 use crate::graph::{
-    AnyCsr, DenseId, GraphCsr, GraphError, Neighbours, RelationCsr, RelationIndex,
+    AnyCsr, DenseId, Direction, GraphCsr, GraphError, Neighbours, RelationCsr, RelationIndex,
     RelationSelection,
 };
-
-/// Which way a traversal follows edges.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Direction {
-    /// From source to target: the forward CSR.
-    Out,
-    /// From target to source: the reverse CSR.
-    In,
-    /// Either way: the forward and reverse CSRs together.
-    Both,
-}
-
-impl Direction {
-    /// The opposite direction; `Both` is its own opposite.
-    pub fn reversed(self) -> Self {
-        match self {
-            Self::Out => Self::In,
-            Self::In => Self::Out,
-            Self::Both => Self::Both,
-        }
-    }
-}
 
 /// The CSRs a traversal reads: the selected relations in one direction.
 ///

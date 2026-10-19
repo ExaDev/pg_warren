@@ -11,6 +11,7 @@
 //! [`GraphCsr::from_parts`], which validate the segments against each other.
 
 mod csr;
+mod direction;
 pub(crate) mod edge_list;
 mod error;
 mod id_map;
@@ -20,6 +21,7 @@ mod segment;
 mod tombstones;
 
 pub use csr::{AnyCsr, Csr, GraphCsr, Neighbours, RelationCsr, Target, TargetWidth};
+pub use direction::Direction;
 pub use edge_list::{EdgeIntake, EdgeList};
 pub use error::GraphError;
 pub use id_map::{ExternalId, IdMap};

@@ -73,11 +73,11 @@ pub fn reachable_set_each(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph::Direction;
     use crate::graph::GraphCsr;
     use crate::graph::RelationSelection;
     use crate::interrupts::Uninterrupted;
     use crate::traversal::example::directed;
-    use crate::traversal::Direction;
 
     // 0 → 1 → 2 → 3, 4 → 3, 5 isolated
     fn example() -> GraphCsr {

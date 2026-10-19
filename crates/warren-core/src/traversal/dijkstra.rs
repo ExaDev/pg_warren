@@ -119,11 +119,11 @@ impl Eq for Queued {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph::Direction;
     use crate::graph::GraphCsr;
     use crate::graph::RelationSelection;
     use crate::interrupts::{Cancellation, Uninterrupted};
     use crate::traversal::example::{directed, graph};
-    use crate::traversal::Direction;
 
     fn cheapest(
         graph: &GraphCsr,
