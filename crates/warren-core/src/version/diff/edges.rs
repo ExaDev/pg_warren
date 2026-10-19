@@ -31,6 +31,18 @@ impl EdgeDelta {
     pub(super) fn all_removed(csr: &AnyCsr) -> Self {
         Self { before: csr.edge_count(), removed: csr.edge_count(), ..Self::default() }
     }
+
+    /// The edge delta between two forward CSRs of one relation in the same
+    /// id space, either of which may be missing (the relation is absent from
+    /// that version). Also the `edit` distance's merge (DESIGN.md §8).
+    pub(crate) fn between(before: Option<&AnyCsr>, after: Option<&AnyCsr>) -> Self {
+        match (before, after) {
+            (Some(before), Some(after)) => edge_delta(before, after),
+            (None, Some(after)) => Self::all_added(after),
+            (Some(before), None) => Self::all_removed(before),
+            (None, None) => Self::default(),
+        }
+    }
 }
 
 /// The edge delta of one relation, named as in the relation dictionaries.
@@ -82,10 +94,7 @@ pub(super) fn relation_deltas<E: ExternalId>(
     after: &GraphVersion<'_, E>,
 ) -> Vec<RelationDelta> {
     let in_after = after.relations().names().iter().filter_map(|name| {
-        let edges = match (forward(before, name), forward(after, name)?) {
-            (Some(before), after) => edge_delta(before, after),
-            (None, after) => EdgeDelta::all_added(after),
-        };
+        let edges = EdgeDelta::between(forward(before, name), Some(forward(after, name)?));
         Some(RelationDelta { name: name.clone(), edges })
     });
     let only_before = before.relations().names().iter().filter_map(|name| {

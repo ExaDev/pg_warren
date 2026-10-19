@@ -22,6 +22,7 @@ mod read_only;
 mod segment;
 mod selection;
 mod source;
+mod spectral_sql;
 mod traversal_sql;
 mod vector;
 mod version_sql;

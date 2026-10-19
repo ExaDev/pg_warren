@@ -75,15 +75,15 @@ pub(super) fn bound_names(
 }
 
 /// A version, the vectors bound to it, and the call's compute memory.
-pub(super) struct Vectors<E> {
+pub(crate) struct Vectors<E> {
     /// The graph.
-    pub(super) graph: GraphDefinition,
+    pub(crate) graph: GraphDefinition,
     /// The version.
-    pub(super) version: VersionId,
+    pub(crate) version: VersionId,
     /// The loaded version.
-    pub(super) loaded: Arc<LoadedVersion<E>>,
+    pub(crate) loaded: Arc<LoadedVersion<E>>,
     /// The call's compute memory budget.
-    pub(super) memory: ComputeMemory,
+    pub(crate) memory: ComputeMemory,
     records: Vec<VectorRecord>,
     held: HashMap<String, MemoryCharge>,
 }
@@ -91,13 +91,13 @@ pub(super) struct Vectors<E> {
 impl<E: IdDatum> Vectors<E> {
     /// Opens `resolved`'s version and lists its vectors, with a fresh call
     /// budget of `warren.max_compute_memory`.
-    pub(super) fn open(resolved: Resolved) -> Result<Self, ComputeSqlError> {
+    pub(crate) fn open(resolved: Resolved) -> Result<Self, ComputeSqlError> {
         Self::open_within(resolved, &compute_memory())
     }
 
     /// Opens `resolved`'s version and lists its vectors, charging what the
     /// call reads to `memory` (a budget shared with other versions).
-    pub(super) fn open_within(
+    pub(crate) fn open_within(
         resolved: Resolved,
         memory: &ComputeMemory,
     ) -> Result<Self, ComputeSqlError> {
@@ -114,12 +114,12 @@ impl<E: IdDatum> Vectors<E> {
     }
 
     /// The version's id space: every vector's row count.
-    pub(super) fn id_space(&self) -> u64 {
+    pub(crate) fn id_space(&self) -> u64 {
         self.loaded.id_map.id_space()
     }
 
     /// The version's tombstones.
-    pub(super) fn tombstones(&self) -> &Tombstones {
+    pub(crate) fn tombstones(&self) -> &Tombstones {
         self.loaded.id_map.tombstones()
     }
 
@@ -134,7 +134,7 @@ impl<E: IdDatum> Vectors<E> {
     }
 
     /// Vector `name`, which must be bound to the version.
-    pub(super) fn get(&mut self, name: &str) -> Result<Arc<AnyVector>, ComputeSqlError> {
+    pub(crate) fn get(&mut self, name: &str) -> Result<Arc<AnyVector>, ComputeSqlError> {
         self.find(name)?.ok_or_else(|| ComputeSqlError::VectorNotFound {
             graph: self.graph.name.clone(),
             name: name.to_owned(),
@@ -174,7 +174,7 @@ impl<E: IdDatum> Vectors<E> {
     /// any vector of that name of either kind; a persisted one replaced
     /// must have been written by the caller, or the caller must own the
     /// graph.
-    pub(super) fn save(
+    pub(crate) fn save(
         &mut self,
         name: &str,
         mut vector: AnyVector,

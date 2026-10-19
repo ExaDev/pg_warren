@@ -39,7 +39,8 @@ pub(crate) fn define_compute_settings() {
     unsafe { *THREADS.as_ptr() = default_threads() };
     GucRegistry::define_int_guc(
         c"warren.threads",
-        c"Threads a compute kernel (spmv, spmm, vector_map, reductions, gather, triangles) runs on.",
+        c"Threads a compute kernel (spmv, spmm, vector_map, reductions, gather, triangles, \
+           eigen, distance) runs on.",
         c"Defaults to half the cores. Compute threads never call into Postgres.",
         &THREADS,
         1,
@@ -62,7 +63,7 @@ pub(crate) fn define_compute_settings() {
 }
 
 /// A fresh compute memory budget of `warren.max_compute_memory`.
-pub(super) fn compute_memory() -> ComputeMemory {
+pub(crate) fn compute_memory() -> ComputeMemory {
     ComputeMemory::new(u64::try_from(MAX_COMPUTE_MEMORY.get()).unwrap_or(0) * 1024)
 }
 
@@ -73,7 +74,7 @@ thread_local! {
 
 /// The compute pool of `warren.threads` threads, built (or rebuilt) on
 /// first use after a change.
-pub(super) fn workers() -> Result<Rc<Workers>, ComputeError> {
+pub(crate) fn workers() -> Result<Rc<Workers>, ComputeError> {
     let threads = usize::try_from(THREADS.get()).unwrap_or(1);
     if let Some(workers) = WORKERS.with_borrow(|w| w.clone().filter(|w| w.threads() == threads)) {
         return Ok(workers);
