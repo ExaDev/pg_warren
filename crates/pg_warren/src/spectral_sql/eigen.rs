@@ -5,6 +5,7 @@
 use pgrx::prelude::*;
 use warren_core::spectral::{self, Eigen, EigenOptions, Resources};
 
+use super::caveats::caveats;
 use super::matrix::{solver_options, OperatorArguments};
 use super::SpectralSqlError;
 use crate::access::entry;
@@ -26,6 +27,9 @@ fn solve<E: IdDatum>(
     persist: bool,
 ) -> Result<Vec<Row>, SpectralSqlError> {
     let eigen = eigenpairs(&vectors, operator, options)?;
+    for warning in caveats(&eigen) {
+        pgrx::warning!("{warning}");
+    }
     let mut rows = Vec::with_capacity(eigen.pairs.len());
     for (i, pair) in (1..).zip(eigen.pairs) {
         if let Some(prefix) = prefix {

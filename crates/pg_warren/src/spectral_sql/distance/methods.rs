@@ -69,24 +69,29 @@ pub(super) fn spectral<E: IdDatum>(
     operator: &OperatorArguments,
     eigenvalues: &Eigenvalues<'_>,
 ) -> Result<Value, SpectralSqlError> {
-    let before = values(&mut pair.before, operator, eigenvalues)?;
-    let after = values(&mut pair.after, operator, eigenvalues)?;
+    let (before, before_converged) = values(&mut pair.before, operator, eigenvalues)?;
+    let (after, after_converged) = values(&mut pair.after, operator, eigenvalues)?;
     let distance = spectral_distance(&before, &after);
-    Ok(json!({
+    let mut result = json!({
         "l2": distance.l2, "relative": distance.relative, "max": distance.max,
         "before": before, "after": after,
-    }))
+    });
+    if let (Some(before), Some(after)) = (before_converged, after_converged) {
+        result["converged"] = json!(before && after);
+    }
+    Ok(result)
 }
 
-/// One version's eigenvalues.
+/// One version's eigenvalues, and for a fresh solve whether it converged.
 fn values<E: IdDatum>(
     vectors: &mut Vectors<E>,
     operator: &OperatorArguments,
     eigenvalues: &Eigenvalues<'_>,
-) -> Result<Vec<f64>, SpectralSqlError> {
+) -> Result<(Vec<f64>, Option<bool>), SpectralSqlError> {
     match eigenvalues {
         Eigenvalues::Solved(options) => {
-            Ok(eigenpairs(vectors, operator, options)?.pairs.iter().map(|p| p.value).collect())
+            let solved = eigenpairs(vectors, operator, options)?;
+            Ok((solved.pairs.iter().map(|p| p.value).collect(), Some(solved.converged)))
         }
         Eigenvalues::Stored { prefix, k } => {
             let stored = (1..=*k)
@@ -100,7 +105,7 @@ fn values<E: IdDatum>(
             let mut resources =
                 Resources { workers: &pool, memory, interrupts: &mut PostgresInterrupts };
             let refs: Vec<&AnyVector> = stored.iter().map(|v| &**v).collect();
-            Ok(rayleigh_quotients(&mut resources, &loaded.graph, &matrix, &refs)?)
+            Ok((rayleigh_quotients(&mut resources, &loaded.graph, &matrix, &refs)?, None))
         }
     }
 }

@@ -235,6 +235,7 @@ mod tests {
         assert!(zero(&d, "wasserstein") && zero(&d, "ks"), "{d}");
         let d = distance(&format!("'g', {v}, {v}, 'spectral', k := 2"))?;
         assert!(zero(&d, "l2"), "{d}");
+        assert_eq!(d["converged"], true);
         let d = distance(&format!("'g', {v}, {v}, 'spectral', vectors_prefix := 'lap', k := 3, matrix := 'normalized_laplacian'"))?;
         assert!(d["l2"].as_f64().is_some_and(|l2| l2 == 0.0), "{d}");
         assert!(d["before"][0].as_f64().is_some_and(|value| value.abs() < 1e-9), "{d}");
@@ -275,6 +276,22 @@ mod tests {
                 "{found}"
             );
         }
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_fresh_solve_that_stops_early_says_so() -> Result<(), Error> {
+        Spi::run(
+            "CREATE TABLE q_nodes (id bigint); CREATE TABLE q_edges (src bigint, dst bigint);
+             INSERT INTO q_nodes SELECT generate_series(1, 200);
+             INSERT INTO q_edges SELECT g, (g * 7) % 200 + 1 FROM generate_series(1, 200) g
+                       UNION ALL SELECT g, g % 200 + 1 FROM generate_series(1, 200) g;
+             SELECT warren.create_graph('q', 'SELECT id FROM q_nodes', 'SELECT src, dst FROM q_edges',
+                                        directed := false)",
+        )?;
+        let v = refreshed("q")?;
+        let d = distance(&format!("'q', {v}, {v}, 'spectral', k := 4, max_iter := 25"))?;
+        assert_eq!(d["converged"], false, "{d}");
         Ok(())
     }
 
