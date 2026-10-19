@@ -810,7 +810,7 @@ warren.drop_graph(name); warren.prewarm(name); warren.evict(name);
 warren.grant(name, role regrole); warren.revoke(name, role regrole);   -- §7 access; both RETURN void
 -- promote, drop_version, drop_graph RETURN void; promote applies retention (§7)
 warren.info(name) RETURNS jsonb;   -- current version, stats, staleness (now() - built_at), bytes, versions list;
-                                   -- owners and readers may call it. Keys: name, owner, readers, id_type, the flags,
+                                   -- owners and readers may call it. Keys: name, owner, readers, id_type, search_path, the flags,
                                    -- retain_versions, current_version, staleness, bytes, versions[{version, seq, staged,
                                    -- current, label, built_at, built_lsn, staleness, node_count, id_space, edge_count,
                                    -- dropped_edges, deduplicated_edges, target_width, bytes, compacted_from, vectors}]
