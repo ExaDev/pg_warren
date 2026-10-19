@@ -6,6 +6,7 @@ use std::cell::Cell;
 use pgrx::prelude::*;
 
 use super::AccessError;
+use crate::read_only::read_one;
 
 /// The security context flags of a switch: the user id was changed locally,
 /// and the statements inside may not change it back or create temporary
@@ -54,8 +55,9 @@ pub(crate) fn extension_owner() -> Result<pg_sys::Oid, AccessError> {
     if let Some(owner) = EXTENSION_OWNER.get() {
         return Ok(owner);
     }
-    let owner = Spi::get_one::<pg_sys::Oid>(
+    let owner = read_one::<pg_sys::Oid>(
         "SELECT extowner FROM pg_catalog.pg_extension WHERE extname = 'pg_warren'",
+        &[],
     )?
     .ok_or(AccessError::ExtensionMissing)?;
     EXTENSION_OWNER.set(Some(owner));

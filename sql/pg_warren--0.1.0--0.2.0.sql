@@ -33,7 +33,7 @@ CREATE  FUNCTION warren."explain_map"(
 	"expr" TEXT, /* Option < & str > */
 	"version" bigint DEFAULT NULL /* Option < i64 > */
 ) RETURNS jsonb /* JsonB */
-STABLE PARALLEL SAFE 
+STABLE PARALLEL RESTRICTED 
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'explain_map_wrapper';
 
@@ -143,7 +143,7 @@ CREATE  FUNCTION warren."vector_norm_diff"(
 	"a_version" bigint DEFAULT NULL, /* Option < i64 > */
 	"b_version" bigint DEFAULT NULL /* Option < i64 > */
 ) RETURNS double precision /* f64 */
-STABLE PARALLEL SAFE 
+STABLE PARALLEL RESTRICTED 
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'vector_norm_diff_wrapper';
 
@@ -153,7 +153,7 @@ CREATE  FUNCTION warren."vector_reduce"(
 	"op" TEXT, /* Option < & str > */
 	"version" bigint DEFAULT NULL /* Option < i64 > */
 ) RETURNS double precision /* Option < f64 > */
-STABLE PARALLEL SAFE 
+STABLE PARALLEL RESTRICTED 
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'vector_reduce_wrapper';
 
@@ -162,28 +162,28 @@ CREATE  FUNCTION warren."vector_stats"(
 	"name" TEXT, /* Option < & str > */
 	"version" bigint DEFAULT NULL /* Option < i64 > */
 ) RETURNS jsonb /* JsonB */
-STABLE PARALLEL SAFE 
+STABLE PARALLEL RESTRICTED 
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'vector_stats_wrapper';
 
 CREATE FUNCTION warren.id_map(graph text, id_type anyelement, version bigint DEFAULT NULL)
 RETURNS TABLE (node_id anyelement, dense_id bigint, live boolean)
-STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'id_map_wrapper';
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'id_map_wrapper';
 
 CREATE FUNCTION warren.matrix_rows(graph text, name text, id_type anyelement,
                                    version bigint DEFAULT NULL)
 RETURNS TABLE (node_id anyelement, "row" float8[])
-STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'matrix_rows_wrapper';
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'matrix_rows_wrapper';
 
 CREATE FUNCTION warren.vector_topk(graph text, name text, k int, id_type anyelement,
                                    descending bool DEFAULT true, version bigint DEFAULT NULL)
 RETURNS TABLE (node_id anyelement, value float8)
-STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'vector_topk_wrapper';
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'vector_topk_wrapper';
 
 CREATE FUNCTION warren.vector_values(graph text, name text, id_type anyelement,
                                      version bigint DEFAULT NULL)
 RETURNS TABLE (node_id anyelement, value float8)
-STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'vector_values_wrapper';
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'vector_values_wrapper';
 
 -- The spectral functions (M6, DESIGN.md §6.5, §8), as pgrx generates them
 -- for 0.2.0.
@@ -208,7 +208,7 @@ CREATE  FUNCTION warren."distance"(
 	"dtype" TEXT DEFAULT 'f32', /* Option < & str > */
 	"graph2" TEXT DEFAULT NULL /* Option < & str > */
 ) RETURNS jsonb /* JsonB */
-VOLATILE PARALLEL UNSAFE 
+STABLE PARALLEL RESTRICTED 
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'distance_wrapper';
 
@@ -551,3 +551,10 @@ CREATE  FUNCTION warren."triangles"(
 VOLATILE PARALLEL UNSAFE 
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'triangles_wrapper';
+
+-- Parallel labels (DESIGN.md §9.3): functions that read a graph are
+-- PARALLEL RESTRICTED, since parallel workers have an empty backend-local
+-- cache and cannot see transient vectors.
+
+ALTER FUNCTION warren.diff(text, bigint, bigint) PARALLEL RESTRICTED;
+ALTER FUNCTION warren.info(text) PARALLEL RESTRICTED;

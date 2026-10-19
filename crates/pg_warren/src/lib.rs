@@ -14,6 +14,9 @@ mod external_ids;
 #[cfg(any(test, feature = "pg_test"))]
 mod fixture;
 mod interrupts;
+#[cfg(any(test, feature = "pg_test"))]
+mod parallel_labels;
+mod read_only;
 mod segment;
 mod selection;
 mod source;

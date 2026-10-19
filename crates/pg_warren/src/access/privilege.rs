@@ -6,6 +6,7 @@
 use pgrx::prelude::*;
 
 use super::AccessError;
+use crate::read_only::{read_one, read_two};
 
 /// Checks that the caller is a member of `owner`, the owner role of graph
 /// `graph`; `action` names the function for the error.
@@ -63,8 +64,9 @@ pub(crate) fn require_creator_or_owner(
 
 /// Whether the caller is a superuser.
 pub(crate) fn is_superuser() -> Result<bool, AccessError> {
-    Ok(Spi::get_one::<bool>(
+    Ok(read_one::<bool>(
         "SELECT rolsuper FROM pg_catalog.pg_roles WHERE rolname = pg_catalog.current_user()",
+        &[],
     )?
     .unwrap_or(false))
 }
@@ -75,7 +77,7 @@ fn membership(
     owner: pg_sys::Oid,
     readers: &[pg_sys::Oid],
 ) -> Result<(Option<String>, bool), AccessError> {
-    let (name, member) = Spi::get_two_with_args::<String, bool>(
+    let (name, member) = read_two::<String, bool>(
         "SELECT (SELECT rolname::text FROM pg_catalog.pg_roles WHERE oid = $1),
                 EXISTS (SELECT 1 FROM pg_catalog.pg_roles r
                         WHERE (r.oid = $1 OR r.oid = ANY ($2))

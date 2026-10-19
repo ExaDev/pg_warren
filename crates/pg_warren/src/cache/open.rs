@@ -6,12 +6,11 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 
-use pgrx::prelude::*;
-
 use super::versions::VersionCache;
 use super::{load, CacheError, LoadedVersion};
 use crate::access::{as_extension_owner, require_reader};
 use crate::catalog::{require_version, GraphDefinition, VersionId};
+use crate::read_only::read_one;
 use crate::segment::SpiSegmentStore;
 use crate::source::IdDatum;
 use crate::vector::{retain_transients, transient_versions};
@@ -98,7 +97,7 @@ fn existing_versions(versions: &[VersionId]) -> Result<Vec<VersionId>, CacheErro
     }
     as_extension_owner(|| {
         Ok::<_, CacheError>(
-            Spi::get_one_with_args::<Vec<VersionId>>(
+            read_one::<Vec<VersionId>>(
                 "SELECT coalesce(array_agg(version_id), '{}') FROM warren.versions
                  WHERE version_id = ANY ($1)",
                 &[versions.to_vec().into()],

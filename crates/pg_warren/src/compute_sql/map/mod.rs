@@ -149,7 +149,7 @@ fn mapped<E: IdDatum>(
 /// `warren.explain_map`: `{"path": "compiled" | "executor", "reason":
 /// …, "dtype": …}`: how `vector_map` would evaluate `expr` over the
 /// vectors bound to `version`, and why.
-#[pg_extern(schema = "warren", stable, parallel_safe)]
+#[pg_extern(schema = "warren", stable, parallel_restricted)]
 fn explain_map(
     graph: Option<&str>,
     expr: Option<&str>,
