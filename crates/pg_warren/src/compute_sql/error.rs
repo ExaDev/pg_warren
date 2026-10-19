@@ -8,7 +8,8 @@ use warren_core::compute::{ArithmeticError, ComputeError};
 use crate::access::{self, AccessError, SqlError};
 use crate::cache::{CacheError, LoadError};
 use crate::catalog::{CatalogError, VersionId};
-use crate::traversal_sql::TraversalSqlError;
+use crate::external_ids::ExternalIdError;
+use crate::selection::SelectionError;
 use crate::vector::VectorError;
 
 /// Why a compute function could not answer.
@@ -42,6 +43,18 @@ pub(crate) enum ComputeSqlError {
          smallint, numeric or boolean, not {0}"
     )]
     MapType(String),
+    /// `vector_from_query`'s id column does not cast implicitly to the
+    /// graph's id type.
+    #[error(
+        "query column 1 (id) is of type {found}, which does not cast implicitly to the graph's \
+         id type {id_type}"
+    )]
+    IdColumnType {
+        /// The column's type.
+        found: String,
+        /// The graph's id type.
+        id_type: String,
+    },
     /// A vector name must not be empty.
     #[error("a vector name must not be empty")]
     EmptyName,
@@ -60,9 +73,12 @@ pub(crate) enum ComputeSqlError {
     /// A vector could not be stored or read.
     #[error(transparent)]
     Vector(#[from] VectorError),
-    /// An id argument or relation did not fit the graph.
+    /// An id argument did not fit the graph.
     #[error(transparent)]
-    Traversal(#[from] TraversalSqlError),
+    ExternalId(#[from] ExternalIdError),
+    /// The direction or relations could not be selected.
+    #[error(transparent)]
+    Selection(#[from] SelectionError),
     /// A query does not fit.
     #[error(transparent)]
     Source(#[from] crate::source::SourceError),
@@ -86,6 +102,7 @@ impl SqlError for ComputeSqlError {
             Self::NullArgument(_) => PgSqlErrorCode::ERRCODE_NULL_VALUE_NOT_ALLOWED,
             Self::VectorNotFound { .. } => PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT,
             Self::DuplicateNode(_) => PgSqlErrorCode::ERRCODE_CARDINALITY_VIOLATION,
+            Self::IdColumnType { .. } => PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
             Self::MapSyntax(_) => PgSqlErrorCode::ERRCODE_SYNTAX_ERROR,
             Self::MapUnsupported(_) => PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
             Self::MapType(_) => PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
@@ -96,7 +113,8 @@ impl SqlError for ComputeSqlError {
             Self::Catalog(error) => error.sqlstate(),
             Self::Cache(error) => error.sqlstate(),
             Self::Vector(error) => error.sqlstate(),
-            Self::Traversal(error) => error.sqlstate(),
+            Self::ExternalId(error) => error.sqlstate(),
+            Self::Selection(error) => error.sqlstate(),
             Self::Source(error) => error.sqlstate(),
             Self::Compute(error) => compute_sqlstate(error),
             Self::Spi(_) => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,

@@ -9,7 +9,7 @@ use super::CacheError;
 use crate::access::entry;
 use crate::catalog::{GraphDefinition, VersionId};
 use crate::source::with_id_type;
-use crate::vector::evict_vectors;
+use crate::vector::{evict_transients, evict_vectors};
 
 /// `warren.prewarm`: loads version `version` of graph `name` (its current
 /// version if NULL) into this backend's cache and returns its id. Owners
@@ -25,8 +25,8 @@ fn prewarm_version(name: &str, version: Option<VersionId>) -> Result<VersionId, 
     Ok(resolved.version)
 }
 
-/// `warren.evict`: frees this backend's cached versions and vectors of
-/// graph `name` and returns how many there were. It changes nothing but
+/// `warren.evict`: frees this backend's cached versions, cached vectors
+/// and transient vectors of graph `name` and returns how many there were. It changes nothing but
 /// this backend's memory, so it needs no privilege on the graph.
 #[pg_extern(schema = "warren", volatile, parallel_restricted)]
 fn evict(name: &str) -> i64 {
@@ -35,7 +35,9 @@ fn evict(name: &str) -> i64 {
 
 fn evict_versions(name: &str) -> Result<i64, CacheError> {
     let graph = GraphDefinition::find(name)?;
-    let freed = evict_graph(graph.graph_id) + evict_vectors(graph.graph_id);
+    let freed = evict_graph(graph.graph_id)
+        + evict_vectors(graph.graph_id)
+        + evict_transients(graph.graph_id);
     Ok(i64::try_from(freed).unwrap_or(i64::MAX))
 }
 

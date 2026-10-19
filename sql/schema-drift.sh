@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 # Schema drift check (DESIGN.md §12, §13): the extension SQL that pgrx
-# generates must match the committed sql/pg_warren--<version>.sql, so that
-# every schema change is deliberate and reviewed.
+# generates must match the committed sql/pg_warren--<version>.sql of the
+# version in Cargo.toml (the one in development), so that every schema
+# change is deliberate and reviewed. Released install scripts are frozen:
+# each is listed in sql/released.sha256 and must match it byte for byte,
+# the version in development must not be one of them, and every released
+# version must have a chain of upgrade scripts to it (CONTRIBUTING.md,
+# "Releases and upgrades"). test/upgrade.py checks what the scripts do.
 #
 #   sql/schema-drift.sh            # check (exit 1 and print a diff on drift)
-#   sql/schema-drift.sh --update   # regenerate the committed file
+#   sql/schema-drift.sh --update   # regenerate the current version's file
+#                                  # (never a released one)
 #
 # Needs cargo-pgrx initialised for $PG (default pg16). pgrx orders entities
 # unstably and annotates them, so both sides are normalised before
@@ -21,6 +27,36 @@ version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$root/Cargo.toml" | head -n 1)"
 committed="$root/sql/pg_warren--$version.sql"
 generated="$(mktemp)"
 trap 'rm -f "$generated"' EXIT
+
+released() {
+    (cd "$root/sql" && sha256sum --check --quiet released.sha256) || {
+        echo "a released install script changed: released files are immutable (sql/released.sha256)" >&2
+        exit 1
+    }
+    if grep -q " pg_warren--$version\.sql\$" "$root/sql/released.sha256"; then
+        echo "version $version is released; bump the workspace version before changing the schema" >&2
+        exit 1
+    fi
+    python3 -I - "$root/sql" "$version" <<'PY'
+import re, sys
+from pathlib import Path
+sql, current = Path(sys.argv[1]), sys.argv[2]
+edges = {}
+for path in sql.glob("pg_warren--*--*.sql"):
+    start, end = re.fullmatch(r"pg_warren--(.+)--(.+)\.sql", path.name).groups()
+    edges.setdefault(start, []).append(end)
+for line in (sql / "released.sha256").read_text().splitlines():
+    version = re.search(r"pg_warren--(.+)\.sql$", line).group(1)
+    seen, todo = set(), [version]
+    while todo:
+        at = todo.pop()
+        seen.add(at)
+        todo += [n for n in edges.get(at, []) if n not in seen]
+    if current not in seen:
+        sys.exit(f"no upgrade path from released {version} to {current}: add sql/pg_warren--{version}--{current}.sql")
+PY
+}
+released
 
 (cd "$root/crates/pg_warren" && cargo pgrx schema "$pg" -o "$generated" >/dev/null)
 

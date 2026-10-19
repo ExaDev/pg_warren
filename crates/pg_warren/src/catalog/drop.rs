@@ -60,8 +60,8 @@ mod tests {
         let first = refresh("d", true)?;
         let staged = refresh("d", false)?;
         Spi::run(&format!(
-            "INSERT INTO warren.vectors (graph_id, version_id, name, dtype, length)
-             SELECT graph_id, {staged}, 'rank', 'f64', 5 FROM warren.graphs WHERE name = 'd'"
+            "INSERT INTO warren.vectors (graph_id, version_id, name, dtype, length, created_by)
+             SELECT graph_id, {staged}, 'rank', 'f64', 5, current_user::regrole FROM warren.graphs WHERE name = 'd'"
         ))?;
         Spi::run(&format!("SELECT warren.drop_version('d', {staged})"))?;
         assert_eq!(versions("d")?, Some(format!("{first}:false")));

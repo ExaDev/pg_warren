@@ -76,8 +76,8 @@ mod tests {
         ring("p", 5, 1)?;
         let first = refresh("p", true)?;
         Spi::run(&format!(
-            "INSERT INTO warren.vectors (graph_id, version_id, name, dtype, length)
-             SELECT graph_id, {first}, 'rank', 'f64', 5 FROM warren.graphs WHERE name = 'p'"
+            "INSERT INTO warren.vectors (graph_id, version_id, name, dtype, length, created_by)
+             SELECT graph_id, {first}, 'rank', 'f64', 5, current_user::regrole FROM warren.graphs WHERE name = 'p'"
         ))?;
         let second = refresh("p", true)?;
         assert_eq!(versions("p")?, Some(format!("{first}:false {second}:false")));

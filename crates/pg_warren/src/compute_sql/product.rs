@@ -18,8 +18,8 @@ use super::vectors::Vectors;
 use super::{entry, ComputeSqlError};
 use crate::cache::resolve;
 use crate::interrupts::PostgresInterrupts;
+use crate::selection::relations;
 use crate::source::{with_id_type, IdDatum};
-use crate::traversal_sql::relations;
 
 /// Which product a call computes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +42,7 @@ struct Arguments<'a> {
     complement: bool,
     replace: bool,
     accumulate: Option<BinaryOp>,
+    persist: bool,
 }
 
 /// `vector` filled with `monoid`'s identity, at `vector`'s dtype and
@@ -122,7 +123,7 @@ impl Arguments<'_> {
         let pool = workers()?;
         let graph = &loaded.graph;
         multiply(&pool, &vectors.memory, &mut PostgresInterrupts, graph, &product, &x, &mut y)?;
-        vectors.save(self.y, y)?;
+        vectors.save(self.y, y, self.persist)?;
         Ok(())
     }
 }
@@ -142,6 +143,7 @@ fn product(
     mask_complement: Option<bool>,
     replace: Option<bool>,
     accumulate: Option<&str>,
+    persist: Option<bool>,
     version: Option<i64>,
 ) {
     entry(|_| {
@@ -157,6 +159,7 @@ fn product(
             complement: mask_complement.ok_or(ComputeSqlError::NullArgument("mask_complement"))?,
             replace: replace.ok_or(ComputeSqlError::NullArgument("replace"))?,
             accumulate: accumulate.map(str::parse).transpose()?,
+            persist: persist.ok_or(ComputeSqlError::NullArgument("persist"))?,
         };
         let resolved = resolve(graph, version, "write vectors of")?;
         with_id_type!(resolved.graph.id_type, E => arguments.run(Vectors::<E>::open(resolved)?, shape))
@@ -164,7 +167,7 @@ fn product(
 }
 
 /// `warren.spmv`: `y = A ⊗ x` (`Aᵀ ⊗ x` if `transpose`) over `semiring`,
-/// for width-1 vectors, written to vector `y`.
+/// for width-1 vectors, written to vector `y` (transient if not `persist`).
 #[allow(clippy::too_many_arguments)] // The SQL signature's arguments.
 #[pg_extern(schema = "warren", volatile, parallel_unsafe)]
 fn spmv(
@@ -179,6 +182,7 @@ fn spmv(
     mask_complement: default!(Option<bool>, "false"),
     replace: default!(Option<bool>, "false"),
     accumulate: default!(Option<&str>, "NULL"),
+    persist: default!(Option<bool>, "true"),
     version: default!(Option<i64>, "NULL"),
 ) {
     product(
@@ -194,12 +198,14 @@ fn spmv(
         mask_complement,
         replace,
         accumulate,
+        persist,
         version,
     );
 }
 
 /// `warren.spmm`: `Y = A ⊗ X` (`Aᵀ ⊗ X` if `transpose`) over `semiring`,
-/// for matrices of one width, written to matrix `y`; a mask selects rows.
+/// for matrices of one width, written to matrix `y` (transient if not
+/// `persist`); a mask selects rows.
 #[allow(clippy::too_many_arguments)] // The SQL signature's arguments.
 #[pg_extern(schema = "warren", volatile, parallel_unsafe)]
 fn spmm(
@@ -214,6 +220,7 @@ fn spmm(
     mask_complement: default!(Option<bool>, "false"),
     replace: default!(Option<bool>, "false"),
     accumulate: default!(Option<&str>, "NULL"),
+    persist: default!(Option<bool>, "true"),
     version: default!(Option<i64>, "NULL"),
 ) {
     product(
@@ -229,6 +236,7 @@ fn spmm(
         mask_complement,
         replace,
         accumulate,
+        persist,
         version,
     );
 }

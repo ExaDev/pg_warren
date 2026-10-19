@@ -6,6 +6,7 @@ use warren_core::compute::ComputeError;
 
 use super::VectorId;
 use crate::access::{AccessError, SqlError};
+use crate::catalog::VersionId;
 
 /// Why a vector could not be stored or read.
 #[derive(Debug, Error)]
@@ -21,6 +22,16 @@ pub(crate) enum VectorError {
     /// A vector needs more than 2³¹ chunks.
     #[error("vector \"{0}\" needs more than 2^31 chunks")]
     TooManyChunks(String),
+    /// A concurrent transaction wrote a vector of this name meanwhile.
+    #[error(
+        "vector \"{name}\" at version {version} was written by a concurrent transaction; retry"
+    )]
+    WrittenConcurrently {
+        /// The vector's name.
+        name: String,
+        /// The version.
+        version: VersionId,
+    },
     /// A stored dtype is not one this library knows.
     #[error("vector {vector} has an unknown dtype \"{dtype}\"")]
     UnknownDtype {
@@ -48,6 +59,7 @@ impl SqlError for VectorError {
                 PgSqlErrorCode::ERRCODE_DATA_CORRUPTED
             }
             Self::TooManyChunks(_) => PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+            Self::WrittenConcurrently { .. } => PgSqlErrorCode::ERRCODE_T_R_SERIALIZATION_FAILURE,
             Self::Compute(ComputeError::MemoryLimit { .. }) => {
                 PgSqlErrorCode::ERRCODE_CONFIGURATION_LIMIT_EXCEEDED
             }

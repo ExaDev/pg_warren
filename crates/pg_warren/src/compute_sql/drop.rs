@@ -1,22 +1,25 @@
-//! `warren.drop_vector` (DESIGN.md §6.2, §7): a management function, so
-//! only members of the graph's owner role may call it.
+//! `warren.drop_vector` (DESIGN.md §6.2, §7): a vector's creator, or a
+//! member of the graph's owner role, may drop it.
 
 use pgrx::prelude::*;
 
 use super::{entry, ComputeSqlError};
-use crate::access::require_owner;
+use crate::access::require_creator_or_owner;
 use crate::cache::resolve;
-use crate::vector::{forget, SpiVectorStore, VectorStore};
+use crate::vector::{drop_transient, forget, SpiVectorStore, VectorError, VectorStore};
 
 /// `warren.drop_vector`: deletes vector `name` bound to `version` (the
-/// current version if NULL).
+/// current version if NULL): the session's transient vector of that name
+/// if there is one, else the persisted one.
 #[pg_extern(schema = "warren", volatile, parallel_unsafe)]
 fn drop_vector(graph: Option<&str>, name: Option<&str>, version: default!(Option<i64>, "NULL")) {
     entry(|_| {
         let graph = graph.ok_or(ComputeSqlError::NullArgument("graph"))?;
         let name = name.ok_or(ComputeSqlError::NullArgument("name"))?;
-        let resolved = resolve(graph, version, "drop vectors of")?;
-        require_owner(resolved.graph.owner, graph, "drop vectors of")?;
+        let resolved = resolve(graph, version, "write vectors of")?;
+        if drop_transient(resolved.graph.graph_id, resolved.version, name) {
+            return Ok(());
+        }
         let mut store = SpiVectorStore;
         let bound = store.bound(resolved.version)?;
         let record = bound.iter().find(|record| record.name == name).ok_or_else(|| {
@@ -26,8 +29,17 @@ fn drop_vector(graph: Option<&str>, name: Option<&str>, version: default!(Option
                 version: resolved.version,
             }
         })?;
+        require_creator_or_owner(record.created_by, resolved.graph.owner, graph, name)?;
+        // By id: the row checked above, never one of that name committed
+        // since by another transaction.
+        if !store.delete(record.vector)? {
+            return Err(VectorError::WrittenConcurrently {
+                name: name.to_owned(),
+                version: resolved.version,
+            }
+            .into());
+        }
         forget(record.vector);
-        store.delete(resolved.version, name)?;
         Ok(())
     })
 }
@@ -51,20 +63,6 @@ mod tests {
         let again = failure("warren.drop_vector('t', 'c')")?;
         let expected = format!("42704: graph \"t\" has no vector \"c\" at version {version}");
         assert_eq!(again, Some(expected));
-        Ok(())
-    }
-
-    #[pg_test]
-    fn only_owners_drop_vectors_and_readers_write_them() -> Result<(), Error> {
-        small("t")?;
-        Spi::run("CREATE ROLE analyst; SELECT warren.grant('t', 'analyst'); SET ROLE analyst")?;
-        Spi::run("SELECT warren.vector_const('t', 'c', 1)")?;
-        let refused = failure("warren.drop_vector('t', 'c')")?;
-        Spi::run("RESET ROLE")?;
-        assert_eq!(
-            refused.as_deref(),
-            Some("42501: must be a member of role \"t_owner\" to drop vectors of graph \"t\"")
-        );
         Ok(())
     }
 

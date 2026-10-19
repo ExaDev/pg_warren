@@ -10,9 +10,9 @@ use super::settings::workers;
 use super::vectors::Vectors;
 use super::{entry, ComputeSqlError};
 use crate::cache::resolve;
+use crate::external_ids::{check_type, external};
 use crate::interrupts::PostgresInterrupts;
 use crate::source::with_id_type;
-use crate::traversal_sql::{check_type, external};
 
 /// `warren.vector_topk`: the `k` live nodes with the largest values of the
 /// width-1 vector `name` (the smallest unless `descending`), best first,

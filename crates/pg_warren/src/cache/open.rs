@@ -14,6 +14,7 @@ use crate::access::{as_extension_owner, require_reader};
 use crate::catalog::{require_version, GraphDefinition, VersionId};
 use crate::segment::SpiSegmentStore;
 use crate::source::IdDatum;
+use crate::vector::{retain_transients, transient_versions};
 
 thread_local! {
     /// This backend's loaded versions.
@@ -52,8 +53,9 @@ pub(crate) fn resolve(
 }
 
 /// The loaded version `resolved` names, from this backend's cache or
-/// loaded into it. A load first prunes cached versions that have since been
-/// dropped (with their graphs or on their own); a load of a graph's current
+/// loaded into it. A load first prunes cached versions, and transient
+/// vectors of versions, that have since been dropped (with their graphs or
+/// on their own); a load of a graph's current
 /// version also drops the graph's other cached versions, which callers
 /// reach only by asking for them explicitly (scans holding one keep their
 /// copy, and a later explicit call reloads it).
@@ -64,9 +66,13 @@ pub(crate) fn cached<E: IdDatum + Send + Sync>(
     if let Some(loaded) = CACHE.with_borrow(|cache| cache.get::<E>(version)) {
         return Ok(loaded);
     }
-    let cached = CACHE.with_borrow(VersionCache::versions);
+    let mut cached = CACHE.with_borrow(VersionCache::versions);
+    cached.extend(transient_versions());
+    cached.sort_unstable();
+    cached.dedup();
     let existing = existing_versions(&cached)?;
     CACHE.with_borrow_mut(|cache| cache.retain(&existing));
+    retain_transients(&existing);
     // Load outside any borrow of the cache: loading runs SPI, which may
     // raise an ERROR that unwinds through this frame.
     let loaded = load::<E>(&mut SpiSegmentStore, version)?;

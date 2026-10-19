@@ -107,7 +107,9 @@ pub(crate) fn evict_vectors(graph_id: i32) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vector::Binding;
     use crate::vector::{write_vector, MemoryVectorStore};
+    use pgrx::pg_sys;
     use warren_core::compute::Vector;
 
     fn memory() -> ComputeMemory {
@@ -147,12 +149,15 @@ mod tests {
     fn a_load_reads_once_then_hits_the_cache_and_prunes_replaced_vectors() {
         let mut store = MemoryVectorStore::default();
         let ones: AnyVector = Vector::filled(&memory(), 3, 1, 1i64).unwrap().into();
-        let first = write_vector(&mut store, 5, 7, "x", &ones, 64).unwrap();
+        let first =
+            write_vector(&mut store, &Binding::new(5, 7, "x", pg_sys::Oid::INVALID), &ones, 64)
+                .unwrap();
         let loaded = load(&mut store, &memory(), 5, &first).unwrap();
         store.chunks.clear();
         let again = load(&mut store, &memory(), 5, &first).unwrap();
         assert!(Arc::ptr_eq(&loaded, &again), "the second load is a cache hit");
-        let second = write_vector(&mut store, 5, 7, "x", &ones, 64).unwrap();
+        let binding = Binding::new(5, 7, "x", pg_sys::Oid::INVALID).replacing(Some(first.vector));
+        let second = write_vector(&mut store, &binding, &ones, 64).unwrap();
         load(&mut store, &memory(), 5, &second).unwrap();
         let cached = CACHE.with_borrow(VectorCache::vectors);
         assert_eq!(cached, [second.vector], "the replaced vector was pruned");

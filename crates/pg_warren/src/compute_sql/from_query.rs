@@ -2,9 +2,14 @@
 //! a query's `(id, value)` rows, through the version's id map.
 //!
 //! The query runs as the caller, under the caller's `search_path`, as a
-//! read-only cursor. Its values are cast to the dtype's SQL type by
-//! Postgres itself (`double precision`, `real`, `bigint`, `boolean`, or an
-//! array of it for a matrix row), and its ids to the graph's id type. Nodes
+//! read-only cursor. It is first prepared without being planned or run, to
+//! read its column types: it must be one SELECT (or VALUES, or TABLE) of
+//! two columns whose first casts implicitly to the graph's id type (so ids
+//! are never rounded: a `double precision` id is an error). Its values are
+//! cast to the dtype's SQL type by Postgres itself, as `::` casts
+//! (`double precision`, `real`, `bigint`, `boolean`, or an array of it for
+//! a matrix row: `2.5` is 3 in an `i64` vector), and its ids to the graph's
+//! id type. Nodes
 //! without a row get `fill`; ids that are NULL, unknown or tombstoned in
 //! the version are skipped; a node with two rows is an error. A NULL value
 //! is stored as SQL NULL is everywhere in vectors: `NaN` in a float vector,
@@ -24,7 +29,9 @@ use super::{entry, ComputeSqlError};
 use crate::access::{with_search_path, Caller};
 use crate::cache::resolve;
 use crate::interrupts::PostgresInterrupts;
-use crate::source::{for_each_row, open_read_only, with_id_type, IdDatum, SourceError};
+use crate::source::{
+    describe, for_each_row, open_read_only, type_name, with_id_type, IdDatum, SourceError,
+};
 
 /// The SQL type a dtype's values are cast to.
 fn sql_type(dtype: Dtype) -> &'static str {
@@ -38,7 +45,8 @@ fn sql_type(dtype: Dtype) -> &'static str {
 
 /// `warren.vector_from_query`: vector `name` of `dtype` from `query`'s
 /// `(id, value)` rows (`value` an array for a matrix), bound to `version`
-/// (the current version if NULL). Returns its vector id.
+/// (the current version if NULL). Returns its vector id (NULL if not
+/// `persist`: a transient vector).
 #[pg_extern(schema = "warren", volatile, parallel_unsafe)]
 fn vector_from_query(
     graph: Option<&str>,
@@ -46,11 +54,13 @@ fn vector_from_query(
     query: Option<&str>,
     dtype: default!(Option<&str>, "'f64'"),
     fill: default!(Option<f64>, "0"),
+    persist: default!(Option<bool>, "true"),
     version: default!(Option<i64>, "NULL"),
-) -> i64 {
+) -> Option<i64> {
     entry(|caller| {
         let graph = graph.ok_or(ComputeSqlError::NullArgument("graph"))?;
         let name = name.ok_or(ComputeSqlError::NullArgument("name"))?;
+        let persist = persist.ok_or(ComputeSqlError::NullArgument("persist"))?;
         let query = query.ok_or(ComputeSqlError::NullArgument("query"))?;
         let dtype = parse_dtype(dtype)?;
         let fill = fill.ok_or(ComputeSqlError::NullArgument("fill"))?;
@@ -64,7 +74,7 @@ fn vector_from_query(
                 Dtype::I64 => read.vector::<E, i64>(&vectors)?,
                 Dtype::Bool => read.vector::<E, bool>(&vectors)?,
             };
-            vectors.save(name, vector)
+            vectors.save(name, vector, persist)
         })
     })
 }
@@ -113,7 +123,7 @@ impl Read<'_> {
         let query = self.query.trim_end().trim_end_matches(';');
         with_search_path(self.caller.search_path(), || {
             Spi::connect(|client| {
-                let columns = open_read_only::<ComputeSqlError>(client, "query", query)?.columns;
+                let columns = describe::<ComputeSqlError>("query", query)?;
                 if columns.len() != 2 {
                     return Err(SourceError::ColumnCount {
                         query: "query",
@@ -121,6 +131,23 @@ impl Read<'_> {
                         found: columns.len(),
                     }
                     .into());
+                }
+                let id_type = E::Sql::type_oid();
+                // SAFETY: can_coerce_type reads one type pair from the
+                // catalogs.
+                let implicit = unsafe {
+                    pg_sys::can_coerce_type(
+                        1,
+                        &columns[0].oid,
+                        &id_type,
+                        pg_sys::CoercionContext::COERCION_IMPLICIT,
+                    )
+                };
+                if !implicit {
+                    return Err(ComputeSqlError::IdColumnType {
+                        found: columns[0].name.clone(),
+                        id_type: type_name(id_type),
+                    });
                 }
                 // SAFETY: get_element_type only reads the type cache.
                 let array =
@@ -360,13 +387,41 @@ mod tests {
                 "'SELECT 1::bigint, NULL::int', 'i64'",
                 "22004: null value cannot be stored in a i64 vector",
             ),
-            ("'DELETE FROM t_nodes RETURNING id, id'", "0A000: DELETE is not allowed"),
+            (
+                "'DELETE FROM t_nodes RETURNING id, id'",
+                "42601: query must be a single SELECT (or VALUES, or TABLE)",
+            ),
+            ("'SELECT 1::bigint, 1; SELECT 2::bigint, 2'", "42601: query must be a single SELECT"),
+            (
+                "'SELECT 2.5::float8, 1'",
+                "42804: query column 1 (id) is of type double precision, which does not cast \
+                 implicitly to the graph's id type bigint",
+            ),
+            (
+                "'SELECT ''1''::text, 1'",
+                "42804: query column 1 (id) is of type text, which does not cast implicitly",
+            ),
         ];
         for (args, expected) in cases {
             let found = failure(&format!("warren.vector_from_query('t', 'x', {args})"))?;
             let found = found.unwrap_or_default();
             assert!(found.starts_with(expected), "{args}: {found}");
         }
+        Ok(())
+    }
+
+    #[pg_test]
+    fn ids_cast_implicitly_and_tombstoned_ids_are_skipped_even_when_repeated() -> Result<(), Error>
+    {
+        small("t")?;
+        Spi::run("DELETE FROM t_nodes WHERE id = 2")?;
+        crate::fixture::refresh("t", true)?;
+        Spi::run(
+            "SELECT warren.vector_from_query('t', 'x',
+                 'SELECT id::int, 5 FROM t_nodes WHERE id = 1
+                  UNION ALL SELECT 2, 1 UNION ALL SELECT 2, 2')",
+        )?;
+        assert_eq!(values("x")?.as_deref(), Some("1:5 3:0 4:0 5:0 6:0"));
         Ok(())
     }
 

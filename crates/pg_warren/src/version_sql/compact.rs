@@ -12,6 +12,7 @@ use crate::cache::load;
 use crate::catalog::{version_record, GraphDefinition, NewVersion, VersionId, VersionStats};
 use crate::segment::{write_version, SegmentStore, SpiSegmentStore, CHUNK_SIZE};
 use crate::source::with_id_type;
+use crate::vector::{move_vectors, moved_notice, SpiVectorStore, VectorStore};
 
 /// `warren.compact`: renumbers graph `name`'s current version to remove its
 /// tombstones, records the result as a new version with `compacted_from`
@@ -30,29 +31,47 @@ fn compact_graph(name: &str) -> Result<VersionId, VersionOperationError> {
         .current_version
         .ok_or_else(|| VersionOperationError::NoCurrentVersion(graph.name.clone()))?;
     let (carried, built_lsn) = version_record(source)?;
-    with_id_type!(graph.id_type, E => compact_version::<E>(
+    let (version, moved) = with_id_type!(graph.id_type, E => compact_version::<E>(
         &graph,
         source,
         &carried,
         CHUNK_SIZE,
-        &mut SpiSegmentStore,
-        &mut SpiCatalog::at_lsn(built_lsn),
-    ))
+        &mut Stores {
+            segments: &mut SpiSegmentStore,
+            vectors: &mut SpiVectorStore,
+            catalog: &mut SpiCatalog::at_lsn(built_lsn),
+        },
+    ))?;
+    if !moved.is_empty() {
+        notice!("{}", moved_notice(&moved, source, version));
+    }
+    Ok(version)
+}
+
+/// The stores a compaction reads and writes.
+pub(crate) struct Stores<'a, S, V, C> {
+    /// Segments of both versions.
+    pub(crate) segments: &'a mut S,
+    /// Vectors bound to both versions.
+    pub(crate) vectors: &'a mut V,
+    /// The version catalog.
+    pub(crate) catalog: &'a mut C,
 }
 
 /// Compacts version `source` of `graph` into a new, promoted version.
 /// Its dropped and deduplicated edge counts are carried over from
 /// `carried`, the source's recorded statistics: the compacted version holds
-/// the same edges.
+/// the same edges. The source's persisted vectors move to it, with their
+/// rows in the new dense ids. Returns the version and the vectors moved.
 pub(crate) fn compact_version<E: ExternalId>(
     graph: &GraphDefinition,
     source: VersionId,
     carried: &VersionStats,
     chunk_size: usize,
-    segments: &mut impl SegmentStore,
-    catalog: &mut impl Catalog,
-) -> Result<VersionId, VersionOperationError> {
-    let loaded = load::<E>(segments, source)?;
+    stores: &mut Stores<'_, impl SegmentStore, impl VectorStore, impl Catalog>,
+) -> Result<(VersionId, Vec<String>), VersionOperationError> {
+    let Stores { segments, vectors, catalog } = stores;
+    let loaded = load::<E>(*segments, source)?;
     let compaction = renumber(&loaded.version()?)?;
     let stats = VersionStats::measure(
         &compaction.id_map,
@@ -67,7 +86,7 @@ pub(crate) fn compact_version<E: ExternalId>(
         compacted_from: Some(source),
     })?;
     let bytes = write_version(
-        segments,
+        *segments,
         version,
         &compaction.id_map,
         &loaded.relations,
@@ -75,8 +94,11 @@ pub(crate) fn compact_version<E: ExternalId>(
         chunk_size,
     )?;
     catalog.record_bytes(version, bytes)?;
+    let rows = compaction.renumbering.old_dense_ids();
+    let moved = move_vectors(*vectors, graph.graph_id, source, version, rows, chunk_size)?;
+    // With its vectors moved, retention may delete the source on promotion.
     catalog.promote(graph, version)?;
-    Ok(version)
+    Ok((version, moved))
 }
 
 #[cfg(test)]
@@ -86,6 +108,7 @@ mod unit {
     use crate::cache::load;
     use crate::catalog::{GraphDefinition, NewVersion, VersionStats};
     use crate::segment::{write_version, MemorySegmentStore};
+    use crate::vector::MemoryVectorStore;
     use pgrx::pg_sys;
     use warren_core::graph::{EdgeIntake, GraphCsr, IdMap, RelationDictionary};
 
@@ -128,9 +151,11 @@ mod unit {
         let source = catalog_version(&mut catalog, carried);
         write_version(&mut store, source, &id_map, &relations, &built, 16).unwrap();
 
+        let mut vectors = MemoryVectorStore::default();
+        let mut stores =
+            Stores { segments: &mut store, vectors: &mut vectors, catalog: &mut catalog };
         let compacted =
-            compact_version::<i64>(&graph(), source, &carried, 16, &mut store, &mut catalog)
-                .unwrap();
+            compact_version::<i64>(&graph(), source, &carried, 16, &mut stores).unwrap().0;
 
         let row = catalog.version(compacted).clone();
         assert_eq!(row.compacted_from, Some(source));
@@ -168,7 +193,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{current, failure, refresh, ring, versions};
+    use crate::fixture::{current, failure, refresh, ring, rows, versions};
 
     /// Graph `c`: a ring of 5, built, then node 3 removed and rebuilt, so the
     /// current version has a tombstone. Returns both versions.
@@ -198,6 +223,74 @@ mod tests {
         Spi::run("INSERT INTO c_nodes VALUES (9)")?;
         let next = refresh("c", true)?;
         assert_eq!(row(next)?, Some("|f|5|5|3".to_owned()));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn compact_moves_persisted_vectors_by_node_with_their_creators() -> Result<(), Error> {
+        let (_, second) = tombstoned()?;
+        Spi::run(
+            "CREATE ROLE c_reader; SELECT warren.grant('c', 'c_reader'); GRANT SELECT ON c_nodes TO c_reader;
+             SELECT warren.vector_dense_id('c', 'id', 'f64');
+             SET ROLE c_reader;
+             SELECT warren.vector_from_query('c', 'emb', 'SELECT id, ARRAY[id, -id] FROM c_nodes', 'f32');
+             SELECT warren.vector_const('c', 'scratch', 1, persist := false);
+             RESET ROLE",
+        )?;
+        let compacted = Spi::get_one::<i64>("SELECT warren.compact('c')")?.unwrap_or_default();
+        let carried = rows(&format!(
+            "SELECT name || ':' || dtype || ':' || width || ':' || length || ':' || created_by
+             FROM warren.vectors WHERE version_id = {compacted} ORDER BY name"
+        ))?;
+        let user = Spi::get_one::<String>("SELECT current_user::text")?.unwrap_or_default();
+        assert_eq!(carried, Some(format!("emb:f32:2:4:c_reader id:f64:1:4:{user}")));
+        // Each node keeps its value: `id` holds the old dense ids.
+        assert_eq!(
+            rows(
+                "SELECT node_id || ':' || value FROM warren.vector_values('c', 'id', NULL::bigint)"
+            )?
+            .as_deref(),
+            Some("1:0 2:1 4:3 5:4")
+        );
+        assert_eq!(
+            rows("SELECT node_id || ':' || row::text FROM warren.matrix_rows('c', 'emb', NULL::bigint)")?
+                .as_deref(),
+            Some("1:{1,-1} 2:{2,-2} 4:{4,-4} 5:{5,-5}")
+        );
+        let dense = rows(&format!(
+            "SELECT string_agg(encode(data, 'hex'), '') FROM warren.vector_chunks
+             JOIN warren.vectors USING (vector_id) WHERE version_id = {compacted} AND name = 'id'"
+        ))?;
+        assert_eq!(
+            dense.as_deref(),
+            Some("0000000000000000000000000000f03f00000000000008400000000000001040"),
+            "rows in the new dense ids, without the tombstone"
+        );
+        // They moved: the source has none left (so retention can drop it),
+        // and transient vectors are not carried.
+        let kept = Spi::get_one::<i64>(&format!(
+            "SELECT count(*) FROM warren.vectors WHERE version_id = {second}"
+        ))?;
+        assert_eq!(kept, Some(0));
+        let scratch = failure("warren.vector_values('c', 'scratch', NULL::bigint)")?;
+        assert!(scratch.unwrap_or_default().starts_with("42704"));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn after_moving_its_vectors_retention_drops_the_compacted_source() -> Result<(), Error> {
+        ring("k", 5, 1)?;
+        refresh("k", true)?;
+        Spi::run("DELETE FROM k_nodes WHERE id = 3; DELETE FROM k_edges WHERE 3 IN (src, dst)")?;
+        refresh("k", true)?;
+        Spi::run("SELECT warren.vector_const('k', 'rank', 1)")?;
+        let compacted = Spi::get_one::<i64>("SELECT warren.compact('k')")?.unwrap_or_default();
+        assert_eq!(versions("k")?, Some(format!("{compacted}:false")));
+        assert_eq!(
+            rows("SELECT node_id || ':' || value FROM warren.vector_values('k', 'rank', NULL::bigint)")?
+                .as_deref(),
+            Some("1:1 2:1 4:1 5:1")
+        );
         Ok(())
     }
 

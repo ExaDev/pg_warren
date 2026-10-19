@@ -41,6 +41,26 @@ pub(crate) fn require_reader(
     }
 }
 
+/// Checks that the caller may replace or drop persisted vector `vector`
+/// of graph `graph`, written by role `creator`: as a member of `creator`
+/// or of `owner`, the graph's owner role (DESIGN.md §7).
+pub(crate) fn require_creator_or_owner(
+    creator: pg_sys::Oid,
+    owner: pg_sys::Oid,
+    graph: &str,
+    vector: &str,
+) -> Result<(), AccessError> {
+    let (creator_name, member) = membership(creator, &[owner])?;
+    let (owner_name, _) = membership(owner, &[])?;
+    let owner = owner_name.ok_or_else(|| AccessError::OwnerDropped(graph.to_owned()))?;
+    let (vector, graph) = (vector.to_owned(), graph.to_owned());
+    match (member, creator_name) {
+        (true, _) => Ok(()),
+        (false, Some(creator)) => Err(AccessError::NotCreator { vector, graph, creator, owner }),
+        (false, None) => Err(AccessError::CreatorDropped { vector, graph, owner }),
+    }
+}
+
 /// Whether the caller is a superuser.
 pub(crate) fn is_superuser() -> Result<bool, AccessError> {
     Ok(Spi::get_one::<bool>(

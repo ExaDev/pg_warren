@@ -18,13 +18,12 @@ use serde_json::json;
 use warren_core::compute::{map, AnyVector};
 
 use super::settings::workers;
-use super::vectors::Vectors;
+use super::vectors::{bound_names, BoundName, Vectors};
 use super::{entry, ComputeSqlError};
-use crate::access::Caller;
+use crate::access::{with_search_path, Caller};
 use crate::cache::resolve;
 use crate::interrupts::PostgresInterrupts;
 use crate::source::{with_id_type, IdDatum};
-use crate::vector::{SpiVectorStore, VectorRecord, VectorStore};
 use parse::{analyse, Analysed, Column};
 use translate::{translate, Compiled};
 
@@ -52,8 +51,8 @@ fn executor_forced() -> bool {
 }
 
 /// The synthetic row's columns: the vectors bound to the version.
-fn columns(records: &[VectorRecord]) -> Vec<Column> {
-    records.iter().map(|record| Column { name: record.name.clone(), dtype: record.dtype }).collect()
+fn columns(names: &[BoundName]) -> Vec<Column> {
+    names.iter().map(|bound| Column { name: bound.name.clone(), dtype: bound.dtype }).collect()
 }
 
 /// `expr` parsed against `columns`, and how it is evaluated.
@@ -67,7 +66,8 @@ fn plan(
     Ok((analysed, compiled))
 }
 
-/// `warren.vector_map`: vector `y` (replacing any of that name) holds
+/// `warren.vector_map`: vector `y` (replacing any of that name; transient
+/// if not `persist`) holds
 /// `expr` evaluated at every element, over the vectors bound to `version`
 /// (the current version if NULL) by name. Its dtype is the expression's
 /// type (`integer` and `smallint` as `i64`, `numeric` as `f64`), and its
@@ -77,15 +77,17 @@ fn vector_map(
     graph: Option<&str>,
     y: Option<&str>,
     expr: Option<&str>,
+    persist: default!(Option<bool>, "true"),
     version: default!(Option<i64>, "NULL"),
 ) {
     entry(|caller| {
         let graph = graph.ok_or(ComputeSqlError::NullArgument("graph"))?;
         let y = y.ok_or(ComputeSqlError::NullArgument("y"))?;
         let expr = expr.ok_or(ComputeSqlError::NullArgument("expr"))?;
+        let persist = persist.ok_or(ComputeSqlError::NullArgument("persist"))?;
         let resolved = resolve(graph, version, "write vectors of")?;
         with_id_type!(resolved.graph.id_type, E => {
-            mapped::<E>(caller, Vectors::<E>::open(resolved)?, y, expr)
+            mapped::<E>(caller, Vectors::<E>::open(resolved)?, y, expr, persist)
         })
     })
 }
@@ -95,8 +97,9 @@ fn mapped<E: IdDatum>(
     mut vectors: Vectors<E>,
     y: &str,
     expr: &str,
+    persist: bool,
 ) -> Result<(), ComputeSqlError> {
-    let (analysed, compiled) = plan(caller, expr, columns(vectors.records()))?;
+    let (analysed, compiled) = plan(caller, expr, columns(&vectors.names()?))?;
     let id_space = vectors.id_space();
     let operands = |vectors: &mut Vectors<E>, columns: &[usize]| {
         columns
@@ -114,10 +117,15 @@ fn mapped<E: IdDatum>(
             let columns = executor::referenced(&analysed);
             let loaded = operands(&mut vectors, &columns)?;
             let refs: Vec<&AnyVector> = loaded.iter().map(|operand| &**operand).collect();
-            executor::evaluate(&analysed, &columns, &refs, id_space, &vectors.memory)?
+            // Function bodies, PL/pgSQL statements and regclass casts the
+            // expression calls resolve names when they run, so they run
+            // under the caller's search_path, as the caller's own SQL would.
+            with_search_path(caller.search_path(), || {
+                executor::evaluate(&analysed, &columns, &refs, id_space, &vectors.memory)
+            })?
         }
     };
-    vectors.save(y, result)?;
+    vectors.save(y, result, persist)?;
     Ok(())
 }
 
@@ -134,8 +142,8 @@ fn explain_map(
         let graph = graph.ok_or(ComputeSqlError::NullArgument("graph"))?;
         let expr = expr.ok_or(ComputeSqlError::NullArgument("expr"))?;
         let resolved = resolve(graph, version, "read")?;
-        let records = SpiVectorStore.bound(resolved.version)?;
-        let (analysed, compiled) = plan(caller, expr, columns(&records))?;
+        let names = bound_names(resolved.graph.graph_id, resolved.version)?;
+        let (analysed, compiled) = plan(caller, expr, columns(&names))?;
         let dtype = analysed.dtype.name();
         Ok(JsonB(match compiled {
             Ok(_) => json!({

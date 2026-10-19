@@ -8,6 +8,8 @@ use warren_core::traversal::TraversalError;
 use crate::access::{self, SqlError};
 use crate::cache::{CacheError, LoadError};
 use crate::extension::graph_sqlstate;
+use crate::external_ids::ExternalIdError;
+use crate::selection::SelectionError;
 
 /// Why a traversal function could not answer.
 #[derive(Debug, Error)]
@@ -15,26 +17,6 @@ pub(crate) enum TraversalSqlError {
     /// An argument that must be given was NULL.
     #[error("{0} must not be NULL")]
     NullArgument(&'static str),
-    /// An argument has the wrong id type for the graph.
-    #[error(
-        "graph \"{graph}\" has node ids of type {id_type}, but {argument} is of type {found}; \
-         cast it to {cast}"
-    )]
-    IdType {
-        /// The graph.
-        graph: String,
-        /// The graph's id type.
-        id_type: String,
-        /// The argument.
-        argument: &'static str,
-        /// The argument's type.
-        found: String,
-        /// The type to cast the argument to.
-        cast: String,
-    },
-    /// `direction` is not `out`, `in` or `both`.
-    #[error("direction must be 'out', 'in' or 'both', not '{0}'")]
-    Direction(String),
     /// A depth or count argument is negative.
     #[error("{0} must not be negative")]
     Negative(&'static str),
@@ -58,16 +40,12 @@ pub(crate) enum TraversalSqlError {
     /// A walk count does not fit `bigint`.
     #[error("walk count {0} exceeds the range of bigint")]
     CountOutOfRange(u64),
-    /// An argument that must be an array is not one.
-    #[error("{argument} must be an array (e.g. ARRAY[...]::{id_type}[]), not {found}")]
-    NotAnArray {
-        /// The argument.
-        argument: &'static str,
-        /// The id type to make an array of.
-        id_type: String,
-        /// The argument's type.
-        found: String,
-    },
+    /// An id argument does not fit the graph.
+    #[error(transparent)]
+    ExternalId(#[from] ExternalIdError),
+    /// The direction or relations could not be selected.
+    #[error(transparent)]
+    Selection(#[from] SelectionError),
     /// The graph or version could not be opened.
     #[error(transparent)]
     Cache(#[from] CacheError),
@@ -86,14 +64,13 @@ impl SqlError for TraversalSqlError {
     fn sqlstate(&self) -> PgSqlErrorCode {
         match self {
             Self::NullArgument(_) => PgSqlErrorCode::ERRCODE_NULL_VALUE_NOT_ALLOWED,
-            Self::IdType { .. } | Self::NotAnArray { .. } => {
-                PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH
-            }
             Self::CountOutOfRange(_) => PgSqlErrorCode::ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE,
             Self::WalkRowCeiling { .. } => PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
-            Self::Direction(_) | Self::Negative(_) | Self::Step(_) | Self::Mode(_) => {
+            Self::Negative(_) | Self::Step(_) | Self::Mode(_) => {
                 PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE
             }
+            Self::ExternalId(error) => error.sqlstate(),
+            Self::Selection(error) => error.sqlstate(),
             Self::Cache(error) => error.sqlstate(),
             Self::Traversal(error) => traversal_sqlstate(error),
         }

@@ -3,30 +3,27 @@
 
 use warren_core::compute::{encode, AnyVector, ComputeMemory, Decoder};
 
-use super::{VectorError, VectorRecord, VectorStore};
-use crate::catalog::VersionId;
+use super::{Binding, VectorError, VectorRecord, VectorStore};
 
-/// Stores `vector` as `name`, bound to `version` of graph `graph_id`,
-/// replacing any vector of that name, in chunks of at most `chunk_size`
-/// bytes. Returns its record.
+/// Stores `vector` at `binding`, replacing any vector of that name, in
+/// chunks of at most `chunk_size` bytes. Returns its record.
 pub(crate) fn write_vector(
     store: &mut impl VectorStore,
-    graph_id: i32,
-    version: VersionId,
-    name: &str,
+    binding: &Binding<'_>,
     vector: &AnyVector,
     chunk_size: usize,
 ) -> Result<VectorRecord, VectorError> {
     let (dtype, width, length) = (vector.dtype(), vector.width(), vector.id_space());
-    let id = store.insert(graph_id, version, name, dtype, width, length)?;
-    let mut chunk_no = 0i32;
-    encode(vector, chunk_size, |chunk| {
-        store.write_chunk(id, chunk_no, chunk)?;
-        chunk_no =
-            chunk_no.checked_add(1).ok_or_else(|| VectorError::TooManyChunks(name.to_owned()))?;
-        Ok::<_, VectorError>(())
-    })?;
-    Ok(VectorRecord { vector: id, name: name.to_owned(), dtype, width, length })
+    let id = store.insert(binding, dtype, width, length)?;
+    store.write_chunks(id, binding.name, &mut |sink| encode(vector, chunk_size, &mut *sink))?;
+    Ok(VectorRecord {
+        vector: id,
+        name: binding.name.to_owned(),
+        dtype,
+        width,
+        length,
+        created_by: binding.created_by,
+    })
 }
 
 /// The vector `record` describes: its chunks, which must be numbered
@@ -51,7 +48,9 @@ pub(crate) fn read_vector(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vector::Binding;
     use crate::vector::MemoryVectorStore;
+    use pgrx::pg_sys;
     use warren_core::compute::{ComputeError, Dtype, Vector};
 
     fn memory() -> ComputeMemory {
@@ -67,7 +66,13 @@ mod tests {
     fn a_vector_is_written_as_numbered_chunks_and_read_back() {
         let mut store = MemoryVectorStore::default();
         let vector = sample();
-        let record = write_vector(&mut store, 1, 7, "emb", &vector, 100).unwrap();
+        let record = write_vector(
+            &mut store,
+            &Binding::new(1, 7, "emb", pg_sys::Oid::INVALID),
+            &vector,
+            100,
+        )
+        .unwrap();
         assert_eq!(
             (record.name.as_str(), record.dtype, record.width, record.length),
             ("emb", Dtype::F64, 2, 20)
@@ -81,18 +86,41 @@ mod tests {
     #[test]
     fn writing_a_name_again_replaces_the_vector() {
         let mut store = MemoryVectorStore::default();
-        let first = write_vector(&mut store, 1, 7, "x", &sample(), 64).unwrap();
+        let first =
+            write_vector(&mut store, &Binding::new(1, 7, "x", pg_sys::Oid::INVALID), &sample(), 64)
+                .unwrap();
         let ones = Vector::filled(&memory(), 20, 1, 1i64).unwrap().into();
-        let second = write_vector(&mut store, 1, 7, "x", &ones, 64).unwrap();
+        let binding = Binding::new(1, 7, "x", pg_sys::Oid::INVALID);
+        let second =
+            write_vector(&mut store, &binding.replacing(Some(first.vector)), &ones, 64).unwrap();
         assert_ne!(first.vector, second.vector);
         assert_eq!(store.existing(&[first.vector, second.vector]).unwrap(), [second.vector]);
         assert_eq!(read_vector(&mut store, &memory(), &second).unwrap(), ones);
     }
 
     #[test]
+    fn a_write_never_deletes_a_vector_it_did_not_check() {
+        let mut store = MemoryVectorStore::default();
+        let binding = Binding::new(1, 7, "x", pg_sys::Oid::INVALID);
+        let first = write_vector(&mut store, &binding, &sample(), 64).unwrap();
+        // The writer found no "x", or an older one: someone wrote it since.
+        for checked in [None, Some(first.vector + 100)] {
+            let error = write_vector(&mut store, &binding.replacing(checked), &sample(), 64);
+            assert!(matches!(error, Err(VectorError::WrittenConcurrently { .. })), "{error:?}");
+            assert_eq!(store.existing(&[first.vector]).unwrap(), [first.vector]);
+        }
+    }
+
+    #[test]
     fn a_gap_in_the_chunks_is_an_error() {
         let mut store = MemoryVectorStore::default();
-        let record = write_vector(&mut store, 1, 7, "emb", &sample(), 100).unwrap();
+        let record = write_vector(
+            &mut store,
+            &Binding::new(1, 7, "emb", pg_sys::Oid::INVALID),
+            &sample(),
+            100,
+        )
+        .unwrap();
         store.chunks.remove(&(record.vector, 1));
         assert!(matches!(
             read_vector(&mut store, &memory(), &record),
@@ -103,7 +131,13 @@ mod tests {
     #[test]
     fn missing_or_extra_bytes_are_errors() {
         let mut store = MemoryVectorStore::default();
-        let record = write_vector(&mut store, 1, 7, "emb", &sample(), 100).unwrap();
+        let record = write_vector(
+            &mut store,
+            &Binding::new(1, 7, "emb", pg_sys::Oid::INVALID),
+            &sample(),
+            100,
+        )
+        .unwrap();
         store.chunks.remove(&(record.vector, 3));
         assert!(matches!(
             read_vector(&mut store, &memory(), &record),
@@ -114,7 +148,13 @@ mod tests {
     #[test]
     fn reading_is_charged_to_the_budget() {
         let mut store = MemoryVectorStore::default();
-        let record = write_vector(&mut store, 1, 7, "emb", &sample(), 100).unwrap();
+        let record = write_vector(
+            &mut store,
+            &Binding::new(1, 7, "emb", pg_sys::Oid::INVALID),
+            &sample(),
+            100,
+        )
+        .unwrap();
         assert!(matches!(
             read_vector(&mut store, &ComputeMemory::new(100), &record),
             Err(VectorError::Compute(ComputeError::MemoryLimit { .. }))

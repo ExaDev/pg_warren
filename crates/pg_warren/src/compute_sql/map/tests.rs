@@ -109,6 +109,44 @@ mod tests {
     }
 
     #[pg_test]
+    fn the_executor_evaluates_under_the_callers_search_path() -> Result<(), Error> {
+        appendix_vectors()?;
+        // The function's body names `params` unqualified: it resolves when
+        // the body is first run, so only under the caller's search_path.
+        Spi::run(
+            "CREATE TABLE public.params (w float8); INSERT INTO public.params VALUES (3);
+             CREATE FUNCTION public.weighted(x float8) RETURNS float8
+                 LANGUAGE sql STABLE AS 'SELECT x * w FROM params'",
+        )?;
+        assert_eq!(path("t", "public.weighted(deg)")?.as_deref(), Some("executor"));
+        Spi::run(
+            "SET search_path = public, pg_catalog;
+             SELECT warren.vector_map('t', 'w', 'weighted(deg)');
+             RESET search_path",
+        )?;
+        assert_eq!(values("w")?.as_deref(), Some("1:6 2:3 3:3 4:3 5:3 6:0"));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn the_synthetic_row_holds_only_the_vectors_the_expression_names() -> Result<(), Error> {
+        small("t")?;
+        // More vectors than a row may have columns (1664).
+        Spi::run(
+            "DO $$ BEGIN
+                 FOR i IN 1..1700 LOOP
+                     PERFORM warren.vector_const('t', 'v' || i, i, persist := false);
+                 END LOOP;
+             END $$",
+        )?;
+        Spi::run("SELECT warren.vector_map('t', 'sum', 'v1 + v2 * \"v1700\"')")?;
+        assert_eq!(values("sum")?.as_deref(), Some("1:3401 2:3401 3:3401 4:3401 5:3401 6:3401"));
+        let unknown = failure("warren.vector_map('t', 'y', 'v1 + nope')")?;
+        assert_eq!(unknown.as_deref(), Some("42703: column \"nope\" does not exist"));
+        Ok(())
+    }
+
+    #[pg_test]
     fn expressions_that_are_not_one_scalar_expression_are_refused() -> Result<(), Error> {
         appendix_vectors()?;
         let cases = [
@@ -200,6 +238,7 @@ mod tests {
             let leaves = [
                 "a",
                 "b",
+                "m",
                 "e::float8",
                 "c::float8",
                 "(2.5::float8)",
@@ -214,13 +253,9 @@ mod tests {
                 return self.pick(&leaves).to_owned();
             }
             let d = depth - 1;
-            match self.below(12) {
-                0 => format!(
-                    "({} {} {})",
-                    self.float(d),
-                    self.pick(&["+", "-", "*", "/"]),
-                    self.float(d)
-                ),
+            let ops = ["+", "-", "*", "/"];
+            match self.below(16) {
+                0 => format!("({} {} {})", self.float(d), self.pick(&ops), self.float(d)),
                 1 => format!("(-{})", self.float(d)),
                 2 => format!(
                     "{}({})",
@@ -254,33 +289,111 @@ mod tests {
                 10 => {
                     format!("CASE {} WHEN {} THEN {} END", self.int(d), self.int(d), self.float(d))
                 }
+                // float48 and float84: real against double precision.
+                11 => format!("({} {} {})", self.real(d), self.pick(&ops), self.float(d)),
+                12 => format!("({} {} {})", self.float(d), self.pick(&ops), self.real(d)),
+                13 => format!(
+                    "CASE {} WHEN {} THEN {} ELSE {} END",
+                    self.float(d),
+                    self.float(d),
+                    self.float(d),
+                    self.float(d)
+                ),
+                14 => format!("({})::float8", self.real(d)),
                 _ => format!("({} ^ {})", self.float(d), self.float(d)),
+            }
+        }
+
+        /// A `real` expression.
+        fn real(&mut self, depth: u32) -> String {
+            let leaves = [
+                "e",
+                "n",
+                "(-0::real)",
+                "(0.5::real)",
+                "(3e38::real)",
+                "(1e-38::real)",
+                "('NaN'::real)",
+                "a::real",
+                "c::real",
+            ];
+            if depth == 0 || self.below(4) == 0 {
+                return self.pick(&leaves).to_owned();
+            }
+            let d = depth - 1;
+            match self.below(9) {
+                0 | 1 => format!(
+                    "({} {} {})",
+                    self.real(d),
+                    self.pick(&["+", "-", "*", "/"]),
+                    self.real(d)
+                ),
+                2 => format!("(-{})", self.real(d)),
+                3 => format!("abs({})", self.real(d)),
+                4 => format!(
+                    "CASE WHEN {} THEN {} ELSE {} END",
+                    self.boolean(d),
+                    self.real(d),
+                    self.real(d)
+                ),
+                5 => format!("NULLIF({}, {})", self.real(d), self.real(d)),
+                6 => format!(
+                    "{}({}, {})",
+                    self.pick(&["LEAST", "GREATEST"]),
+                    self.real(d),
+                    self.real(d)
+                ),
+                7 => format!("({})::real", self.float(d)),
+                _ => format!("COALESCE({}, {})", self.real(d), self.real(d)),
             }
         }
 
         /// A `bigint` expression.
         fn int(&mut self, depth: u32) -> String {
-            let leaves = ["c", "(7::bigint)", "(0::bigint)", "(-9223372036854775807::bigint)"];
+            let leaves = [
+                "c",
+                "(7::bigint)",
+                "(0::bigint)",
+                "(-1::bigint)",
+                "(-9223372036854775807::bigint)",
+                "(-9223372036854775807::bigint - 1)",
+            ];
             if depth == 0 || self.below(3) == 0 {
                 return self.pick(&leaves).to_owned();
             }
             let d = depth - 1;
-            match self.below(6) {
-                0 => format!(
-                    "({} {} {})",
-                    self.int(d),
-                    self.pick(&["+", "-", "*", "/", "%"]),
-                    self.int(d)
-                ),
-                1 => format!("abs({})", self.int(d)),
-                2 => format!("({})::bigint", self.float(d)),
-                3 => format!(
+            let ops = ["+", "-", "*", "/", "%"];
+            // integer constants: int84 and int48 operators.
+            let int4 = ["0", "1", "-1", "2", "2147483647", "-2147483648"];
+            match self.below(10) {
+                0 | 1 => format!("({} {} {})", self.int(d), self.pick(&ops), self.int(d)),
+                2 => format!("abs({})", self.int(d)),
+                3 => format!("({})::bigint", self.float(d)),
+                4 => format!(
                     "CASE WHEN {} THEN {} ELSE {} END",
                     self.boolean(d),
                     self.int(d),
                     self.int(d)
                 ),
-                4 => format!("GREATEST({}, {})", self.int(d), self.int(d)),
+                5 => format!(
+                    "{}({}, {})",
+                    self.pick(&["LEAST", "GREATEST"]),
+                    self.int(d),
+                    self.int(d)
+                ),
+                6 => format!(
+                    "({} {} {})",
+                    self.int(d),
+                    self.pick(&["+", "-", "*", "/"]),
+                    self.pick(&int4)
+                ),
+                7 => format!(
+                    "({} {} {})",
+                    self.pick(&int4),
+                    self.pick(&["+", "-", "*", "/"]),
+                    self.int(d)
+                ),
+                8 => format!("NULLIF({}, {})", self.int(d), self.int(d)),
                 _ => format!("(-{})", self.int(d)),
             }
         }
@@ -289,12 +402,20 @@ mod tests {
         fn boolean(&mut self, depth: u32) -> String {
             if depth == 0 || self.below(4) == 0 {
                 return self
-                    .pick(&["d", "(a > b)", "(c = 0)", "(e < 1)", "NULL::boolean"])
+                    .pick(&[
+                        "d",
+                        "(a > b)",
+                        "(c = 0)",
+                        "(e < 1)",
+                        "(c < 3)",
+                        "(n >= e)",
+                        "NULL::boolean",
+                    ])
                     .to_owned();
             }
             let d = depth - 1;
             let cmp = ["=", "<>", "<", "<=", ">", ">="];
-            match self.below(5) {
+            match self.below(10) {
                 0 => format!("({} {} {})", self.float(d), self.pick(&cmp), self.float(d)),
                 1 => format!("({} {} {})", self.int(d), self.pick(&cmp), self.int(d)),
                 2 => format!(
@@ -304,14 +425,25 @@ mod tests {
                     self.boolean(d)
                 ),
                 3 => format!("(NOT {})", self.boolean(d)),
+                4 => format!("({} {} {})", self.real(d), self.pick(&cmp), self.real(d)),
+                5 => format!("({} {} {})", self.real(d), self.pick(&cmp), self.float(d)),
+                6 => format!("({} {} 2)", self.int(d), self.pick(&cmp)),
+                7 => format!("NULLIF({}, {})", self.boolean(d), self.boolean(d)),
+                8 => format!(
+                    "{}({}, {})",
+                    self.pick(&["LEAST", "GREATEST"]),
+                    self.boolean(d),
+                    self.boolean(d)
+                ),
                 _ => format!("({} {} {})", self.boolean(d), self.pick(&cmp), self.boolean(d)),
             }
         }
     }
 
     /// Graph `p`: a 300-node ring with random vectors `a`, `b` (f64), `c`
-    /// (i64), `d` (bool) and `e` (f32), with zeros, NaN, infinities and
-    /// extremes among them.
+    /// (i64), `d` (bool), `e` (f32) and matrices `m` (f64) and `n` (f32) of
+    /// width 3, with zeros, `-0`, NaN, infinities, denormals and extremes
+    /// (`i64::MIN` and `MAX` among them).
     fn random_vectors() -> Result<(), Error> {
         ring("p", 300, 2)?;
         refresh("p", true)?;
@@ -322,15 +454,26 @@ mod tests {
                               WHEN 3 THEN '-0' WHEN 4 THEN 1e300 ELSE (random() - 0.5) * 20 END::float8 AS a,
                  CASE id % 19 WHEN 0 THEN '-Infinity' WHEN 1 THEN 0 ELSE random() * 4 - 1 END::float8 AS b,
                  CASE id % 17 WHEN 0 THEN 0 WHEN 1 THEN 9223372036854775807
+                              WHEN 2 THEN '-9223372036854775808'::bigint WHEN 3 THEN -1
                               ELSE floor(random() * 21 - 10)::bigint END AS c,
                  random() < 0.5 AS d,
-                 (random() * 3 - 1.5)::real AS e
+                 CASE id % 13 WHEN 0 THEN '-0' WHEN 1 THEN '3e38' WHEN 2 THEN '1e-45'
+                              WHEN 3 THEN 'NaN' WHEN 4 THEN '-Infinity' WHEN 5 THEN 0
+                              ELSE (random() * 3 - 1.5)::real END::real AS e
+             FROM p_nodes;
+             CREATE TABLE p_rows AS SELECT id,
+                 ARRAY[(random() - 0.5) * 8, CASE id % 7 WHEN 0 THEN '-0' ELSE random() END,
+                       CASE id % 11 WHEN 0 THEN 'NaN' ELSE id::float8 END]::float8[] AS m,
+                 ARRAY[random() * 2, CASE id % 5 WHEN 0 THEN '-0' ELSE -random() END,
+                       CASE id % 9 WHEN 0 THEN '3e38' ELSE 1::real END]::real[] AS n
              FROM p_nodes;
              SELECT warren.vector_from_query('p', 'a', 'SELECT id, a FROM p_values');
              SELECT warren.vector_from_query('p', 'b', 'SELECT id, b FROM p_values');
              SELECT warren.vector_from_query('p', 'c', 'SELECT id, c FROM p_values', 'i64');
              SELECT warren.vector_from_query('p', 'd', 'SELECT id, d FROM p_values', 'bool');
-             SELECT warren.vector_from_query('p', 'e', 'SELECT id, e FROM p_values', 'f32')",
+             SELECT warren.vector_from_query('p', 'e', 'SELECT id, e FROM p_values', 'f32');
+             SELECT warren.vector_from_query('p', 'm', 'SELECT id, m FROM p_rows');
+             SELECT warren.vector_from_query('p', 'n', 'SELECT id, n FROM p_rows', 'f32')",
         )
     }
 
@@ -338,11 +481,12 @@ mod tests {
     fn compiled_and_executor_paths_agree_bit_for_bit_on_random_expressions() -> Result<(), Error> {
         random_vectors()?;
         let mut random = Random(0x9e37_79b9_7f4a_7c15);
-        let (mut values, mut errors) = (0, 0);
-        for _ in 0..300 {
-            let expr = match random.below(3) {
+        let (mut values, mut errors, mut reals, mut matrices) = (0, 0, 0, 0);
+        for _ in 0..500 {
+            let expr = match random.below(4) {
                 0 => random.float(4),
-                1 => random.int(3),
+                1 => random.real(4),
+                2 => random.int(3),
                 _ => random.boolean(3),
             };
             assert_eq!(path("p", &expr)?.as_deref(), Some("compiled"), "{expr}");
@@ -352,8 +496,11 @@ mod tests {
                 true => errors += 1,
                 false => values += 1,
             }
+            reals += usize::from(compiled.starts_with("f32:"));
+            matrices += usize::from(compiled.contains(":3:"));
         }
-        assert!(values > 100 && errors > 10, "{values} values, {errors} errors");
+        assert!(values > 150 && errors > 20, "{values} values, {errors} errors");
+        assert!(reals > 40 && matrices > 40, "{reals} real results, {matrices} matrices");
         Ok(())
     }
 
