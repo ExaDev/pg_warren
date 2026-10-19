@@ -65,7 +65,7 @@ before changing code. Commands, toolchain setup and environment gotchas are in
 | Adapter logic behind ports, against fakes | `pg_warren`, plain `#[test]` | `cargo pgrx test pgNN` (crate needs the pgrx harness) |
 | In-database (`#[pg_test]`): SQL surface, SPI adapters, transactions | `pg_warren`, `#[pg_schema] mod tests` per feature module | `cargo pgrx test pgNN` |
 | Integration / oracle / Appendix A use cases | `test/` | TBD (M2+) |
-| Domain tests under Miri | `warren-core` (same tests) | `cargo +nightly miri test -p warren-core` |
+| Domain tests under Miri | `warren-core` (same tests) | `cargo +$MIRI_NIGHTLY miri test -p warren-core` (pinned nightly, see `ci.yml`) |
 | Micro-benchmarks (`criterion`) | `warren-core/benches/` | `cargo bench -p warren-core` |
 
 ## pgrx specifics (learned in M0)
