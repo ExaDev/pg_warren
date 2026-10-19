@@ -2,10 +2,15 @@
 //! starts reaches (DESIGN.md §9.3, `warren.reachable`,
 //! `warren.reachable_set`).
 
+use std::ops::ControlFlow;
+
 use super::level::{Admission, LevelSearch};
+use super::scratch::Rows;
 use super::stats::Progress;
-use super::{Adjacency, Interrupts, TraversalError, Traversed, Visit};
-use crate::graph::{memory, DenseId};
+use super::{
+    bfs_each, Adjacency, Interrupts, Limits, TraversalError, TraversalStats, Traversed, Visit,
+};
+use crate::graph::DenseId;
 
 /// Whether `target` is within `max_depth` edges of `start` along
 /// `adjacency` (unbounded if `None`). A node reaches itself. The search
@@ -25,39 +30,38 @@ pub fn reachable(
         found = visit.node == target;
         Ok(if found { Admission::AdmitAndStop } else { Admission::Admit })
     };
-    search(adjacency, &[start], max_depth, interrupts, &mut admit)
-        .map(|progress| progress.traversed(found))
+    let mut progress = Progress::new(interrupts);
+    LevelSearch::new(adjacency, None)?.run(&[start], max_depth, &mut progress, &mut admit)?;
+    Ok(progress.traversed(found))
 }
 
 /// Every node within `max_depth` edges of `starts` along `adjacency`
 /// (unbounded if `None`), starts included, once each, in BFS order.
+/// Collects [`reachable_set_each`].
 pub fn reachable_set(
     adjacency: &Adjacency<'_>,
     starts: &[DenseId],
     max_depth: Option<u32>,
     interrupts: &mut dyn Interrupts,
 ) -> Result<Traversed<Vec<DenseId>>, TraversalError> {
-    let mut nodes = Vec::new();
-    let mut admit = |visit: Visit| {
-        memory::reserve_one(&mut nodes)?;
-        nodes.push(visit.node);
-        Ok(Admission::Admit)
-    };
-    search(adjacency, starts, max_depth, interrupts, &mut admit)
-        .map(|progress| progress.traversed(nodes))
+    let mut nodes = Rows::new();
+    let stats =
+        reachable_set_each(adjacency, starts, max_depth, interrupts, |node| nodes.push(node))?;
+    Ok(Traversed { result: nodes.finish()?, stats })
 }
 
-/// Runs an unfiltered level search from `starts` to `max_depth`.
-fn search<'c>(
+/// [`reachable_set`], handing each node to `visitor` as it is reached
+/// instead of collecting them; returning [`ControlFlow::Break`] stops the
+/// scan after that node.
+pub fn reachable_set_each(
     adjacency: &Adjacency<'_>,
     starts: &[DenseId],
     max_depth: Option<u32>,
-    interrupts: &'c mut dyn Interrupts,
-    admit: &mut impl FnMut(Visit) -> Result<Admission, TraversalError>,
-) -> Result<Progress<'c>, TraversalError> {
-    let mut progress = Progress::new(interrupts);
-    LevelSearch::new(adjacency, None)?.run(starts, max_depth, &mut progress, admit)?;
-    Ok(progress)
+    interrupts: &mut dyn Interrupts,
+    mut visitor: impl FnMut(DenseId) -> ControlFlow<()>,
+) -> Result<TraversalStats, TraversalError> {
+    let limits = Limits { max_depth, max_results: None };
+    bfs_each(adjacency, starts, None, limits, interrupts, |visit| visitor(visit.node))
 }
 
 #[cfg(test)]
@@ -105,6 +109,23 @@ mod tests {
             reachable(&out(&graph), 0, 6, None, &mut Uninterrupted).unwrap_err(),
             TraversalError::NodeOutsideIdSpace { node: 6 }
         );
+    }
+
+    #[test]
+    fn reachable_set_each_streams_nodes_until_the_visitor_stops_it() {
+        let graph = example();
+        let mut seen = Vec::new();
+        let stats = reachable_set_each(&out(&graph), &[0], None, &mut Uninterrupted, |node| {
+            seen.push(node);
+            if node == 1 {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        })
+        .unwrap();
+        assert_eq!(seen, [0, 1]);
+        assert_eq!(stats.nodes_visited, 2);
     }
 
     #[test]

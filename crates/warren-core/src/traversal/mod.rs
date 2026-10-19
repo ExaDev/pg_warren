@@ -27,13 +27,13 @@ mod example;
 mod reference;
 
 pub use adjacency::{Adjacency, Direction, RelationSelection};
-pub use bfs::{bfs, Visit};
+pub use bfs::{bfs, bfs_each, Visit};
 pub use components::components;
 pub use dijkstra::{dijkstra, WeightedPath};
 pub use error::TraversalError;
 pub use interrupts::{Cancellation, Cancelled, Interrupts, Uninterrupted};
 pub use limits::Limits;
 pub use node_set::NodeSet;
-pub use reachable::{reachable, reachable_set};
+pub use reachable::{reachable, reachable_set, reachable_set_each};
 pub use shortest_path::shortest_path;
 pub use stats::{TraversalStats, Traversed};

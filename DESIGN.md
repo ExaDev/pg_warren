@@ -689,6 +689,7 @@ Implementation notes:
 - Defaults for caps may come from GUCs inside the SQL `DEFAULT` expression (`current_setting('warren.…', true)`).
 - Decisions made in M1 (`warren-core::traversal`, dense ids in and out):
   - `direction` `in` and `both` read the reverse CSR and raise an error when the graph was built without one. `shortest_path` without a reverse CSR runs a forward-only BFS instead; `components` never needs one.
+  - `bfs` and `reachable_set` also come in streaming forms (`bfs_each`, `reachable_set_each`) that hand each row to a visitor, so an SRF under SQL `LIMIT` stops the scan by breaking. A visitor stopping the scan is not truncation.
   - `node_filter` applies to the nodes a traversal reaches, never to its starts: starts are always admitted at depth 0, and repeated starts count once. `reachable_set` includes the starts.
   - `last_stats()` counts `nodes_visited` (nodes admitted or settled, starts included) and `edges_traversed` (CSR row entries scanned). The `Interrupts` hook is polled on the first unit of work (a visited node or a scanned row entry) and every 65,536th after.
   - `shortest_path` breaks ties between meeting nodes of equal combined distance by the smallest dense ID, so its result is deterministic.
