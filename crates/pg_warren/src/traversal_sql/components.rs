@@ -2,7 +2,8 @@
 
 use pgrx::prelude::*;
 use pgrx::AnyElement;
-use warren_core::traversal::components as label_components;
+use warren_core::graph::GraphError;
+use warren_core::traversal::{components as label_components, TraversalError};
 
 use super::ids::{check_type, external};
 use super::interrupts::PostgresInterrupts;
@@ -39,11 +40,14 @@ fn components(
             // SAFETY: fcinfo is this call's, and argument 1 exists.
             let witness = unsafe { pgrx::fcinfo::pg_getarg_type(fcinfo, 1) };
             check_type::<E>(graph, "id_type", witness, false)?;
-            let loaded = cached::<E>(resolved.graph.graph_id, resolved.version)?;
+            let loaded = cached::<E>(&resolved)?;
             let labelled = label_components(&loaded.graph, &mut PostgresInterrupts)?;
             recorder.record(labelled.stats);
             let tombstones = loaded.id_map.tombstones();
             let mut rows = Vec::new();
+            let live = usize::try_from(loaded.id_map.node_count()).unwrap_or(usize::MAX);
+            rows.try_reserve_exact(live)
+                .map_err(|_| TraversalError::from(GraphError::OutOfMemory { elements: live }))?;
             for (node, &component) in (0..).zip(&labelled.result) {
                 if tombstones.contains(node) {
                     continue;

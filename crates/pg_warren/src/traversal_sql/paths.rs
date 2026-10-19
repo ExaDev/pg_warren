@@ -12,7 +12,7 @@ use warren_core::traversal::{
 };
 
 use super::args::{bound, direction, relations};
-use super::ids::{element, external_array};
+use super::ids::{element, element_widened, external_array};
 use super::interrupts::PostgresInterrupts;
 use super::stats::Recorder;
 use super::{entry, TraversalSqlError};
@@ -40,7 +40,16 @@ fn reachable(
     direction: Option<&str>,
     version: Option<i64>,
 ) -> Option<bool> {
-    let call = Endpoints { function: "reachable", graph, start, target, rels, direction, version };
+    let call = Endpoints {
+        function: "reachable",
+        graph,
+        start,
+        target,
+        rels,
+        direction,
+        version,
+        widen: true,
+    };
     entry(|| {
         let max_depth = bound("max_depth", max_depth.map(i64::from))?;
         let opened = call.open()?;
@@ -75,8 +84,16 @@ fn shortest_path(
     direction: Option<&str>,
     version: Option<i64>,
 ) -> Option<AnyArray> {
-    let call =
-        Endpoints { function: "shortest_path", graph, start, target, rels, direction, version };
+    let call = Endpoints {
+        function: "shortest_path",
+        graph,
+        start,
+        target,
+        rels,
+        direction,
+        version,
+        widen: false,
+    };
     entry(|| {
         let max_depth = bound("max_depth", max_depth.map(i64::from))?;
         let opened = call.open()?;
@@ -111,7 +128,16 @@ fn dijkstra(
     direction: Option<&str>,
     version: Option<i64>,
 ) -> TableIterator<'static, (name!(path, AnyArray), name!(cost, f64))> {
-    let call = Endpoints { function: "dijkstra", graph, start, target, rels, direction, version };
+    let call = Endpoints {
+        function: "dijkstra",
+        graph,
+        start,
+        target,
+        rels,
+        direction,
+        version,
+        widen: false,
+    };
     entry(|| {
         let opened = call.open()?;
         let row = with_id_type!(opened.id_type(), E => opened.run::<E, _>(|loaded, adjacency, start, target| {
@@ -134,6 +160,9 @@ struct Endpoints<'a> {
     rels: Option<Vec<Option<String>>>,
     direction: Option<&'a str>,
     version: Option<i64>,
+    /// Whether narrower integer ids are widened (for results that hold no
+    /// ids).
+    widen: bool,
 }
 
 /// What a search over two endpoints returns, with the work it did.
@@ -174,9 +203,13 @@ impl Opened<'_> {
         let (Some(start), Some(target)) = (self.call.start, self.call.target) else {
             return Ok(None);
         };
-        let start = element::<E>(self.graph, "start", start)?;
-        let target = element::<E>(self.graph, "target", target)?;
-        let loaded = cached::<E>(self.resolved.graph.graph_id, self.resolved.version)?;
+        let read = match self.call.widen {
+            true => element_widened::<E>,
+            false => element::<E>,
+        };
+        let start = read(self.graph, "start", start)?;
+        let target = read(self.graph, "target", target)?;
+        let loaded = cached::<E>(&self.resolved)?;
         let (Some(start), Some(target)) =
             (loaded.id_map.dense_id(&start), loaded.id_map.dense_id(&target))
         else {

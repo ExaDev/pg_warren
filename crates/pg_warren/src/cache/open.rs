@@ -51,13 +51,16 @@ pub(crate) fn resolve(
     Ok(Resolved { graph, version })
 }
 
-/// The loaded `version` of graph `graph_id`, from this backend's cache or
+/// The loaded version `resolved` names, from this backend's cache or
 /// loaded into it. A load first prunes cached versions that have since been
-/// dropped (with their graphs or on their own).
+/// dropped (with their graphs or on their own); a load of a graph's current
+/// version also drops the graph's other cached versions, which callers
+/// reach only by asking for them explicitly (scans holding one keep their
+/// copy, and a later explicit call reloads it).
 pub(crate) fn cached<E: IdDatum + Send + Sync>(
-    graph_id: i32,
-    version: VersionId,
+    resolved: &Resolved,
 ) -> Result<Arc<LoadedVersion<E>>, CacheError> {
+    let (graph_id, version) = (resolved.graph.graph_id, resolved.version);
     if let Some(loaded) = CACHE.with_borrow(|cache| cache.get::<E>(version)) {
         return Ok(loaded);
     }
@@ -67,7 +70,13 @@ pub(crate) fn cached<E: IdDatum + Send + Sync>(
     // Load outside any borrow of the cache: loading runs SPI, which may
     // raise an ERROR that unwinds through this frame.
     let loaded = load::<E>(&mut SpiSegmentStore, version)?;
-    Ok(CACHE.with_borrow_mut(|cache| cache.insert(graph_id, version, loaded)))
+    let current = resolved.graph.current_version == Some(version);
+    Ok(CACHE.with_borrow_mut(|cache| {
+        if current {
+            cache.evict_graph(graph_id);
+        }
+        cache.insert(graph_id, version, loaded)
+    }))
 }
 
 /// Drops this backend's cached versions of graph `graph_id`; returns how

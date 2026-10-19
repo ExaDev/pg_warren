@@ -1,6 +1,8 @@
 //! `warren.step`, the stable intermediate representation of a walk's steps
 //! (DESIGN.md §9.2, §14 item 14): the composite type, its `warren.s()`
-//! constructor, the `jsonb → warren.step[]` cast, and reading steps into
+//! constructor, the `jsonb → warren.step[]` cast (which refuses anything
+//! but an array of objects with the five keys, `rels` and `filter` arrays
+//! or null), and reading steps into
 //! `warren-core`'s [`Step`]s against a loaded version.
 //!
 //! A composite type cannot have a polymorphic attribute, so a step holds
@@ -13,7 +15,7 @@ use pgrx::{AllocatedByRust, AnyArray, Array};
 use warren_core::traversal::{HopRange, NodeSet, Step};
 
 use super::args::{direction, relations};
-use super::ids::parse;
+use super::ids::{element_type, parse};
 use super::{entry, TraversalSqlError};
 use crate::cache::LoadedVersion;
 use crate::source::IdDatum;
@@ -29,18 +31,51 @@ CREATE TYPE warren.step AS (
 );
 
 CREATE FUNCTION warren.steps(steps jsonb) RETURNS warren.step[]
-IMMUTABLE STRICT PARALLEL SAFE LANGUAGE sql
+IMMUTABLE STRICT PARALLEL SAFE LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp
 AS $$
-    SELECT coalesce(array_agg(ROW(
-               CASE WHEN jsonb_typeof(e -> 'rels') = 'array' THEN
-                   ARRAY(SELECT jsonb_array_elements_text(e -> 'rels')) END,
-               coalesce(e ->> 'direction', 'out'),
-               CASE WHEN jsonb_typeof(e -> 'filter') = 'array' THEN
-                   ARRAY(SELECT jsonb_array_elements_text(e -> 'filter')) END,
-               coalesce((e ->> 'min_hops')::int, 1),
-               (e ->> 'max_hops')::int)::warren.step ORDER BY o), '{}')
-    FROM jsonb_array_elements(steps) WITH ORDINALITY AS x(e, o)
+DECLARE
+    step jsonb;
+    position int := 0;
+    key text;
+    result warren.step[] := '{}';
+BEGIN
+    IF jsonb_typeof(steps) <> 'array' THEN
+        RAISE EXCEPTION USING ERRCODE = 'invalid_parameter_value',
+            MESSAGE = format('steps must be a JSON array of step objects, not %s',
+                             jsonb_typeof(steps));
+    END IF;
+    FOR step IN SELECT e FROM jsonb_array_elements(steps) AS x(e) LOOP
+        position := position + 1;
+        IF jsonb_typeof(step) <> 'object' THEN
+            RAISE EXCEPTION USING ERRCODE = 'invalid_parameter_value',
+                MESSAGE = format('step %s must be an object, not %s', position,
+                                 jsonb_typeof(step));
+        END IF;
+        FOR key IN SELECT jsonb_object_keys(step) LOOP
+            IF key NOT IN ('rels', 'direction', 'filter', 'min_hops', 'max_hops') THEN
+                RAISE EXCEPTION USING ERRCODE = 'invalid_parameter_value',
+                    MESSAGE = format('step %s has an unknown key "%s"', position, key);
+            END IF;
+        END LOOP;
+        FOREACH key IN ARRAY ARRAY['rels', 'filter'] LOOP
+            IF jsonb_typeof(step -> key) NOT IN ('array', 'null') THEN
+                RAISE EXCEPTION USING ERRCODE = 'invalid_parameter_value',
+                    MESSAGE = format('step %s: %s must be an array or null, not %s', position,
+                                     key, jsonb_typeof(step -> key));
+            END IF;
+        END LOOP;
+        result := result || ROW(
+            CASE WHEN jsonb_typeof(step -> 'rels') = 'array' THEN
+                ARRAY(SELECT jsonb_array_elements_text(step -> 'rels')) END,
+            coalesce(step ->> 'direction', 'out'),
+            CASE WHEN jsonb_typeof(step -> 'filter') = 'array' THEN
+                ARRAY(SELECT jsonb_array_elements_text(step -> 'filter')) END,
+            coalesce((step ->> 'min_hops')::int, 1),
+            (step ->> 'max_hops')::int)::warren.step;
+    END LOOP;
+    RETURN result;
+END
 $$;
 
 CREATE CAST (jsonb AS warren.step[]) WITH FUNCTION warren.steps(jsonb);
@@ -74,7 +109,10 @@ fn s(
     entry(|| {
         let mut step = PgHeapTuple::new_composite_type("warren.step")
             .map_err(|error| TraversalSqlError::Step(error.to_string()))?;
-        let filter = filter.map(|filter| texts(&filter));
+        let filter = match filter {
+            Some(filter) => Some(texts(&filter)?),
+            None => None,
+        };
         let fields = [
             step.set_by_name("rels", rels),
             step.set_by_name("direction", direction.map(str::to_owned)),
@@ -90,15 +128,14 @@ fn s(
 }
 
 /// The elements of `array` as text, in their type's output format.
-fn texts(array: &AnyArray) -> Vec<Option<String>> {
-    // SAFETY: get_element_type only reads the type cache.
-    let element = unsafe { pg_sys::get_element_type(array.oid()) };
+fn texts(array: &AnyArray) -> Result<Vec<Option<String>>, TraversalSqlError> {
+    let element = element_type("filter", array.oid(), "bigint")?;
     let mut output = pg_sys::Oid::INVALID;
     let mut varlena = false;
     // SAFETY: the out-pointers point to live locals; an unknown type raises
     // an ERROR.
     unsafe { pg_sys::getTypeOutputInfo(element, &mut output, &mut varlena) };
-    array
+    Ok(array
         .into_iter()
         .map(|value| {
             value.map(|value| {
@@ -110,7 +147,7 @@ fn texts(array: &AnyArray) -> Vec<Option<String>> {
                 unsafe { std::ffi::CStr::from_ptr(text) }.to_string_lossy().into_owned()
             })
         })
-        .collect()
+        .collect())
 }
 
 /// The steps of a walk, read into `warren-core` steps over `loaded`.

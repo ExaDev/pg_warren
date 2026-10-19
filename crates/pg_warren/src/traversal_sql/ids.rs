@@ -28,6 +28,33 @@ pub(crate) fn element<E: IdDatum>(
     sql.map(E::from_sql).ok_or(TraversalSqlError::NullArgument(argument))
 }
 
+/// [`element`], but an `int2` or `int4` value is also accepted for a
+/// wider integer id type: for lookups whose result type does not depend
+/// on the argument's, so `warren.degree('g', 42)` works on a `bigint`
+/// graph.
+pub(crate) fn element_widened<E: IdDatum>(
+    graph: &str,
+    argument: &'static str,
+    value: AnyElement,
+) -> Result<E, TraversalSqlError> {
+    // SAFETY: each read below is of the datum's own type, `value.oid()`.
+    let narrow = unsafe {
+        match value.oid() {
+            pg_sys::INT2OID => {
+                i16::from_polymorphic_datum(value.datum(), false, value.oid()).map(i64::from)
+            }
+            pg_sys::INT4OID if value.oid() != E::Sql::type_oid() => {
+                i32::from_polymorphic_datum(value.datum(), false, value.oid()).map(i64::from)
+            }
+            _ => None,
+        }
+    };
+    match narrow.and_then(E::from_integer) {
+        Some(id) => Ok(id),
+        None => element(graph, argument, value),
+    }
+}
+
 /// The non-NULL external ids `array` holds, checked to be an array of the
 /// graph's id type.
 pub(crate) fn elements<E: IdDatum>(
@@ -92,6 +119,25 @@ pub(crate) fn external_array<E: IdDatum>(id_map: &IdMap<E>, path: &[DenseId]) ->
     unsafe { AnyArray::from_polymorphic_datum(datum, false, array_type) }
 }
 
+/// The element type of array type `oid`; an error naming `argument` if
+/// `oid` is not an array type (`example` is the id type to suggest).
+pub(crate) fn element_type(
+    argument: &'static str,
+    oid: pg_sys::Oid,
+    example: &str,
+) -> Result<pg_sys::Oid, TraversalSqlError> {
+    // SAFETY: get_element_type only reads the type cache.
+    let element = unsafe { pg_sys::get_element_type(oid) };
+    if element == pg_sys::Oid::INVALID {
+        return Err(TraversalSqlError::NotAnArray {
+            argument,
+            id_type: example.to_owned(),
+            found: type_name(oid),
+        });
+    }
+    Ok(element)
+}
+
 /// Checks that `oid` is the graph's id type (`array`: an array of it).
 pub(crate) fn check_type<E: IdDatum>(
     graph: &str,
@@ -101,8 +147,7 @@ pub(crate) fn check_type<E: IdDatum>(
 ) -> Result<(), TraversalSqlError> {
     let expected = E::Sql::type_oid();
     let found = match array {
-        // SAFETY: get_element_type only reads the type cache.
-        true => unsafe { pg_sys::get_element_type(oid) },
+        true => element_type(argument, oid, &type_name(expected))?,
         false => oid,
     };
     if found == expected {
