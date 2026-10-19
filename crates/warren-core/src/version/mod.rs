@@ -1,18 +1,21 @@
 //! Operations across versions of a graph: the structural [`diff`] of two
-//! versions in the same id space (DESIGN.md §7) and [`compact`], which
+//! versions in the same id space (DESIGN.md §7), [`compact`], which
 //! renumbers a version into a new id space without tombstones (DESIGN.md
-//! §5.2).
+//! §5.2), and [`align`], which renumbers a version of another graph into a
+//! version's id space by external id (DESIGN.md §8).
 //!
 //! `graph` owns the structure of one version; this module only reads
 //! [`GraphVersion`]s and produces values (or, for compaction, a new version
 //! built through [`GraphCsr::build`]).
 
+mod alignment;
 mod compaction;
 mod diff;
 mod error;
 #[cfg(test)]
 mod history;
 
+pub use alignment::{align, Alignment};
 pub use compaction::{compact, Compaction, Renumbering};
 pub use diff::{diff, DegreeCount, DegreeShift, EdgeDelta, NodeDelta, RelationDelta, VersionDiff};
 pub use error::VersionError;

@@ -1,19 +1,18 @@
 //! Alignment of a vector of one graph to the id space of another, for
 //! comparing across graphs (DESIGN.md §8: the shadow-schema pattern). The
-//! adapter builds the dense-id mapping by joining the two id maps on
-//! external id; this moves the rows.
+//! dense-id mapping comes from [`crate::version::align`]; this moves the
+//! rows.
 
 use super::super::SpectralError;
 use crate::compute::{AnyVector, ComputeMemory, Element, Vector};
 use crate::graph::DenseId;
 
 /// `vector` (of another graph) with row `i` moved to row `mapping[i]` of a
-/// vector over `id_space`: rows mapped to `None` are dropped, and rows that
-/// nothing maps to are zero.
+/// vector over `id_space`; rows that nothing maps to are zero.
 pub fn align(
     memory: &ComputeMemory,
     vector: &AnyVector,
-    mapping: &[Option<DenseId>],
+    mapping: &[DenseId],
     id_space: u64,
 ) -> Result<AnyVector, SpectralError> {
     if mapping.len() as u64 != vector.id_space() {
@@ -21,7 +20,7 @@ pub fn align(
         return Err(SpectralError::MappingLength { expected, found });
     }
     let (mut seen, _seen) = memory.filled(id_space as usize, false)?;
-    for &target in mapping.iter().flatten() {
+    for &target in mapping {
         match seen.get_mut(target as usize) {
             None => return Err(SpectralError::MappedOutside { target, id_space }),
             Some(true) => return Err(SpectralError::MappedTwice { target }),
@@ -40,17 +39,15 @@ pub fn align(
 fn moved<E: Element>(
     memory: &ComputeMemory,
     vector: &Vector<E>,
-    mapping: &[Option<DenseId>],
+    mapping: &[DenseId],
     id_space: u64,
 ) -> Result<Vector<E>, SpectralError> {
     let width = vector.width();
     let mut aligned = Vector::filled(memory, id_space, width, E::default())?;
     let values = aligned.values_mut();
-    for (source, target) in (0..).zip(mapping) {
-        if let Some(target) = *target {
-            let start = target as usize * width;
-            values[start..start + width].copy_from_slice(vector.row(source));
-        }
+    for (source, &target) in (0..).zip(mapping) {
+        let start = target as usize * width;
+        values[start..start + width].copy_from_slice(vector.row(source));
     }
     Ok(aligned)
 }
@@ -74,14 +71,11 @@ mod tests {
             Vector::from_values(&memory(), 3, 2, vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0])
                 .unwrap()
                 .into();
-        let aligned = align(&memory(), &matrix, &[Some(3), None, Some(0)], 4).unwrap();
-        assert_eq!((aligned.id_space(), aligned.width()), (4, 2));
-        assert_eq!(values::<f32>(&aligned), [5.0, 6.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0]);
+        let aligned = align(&memory(), &matrix, &[3, 1, 0], 5).unwrap();
+        assert_eq!((aligned.id_space(), aligned.width()), (5, 2));
+        assert_eq!(values::<f32>(&aligned), [5.0, 6.0, 3.0, 4.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0]);
         let labels: AnyVector = Vector::from_values(&memory(), 2, 1, vec![7i64, 8]).unwrap().into();
-        assert_eq!(
-            values::<i64>(&align(&memory(), &labels, &[Some(1), Some(0)], 2).unwrap()),
-            [8, 7]
-        );
+        assert_eq!(values::<i64>(&align(&memory(), &labels, &[1, 0], 2).unwrap()), [8, 7]);
     }
 
     #[test]
@@ -89,15 +83,15 @@ mod tests {
         let vector: AnyVector =
             Vector::from_values(&memory(), 2, 1, vec![1.0f64, 2.0]).unwrap().into();
         assert_eq!(
-            align(&memory(), &vector, &[Some(0)], 2),
+            align(&memory(), &vector, &[0], 2),
             Err(SpectralError::MappingLength { expected: 2, found: 1 })
         );
         assert_eq!(
-            align(&memory(), &vector, &[Some(0), Some(2)], 2),
+            align(&memory(), &vector, &[0, 2], 2),
             Err(SpectralError::MappedOutside { target: 2, id_space: 2 })
         );
         assert_eq!(
-            align(&memory(), &vector, &[Some(1), Some(1)], 2),
+            align(&memory(), &vector, &[1, 1], 2),
             Err(SpectralError::MappedTwice { target: 1 })
         );
     }
