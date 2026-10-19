@@ -1,6 +1,6 @@
-//! Traversal over a graph's CSR: BFS frontiers, reachability, shortest paths
-//! and components (DESIGN.md §9), in dense ids. Mapping external ids to and
-//! from dense ids is the adapter's job.
+//! Traversal over a graph's CSR: BFS frontiers, reachability, shortest
+//! paths, components and walks (DESIGN.md §9), in dense ids. Mapping
+//! external ids to and from dense ids is the adapter's job.
 //!
 //! A traversal starts from an [`Adjacency`]: the CSRs of the selected
 //! relations, read in one [`Direction`]. It reports [`TraversalStats`]
