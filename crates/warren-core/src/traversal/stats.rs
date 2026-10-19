@@ -29,6 +29,20 @@ pub struct Traversed<T> {
     pub stats: TraversalStats,
 }
 
+/// The stats so far and the units of work until the next poll: what a
+/// suspended traversal keeps between calls.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Tally {
+    stats: TraversalStats,
+    until_poll: u32,
+}
+
+impl Tally {
+    pub(crate) fn stats(&self) -> TraversalStats {
+        self.stats
+    }
+}
+
 /// Running stats plus the interrupt poll, threaded through a traversal.
 pub(crate) struct Progress<'c> {
     stats: TraversalStats,
@@ -38,7 +52,17 @@ pub(crate) struct Progress<'c> {
 
 impl<'c> Progress<'c> {
     pub(crate) fn new(interrupts: &'c mut dyn Interrupts) -> Self {
-        Self { stats: TraversalStats::default(), interrupts, until_poll: 0 }
+        Self::resume(interrupts, Tally::default())
+    }
+
+    /// Continues a suspended traversal's count where `tally` left it.
+    pub(crate) fn resume(interrupts: &'c mut dyn Interrupts, tally: Tally) -> Self {
+        Self { stats: tally.stats, interrupts, until_poll: tally.until_poll }
+    }
+
+    /// The count so far, to resume from later.
+    pub(crate) fn suspend(self) -> Tally {
+        Tally { stats: self.stats, until_poll: self.until_poll }
     }
 
     /// Counts a visited node, a unit of work.
@@ -97,6 +121,20 @@ mod tests {
             progress.finish(),
             TraversalStats { nodes_visited: 1, edges_traversed: 2, truncated: true }
         );
+    }
+
+    #[test]
+    fn a_suspended_progress_resumes_its_count_and_poll_interval() {
+        let cancellation = Cancellation::new();
+        let mut polled = cancellation.clone();
+        let mut progress = Progress::new(&mut polled);
+        progress.node_visited().unwrap();
+        let tally = progress.suspend();
+        cancellation.cancel();
+        let mut polled = cancellation.clone();
+        let mut resumed = Progress::resume(&mut polled, tally);
+        resumed.edge_traversed().unwrap();
+        assert_eq!(resumed.suspend().stats().nodes_visited, 1);
     }
 
     #[test]

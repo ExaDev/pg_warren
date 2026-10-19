@@ -53,8 +53,8 @@ fn record(graph: &NewGraph<'_>) -> Result<(), CatalogError> {
         ))
     })?;
     let id_type = check_node_columns(&node_columns)?;
-    check_edge_columns(&edge_columns, graph.has_relations, graph.weighted)?;
-    NewGraph { id_type, ..*graph }.create()
+    check_edge_columns(&edge_columns, id_type, graph.has_relations, graph.weighted)?;
+    NewGraph { id_type: id_type.oid(), ..*graph }.create()
 }
 
 #[cfg(any(test, feature = "pg_test"))]
@@ -137,19 +137,27 @@ mod tests {
         )
     }
 
-    #[pg_test(
-        error = "node ids of type integer are not supported yet; node_query must return bigint"
-    )]
-    fn int4_node_ids_are_rejected_until_m3() -> Result<(), Error> {
+    #[pg_test]
+    fn int4_and_uuid_node_ids_are_id_types() -> Result<(), Error> {
+        Spi::run(
+            "CREATE TABLE cg_small (src int, dst int); CREATE TABLE cg_u (src uuid, dst uuid)",
+        )?;
         tables()?;
         Spi::run(
-            "SELECT warren.create_graph('cg', 'SELECT small FROM cg_nodes',
-                                        'SELECT src, dst FROM cg_edges')",
-        )
+            "SELECT warren.create_graph('cg4', 'SELECT small FROM cg_nodes',
+                                        'SELECT src, dst FROM cg_small');
+             SELECT warren.create_graph('cgu', 'SELECT u FROM cg_nodes',
+                                        'SELECT src, dst FROM cg_u')",
+        )?;
+        let types = Spi::get_one::<String>(
+            "SELECT string_agg(id_type::text, ' ' ORDER BY name) FROM warren.graphs",
+        )?;
+        assert_eq!(types.as_deref(), Some("integer uuid"));
+        Ok(())
     }
 
-    #[pg_test(error = "node ids of type uuid are not supported yet; node_query must return bigint")]
-    fn uuid_node_ids_are_rejected_until_m3() -> Result<(), Error> {
+    #[pg_test(error = "edge_query column 1 (source id) must be of type uuid, not bigint")]
+    fn edge_endpoints_must_have_the_node_id_type() -> Result<(), Error> {
         tables()?;
         Spi::run(
             "SELECT warren.create_graph('cg', 'SELECT u FROM cg_nodes',

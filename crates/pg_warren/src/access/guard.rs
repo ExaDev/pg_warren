@@ -114,22 +114,42 @@ mod tests {
 
     use crate::fixture::{refresh, ring};
 
-    /// Role `eve` (not a superuser) owns schema `eve`, where it defines an
-    /// `=` on text that logs who ran it to `public.probe_log`, and shadows
+    /// Role `eve` (not a superuser) owns schema `eve`, where it defines `=`
+    /// on text, bigint and oid and `||` on text, each counting its calls on
+    /// sequence `public.probe_seq` (which a rolled-back call does not undo),
+    /// and shadows
     /// `pg_roles` and `pg_has_role` with versions that say yes to anything.
     fn hostile_eve() -> Result<(), Error> {
         Spi::run(
             "CREATE ROLE eve;
              CREATE SCHEMA eve AUTHORIZATION eve;
-             CREATE TABLE public.probe_log (who text);
-             GRANT INSERT ON public.probe_log TO PUBLIC;
+             CREATE SEQUENCE public.probe_seq;
+             GRANT USAGE ON public.probe_seq TO PUBLIC;
              SET ROLE eve;
              CREATE FUNCTION eve.teq(text, text) RETURNS boolean LANGUAGE plpgsql AS $f$
                  BEGIN
-                     INSERT INTO public.probe_log VALUES (current_user::text);
+                     PERFORM pg_catalog.nextval('public.probe_seq');
                      RETURN $1 OPERATOR(pg_catalog.=) $2;
                  END $f$;
              CREATE OPERATOR eve.= (LEFTARG = text, RIGHTARG = text, FUNCTION = eve.teq);
+             CREATE FUNCTION eve.beq(bigint, bigint) RETURNS boolean LANGUAGE plpgsql AS $f$
+                 BEGIN
+                     PERFORM pg_catalog.nextval('public.probe_seq');
+                     RETURN $1 OPERATOR(pg_catalog.=) $2;
+                 END $f$;
+             CREATE OPERATOR eve.= (LEFTARG = bigint, RIGHTARG = bigint, FUNCTION = eve.beq);
+             CREATE FUNCTION eve.oeq(oid, oid) RETURNS boolean LANGUAGE plpgsql AS $f$
+                 BEGIN
+                     PERFORM pg_catalog.nextval('public.probe_seq');
+                     RETURN $1 OPERATOR(pg_catalog.=) $2;
+                 END $f$;
+             CREATE OPERATOR eve.= (LEFTARG = oid, RIGHTARG = oid, FUNCTION = eve.oeq);
+             CREATE FUNCTION eve.tcat(text, text) RETURNS text LANGUAGE plpgsql AS $f$
+                 BEGIN
+                     PERFORM pg_catalog.nextval('public.probe_seq');
+                     RETURN $1 OPERATOR(pg_catalog.||) $2;
+                 END $f$;
+             CREATE OPERATOR eve.|| (LEFTARG = text, RIGHTARG = text, FUNCTION = eve.tcat);
              CREATE FUNCTION eve.pg_has_role(oid, text) RETURNS boolean
                  LANGUAGE sql AS 'SELECT true';
              CREATE VIEW eve.pg_roles AS
@@ -151,7 +171,9 @@ mod tests {
     }
 
     fn probes() -> Result<Option<i64>, Error> {
-        Spi::get_one::<i64>("SELECT count(*) FROM public.probe_log")
+        Spi::get_one::<i64>(
+            "SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM public.probe_seq",
+        )
     }
 
     #[pg_test]
@@ -180,21 +202,44 @@ mod tests {
     /// One call of every `warren.*` function, by name; `{v}` is a version
     /// of graph `victim`.
     const CALLS: &[(&str, &str)] = &[
+        ("bfs", "warren.bfs('victim', ARRAY[1::bigint], 2)"),
         ("compact", "warren.compact('victim')"),
+        ("components", "warren.components('victim', NULL::bigint)"),
         (
             "create_graph",
             "warren.create_graph('eves', 'SELECT 1::bigint', 'SELECT 1::bigint, 2::bigint')",
         ),
+        ("degree", "warren.degree('victim', 1::bigint)"),
         ("diff", "warren.diff('victim', {v}, {v})"),
+        ("dijkstra", "warren.dijkstra('victim', 1::bigint, 2::bigint)"),
         ("drop_graph", "warren.drop_graph('victim')"),
         ("drop_version", "warren.drop_version('victim', {v})"),
+        ("evict", "warren.evict('victim')"),
         ("grant", "warren.grant('victim', 'eve')"),
+        ("has_edge", "warren.has_edge('victim', 1::bigint, 2::bigint)"),
         ("info", "warren.info('victim')"),
+        ("last_stats", "warren.last_stats()"),
+        ("neighbours", "warren.neighbours('victim', 1::bigint)"),
+        ("prewarm", "warren.prewarm('victim')"),
         ("promote", "warren.promote('victim', {v})"),
+        ("reachable", "warren.reachable('victim', 1::bigint, 2::bigint)"),
+        ("reachable_set", "warren.reachable_set('victim', ARRAY[1::bigint])"),
         ("refresh", "warren.refresh('victim')"),
         ("revoke", "warren.revoke('victim', 'eve')"),
+        ("s", "warren.s(NULL)"),
+        ("shortest_path", "warren.shortest_path('victim', 1::bigint, 2::bigint)"),
+        ("steps", "warren.steps('[]')"),
         ("version", "warren.version()"),
+        ("walk", "warren.walk('victim', ARRAY[1::bigint], ARRAY[warren.s(NULL)])"),
     ];
+
+    #[pg_test]
+    fn the_hostile_operators_run_where_the_search_path_is_not_pinned() -> Result<(), Error> {
+        hostile_eve()?;
+        as_eve("1::bigint = 1::bigint, 1::oid = 1::oid, 'a'::text = 'a', 'a'::text || 'b'")?;
+        assert_eq!(probes()?, Some(4), "every probe operator logs");
+        Ok(())
+    }
 
     #[pg_test]
     fn every_warren_function_ignores_the_callers_search_path() -> Result<(), Error> {
@@ -206,10 +251,17 @@ mod tests {
         assert_eq!(functions, Some(called.join(",")), "every warren.* function has a call");
 
         ring("victim", 3, 2)?;
+        let older = refresh("victim", true)?;
         let version = refresh("victim", true)?;
         hostile_eve()?;
         Spi::run("SELECT warren.grant('victim', 'eve')")?;
         for (_, call) in CALLS {
+            // Leave only the older version cached, so that a call reading
+            // the current one misses and prunes the cache (SPI over
+            // warren.versions) inside the probe.
+            Spi::run(&format!(
+                "SELECT warren.evict('victim'); SELECT warren.prewarm('victim', {older})"
+            ))?;
             as_eve(&call.replace("{v}", &version.to_string()))?;
         }
         assert_eq!(probes()?, Some(0), "the hostile operator ran");

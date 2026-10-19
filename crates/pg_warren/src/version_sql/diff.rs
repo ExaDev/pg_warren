@@ -11,6 +11,7 @@ use crate::access::{entry, require_reader};
 use crate::cache::load;
 use crate::catalog::{compaction_between, require_version, GraphDefinition, VersionId};
 use crate::segment::SpiSegmentStore;
+use crate::source::with_id_type;
 
 /// `warren.diff`: the structural delta from version `v1` of graph `name` to
 /// version `v2` — nodes added and removed, edges added and removed per
@@ -36,9 +37,11 @@ fn diff_versions(name: &str, v1: VersionId, v2: VersionId) -> Result<JsonB, Vers
             source_version,
         });
     }
-    let before = load::<i64>(&mut SpiSegmentStore, v1)?;
-    let after = load::<i64>(&mut SpiSegmentStore, v2)?;
-    let delta = delta(&before.version()?, &after.version()?)?;
+    let delta = with_id_type!(graph.id_type, E => {
+        let before = load::<E>(&mut SpiSegmentStore, v1)?;
+        let after = load::<E>(&mut SpiSegmentStore, v2)?;
+        delta(&before.version()?, &after.version()?)?
+    });
     Ok(JsonB(diff_json(v1, v2, &delta)))
 }
 

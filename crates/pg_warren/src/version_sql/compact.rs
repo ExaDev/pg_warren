@@ -11,6 +11,7 @@ use crate::build::{Catalog, SpiCatalog};
 use crate::cache::load;
 use crate::catalog::{version_record, GraphDefinition, NewVersion, VersionId, VersionStats};
 use crate::segment::{write_version, SegmentStore, SpiSegmentStore, CHUNK_SIZE};
+use crate::source::with_id_type;
 
 /// `warren.compact`: renumbers graph `name`'s current version to remove its
 /// tombstones, records the result as a new version with `compacted_from`
@@ -29,14 +30,14 @@ fn compact_graph(name: &str) -> Result<VersionId, VersionOperationError> {
         .current_version
         .ok_or_else(|| VersionOperationError::NoCurrentVersion(graph.name.clone()))?;
     let (carried, built_lsn) = version_record(source)?;
-    compact_version::<i64>(
+    with_id_type!(graph.id_type, E => compact_version::<E>(
         &graph,
         source,
         &carried,
         CHUNK_SIZE,
         &mut SpiSegmentStore,
         &mut SpiCatalog::at_lsn(built_lsn),
-    )
+    ))
 }
 
 /// Compacts version `source` of `graph` into a new, promoted version.
@@ -94,6 +95,7 @@ mod unit {
             name: "g".to_owned(),
             owner: pg_sys::Oid::INVALID,
             readers: Vec::new(),
+            id_type: crate::source::IdType::Int8,
             node_query: String::new(),
             edge_query: String::new(),
             search_path: String::new(),

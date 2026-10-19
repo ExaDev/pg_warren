@@ -4,6 +4,7 @@
 use pgrx::{pg_sys, PgSqlErrorCode};
 use thiserror::Error;
 
+use super::IdType;
 use crate::access::SqlError;
 
 /// The type of one result column of a source query.
@@ -42,12 +43,6 @@ pub(crate) enum SourceError {
         /// The column's type.
         found: String,
     },
-    /// The node ids have an id type a later milestone supports.
-    #[error("node ids of type {found} are not supported yet; node_query must return bigint")]
-    UnsupportedIdType {
-        /// The node id type.
-        found: String,
-    },
     /// The query text contains a NUL byte.
     #[error("{query} contains a NUL byte")]
     NulByte {
@@ -62,15 +57,14 @@ impl SqlError for SourceError {
             Self::ColumnCount { .. } | Self::ColumnType { .. } => {
                 PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH
             }
-            Self::UnsupportedIdType { .. } => PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
             Self::NulByte { .. } => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
         }
     }
 }
 
 /// The one column a node query must return: its node ids, whose type is the
-/// graph's id type. Returns that type: `int8` (`int4` and `uuid` arrive in M3).
-pub(crate) fn check_node_columns(columns: &[ColumnType]) -> Result<pg_sys::Oid, SourceError> {
+/// graph's id type (`integer`, `bigint` or `uuid`). Returns that id type.
+pub(crate) fn check_node_columns(columns: &[ColumnType]) -> Result<IdType, SourceError> {
     let [id] = columns else {
         return Err(SourceError::ColumnCount {
             query: "node_query",
@@ -78,30 +72,26 @@ pub(crate) fn check_node_columns(columns: &[ColumnType]) -> Result<pg_sys::Oid, 
             found: columns.len(),
         });
     };
-    match id.oid {
-        pg_sys::INT8OID => Ok(id.oid),
-        pg_sys::INT4OID | pg_sys::UUIDOID => {
-            Err(SourceError::UnsupportedIdType { found: id.name.clone() })
-        }
-        _ => Err(mistyped("node_query", 1, "node id", "bigint", id)),
-    }
+    IdType::from_oid(id.oid)
+        .ok_or_else(|| mistyped("node_query", 1, "node id", "integer, bigint or uuid", id))
 }
 
-/// The columns an `int8` graph's edge query must return: source and target
-/// ids, then a `text` relation if the graph has relations, then a `float8`
-/// weight if it is weighted.
+/// The columns an edge query must return: source and target ids of the
+/// graph's id type, then a `text` relation if the graph has relations, then
+/// a `float8` weight if it is weighted.
 pub(crate) fn check_edge_columns(
     columns: &[ColumnType],
+    id_type: IdType,
     has_relations: bool,
     weighted: bool,
 ) -> Result<(), SourceError> {
-    let mut expected =
-        vec![("source id", pg_sys::INT8OID, "bigint"), ("target id", pg_sys::INT8OID, "bigint")];
+    let id = (id_type.oid(), id_type.sql_name());
+    let mut expected = vec![("source id", id), ("target id", id)];
     if has_relations {
-        expected.push(("relation", pg_sys::TEXTOID, "text"));
+        expected.push(("relation", (pg_sys::TEXTOID, "text")));
     }
     if weighted {
-        expected.push(("weight", pg_sys::FLOAT8OID, "double precision"));
+        expected.push(("weight", (pg_sys::FLOAT8OID, "double precision")));
     }
     if columns.len() != expected.len() {
         return Err(SourceError::ColumnCount {
@@ -110,7 +100,7 @@ pub(crate) fn check_edge_columns(
             found: columns.len(),
         });
     }
-    for (number, (column, (role, oid, name))) in (1..).zip(columns.iter().zip(expected)) {
+    for (number, (column, (role, (oid, name)))) in (1..).zip(columns.iter().zip(expected)) {
         if column.oid != oid {
             return Err(mistyped("edge_query", number, role, name, column));
         }
@@ -140,9 +130,19 @@ mod tests {
         column(pg_sys::INT8OID, "bigint")
     }
 
+    fn int4() -> ColumnType {
+        column(pg_sys::INT4OID, "integer")
+    }
+
+    fn uuid() -> ColumnType {
+        column(pg_sys::UUIDOID, "uuid")
+    }
+
     #[test]
-    fn a_node_query_returns_one_int8_column() {
-        assert_eq!(check_node_columns(&[int8()]), Ok(pg_sys::INT8OID));
+    fn a_node_query_returns_one_column_of_an_id_type() {
+        assert_eq!(check_node_columns(&[int8()]), Ok(IdType::Int8));
+        assert_eq!(check_node_columns(&[int4()]), Ok(IdType::Int4));
+        assert_eq!(check_node_columns(&[uuid()]), Ok(IdType::Uuid));
         assert_eq!(
             check_node_columns(&[int8(), int8()]),
             Err(SourceError::ColumnCount { query: "node_query", expected: "1", found: 2 })
@@ -153,36 +153,30 @@ mod tests {
                 query: "node_query",
                 column: 1,
                 role: "node id",
-                expected: "bigint",
+                expected: "integer, bigint or uuid",
                 found: "text".to_owned(),
             })
         );
     }
 
     #[test]
-    fn int4_and_uuid_node_ids_are_not_supported_yet() {
-        for (oid, name) in [(pg_sys::INT4OID, "integer"), (pg_sys::UUIDOID, "uuid")] {
-            assert_eq!(
-                check_node_columns(&[column(oid, name)]),
-                Err(SourceError::UnsupportedIdType { found: name.to_owned() })
-            );
-        }
-    }
-
-    #[test]
     fn an_edge_query_has_a_column_per_flag() {
         let text = column(pg_sys::TEXTOID, "text");
         let float8 = column(pg_sys::FLOAT8OID, "double precision");
-        assert_eq!(check_edge_columns(&[int8(), int8()], false, false), Ok(()));
-        assert_eq!(check_edge_columns(&[int8(), int8(), text.clone()], true, false), Ok(()));
-        assert_eq!(check_edge_columns(&[int8(), int8(), float8.clone()], false, true), Ok(()));
-        assert_eq!(check_edge_columns(&[int8(), int8(), text.clone(), float8], true, true), Ok(()));
+        let id = IdType::Int8;
+        assert_eq!(check_edge_columns(&[int8(), int8()], id, false, false), Ok(()));
+        assert_eq!(check_edge_columns(&[int8(), int8(), text.clone()], id, true, false), Ok(()));
+        assert_eq!(check_edge_columns(&[int8(), int8(), float8.clone()], id, false, true), Ok(()));
         assert_eq!(
-            check_edge_columns(&[int8(), int8(), text.clone()], false, false),
+            check_edge_columns(&[int8(), int8(), text.clone(), float8], id, true, true),
+            Ok(())
+        );
+        assert_eq!(
+            check_edge_columns(&[int8(), int8(), text.clone()], id, false, false),
             Err(SourceError::ColumnCount { query: "edge_query", expected: "2", found: 3 })
         );
         assert_eq!(
-            check_edge_columns(&[int8(), int8(), text], false, true),
+            check_edge_columns(&[int8(), int8(), text], id, false, true),
             Err(SourceError::ColumnType {
                 query: "edge_query",
                 column: 3,
@@ -191,14 +185,30 @@ mod tests {
                 found: "text".to_owned(),
             })
         );
+    }
+
+    #[test]
+    fn edge_endpoints_have_the_graphs_id_type() {
+        assert_eq!(check_edge_columns(&[int4(), int4()], IdType::Int4, false, false), Ok(()));
+        assert_eq!(check_edge_columns(&[uuid(), uuid()], IdType::Uuid, false, false), Ok(()));
         assert_eq!(
-            check_edge_columns(&[int8(), column(pg_sys::INT4OID, "integer")], false, false),
+            check_edge_columns(&[int8(), int4()], IdType::Int8, false, false),
             Err(SourceError::ColumnType {
                 query: "edge_query",
                 column: 2,
                 role: "target id",
                 expected: "bigint",
                 found: "integer".to_owned(),
+            })
+        );
+        assert_eq!(
+            check_edge_columns(&[int8(), int8()], IdType::Uuid, false, false),
+            Err(SourceError::ColumnType {
+                query: "edge_query",
+                column: 1,
+                role: "source id",
+                expected: "uuid",
+                found: "bigint".to_owned(),
             })
         );
     }
