@@ -33,6 +33,7 @@ pub(crate) fn max_build_memory() -> u64 {
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;

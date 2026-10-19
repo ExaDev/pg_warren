@@ -114,6 +114,7 @@ pub(crate) trait VectorStore {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 pub(crate) mod tests {
     use super::*;
     use std::collections::BTreeMap;

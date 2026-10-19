@@ -82,6 +82,7 @@ fn truncation_notice(function: &str, graph: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod tests {
     use super::*;
 

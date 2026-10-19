@@ -103,6 +103,7 @@ pub(crate) fn evict_transients(graph_id: i32) -> usize {
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod tests {
     use super::*;
     use pgrx::prelude::*;

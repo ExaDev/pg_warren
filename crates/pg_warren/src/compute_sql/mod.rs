@@ -21,11 +21,14 @@ mod from_query;
 mod gather;
 mod library;
 #[cfg(any(test, feature = "pg_test"))]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod limits;
 mod map;
 #[cfg(any(test, feature = "pg_test"))]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod oracle;
 #[cfg(any(test, feature = "pg_test"))]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod ownership;
 mod product;
 mod read;
@@ -33,6 +36,7 @@ mod reduce;
 mod settings;
 mod summary;
 #[cfg(any(test, feature = "pg_test"))]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod transient;
 mod vectors;
 

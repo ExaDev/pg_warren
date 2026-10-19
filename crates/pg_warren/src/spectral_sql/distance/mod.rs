@@ -88,8 +88,11 @@ fn count(k: Option<i32>) -> Result<usize, SpectralSqlError> {
 ///
 /// `subspace` and `embedding` read the rows of `compared_rows`: `shared`
 /// nodes (present on both sides) or `all` (absent rows as zero).
-#[allow(clippy::too_many_arguments)] // The SQL signature's arguments.
-#[pg_extern(schema = "warren", volatile, parallel_unsafe)]
+#[allow(clippy::too_many_arguments)]
+// The SQL signature's arguments.
+// It reads and persists nothing (a fresh eigensolve for `spectral` is not
+// stored), so it is a read: `PARALLEL RESTRICTED` (DESIGN.md §6.9).
+#[pg_extern(schema = "warren", stable, parallel_restricted)]
 fn distance(
     graph: Option<&str>,
     v1: Option<i64>,
@@ -170,6 +173,7 @@ fn distance(
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;

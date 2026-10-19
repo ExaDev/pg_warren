@@ -18,7 +18,7 @@ use crate::source::with_id_type;
 /// relation and over all relations, and the shift of the out- and in-degree
 /// distributions. Refused across a compaction boundary. Owners and readers
 /// may call it.
-#[pg_extern(schema = "warren", stable)]
+#[pg_extern(schema = "warren", stable, parallel_restricted)]
 fn diff(name: &str, v1: i64, v2: i64) -> JsonB {
     entry(|_| diff_versions(name, v1, v2))
 }
@@ -86,6 +86,7 @@ fn degree_json(shift: &DegreeShift) -> Value {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod unit {
     use super::*;
     use warren_core::graph::{EdgeIntake, GraphCsr, IdMap, RelationDictionary};
@@ -146,6 +147,7 @@ mod unit {
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;

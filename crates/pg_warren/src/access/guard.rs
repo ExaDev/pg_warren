@@ -66,17 +66,51 @@ pub(crate) fn entry<T, E: SqlError>(body: impl FnOnce(&Caller) -> Result<T, E>) 
 /// Runs `f` with `search_path` set to `path`, then restores the previous
 /// value. If `f` raises an ERROR, the (sub)transaction abort restores it.
 pub(crate) fn with_search_path<R>(path: &str, f: impl FnOnce() -> R) -> R {
-    // A NUL cannot come from SQL text; an empty path is the safe fallback
-    // (only the implicit pg_catalog).
-    let path = CString::new(path).unwrap_or_default();
+    with_setting(c"search_path", path, f)
+}
+
+/// Runs `f` with the transaction read-only, then restores its previous
+/// state: the caller's SQL that a `warren.*` function runs to read (a
+/// source, message or value query) can then write nothing, not even
+/// through a VOLATILE function it calls, which a read-only cursor alone
+/// would allow. (The `transaction_read_only` GUC cannot be set inside a
+/// function, so this sets the backend's flag; an ERROR unwinds through the
+/// guard that restores it, as does a subtransaction abort.)
+pub(crate) fn with_read_only<R>(f: impl FnOnce() -> R) -> R {
+    /// Restores `XactReadOnly` when dropped, including while unwinding.
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            // SAFETY: the main thread's transaction state flag, restored to
+            // the value read below.
+            unsafe { pg_sys::XactReadOnly = self.0 };
+        }
+    }
+    // SAFETY: reads and sets the main thread's transaction state flag,
+    // which the executor checks before every write.
+    let _restore = unsafe {
+        let restore = Restore(pg_sys::XactReadOnly);
+        pg_sys::XactReadOnly = true;
+        restore
+    };
+    f()
+}
+
+/// Runs `f` with GUC `name` set to `value` at a new nest level, then pops
+/// it, restoring the previous value; if `f` raises an ERROR, the
+/// (sub)transaction abort pops it.
+fn with_setting<R>(name: &CStr, value: &str, f: impl FnOnce() -> R) -> R {
+    // A NUL cannot come from SQL text; an empty value is the safe fallback
+    // (for search_path, only the implicit pg_catalog).
+    let value = CString::new(value).unwrap_or_default();
     // SAFETY: plain backend calls with NUL-terminated strings that outlive
     // them; set_config_option raises an ERROR rather than return failure
     // for a session-level SET of a valid GUC.
     let level = unsafe {
         let level = pg_sys::NewGUCNestLevel();
         pg_sys::set_config_option(
-            c"search_path".as_ptr(),
-            path.as_ptr(),
+            name.as_ptr(),
+            value.as_ptr(),
             pg_sys::GucContext::PGC_USERSET,
             pg_sys::GucSource::PGC_S_SESSION,
             pg_sys::GucAction::GUC_ACTION_SAVE,
@@ -87,7 +121,7 @@ pub(crate) fn with_search_path<R>(path: &str, f: impl FnOnce() -> R) -> R {
         level
     };
     let result = f();
-    // SAFETY: pops the nest level opened above, restoring search_path.
+    // SAFETY: pops the nest level opened above, restoring the setting.
     unsafe { pg_sys::AtEOXact_GUC(true, level) };
     result
 }
@@ -108,6 +142,7 @@ fn current_search_path() -> String {
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;

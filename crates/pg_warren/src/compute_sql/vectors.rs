@@ -40,6 +40,11 @@ fn bytes(dtype: Dtype, width: usize, length: u64) -> u64 {
     length.saturating_mul(width as u64).saturating_mul(element as u64)
 }
 
+/// The prefix of the library's intermediate vectors (§6.7): such names
+/// are only ever transient, so a library function's intermediate can
+/// never replace, and so delete, a persisted vector.
+const RESERVED_PREFIX: &str = "_warren_";
+
 /// A vector name bound to a version, and its element type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct BoundName {
@@ -162,7 +167,8 @@ impl<E: IdDatum> Vectors<E> {
         Ok(Some(load(&mut SpiVectorStore, cache_memory(), graph_id, &record)?))
     }
 
-    /// Stores `vector` as `name` after clearing its tombstoned rows:
+    /// Stores `vector` as `name` (which may be reserved only if not
+    /// `persist`) after clearing its tombstoned rows:
     /// persisted (returning its vector id) or, if not `persist`, as a
     /// transient vector of this session (returning `None`). Either replaces
     /// any vector of that name of either kind; a persisted one replaced
@@ -176,6 +182,9 @@ impl<E: IdDatum> Vectors<E> {
     ) -> Result<Option<VectorId>, ComputeSqlError> {
         if name.is_empty() {
             return Err(ComputeSqlError::EmptyName);
+        }
+        if persist && name.starts_with(RESERVED_PREFIX) {
+            return Err(ComputeSqlError::ReservedName(name.to_owned()));
         }
         let graph_id = self.graph.graph_id;
         let old = self.record(name).map(|old| (old.vector, old.created_by));

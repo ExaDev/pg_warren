@@ -59,6 +59,7 @@ fn record(graph: &NewGraph<'_>) -> Result<(), CatalogError> {
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
@@ -181,6 +182,20 @@ mod tests {
         Spi::run(
             "SELECT warren.create_graph('cg', 'INSERT INTO cg_nodes VALUES (1) RETURNING id',
                                         'SELECT src, dst FROM cg_edges')",
+        )
+    }
+
+    // ... even through a VOLATILE function the query calls.
+    #[pg_test(error = "cannot execute INSERT in a read-only transaction")]
+    fn a_source_query_cannot_write_through_a_function() -> Result<(), Error> {
+        tables()?;
+        Spi::run(
+            "INSERT INTO cg_nodes (id) VALUES (1);
+             CREATE FUNCTION cg_write() RETURNS boolean VOLATILE LANGUAGE plpgsql AS
+                 $f$ BEGIN INSERT INTO cg_nodes VALUES (99); RETURN true; END $f$;
+             SELECT warren.create_graph('cg', 'SELECT id FROM cg_nodes WHERE cg_write()',
+                                        'SELECT src, dst FROM cg_edges');
+             SELECT warren.refresh('cg')",
         )
     }
 

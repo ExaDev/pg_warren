@@ -6,8 +6,10 @@
 //! in either direction, self-loops dropped, in a CSR charged to the
 //! budget; no reverse CSR is needed), then counts in parallel: a node `u`
 //! is in `Σ_{v ∈ N(u)} |N(u) ∩ N(v)| / 2` triangles, each intersection a
-//! merge of two sorted rows. The cost is `Σ_u Σ_{v ∈ N(u)} (d_u + d_v)`:
-//! fine for sparse graphs, quadratic around hubs.
+//! merge of two sorted rows, or, when one row is much longer (a hub's),
+//! a binary search of the shorter's values in it. The cost is about
+//! `Σ_u Σ_{v ∈ N(u)} min(d_u, d_v) · log max(d_u, d_v)`, and a task checks
+//! its cancellation flag every 65,536 row entries it visits.
 
 use std::cmp::Ordering;
 
@@ -135,16 +137,59 @@ impl Symmetric {
     /// Writes each node's triangle count to `counts`.
     fn count(&self, cancellation: &Cancellation, counts: &mut [i64]) -> Result<(), ComputeError> {
         counts.par_chunks_mut(NODES_PER_TASK).enumerate().try_for_each(|(task, counts)| {
-            if cancellation.is_cancelled() {
-                return Err(Cancelled.into());
-            }
+            let mut work = Work::new(cancellation);
+            work.check()?;
             for (offset, count) in counts.iter_mut().enumerate() {
-                let row = self.row(task * NODES_PER_TASK + offset);
-                let pairs: u64 = distinct(row).map(|v| common(row, self.row(v as usize))).sum();
-                *count = i64::try_from(pairs / 2).unwrap_or(i64::MAX);
+                *count = self.triangles_of(task * NODES_PER_TASK + offset, &mut work)?;
             }
             Ok(())
         })
+    }
+
+    /// The triangles `node` is in: half the neighbours its neighbours share
+    /// with it.
+    fn triangles_of(&self, node: usize, work: &mut Work<'_>) -> Result<i64, Cancelled> {
+        let row = self.row(node);
+        let mut pairs = 0;
+        for v in distinct(row) {
+            pairs += common(row, self.row(v as usize), work)?;
+        }
+        Ok(i64::try_from(pairs / 2).unwrap_or(i64::MAX))
+    }
+}
+
+/// The work a task has done since it last checked its cancellation flag,
+/// in row entries visited: it checks every [`WORK_PER_CHECK`], so a hub's
+/// row cannot outlast a cancel (DESIGN.md §6.9).
+struct Work<'c> {
+    cancellation: &'c Cancellation,
+    since_check: u64,
+}
+
+/// Row entries visited between cancellation checks.
+const WORK_PER_CHECK: u64 = 1 << 16;
+
+impl<'c> Work<'c> {
+    fn new(cancellation: &'c Cancellation) -> Self {
+        Self { cancellation, since_check: 0 }
+    }
+
+    /// Checks the flag now.
+    fn check(&mut self) -> Result<(), Cancelled> {
+        self.since_check = 0;
+        match self.cancellation.is_cancelled() {
+            true => Err(Cancelled),
+            false => Ok(()),
+        }
+    }
+
+    /// Records `units` of work, checking the flag once enough is done.
+    fn spend(&mut self, units: u64) -> Result<(), Cancelled> {
+        self.since_check += units;
+        match self.since_check >= WORK_PER_CHECK {
+            true => self.check(),
+            false => Ok(()),
+        }
     }
 }
 
@@ -153,8 +198,27 @@ fn distinct(row: &[DenseId]) -> impl Iterator<Item = DenseId> + '_ {
     row.iter().enumerate().filter(|&(i, v)| i == 0 || row[i - 1] != *v).map(|(_, &v)| v)
 }
 
-/// The number of distinct values two sorted rows share.
-fn common(a: &[DenseId], b: &[DenseId]) -> u64 {
+/// How much longer one row must be than the other before the shorter is
+/// searched into the longer instead of merged with it.
+const SKEW: usize = 16;
+
+/// The number of distinct values two sorted rows share: a merge when they
+/// are of similar length, else a binary search of each value of the
+/// shorter in the rest of the longer, so a hub's row costs about its
+/// neighbour's length, not its own. Its work is spent on `work`.
+fn common(a: &[DenseId], b: &[DenseId], work: &mut Work<'_>) -> Result<u64, Cancelled> {
+    let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    if short.len().saturating_mul(SKEW) < long.len() {
+        let mut rest = long;
+        let mut shared = 0;
+        for value in distinct(short) {
+            let at = rest.partition_point(|&x| x < value);
+            shared += u64::from(rest.get(at) == Some(&value));
+            rest = &rest[at..];
+            work.spend(1 + (usize::BITS - long.len().leading_zeros()) as u64)?;
+        }
+        return Ok(shared);
+    }
     let (mut i, mut j, mut shared) = (0, 0, 0);
     while i < a.len() && j < b.len() {
         match a[i].cmp(&b[j]) {
@@ -172,7 +236,8 @@ fn common(a: &[DenseId], b: &[DenseId]) -> u64 {
             }
         }
     }
-    shared
+    work.spend((a.len() + b.len()) as u64)?;
+    Ok(shared)
 }
 
 // Not under Miri: the compute pool's work stealing runs through
@@ -297,6 +362,53 @@ mod tests {
             let chosen: Option<Vec<_>> = selected.as_ref().map(|s| s.iter().map(|&r| indexes[r]).collect());
             let selection = chosen.as_deref().map_or(RelationSelection::All, RelationSelection::Only);
             prop_assert_eq!(count(&graph, selection), Ok(naive(id_space, &edges, selected.as_deref())));
+        }
+    }
+
+    /// A star: hub 0 joined to leaves 1..=n, which a path also joins, so
+    /// the hub is in n - 1 triangles and each leaf in one or two.
+    fn star(n: u64) -> GraphCsr {
+        let mut edges: Edges = (1..=n).map(|i| (0, 0, i, 1.0)).collect();
+        edges.extend((1..n).map(|i| (0, i, i + 1, 1.0)));
+        reference::graph(n + 1, 1, &edges, false, false)
+    }
+
+    #[test]
+    fn a_hub_costs_its_degree_not_its_square() {
+        // Merging the hub's row with every leaf's would take n² steps.
+        let n = 200_000;
+        let counts = count(&star(n), RelationSelection::All).unwrap();
+        assert_eq!(counts[0], n as i64 - 1);
+        assert_eq!((counts[1], counts[2], counts[n as usize]), (1, 2, 1));
+    }
+
+    #[test]
+    fn a_cancellation_stops_a_hub_row_partway() {
+        let graph = star(100_000);
+        let forward = [graph.all_relations().forward()];
+        let memory = ComputeMemory::new(1 << 26);
+        let cancellation = Cancellation::new();
+        let symmetric = Symmetric::new(&memory, &cancellation, &forward, 100_001).unwrap();
+        cancellation.cancel();
+        // The hub's row alone is more work than a check is apart.
+        assert_eq!(symmetric.triangles_of(0, &mut Work::new(&cancellation)), Err(Cancelled));
+        // A leaf's row is less, and finishes.
+        assert_eq!(symmetric.triangles_of(2, &mut Work::new(&cancellation)), Ok(2));
+    }
+
+    proptest! {
+        #[test]
+        fn intersections_of_skewed_rows_count_distinct_shared_values(
+            mut a in prop::collection::vec(0u64..400, 0..300),
+            mut b in prop::collection::vec(0u64..400, 0..12),
+        ) {
+            a.sort_unstable();
+            b.sort_unstable();
+            let shared = a.iter().collect::<BTreeSet<_>>().intersection(&b.iter().collect()).count() as u64;
+            let cancellation = Cancellation::new();
+            let mut work = Work::new(&cancellation);
+            prop_assert_eq!(common(&a, &b, &mut work), Ok(shared));
+            prop_assert_eq!(common(&b, &a, &mut work), Ok(shared));
         }
     }
 

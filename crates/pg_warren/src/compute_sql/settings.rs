@@ -39,7 +39,8 @@ pub(crate) fn define_compute_settings() {
     unsafe { *THREADS.as_ptr() = default_threads() };
     GucRegistry::define_int_guc(
         c"warren.threads",
-        c"Threads a compute kernel (spmv, spmm, vector_map, reductions) runs on.",
+        c"Threads a compute kernel (spmv, spmm, vector_map, reductions, gather, triangles, \
+           eigen, distance) runs on.",
         c"Defaults to half the cores. Compute threads never call into Postgres.",
         &THREADS,
         1,
@@ -103,6 +104,7 @@ fn with_signals_blocked<R>(f: impl FnOnce() -> R) -> R {
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;

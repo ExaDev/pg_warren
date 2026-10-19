@@ -24,6 +24,19 @@
   `distance` (`edit`, `degree`, `spectral`, `subspace`, `embedding`, as
   `jsonb`), between versions of a graph or, with `graph2`, of two graphs
   aligned by external id.
+- Behaviour change: SQL a user wrote now runs in Postgres's read-only
+  transaction state while warren reads it, so a graph's source queries
+  (at `refresh`), `vector_from_query`'s query and `gather`'s message query
+  that write through a function they call now fail with 25006 (`cannot
+  execute … in a read-only transaction`). This is an integrity guard, not
+  a sandbox (DESIGN.md §7).
+- Fix: functions that read a graph or vector no longer fail with
+  "cannot assign XIDs during a parallel operation" when the query runs in
+  parallel mode (`debug_parallel_query`, or a plan that costs out parallel,
+  e.g. an InitPlan over a parallel scan). Parallel labels: every function
+  that reads a graph or vector is now `PARALLEL RESTRICTED` (the vector
+  reads, `explain_map`, `diff` and `info` change), writers stay `PARALLEL
+  UNSAFE` (DESIGN.md §9.3).
 - Upgrade from 0.1.0: install the new build, then run
   `ALTER EXTENSION pg_warren UPDATE;` in each database before using it.
 

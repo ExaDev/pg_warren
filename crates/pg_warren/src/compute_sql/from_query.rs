@@ -26,7 +26,7 @@ use super::constructors::{dtype as parse_dtype, literal};
 use super::settings::workers;
 use super::vectors::Vectors;
 use super::{entry, ComputeSqlError};
-use crate::access::{with_search_path, Caller};
+use crate::access::{with_read_only, with_search_path, Caller};
 use crate::cache::resolve;
 use crate::interrupts::PostgresInterrupts;
 use crate::source::{
@@ -145,32 +145,34 @@ impl Read<'_> {
     {
         let query = self.query.trim_end().trim_end_matches(';');
         with_search_path(self.caller.search_path(), || {
-            Spi::connect(|client| {
-                let columns = describe::<ComputeSqlError>("query", query)?;
-                if columns.len() != 2 {
-                    return Err(SourceError::ColumnCount {
-                        query: "query",
-                        expected: "2 (id, value)",
-                        found: columns.len(),
+            with_read_only(|| {
+                Spi::connect(|client| {
+                    let columns = describe::<ComputeSqlError>("query", query)?;
+                    if columns.len() != 2 {
+                        return Err(SourceError::ColumnCount {
+                            query: "query",
+                            expected: "2 (id, value)",
+                            found: columns.len(),
+                        }
+                        .into());
                     }
-                    .into());
-                }
-                check_id_column::<E>(&columns[0])?;
-                // SAFETY: get_element_type only reads the type cache.
-                let array =
-                    unsafe { pg_sys::get_element_type(columns[1].oid) } != pg_sys::Oid::INVALID;
-                let cast = format!("{}{}", sql_type(T::DTYPE), if array { "[]" } else { "" });
-                let wrapped = format!(
-                    "SELECT q.id::{}, q.value::{cast} FROM ({query}\n) AS q(id, value)",
-                    self.id_type
-                );
-                let mut opened = open_read_only::<ComputeSqlError>(client, "query", &wrapped)?;
-                let mut rows = Rows::<T>::new(vectors, self.fill_value::<E, T>(vectors)?)?;
-                for_each_row(&mut opened.cursor, |row| match array {
-                    true => rows.matrix_row(vectors, row),
-                    false => rows.scalar_row(vectors, row),
-                })?;
-                rows.finish(vectors)
+                    check_id_column::<E>(&columns[0])?;
+                    // SAFETY: get_element_type only reads the type cache.
+                    let array =
+                        unsafe { pg_sys::get_element_type(columns[1].oid) } != pg_sys::Oid::INVALID;
+                    let cast = format!("{}{}", sql_type(T::DTYPE), if array { "[]" } else { "" });
+                    let wrapped = format!(
+                        "SELECT q.id::{}, q.value::{cast} FROM ({query}\n) AS q(id, value)",
+                        self.id_type
+                    );
+                    let mut opened = open_read_only::<ComputeSqlError>(client, "query", &wrapped)?;
+                    let mut rows = Rows::<T>::new(vectors, self.fill_value::<E, T>(vectors)?)?;
+                    for_each_row(&mut opened.cursor, |row| match array {
+                        true => rows.matrix_row(vectors, row),
+                        false => rows.scalar_row(vectors, row),
+                    })?;
+                    rows.finish(vectors)
+                })
             })
         })
     }
@@ -313,6 +315,7 @@ where
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
@@ -378,6 +381,25 @@ mod tests {
             ragged.as_deref(),
             Some("22023: query rows have 1 values where earlier rows had 2")
         );
+        Ok(())
+    }
+
+    #[pg_test]
+    fn the_query_cannot_write_even_through_a_volatile_function() -> Result<(), Error> {
+        small("t")?;
+        Spi::run(
+            "CREATE TABLE t_log (n int);
+             CREATE FUNCTION t_write() RETURNS bigint VOLATILE LANGUAGE plpgsql AS
+                 $f$ BEGIN INSERT INTO t_log VALUES (1); RETURN 1; END $f$",
+        )?;
+        let refused =
+            failure("warren.vector_from_query('t', 'x', 'SELECT id, t_write() FROM t_nodes')")?;
+        let refused = refused.unwrap_or_default();
+        assert!(
+            refused.starts_with("25006: cannot execute INSERT in a read-only transaction"),
+            "{refused}"
+        );
+        assert_eq!(Spi::get_one::<i64>("SELECT count(*) FROM t_log")?, Some(0));
         Ok(())
     }
 

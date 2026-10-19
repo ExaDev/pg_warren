@@ -5,7 +5,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{failure, rows, small};
+    use crate::fixture::{failure, refresh, ring, rows, small};
 
     /// `warren.gather` over the small graph, as `node:value` text.
     fn gathered(messages: &str, value_type: &str, options: &str) -> Result<Option<String>, Error> {
@@ -120,6 +120,145 @@ mod tests {
             gathered("public.t_messages", "bigint", ", 'count'")?.as_deref(),
             Some("2:1 4:2")
         );
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_vector_never_shadows_a_query_and_a_name_of_both_is_ambiguous() -> Result<(), Error> {
+        small("t")?;
+        Spi::run(
+            "CREATE TABLE msgs AS SELECT id, id * 100 AS v FROM t_nodes;
+             SELECT warren.vector_const('t', 'SELECT id, v FROM msgs', 2, 'i64');
+             SELECT warren.vector_const('t', 'only_a_vector', 3, 'i64')",
+        )?;
+        let query = gathered("SELECT id, v FROM msgs", "bigint", ", 'sum'")?;
+        assert_eq!(query.as_deref(), Some("1:400 2:100 3:200 4:400 5:500"));
+        let vector = gathered("only_a_vector", "bigint", ", 'sum'")?;
+        assert_eq!(vector.as_deref(), Some("1:3 2:3 3:3 4:6 5:3"));
+        assert_eq!(
+            gathered("msgs", "bigint", ", 'sum'")?.as_deref(),
+            Some("1:400 2:100 3:200 4:400 5:500")
+        );
+        Spi::run("SELECT warren.vector_const('t', 'msgs', 1, 'i64')")?;
+        let ambiguous = failure("warren.gather('t', 'msgs', NULL::bigint, NULL::bigint, 'sum')")?
+            .unwrap_or_default();
+        assert!(
+            ambiguous.starts_with("42725: messages \"msgs\" names both a vector bound to version"),
+            "{ambiguous}"
+        );
+        let table = gathered("TABLE msgs", "bigint", ", 'sum'")?;
+        assert_eq!(table.as_deref(), Some("1:400 2:100 3:200 4:400 5:500"));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn results_stream_row_by_row() -> Result<(), Error> {
+        ring("big", 20_000, 2)?;
+        refresh("big", true)?;
+        let call = "warren.gather('big', 'SELECT id, jsonb_build_array(id, id) FROM big_nodes, generate_series(1, 3)',
+                                  NULL::bigint, NULL::jsonb[])";
+        let first = rows(&format!("SELECT node_id || ':' || value::text FROM {call} LIMIT 1"))?;
+        assert_eq!(
+            first.as_deref(),
+            Some("1:{\"[20000, 20000]\",\"[20000, 20000]\",\"[20000, 20000]\"}")
+        );
+        let all = Spi::get_one::<i64>(&format!(
+            "SELECT count(*) FROM {call} WHERE cardinality(value) = 3"
+        ))?;
+        assert_eq!(all, Some(20_000));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn concat_joins_bytes_whatever_their_encoding() -> Result<(), Error> {
+        small("t")?;
+        let bytes = "SELECT id, CASE WHEN id = 1 THEN '\\xff00'::bytea ELSE '\\x41'::bytea END FROM t_nodes";
+        let joined = gathered(bytes, "bytea", ", 'concat', direction := 'out'")?;
+        assert_eq!(joined.as_deref(), Some("1:\\x4141 2:\\x41 3:\\x41 4:\\xff00 5:\\x41"));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn messages_cannot_write() -> Result<(), Error> {
+        small("t")?;
+        Spi::run(
+            "CREATE TABLE t_log (n int);
+             CREATE FUNCTION t_write() RETURNS bigint VOLATILE LANGUAGE plpgsql AS
+                 $f$ BEGIN INSERT INTO t_log VALUES (1); RETURN 1; END $f$",
+        )?;
+        let cte = failure(
+            "warren.gather('t', 'WITH d AS (DELETE FROM t_nodes RETURNING id) SELECT id, id FROM d',
+                           NULL::bigint, NULL::bigint[])",
+        )?
+        .unwrap_or_default();
+        assert!(
+            cte.starts_with("0A000: WITH clause containing a data-modifying statement"),
+            "{cte}"
+        );
+        let function = failure(
+            "warren.gather('t', 'SELECT id, t_write() FROM t_nodes', NULL::bigint, NULL::bigint[])",
+        )?
+        .unwrap_or_default();
+        assert!(
+            function.starts_with("25006: cannot execute INSERT in a read-only transaction"),
+            "{function}"
+        );
+        let written = Spi::get_one::<i64>(
+            "SELECT (SELECT count(*) FROM t_log) + 6 - (SELECT count(*) FROM t_nodes)",
+        )?;
+        assert_eq!(written, Some(0));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn relations_resolve_on_the_callers_search_path_with_the_callers_privileges(
+    ) -> Result<(), Error> {
+        small("t")?;
+        Spi::run(
+            "CREATE SCHEMA hidden;
+             CREATE TABLE hidden.inbox AS SELECT id, id * 3 AS v FROM t_nodes;
+             CREATE ROLE t_reader;
+             SELECT warren.grant('t', 't_reader');
+             GRANT USAGE ON SCHEMA hidden TO t_reader",
+        )?;
+        // The failure helper's table, writable by the reader too.
+        failure("1")?;
+        Spi::run("GRANT ALL ON failure TO t_reader")?;
+        let unseen = failure("warren.gather('t', 'inbox', NULL::bigint, NULL::bigint, 'sum')")?
+            .unwrap_or_default();
+        assert!(unseen.starts_with("42P01: relation \"inbox\" does not exist"), "{unseen}");
+        Spi::run("SET LOCAL search_path = hidden, public")?;
+        assert_eq!(
+            gathered("inbox", "bigint", ", 'sum'")?.as_deref(),
+            Some("1:12 2:3 3:6 4:12 5:15")
+        );
+        Spi::run("SET LOCAL ROLE t_reader")?;
+        let refused = failure("warren.gather('t', 'inbox', NULL::bigint, NULL::bigint, 'sum')")?
+            .unwrap_or_default();
+        assert!(refused.starts_with("42501: permission denied for table inbox"), "{refused}");
+        Spi::run("RESET ROLE; GRANT SELECT ON hidden.inbox TO t_reader; SET LOCAL ROLE t_reader")?;
+        assert_eq!(
+            gathered("inbox", "bigint", ", 'sum'")?.as_deref(),
+            Some("1:12 2:3 3:6 4:12 5:15")
+        );
+        Spi::run("RESET ROLE")?;
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_non_reader_of_the_graph_cannot_gather() -> Result<(), Error> {
+        small("t")?;
+        failure("1")?;
+        Spi::run(
+            "CREATE ROLE t_stranger; GRANT SELECT ON t_nodes TO t_stranger; GRANT ALL ON failure TO t_stranger;
+             SET LOCAL ROLE t_stranger",
+        )?;
+        let refused = failure(
+            "warren.gather('t', 'SELECT id, id FROM t_nodes', NULL::bigint, NULL::bigint[])",
+        )?
+        .unwrap_or_default();
+        Spi::run("RESET ROLE")?;
+        assert!(refused.starts_with("42501: must be a member of role \"t_owner\" or of a reader role to read graph \"t\""), "{refused}");
         Ok(())
     }
 
