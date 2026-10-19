@@ -1,6 +1,6 @@
 # pg_warren — Index-Free-Adjacency Traversal and Graph Compute for PostgreSQL
 
-**Technical note and build brief — v0.5, 17 October 2026**
+**Technical note and build brief — v0.6, 19 October 2026**
 
 > This document is intended to be dropped into an empty repository as the founding brief for an engineering agent. It describes *what* to build, *why* each design decision was taken, and the order in which to build it. Where a decision is deliberately left open, it is flagged in §14. Read the whole document before writing any code.
 >
@@ -8,6 +8,7 @@
 > Changes from v0.2: the query paradigm and the SQL/warren seam made explicit (§9.1); `warren.walk`, an in-engine typed path-pattern traversal with a stable step IR, added to v1 (§9.2); SQL/PGQ-style sugar recorded as the only language direction worth considering (§10).
 > Changes from v0.3: §6 rewritten around "SQL all the way down" — the BSP runner and any program DSL are dropped; control flow lives in PL/pgSQL; three tiers of expressiveness (§6.1); `vector_map` takes SQL expression syntax with a compiled fast path (§6.3); `warren.gather` for tier-2 Pregel with SQL as the vertex language and a `Message` trait in the core (§6.4); contraction / project / lift for community-stateful computation (§6.6). Appendix A adds worked use cases with expected outcomes for test derivation.
 > Changes from v0.4: §4A added — prior art as of October 2026, with a mandatory pre-M1 code reading of pgGraph and OneSparse. The policy is to build everything ourselves and to read prior art for the lessons it embodies, not to take it as a dependency.
+> Changes from v0.5: the §4A prior-art reading is done (`docs/prior-art-notes.md`). Its outcomes: the §4A table is corrected; catalog dump registration, `PUBLIC` revocation, graph ownership and the access model (§5.1, §7); load-time segment validation (§5.3); one pinned snapshot and no source-table locks during builds, counting-sort CSR construction and a reverse CSR built by transpose (§5.4); a Rust-allocated, `Arc`-owned cache (§5.5); GraphBLAS operation naming (§6.3); error and interrupt discipline (§6.9); the bidirectional-BFS meeting rule, visible truncation and canonical component IDs (§9.3); toolchain, lint and CI rules (§11–§13); evidence recorded under §14 items 2, 4 and 16.
 
 ---
 
@@ -85,8 +86,8 @@ Surveyed October 2026. This section exists because the traversal-index half of t
 
 | Project | What it is | Overlap with this note | Divergence |
 |---|---|---|---|
-| **pgGraph** (Evokoa; PGXN; Apache-2.0; Rust/pgrx; PG 14–18; 1.2.1 released 2026-09-23) | Compiles relationships from ordinary tables into forward and reverse CSR, persisted as `.pggraph` artifacts; each backend maps a private in-memory snapshot; source tables remain the truth; SQL functions (`graph.search`, `graph.shortest_path`), not Cypher; depth/frontier limits, pagination, resumable DFS. | §5 (derived CSR, forward+reverse, per-backend snapshot) and §9 (functions, not a language) almost exactly. Same toolchain. | Persistence is file artifacts, not transactional tables — in conflict with the staging and rollback semantics §7–§8 depend on. No versioning, stable IDs, vectors, linear algebra or spectral work documented. Its own roadmap document ("path to full graph engine") suggests a direction towards a graph engine rather than a compute substrate. |
-| **OneSparse** (Michel Pelletier; Apache-2.0; PG18 only; 1.0.0) | Binds SuiteSparse:GraphBLAS into Postgres as `matrix`/`vector`/`scalar` types with semiring operators; BFS, SSSP, PageRank, triangle centrality, betweenness, square clustering. Depends on libgraphblas and LAGraph. | §6.3 (semiring SpMV) and parts of §6.7. Has done the SuiteSparse binding work that §6.10 debates. | Matrices are a datatype, not a catalog of named graphs built from tables (loading documented only from Matrix Market files). No versions, stable IDs, staging, `gather` with variable-width messages, or contraction. PG18-only is a hard constraint against the PG 15–18 target. |
+| **pgGraph** (Evokoa; PGXN; Apache-2.0; Rust/pgrx 0.19; PG 14–18; 1.2.1 released 2026-09-23) | Compiles relationships from ordinary tables into forward and reverse CSR, persisted as `.pggraph` artifacts. Each backend loads a validated copy, which Linux backends can share through a sealed memfd. Source tables remain the truth. Its interface is SQL functions (`graph.traverse`, `graph.shortest_path`, `graph.search`) plus bounded GQL/openCypher profiles (`graph.gql`, `graph.cypher`). It also has trigger-based sync into backend-local overlays, RLS/tenant-scoped results, union-find components, integer-weighted Dijkstra, depth/node/frontier breakers and pagination. | §5 (derived CSR, forward+reverse, per-backend cache) and §9 (functions, not a language) almost exactly. Same toolchain. | Persistence is file artifacts, not transactional tables, so it conflicts with the staging and rollback semantics §7–§8 depend on. Generations are published through MVCC catalog rows that point at files. It has no user-visible versions, no stable dense IDs across rebuilds, no standby support, and refuses builds inside a transaction holding source write locks. Weights are `u32` integers, and node and edge counts are capped at 2³². It has no vectors, linear algebra or spectral work. |
+| **OneSparse** (Michel Pelletier; Apache-2.0; C; PG18 only; 1.0.1) | Binds SuiteSparse:GraphBLAS into Postgres as `matrix`/`vector`/`scalar`/`graph` expanded-object types with semiring operators; BFS, SSSP, PageRank, triangle centrality, betweenness, square clustering. Depends on libgraphblas and LAGraph. | §6.3 (semiring SpMV) and parts of §6.7. Has done the SuiteSparse binding work that §6.10 debates. | Matrices are a datatype, not a catalog of named graphs built from tables. They load from SQL (`matrix_query`, `matrix_agg`) with caller-supplied integer indices, from large objects, or from server files. A stored matrix is one varlena (≤1 GB) and is deserialised on every call. There are no versions, stable IDs, staging, `gather` with variable-width messages, or contraction. Kernels cannot be cancelled. It is PG18-only because it relies on PG18's `SupportRequestModifyInPlace` for in-place PL/pgSQL updates, a hard constraint against the PG 15–18 target. |
 | **pg_igraph** (ineron; PGXN; MIT; C; PG 14+; 1.1.0, 2026-06-11) | Cypher-like language embedded in SQL; edges stored both directions in hash-partitioned tables with covering indexes; adaptive switch from SPI to in-memory hash maps for large frontiers. Requires pg_ilib. | Multi-hop pattern matching and shortest path. | Table-backed with per-query in-memory structures, and a bespoke language — the opposite of §9.1's paradigm. |
 | **Apache AGE** | openCypher on Postgres heap tables and indexes. | None at the storage level. | Query language layer; no IFA, no compute. |
 | **pgRouting** | Dijkstra, components, etc. over an edge SQL, building a Boost graph in memory per call. | Algorithm vocabulary; `pgr_*` function conventions. | No persistence across calls; rebuilds the graph on every invocation. |
@@ -94,7 +95,7 @@ Surveyed October 2026. This section exists because the traversal-index half of t
 
 ### Mandatory pre-M1 code reading
 
-Before M1, the agent reads the pgGraph and OneSparse sources end to end and writes `docs/prior-art-notes.md`: a short, specific record of what each project got right, what it got wrong, and what `pg_warren` will do differently and why. §14 item 16 records that the reading was done. What to look for:
+*Done in M0. The record is [`docs/prior-art-notes.md`](docs/prior-art-notes.md), and its outcomes are folded into this note (v0.6). The brief is kept for reference.* Before M1, the agent reads the pgGraph and OneSparse sources end to end and writes `docs/prior-art-notes.md`: a short, specific record of what each project got right, what it got wrong, and what `pg_warren` will do differently and why. §14 item 16 records that the reading was done. What to look for:
 
 1. **pgGraph, structure and loading.** How the CSR is laid out and aligned; how the per-backend snapshot is mapped and invalidated; how `graph.build()` streams from SPI and sorts (tuplesort? in-memory?) and what it does with dangling edges and duplicates; how it bounds frontier and depth and paginates; where its issue tracker and changelog show bugs — these are the mistakes already made. Compare each against §5.3–§5.5 and §9 and change this note where theirs is better.
 2. **pgGraph, persistence.** Understand precisely *why* they chose file artifacts over tables (load speed? WAL volume? TOAST cost?) and whether those reasons threaten §5.1's table-backed design at scale. If the numbers say TOAST loading is too slow, §14 item 2's mmap cache moves forward — but the transactional table store stays, because §8 depends on it.
@@ -119,8 +120,8 @@ Versioned snapshots with a stable dense-ID space; staged builds inside a transac
 │ Build pipeline (SPI, one snapshot)                           │
 │  1. node_sql → match against prior id_map, append new dense  │
 │     IDs, tombstone missing                                   │
-│  2. edge_sql → remap to dense IDs, sort by (rel, src, dst)   │
-│  3. construct forward + reverse CSR per relation             │
+│  2. edge_sql → remap to dense IDs, counting-sort by src      │
+│  3. forward CSR per relation; reverse CSR by transpose       │
 │  4. write segments to warren.segments under a new version    │
 │  5. promote version (or leave staged)                        │
 └───────────────┬──────────────────────────────────────────────┘
@@ -152,6 +153,8 @@ Versioned snapshots with a stable dense-ID space; staged builds inside a transac
 CREATE TABLE warren.graphs (
     graph_id         serial PRIMARY KEY,
     name             text UNIQUE NOT NULL,
+    owner            regrole NOT NULL,  -- set to current_user by create_graph; never user-writable (§7)
+    readers          regrole[] NOT NULL DEFAULT '{}',  -- roles (and their members) allowed to query (§7)
     source           text NOT NULL DEFAULT 'query',   -- 'query' | 'contraction' (§6.6)
     node_query       text,              -- SELECT <id> ...                       (source = 'query')
     edge_query       text,              -- SELECT <src>, <dst> [, <rel>] [, <weight>] ...
@@ -174,7 +177,10 @@ CREATE TABLE warren.versions (
     node_count   bigint NOT NULL,          -- live nodes
     id_space     bigint NOT NULL,          -- dense ID high-water mark (incl. tombstones)
     edge_count   bigint NOT NULL,
-    dropped_edges bigint NOT NULL,         -- edges referencing unknown nodes
+    dropped_edges bigint NOT NULL,         -- edges with a NULL or unknown endpoint
+    deduplicated_edges bigint NOT NULL,    -- parallel edges folded by deduplication (§14 item 4)
+    target_width  smallint NOT NULL,       -- 4 (u32 targets) or 8 (u64), §5.3
+    compacted_from bigint REFERENCES warren.versions,  -- set by warren.compact: new ID space (§5.2)
     bytes        bigint NOT NULL,
     label        text,                     -- optional user label, e.g. 'corpus-2026-10-17'
     parent_version bigint REFERENCES warren.versions,  -- set when derived by warren.contract (§6.6)
@@ -212,6 +218,10 @@ CREATE TABLE warren.vector_chunks (
 
 Chunks are fixed-size (default 8 MB) so a multi-GB graph is many TOASTed rows. Because all of this is ordinary tables, it is WAL-logged, backed up, replicated to standbys, and — crucially for §8 — **transactional**: a version built inside a transaction that then rolls back simply disappears.
 
+The bootstrap SQL registers every `warren.*` table and sequence with `pg_extension_config_dump`. Without that, `pg_dump` omits extension-member data, and graph definitions, versions and vectors would silently be missing from logical dumps.
+
+The bootstrap SQL also runs `REVOKE ALL … FROM PUBLIC` on every `warren.*` table and sequence. No role except the extension owner can read or write the catalog, segments or vectors directly; all access goes through `warren.*` functions. This is what makes the access check in §7 meaningful: segment and vector bytes are reachable only through functions that perform it.
+
 ### 5.2 Node identity — stable dense IDs
 
 CSR wants dense `0..N-1` integer IDs. User tables have `bigint`, `uuid`, etc.
@@ -239,28 +249,36 @@ Per relation *r* (a single implicit relation if `has_relations = false`):
 | `tombstones` | bitmap | id_space | |
 | `rel_dict` | text[] | R | relation names → index |
 
-`u32` targets when `id_space < 2³²`, else `u64`; width recorded on the version. Sorted targets allow `has_edge` by binary search and make set-intersection algorithms (triangles, Jaccard) straightforward.
+`u32` targets when `id_space < 2³²`, else `u64`; width recorded in `versions.target_width`. Sorted targets allow `has_edge` by binary search and make set-intersection algorithms (triangles, Jaccard) straightforward.
 
-Per-relation CSRs are stored separately so a traversal or SpMV can be restricted to a relation mask without filtering; a "merged" all-relations CSR is built additionally if `has_relations` (it is the common case for global computation). Alignment: every segment starts on a 64-byte boundary when loaded.
+Per-relation CSRs are stored separately so a traversal or SpMV can be restricted to a relation mask without filtering; a "merged" all-relations CSR is built additionally if `has_relations` (it is the common case for global computation). An M1 benchmark checks this choice against the alternative of a single merged CSR with a parallel adaptive-width (`u8`/`u16`/`u32`) relation array, which pgGraph uses and which needs about half the storage when `has_relations`. The result is recorded here. Alignment: every segment starts on a 64-byte boundary when loaded.
+
+Every segment is validated on load, before any unchecked slice is formed: alignment and lengths, `offsets[0] = 0`, offsets monotonic, `offsets[id_space] = M`, every target `< id_space`, and `id_map` sorted. The check is O(N + M), which is cheap next to the detoast. The segment decoder has a fuzz target (§12).
 
 ### 5.4 Build pipeline
 
 `warren.refresh(name, promote bool DEFAULT true, label text DEFAULT NULL)`:
 
-1. Take the transaction snapshot; record `pg_current_wal_lsn()`.
-2. Execute `node_query` via SPI cursor; stream external IDs into a `tuplesort`. Merge-walk against the previous promoted version's `id_map` (if any) to assign dense IDs per §5.2. Write `id_map`, `tombstones`.
-3. Execute `edge_query` via SPI cursor. Map `src`, `dst` to dense IDs by binary search; map `rel` through `rel_dict` (append new relations). Drop and count edges referencing unknown nodes. If `directed = false`, emit both directions. Tuplesort on `(rel, src, dst)`; deduplicate parallel edges (sum weights if weighted — see §14).
-4. One pass per relation to fill `offsets`/`targets`/`weights`. Repeat sorted on `(rel, dst, src)` for reverse CSR. Build the merged CSR if there are multiple relations.
+1. Pin one snapshot for the whole build: `CommandCounterIncrement()`, then `PushActiveSnapshot(GetTransactionSnapshot())`, popped on the normal path. Transaction or subtransaction abort releases it on error. Both queries run as **read-only** SPI cursors (`SPI_cursor_open_with_args(…, read_only = true, …)`) under that snapshot. Under READ COMMITTED, non-read-only SPI statements would each take a fresh snapshot, and `node_query` and `edge_query` could disagree. The queries execute with the graph owner's privileges (`SetUserIdAndSecContext`, as `REFRESH MATERIALIZED VIEW` does; see §7 for both identity switches in `refresh`). No locks are taken on source tables beyond the `AccessShareLock` the queries themselves take; pgGraph, by contrast, takes `SHARE NOWAIT` on every source. Record `pg_current_wal_lsn()`.
+2. Stream `node_query` through the cursor into `warren-core`. Sort the external IDs in memory, and merge-walk against the previous promoted version's `id_map` (if any) to assign dense IDs per §5.2. Write `id_map` and `tombstones`.
+3. Stream `edge_query`. Map `src` and `dst` to dense IDs in `warren-core` (binary search over the typed `id_map`, never text keys or SQL joins). Map `rel` through `rel_dict`, appending new relations. Edges with a NULL or unknown endpoint are dropped and counted in `dropped_edges`. If `directed = false`, emit both directions.
+4. Build the forward CSR with no comparison sort, since dense IDs are already known: counting-sort the edge list by `src`, then sort each row by `(rel, dst)` and deduplicate parallel edges within the row (sum weights if weighted; count in `deduplicated_edges`; see §14). Split per relation, and build the merged CSR if there are multiple relations. Free the edge list, then build the reverse CSR by **transposing** the forward CSR: count in-degrees, prefix-sum, scatter while scanning sources in order. That is O(N + M), and rows come out sorted by source.
 5. Write segments under a new `versions` row with `staged = true`.
 6. If `promote`: set `graphs.current_version`, set `staged = false`, and delete promoted versions beyond `retain_versions` (never delete a version that has named vectors bound to it unless `warren.drop_version` is called explicitly — see §7).
 
 Because the build runs under the caller's snapshot, **it sees the caller's uncommitted writes**. This is the mechanism behind staged evaluation (§8).
 
-Memory discipline: a 100M-edge graph (~1.2 GB forward + ~1.2 GB reverse) should build in under 4 GB of backend RAM; tuplesort handles spill.
+Memory discipline: a 100M-edge graph (~1.2 GB forward + ~1.2 GB reverse) should build in under 4 GB of backend RAM. Peak usage is the edge list (~1.8 GB weighted) plus the forward CSR, and the edge list is freed before the transpose. All graph-sized buffers use `try_reserve`. An external-sort spill is added only if M2 measurements show it is needed.
 
 ### 5.5 Backend-local cache
 
-On first use of a `version_id` in a backend: read chunks via SPI, allocate contiguous segment buffers in `TopMemoryContext`, keep in a backend-local hash keyed by `version_id`. `graphs.current_version` is re-read at the start of each top-level call so a promoted build is picked up by the next statement. Vectors are cached the same way, keyed by `vector_id`. `warren.prewarm(name)` loads eagerly for pooled connections. `warren.evict(name)` frees.
+On first use of a `version_id` in a backend:
+- read the chunks via SPI;
+- copy them into contiguous, 64-byte-aligned segment buffers allocated with the **Rust allocator**, not `palloc`. Compute worker threads read these buffers (§6.9), `Arc` ownership makes eviction during a scan safe, and the allocator gives explicit control over alignment;
+- validate the segments (§5.3);
+- keep them in an `Arc<VersionData>` in a backend-local map keyed by `version_id`.
+
+Set-returning functions hold an `Arc` clone, so `warren.evict` during a scan is safe. `graphs.current_version` is re-read at the start of each top-level call, through a saved SPI plan, so a promoted build is picked up by the next statement. Because the read uses the statement's snapshot, REPEATABLE READ callers keep seeing the version that was current when their snapshot was taken. Vectors are cached the same way, keyed by `vector_id`. `warren.prewarm(name)` loads eagerly for pooled connections. `warren.evict(name)` frees.
 
 Cold load from TOAST runs at a few hundred MB/s — around a second per GB. v1.1 moves the cache into DSM (`dsa`) so backends share one copy and compute workers can see it (§10).
 
@@ -321,12 +339,14 @@ Vectors are persisted in `warren.vectors` / `vector_chunks` so results survive t
 ```sql
 -- y = A ⊗ x over a semiring. A is the graph (optionally transposed / relation-masked / weighted).
 warren.spmv(graph text, x text, y text,
-            semiring text DEFAULT 'plus_times',   -- plus_times | min_plus | max_times | or_and | plus_first | min_first | ...
+            semiring text DEFAULT 'plus_times',   -- <add>_<mult>, GraphBLAS names; see below
             transpose bool DEFAULT false,
             rels text[] DEFAULT NULL,
             weighted bool DEFAULT NULL,           -- NULL = use weights if present
             mask text DEFAULT NULL, mask_complement bool DEFAULT false,
-            accumulate text DEFAULT NULL)        -- NULL = overwrite y; else y = y ⊕ result
+            replace bool DEFAULT false,           -- with a mask: false keeps y outside the mask; true sets it to the ⊕ identity
+            accumulate text DEFAULT NULL)        -- NULL = overwrite y; else a binary op: y = y ⊙ result
+                                                 --   plus | min | max | times | first | second
   RETURNS void;
 
 -- Y = A ⊗ X for a width-d matrix X (neighbour aggregation of embeddings is one call)
@@ -341,6 +361,13 @@ warren.vector_norm_diff(graph text, a text, b text, norm text DEFAULT 'l2') RETU
 ```
 
 **`vector_map` accepts SQL expression syntax and nothing else.** The engine parses `expr` with Postgres's own parser against a synthetic row whose columns are the graph's vector names. If the expression lies in the *compiled subset* — arithmetic, comparisons, boolean operators, `CASE`, `NULLIF`, `COALESCE`, `LEAST`/`GREATEST`, and a whitelist of math functions (`abs`, `sqrt`, `exp`, `ln`, `log`, `power`, `floor`, `ceil`, `round`, `sign`) over numeric vectors and literals — it is compiled to a native closure and run across threads at tier-1 speed. Otherwise it is evaluated row-wise through the executor's expression machinery (`ExecEvalExpr`, JIT where available), roughly 100–500 ns per row: slower, but still correct and still SQL. The planner-visible contract is one language everywhere with graceful degradation, never "unsupported syntax". `EXPLAIN`-style introspection (`warren.explain_map(expr)`) reports which path an expression takes.
+
+**Naming follows the GraphBLAS C API** (as exposed by OneSparse), so users moving between the two find the same vocabulary.
+- A semiring is named `<add>_<mult>`.
+- ⊗ is applied as `⊗(a_ij, x_j)`, so `first` takes the edge weight and `second` takes the input vector value.
+- v1 semirings: `plus_times`, `min_plus`, `max_plus`, `max_times`, `min_times`, `lor_land` (alias `or_and`), `any_pair`, `plus_pair`, `plus_first`, `plus_second`, `min_first`, `min_second`, `max_second`.
+- A mask is a value mask with GraphBLAS semantics: an entry is selected when it casts to boolean true, meaning any non-zero value. NaN is non-zero, so it is selected. pg_warren vectors are dense, so `replace` (the "no entry" state outside the mask) is represented as the ⊕ identity of the semiring: 0 for `plus`, +∞ for `min`, −∞ for `max`, false for `lor`. `mask_complement` and `replace` correspond to GraphBLAS descriptors `c` and `r`; `transpose` corresponds to `t0`.
+- An unweighted graph acts as if every weight were 1.
 
 Semirings are implemented generically in `warren-core` over `(⊕, ⊗, identity)` for f64, i64, and bool element types. SpMV over CSR with a transpose flag means reverse CSR gives pull-based (gather) computation and forward CSR gives push-based (scatter); the pull form parallelises by rows with no write conflicts, which is why `build_reverse` defaults to true.
 
@@ -454,7 +481,7 @@ Design obligations imposed now:
 Shipped as PL/pgSQL functions over the primitives (readable, copyable), each returning a named vector and parameterised by `rels`, `weighted`:
 
 - `warren.pagerank(graph, out, damping, tol, max_iter, seed := NULL)` — seed gives personalised PageRank.
-- `warren.components_vector(graph, out)` — min-label propagation; also available as the traversal SRF.
+- `warren.components_vector(graph, out)` — min-label propagation (`min_second` SpMV); also available as the traversal SRF.
 - `warren.label_propagation(graph, out, seed, max_iter)` — community / semi-supervised.
 - `warren.sssp_vector(graph, out, source)` — min_plus SpMV from a source; all-nodes distances.
 - `warren.degree_vector(graph, out, direction, rels)`.
@@ -469,8 +496,9 @@ For state that must be per-vertex and bytes-shaped with logic that neither SQL n
 ### 6.9 Parallelism
 
 - A Postgres backend is single-threaded and **no thread other than the main one may call any Postgres function** (palloc, elog, SPI, catalog access, …). Pure compute over extension-owned buffers (CSR, vectors, message buffers) is safe on worker threads. `warren-core` therefore takes plain slices and a thread count, and uses `rayon` with a dedicated pool sized by the `warren.threads` GUC (default: half the cores, min 1). The binding layer does all Postgres interaction before and after each kernel call — including, for `gather`, reading the message relation through SPI on the main thread before fan-out and emitting result rows after.
-- Interrupt handling: the main thread polls `CHECK_FOR_INTERRUPTS()` between kernel calls and sets a cancellation flag that worker loops check every ~64K vertices.
-- Memory for vectors, message buffers and work buffers is allocated with the Rust allocator, not `palloc`, and accounted against a `warren.max_compute_memory` GUC; exceeding it raises an error rather than OOMing the server.
+- Interrupt handling: the main thread polls `CHECK_FOR_INTERRUPTS()` between kernel calls and sets a cancellation flag that worker loops check every ~64K vertices. Use `pgrx::check_for_interrupts!()`. pgrx's `pg_sys` FFI is `#[pg_guard]`ed, so an ERROR raised inside it unwinds the Rust frames (destructors run, `RefCell` borrows release). Never call unguarded FFI.
+- Errors are raised only through pgrx (`ErrorReport` with a standard SQLSTATE; detail and hint as needed), never by calling `pg_sys` error functions directly. Nothing in `pg_warren` uses `catch_unwind` around SPI; pgrx already installs the boundary at each `#[pg_extern]`.
+- Memory for vectors, message buffers and work buffers is allocated with the Rust allocator, not `palloc`, and accounted against a `warren.max_compute_memory` GUC; exceeding it raises an error rather than OOMing the server. Graph-sized buffers are reserved with `try_reserve`, so allocator failure is also an error (`53200`), not an abort.
 - v1.1: a **compute background worker** that owns the DSM-resident graph and runs jobs submitted by backends via a shared queue, so compute does not compete with query backends and large jobs can outlive a client session. Results land in `warren.vectors`; `warren.job_status()` reports progress.
 - GPU: the semiring/SpMV formulation is what cuSPARSE/GraphBLAST expect; a GPU backend for `warren-core` is a contained future addition.
 
@@ -484,6 +512,10 @@ SuiteSparse:GraphBLAS is the mature implementation of the semiring model (masks,
 - `warren.refresh(name, promote := false)` builds a **staged** version: fully built, loadable, queryable by explicit `version`, but not visible to callers that use the default. `warren.promote(name, version)` makes it current; `warren.drop_version(name, version)` discards it.
 - `retain_versions` controls how many promoted versions are kept; staged versions are never auto-deleted. A version with bound vectors is not auto-deleted either (a `NOTICE` reports what was retained and why).
 - Versions share the dense ID space (until `compact`), so any vector bound to version *n* can be read against version *m* for comparison — `warren.vector_norm_diff` and `warren.distance` (§8) accept vectors from different versions of the same graph and align by dense ID, treating nodes absent from either side as zero.
+- **Access.** A graph exposes topology computed with its owner's visibility, exactly like a materialised view; source-table RLS does not apply to what traversal reveals. Traversal and compute functions therefore require the caller to be a member of the owner or of a role in `graphs.readers`. `warren.grant(name, role)` and `warren.revoke(name, role)` maintain that list. Management functions (`refresh`, `promote`, `drop_*`, `compact`, `grant`, `revoke`) require membership in the owner role. `owner` is set to `current_user` by `warren.create_graph` and no function changes it; ownership transfer is out of scope for v1.
+- **Catalog writes and identity switches.** All `warren.*` functions are `SECURITY INVOKER`. Because the tables are revoked from `PUBLIC` (§5.1), each catalog, segment or vector SPI statement runs inside an internal switch to the **extension owner**: `GetUserIdAndSecContext`, then `SetUserIdAndSecContext(extowner, SECURITY_LOCAL_USERID_CHANGE | SECURITY_RESTRICTED_OPERATION)`, then restore. The extension owner is read once per backend from `pg_extension.extowner`, and an `ERROR` inside the switch is undone by (sub)transaction abort. This is preferred over `SECURITY DEFINER` functions because the elevation then covers only extension-written SQL against fixed, schema-qualified tables. With `SECURITY DEFINER`, everything the function evaluates would run elevated: user-supplied `node_query`/`edge_query`, `gather` message SQL and `vector_map` executor-fallback expressions. Avoiding that would need a switch back to the invoker at each of those points, which is easier to get wrong.
+- `refresh` therefore makes two identity switches: to the **graph owner** while `node_query` and `edge_query` run (§5.4), and to the **extension owner** for the catalog and segment writes. User SQL never runs as the extension owner.
+- **Dropped roles.** `owner` and `readers` are `regrole` values, which are bare OIDs with no `pg_shdepend` entries, so `DROP ROLE` does not see them. `refresh`, and every function that checks access, raise an error if the owner role no longer exists. Reader OIDs that no longer resolve to a role are ignored by access checks and pruned by `grant` and `revoke`. A `DROP ROLE` event trigger that cleans these up is a v1.1 item.
 - `warren.diff(name, v1, v2)` returns structural deltas: nodes added/removed, edges added/removed per relation, degree-distribution shift — computed by merging the two CSRs row-wise, O(N + M).
 
 ## 8. Change detection workflow
@@ -595,7 +627,7 @@ Semantics and implementation notes:
 
 ### 9.3 Function reference
 
-All take `graph text` first, external IDs for nodes, and `version bigint DEFAULT NULL`. `STABLE`, `PARALLEL SAFE`.
+All take `graph text` first, external IDs for nodes, and `version bigint DEFAULT NULL`. All are `STABLE`. Functions that record `warren.last_stats()` (`bfs`, `walk`, `reachable`, `reachable_set`, `shortest_path`, `dijkstra`, `components`) are `PARALLEL RESTRICTED`, because a parallel worker cannot hand backend-local stats back to the leader. `neighbours`, `degree` and `has_edge` record nothing and are `PARALLEL SAFE`.
 
 ```sql
 warren.bfs(graph text, start anyarray, max_depth int,
@@ -621,6 +653,7 @@ warren.create_graph(name, node_query, edge_query, directed DEFAULT true, weighte
 warren.refresh(name, promote DEFAULT true, label DEFAULT NULL) RETURNS bigint;
 warren.promote(name, version); warren.drop_version(name, version); warren.compact(name);
 warren.drop_graph(name); warren.prewarm(name); warren.evict(name);
+warren.grant(name, role regrole); warren.revoke(name, role regrole);   -- §7 access
 warren.info(name) RETURNS jsonb;   -- current version, stats, staleness (now() - built_at), bytes, versions list
 warren.last_stats() RETURNS jsonb; -- nodes visited, edges traversed, path taken, for the session's last call (Appendix A.6)
 warren.explain_map(graph, expr) RETURNS jsonb;  -- 'compiled' | 'executor', and why (§6.3)
@@ -636,12 +669,21 @@ WHERE n.kind = 'paper' ORDER BY r.depth;
 
 Filtered traversal pushes predicates on intermediate nodes into the engine without a pattern-matching language: `node_filter` is converted to a dense-ID bitmap once per call. Accept a `roaringbitmap` type if that extension is present (v1.1); v1 takes an array.
 
-Implementation notes: level-synchronous BFS with frontier/next-frontier arrays and a visited bitmap (parallelisable later); hard caps on `max_depth`/`max_results`; `CHECK_FOR_INTERRUPTS()` every ~64K nodes; per-call memory context; predecessor arrays only when the signature needs them.
+Implementation notes:
+- Traversal is level-synchronous BFS with frontier and next-frontier arrays (parallelisable later).
+- Per-call scratch (visited set, depth and predecessor arrays) is dense when the expected visit budget exceeds about `id_space/16` and sparse (hash or roaring) otherwise, so a small traversal on a big graph does not allocate O(N). Predecessors are stored only when the signature needs them.
+- Truncation is never silent. `truncated = true` is set in `warren.last_stats()`, and a `NOTICE` is raised, exactly when the scan was stopped early by `max_results` or by a GUC ceiling (for example the `paths`-mode cap, §14 item 15). Reaching the caller's own `max_depth` is the requested result, not truncation.
+- Interrupts are checked every ~64K nodes.
+- There is no OFFSET-style pagination: SRFs stream rows (holding an `Arc` to the cached version) and SQL `LIMIT` stops them. Duplicate removal (`distinct_ends`, multi-start BFS) happens before any cap is applied.
+- `shortest_path`'s bidirectional BFS finishes scanning the current level before choosing the meeting node with the minimum combined distance. Taking the first meeting node can return a non-shortest path, a bug pgGraph shipped and fixed. A differential proptest checks it against single-direction BFS.
+- `components` labels each component with its minimum dense ID, so results are deterministic and comparable across versions.
+- Defaults for caps may come from GUCs inside the SQL `DEFAULT` expression (`current_setting('warren.…', true)`).
 
 ## 10. Future directions (not v1)
 
 - **Incremental maintenance.** Triggers or a logical-replication consumer write deltas to `warren.deltas`; traversal consults CSR + a small overlay (added edges in a hash map, removed in a tombstone set); a background worker compacts into a new version when the overlay grows. Seconds-level staleness without full rebuilds. Note that the stable-ID design already supports this: a delta-compacted version is just another version in the same ID space.
-- **DSM shared cache and compute worker** (§6.9). Probably the first post-v1 item: it removes the per-backend load cost and lets compute run detached from a client session.
+- **DSM shared cache and compute worker** (§6.9). Probably the first post-v1 item: it removes the per-backend load cost and lets compute run detached from a client session. pgGraph's Linux-only sealed-`memfd` sharing of an immutable copy is an alternative worth measuring against `dsa`.
+- **Direction-optimising BFS** (push/pull switch when the frontier exceeds ~N/20 and the reverse CSR exists) for `reachable_set` and `components`. This is how GraphBLAS reaches multi-billion edges/s.
 - **Parallel traversal** via the same thread pool as compute.
 - **WASM vertex programs** (§6.8).
 - **Text IDs**; **edge properties** beyond one weight (parallel arrays); **node property vectors** auto-synced from table columns.
@@ -653,6 +695,11 @@ Implementation notes: level-synchronous BFS with frontier/next-frontier arrays a
 ## 11. Implementation language and tooling
 
 **Rust via [pgrx](https://github.com/pgcentralfoundation/pgrx).** The hot code is array manipulation and numerical kernels; pgrx gives SPI, SRFs, memory-context integration, GUCs, and a test harness that runs against real Postgres instances across versions. Target Postgres 16+ as baseline; test on 15–18. No runtime dependencies beyond Postgres.
+
+Toolchain discipline (adopted from pgGraph's working setup):
+- `pgrx` and `cargo-pgrx` are pinned to the same exact version (`=0.19.3`) and upgraded together in their own change. The Rust toolchain is pinned in `rust-toolchain.toml`.
+- Per-major features are `pg15`…`pg18`, built with `--no-default-features --features pgNN`. `panic = "unwind"` is set in every profile.
+- Lints: `unsafe_op_in_unsafe_fn = "deny"` and `clippy::undocumented_unsafe_blocks = "deny"`. `unwrap`/`expect`/`panic` are denied outside `cfg(test)`. Every `unsafe` block carries a `// SAFETY:` proof, and `warren-core`'s unsafe slice code runs under Miri in CI.
 
 Workspace split, non-negotiable:
 
@@ -668,6 +715,8 @@ Workspace split, non-negotiable:
 - **Use-case tests (Appendix A):** each worked example is an integration test with a generated fixture and the stated expected outcome.
 - Integration tests (`cargo pgrx test`): every SQL function; every `id_type`; directed/undirected; weighted/unweighted; relations present/absent; reverse present/absent; filters; refresh with a prior version loaded; staged → promote → retention → drop; vectors bound to retained versions; `compact` and the refusal to compare across it; rollback of a transaction containing a staged build leaves no rows; cancellation of long traversals and compute; memory cap enforcement.
 - **Oracle tests:** every traversal function against an equivalent recursive CTE; PageRank and components against NetworkX on exported fixtures; `gather(... 'collect')` against a plain SQL join + `array_agg`; `diff` against SQL `EXCEPT`. Exact match on random graphs of ~10K nodes. This suite is the most valuable thing in the repository.
+- Robustness: a `cargo fuzz` target for the segment decoder (§5.3); a differential proptest of bidirectional against single-direction shortest path (§9.3).
+- Extension lifecycle: `cargo pgrx schema` output diffed against the committed `sql/pg_warren--X.Y.Z.sql`. From the first release on, install the previous release, run `ALTER EXTENSION pg_warren UPDATE`, and assert the resulting `pg_proc`/`pg_class` signatures equal a fresh install's. A `pg_dump`/restore round trip preserves `warren.*` rows (§5.1).
 - Cross-version tests: build v1, mutate tables (add/remove nodes and edges), build v2, assert dense IDs of surviving nodes unchanged, assert `distance` is zero when nothing changed and monotone in perturbation size for `edit`.
 
 ### Performance
@@ -702,8 +751,9 @@ pg_warren/
 ├── sql/                    ← hand-written SQL, upgrade scripts
 ├── bench/                  ← generate.py, run.sh, results/
 ├── test/                   ← integration tests not expressible in cargo pgrx test
-├── docker/                 ← Dockerfile per supported PG major
-└── .github/workflows/      ← fmt, clippy, unit, pgrx tests PG 15–18, bench smoke test
+├── docker/                 ← one Dockerfile, parameterised by a PG_MAJOR build arg
+└── .github/workflows/      ← fmt, clippy, unit, Miri (warren-core), pgrx tests PG 15–18 on PGDG packages
+                               (cargo pgrx init --pgNN=<pg_config>), schema-drift + upgrade-path checks (added in M2, once the catalog exists); bench targets compile+run once in core tests
 ```
 
 Each milestone leaves `main` green and demonstrable.
@@ -729,9 +779,9 @@ Post-v0.3: contraction/project/lift and Louvain (§6.6), DSM cache + compute wor
 ## 14. Open decisions (make a call, record it in DESIGN.md, move on)
 
 1. **Polymorphism over `id_type`** in SQL: `anyelement` runtime dispatch vs. generated overloads. Lean: `anyelement`.
-2. **Persistent store**: chunked `bytea` only, or additionally a regenerable `$PGDATA/pg_warren/*.csr` file for mmap? Lean: `bytea` only; measure before adding.
+2. **Persistent store**: chunked `bytea` only, or additionally a regenerable `$PGDATA/pg_warren/*.csr` file for mmap? Lean: `bytea` only; measure before adding. Evidence from pgGraph (`docs/prior-art-notes.md` §1.3–1.4) supports this. Its file artifacts are copied and fully validated on every load anyway, so they are not zero-copy. They needed MVCC catalog publication, per-database namespacing and interrupted-replacement recovery added after the fact, and they have no standby support. M2 measures cold load from `warren.segments`; revisit only if it falls below ~300 MB/s.
 3. **Chunk size** (4/8/32 MB). Measure.
-4. **Parallel-edge deduplication**: drop with count; if weighted, sum or keep-first? Lean: sum.
+4. **Parallel-edge deduplication**: drop with count; if weighted, sum or keep-first? Lean: sum, counted in `versions.deduplicated_edges`. pgGraph keeps parallel edges only because it returns per-edge source-row identities, which pg_warren does not.
 5. **Self-loops**: keep. Lean: yes.
 6. **Undirected weighted**: duplicate weight both directions. Lean: yes.
 7. **Default `max_depth`** on `reachable_set`: unbounded vs. cap. Lean: unbounded, documented.
@@ -743,7 +793,7 @@ Post-v0.3: contraction/project/lift and Louvain (§6.6), DSM cache + compute wor
 13. **`gather` message source.** Accept only a SQL string, or also a relation name / vector name? Lean: all three, dispatched on the argument's form.
 14. **`warren.step` as a composite type vs. `jsonb`.** Composite gives type-checking and a clean `warren.s()` constructor; `jsonb` is easier to generate from application code. Lean: composite as the canonical IR with a `jsonb → warren.step[]` cast for convenience.
 15. **`walk` path enumeration limits.** Hard cap on `max_results` for `mode = 'paths'` (lean: default 100,000, error above a GUC ceiling) and whether to support `'count'` exactly or approximately for variable-length segments (lean: exact).
-16. **Prior-art reading complete** (§4A). Recorded here with a link to `docs/prior-art-notes.md` and a list of the sections of this note changed as a result. Not a reuse decision — the policy is to build in full — but a gate.
+16. **Prior-art reading complete** (§4A). **Done (M0, 2026-10-19):** see [`docs/prior-art-notes.md`](docs/prior-art-notes.md) (pgGraph `b0f53df`, OneSparse `79a57cd`). Sections changed as a result (v0.6): §4A, §5.1, §5.3, §5.4, §5.5, §6.3, §6.7, §6.9, §7, §9.3, §10, §11, §12, §13, §14 items 2 and 4. Not a reuse decision (the policy is to build in full), but a gate.
 
 ## 15. Instructions to the implementing agent
 

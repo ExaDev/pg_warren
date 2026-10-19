@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = ["crates/warren-core", "crates/pg_warren"]
+# Bare `cargo build` / `cargo test` at the root touch only the Postgres-free
+# domain crate. Use `--workspace` (lint) or `cargo pgrx test` for pg_warren.
+default-members = ["crates/warren-core"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/ExaDev/pg_warren"
+rust-version = "1.97"
+
+[profile.dev]
+panic = "unwind"
+
+[profile.release]
+panic = "unwind"
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+
+# Lint policy (DESIGN.md §11, CLAUDE.md). Every crate opts in with
+# `[lints] workspace = true`. Test code may unwrap/expect/panic: see clippy.toml.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"

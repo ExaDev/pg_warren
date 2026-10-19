@@ -1,0 +1,27 @@
+name: Set up PostgreSQL (PGDG)
+description: >
+  Install a PostgreSQL major with server dev headers from the PGDG apt repo,
+  plus libclang for pgrx's bindgen, and export PG_CONFIG / PGRX_PG_CONFIG_PATH.
+inputs:
+  pg-major:
+    description: PostgreSQL major version (15, 16, 17, 18)
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Install PostgreSQL ${{ inputs.pg-major }} from PGDG
+      shell: bash
+      env:
+        PG_MAJOR: ${{ inputs.pg-major }}
+      run: |
+        set -euxo pipefail
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq postgresql-common
+        sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+        sudo apt-get install -y -qq --no-install-recommends \
+          "postgresql-${PG_MAJOR}" "postgresql-server-dev-${PG_MAJOR}" libclang-dev clang
+        PG_CONFIG="/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config"
+        "$PG_CONFIG" --version
+        echo "PG_CONFIG=$PG_CONFIG" >> "$GITHUB_ENV"
+        # Lets pgrx-pg-sys build without `cargo pgrx init` (clippy, doc).
+        echo "PGRX_PG_CONFIG_PATH=$PG_CONFIG" >> "$GITHUB_ENV"
