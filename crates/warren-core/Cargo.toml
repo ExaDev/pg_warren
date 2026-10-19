@@ -26,5 +26,9 @@ harness = false
 name = "traversal"
 harness = false
 
+[[bench]]
+name = "walk"
+harness = false
+
 [lints]
 workspace = true
