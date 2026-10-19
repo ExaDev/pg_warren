@@ -57,6 +57,12 @@ impl<E: ExternalId> LoadedVersion<E> {
     pub(crate) fn version(&self) -> Result<GraphVersion<'_, E>, VersionError> {
         GraphVersion::new(&self.id_map, &self.relations, &self.graph)
     }
+
+    /// The heap bytes it holds: what it counts against
+    /// `warren.max_cache_memory`.
+    pub(crate) fn bytes(&self) -> u64 {
+        self.id_map.bytes() + self.relations.bytes() + self.graph.bytes()
+    }
 }
 
 /// The id map and relation dictionary of `version`, without its CSRs: what

@@ -2,11 +2,13 @@
 //! (DESIGN.md §5.5). A vector id names one immutable vector, so an entry
 //! never goes stale; it only becomes unreachable when its row is deleted
 //! (the name written again, or its version or graph dropped), and is then
-//! pruned.
+//! pruned, or when `warren.max_cache_memory` evicts it; it is reloaded when
+//! next used. A lookup marks it used.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use warren_core::compute::{AnyVector, ComputeMemory};
 
@@ -16,6 +18,7 @@ use super::{read_vector, VectorError, VectorId, VectorRecord, VectorStore};
 struct Entry {
     graph_id: i32,
     vector: Arc<AnyVector>,
+    last_used: Instant,
 }
 
 /// Loaded vectors by vector id. Callers hold `Arc` clones, so evicting a
@@ -26,14 +29,27 @@ pub(crate) struct VectorCache {
 }
 
 impl VectorCache {
-    /// Vector `vector`, if cached.
-    pub(crate) fn get(&self, vector: VectorId) -> Option<Arc<AnyVector>> {
-        self.entries.get(&vector).map(|entry| Arc::clone(&entry.vector))
+    /// Vector `vector`, if cached; the lookup marks it used.
+    pub(crate) fn get(&mut self, vector: VectorId) -> Option<Arc<AnyVector>> {
+        let entry = self.entries.get_mut(&vector)?;
+        entry.last_used = Instant::now();
+        Some(Arc::clone(&entry.vector))
     }
 
     /// Caches `vector` as `id`, of graph `graph_id`.
     pub(crate) fn insert(&mut self, graph_id: i32, id: VectorId, vector: Arc<AnyVector>) {
-        self.entries.insert(id, Entry { graph_id, vector });
+        self.entries.insert(id, Entry { graph_id, vector, last_used: Instant::now() });
+    }
+
+    /// Each cached vector's id, bytes and last use, by vector id.
+    pub(crate) fn held(&self) -> Vec<(VectorId, u64, Instant)> {
+        let mut held: Vec<_> = self
+            .entries
+            .iter()
+            .map(|(id, entry)| (*id, entry.vector.bytes(), entry.last_used))
+            .collect();
+        held.sort_unstable_by_key(|(id, _, _)| *id);
+        held
     }
 
     /// Drops vector `id`, if cached.
@@ -75,7 +91,7 @@ pub(crate) fn load(
     graph_id: i32,
     record: &VectorRecord,
 ) -> Result<Arc<AnyVector>, VectorError> {
-    if let Some(vector) = CACHE.with_borrow(|cache| cache.get(record.vector)) {
+    if let Some(vector) = CACHE.with_borrow_mut(|cache| cache.get(record.vector)) {
         return Ok(vector);
     }
     // Store calls run SPI, and may raise an ERROR or reach user code that
@@ -96,6 +112,12 @@ pub(crate) fn remember(graph_id: i32, id: VectorId, vector: Arc<AnyVector>) {
 /// Drops vector `id` from this backend's cache: its row was just deleted.
 pub(crate) fn forget(id: VectorId) {
     CACHE.with_borrow_mut(|cache| cache.remove(id));
+}
+
+/// Each of this backend's cached vectors' id, bytes and last use, by
+/// vector id: what `warren.max_cache_memory` may evict.
+pub(crate) fn cached_vectors() -> Vec<(VectorId, u64, Instant)> {
+    CACHE.with_borrow(VectorCache::held)
 }
 
 /// Drops this backend's cached vectors of graph `graph_id`; returns how
@@ -132,6 +154,21 @@ mod tests {
         assert_eq!(cache.evict_graph(10), 2);
         assert_eq!(cache.vectors(), [3]);
         assert_eq!(*held, *vector(1.0), "a caller holding a vector keeps it");
+    }
+
+    #[test]
+    fn a_lookup_marks_a_vector_used_and_held_reports_its_bytes() {
+        let mut cache = VectorCache::default();
+        cache.insert(10, 1, vector(1.0));
+        cache.insert(10, 2, vector(2.0));
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        assert!(cache.get(1).is_some());
+        let held = cache.held();
+        assert_eq!(
+            held.iter().map(|(id, bytes, _)| (*id, *bytes)).collect::<Vec<_>>(),
+            [(1, 16), (2, 16)]
+        );
+        assert!(held[0].2 > held[1].2, "the lookup marked vector 1 used");
     }
 
     #[test]

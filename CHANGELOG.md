@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 — in development (until M7)
+
+- `warren.max_cache_memory` (default `4GB`): a size-bound on what a
+  backend's cache holds between calls. Cached graph versions and vectors
+  are evicted least recently used first and reloaded when next used;
+  transient vectors count against it but are never evicted, and a
+  transient write that would take them past it fails with 53400.
+
 ## 0.2.0 — in development (until M6)
 
 - Named vectors (`vector_from_query`, `vector_const`, `vector_degree`,

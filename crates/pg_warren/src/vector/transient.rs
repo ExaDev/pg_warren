@@ -7,7 +7,8 @@
 //!
 //! They are not transactional: a ROLLBACK neither removes one written in
 //! the transaction nor restores one it replaced. They do not pin their
-//! version against retention. They are freed at session end, by
+//! version against retention. They count against `warren.max_cache_memory`
+//! but, since they cannot be reloaded, are never evicted to fit it. They are freed at session end, by
 //! `warren.evict`, by `drop_vector`, by a persisted write of the same name,
 //! and when a later cache load finds their version gone.
 
@@ -74,6 +75,11 @@ pub(crate) fn drop_transient(graph_id: i32, version: VersionId, name: &str) -> b
     TRANSIENT.with_borrow_mut(|map| map.remove(&key).is_some())
 }
 
+/// The heap bytes this backend's transient vectors (of every role) hold.
+pub(crate) fn transient_bytes() -> u64 {
+    TRANSIENT.with_borrow(|map| map.values().map(|vector| vector.bytes()).sum())
+}
+
 /// The versions that have transient vectors (of any role), ascending.
 pub(crate) fn transient_versions() -> Vec<VersionId> {
     let mut versions: Vec<VersionId> =
@@ -124,10 +130,12 @@ mod tests {
         keep_transient(2, 10, "a", vector(4.0)?);
         Spi::run("CREATE ROLE other; SET ROLE other")?;
         keep_transient(1, 10, "a", vector(5.0)?);
+        let all_roles = transient_bytes();
         let other: Vec<String> = transients(1, 10).into_iter().map(|(name, _)| name).collect();
         assert_eq!(evict_transients(1), 1, "another role evicts only its own");
         Spi::run("RESET ROLE")?;
         assert_eq!(other, ["a"]);
+        assert_eq!(all_roles, 5 * 16, "every role's transient vectors count");
         let names: Vec<String> = transients(1, 10).into_iter().map(|(name, _)| name).collect();
         assert_eq!(names, ["a", "b"]);
         assert_eq!(transient(1, 10, "a"), Some(vector(2.0)?));

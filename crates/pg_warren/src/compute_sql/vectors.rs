@@ -2,6 +2,8 @@
 //! session's transient vectors of the version first, then its persisted
 //! ones, read through the backend's vector cache and charged to the call's
 //! compute memory budget, and written back with tombstoned rows cleared.
+//! Each read or write into the backend's cache then trims it to
+//! `warren.max_cache_memory` (DESIGN.md §5.5).
 
 use std::collections::HashMap;
 use std::mem::size_of;
@@ -13,7 +15,7 @@ use warren_core::graph::Tombstones;
 use super::settings::compute_memory;
 use super::ComputeSqlError;
 use crate::access::require_creator_or_owner;
-use crate::cache::{cached, LoadedVersion, Resolved};
+use crate::cache::{admit_transient, cached, trim, LoadedVersion, Resolved};
 use crate::catalog::{GraphDefinition, VersionId};
 use crate::segment::CHUNK_SIZE;
 use crate::source::IdDatum;
@@ -24,7 +26,7 @@ use crate::vector::{
 
 /// The budget cached vectors are charged to while cached: unlimited, since
 /// what bounds a call is its own budget, which each vector it reads is also
-/// charged to.
+/// charged to, and what bounds the cache is `warren.max_cache_memory`.
 fn cache_memory() -> &'static ComputeMemory {
     static CACHE_MEMORY: OnceLock<ComputeMemory> = OnceLock::new();
     CACHE_MEMORY.get_or_init(|| ComputeMemory::new(u64::MAX))
@@ -164,7 +166,9 @@ impl<E: IdDatum> Vectors<E> {
             return Ok(None);
         };
         self.charge(name, bytes(record.dtype, record.width, record.length))?;
-        Ok(Some(load(&mut SpiVectorStore, cache_memory(), graph_id, &record)?))
+        let vector = load(&mut SpiVectorStore, cache_memory(), graph_id, &record)?;
+        trim();
+        Ok(Some(vector))
     }
 
     /// Stores `vector` as `name` (which may be reserved only if not
@@ -173,7 +177,9 @@ impl<E: IdDatum> Vectors<E> {
     /// transient vector of this session (returning `None`). Either replaces
     /// any vector of that name of either kind; a persisted one replaced
     /// must have been written by the caller, or the caller must own the
-    /// graph.
+    /// graph. A transient one is refused if it would take this backend's
+    /// transient vectors past `warren.max_cache_memory`; either kind is
+    /// kept in the cache only as far as the cap allows.
     pub(crate) fn save(
         &mut self,
         name: &str,
@@ -192,6 +198,10 @@ impl<E: IdDatum> Vectors<E> {
             require_creator_or_owner(created_by, self.graph.owner, &self.graph.name, name)?;
         }
         let replacing = old.map(|(vector, _)| vector);
+        if !persist {
+            let replaced = transient(graph_id, self.version, name).map_or(0, |old| old.bytes());
+            admit_transient(replaced, vector.bytes())?;
+        }
         vector.clear_tombstoned(self.tombstones());
         self.held.remove(name);
         // The catalog change comes first: if it fails (a concurrent write),
@@ -211,6 +221,7 @@ impl<E: IdDatum> Vectors<E> {
                 self.records.retain(|bound| bound.name != name);
             }
             keep_transient(graph_id, self.version, name, Arc::new(vector));
+            trim();
             return Ok(None);
         }
         // SAFETY: reads the backend's current user id: the caller's role.
@@ -223,6 +234,7 @@ impl<E: IdDatum> Vectors<E> {
         drop_transient(graph_id, self.version, name);
         let id = record.vector;
         remember(graph_id, id, Arc::new(vector));
+        trim();
         self.records.retain(|bound| bound.name != name);
         self.records.push(record);
         Ok(Some(id))

@@ -31,6 +31,7 @@ mod version_sql;
 #[pgrx::pg_guard]
 pub extern "C-unwind" fn _PG_init() {
     build::define_max_build_memory();
+    cache::define_max_cache_memory();
     traversal_sql::define_max_walk_paths();
     compute_sql::define_compute_settings();
 }
