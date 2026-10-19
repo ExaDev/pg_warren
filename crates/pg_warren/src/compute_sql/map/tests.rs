@@ -109,6 +109,26 @@ mod tests {
     }
 
     #[pg_test]
+    fn the_executor_evaluates_under_the_callers_search_path() -> Result<(), Error> {
+        appendix_vectors()?;
+        // The function's body names `params` unqualified: it resolves when
+        // the body is first run, so only under the caller's search_path.
+        Spi::run(
+            "CREATE TABLE public.params (w float8); INSERT INTO public.params VALUES (3);
+             CREATE FUNCTION public.weighted(x float8) RETURNS float8
+                 LANGUAGE sql STABLE AS 'SELECT x * w FROM params'",
+        )?;
+        assert_eq!(path("t", "public.weighted(deg)")?.as_deref(), Some("executor"));
+        Spi::run(
+            "SET search_path = public, pg_catalog;
+             SELECT warren.vector_map('t', 'w', 'weighted(deg)');
+             RESET search_path",
+        )?;
+        assert_eq!(values("w")?.as_deref(), Some("1:6 2:3 3:3 4:3 5:3 6:0"));
+        Ok(())
+    }
+
+    #[pg_test]
     fn expressions_that_are_not_one_scalar_expression_are_refused() -> Result<(), Error> {
         appendix_vectors()?;
         let cases = [

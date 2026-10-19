@@ -20,7 +20,7 @@ use warren_core::compute::{map, AnyVector};
 use super::settings::workers;
 use super::vectors::Vectors;
 use super::{entry, ComputeSqlError};
-use crate::access::Caller;
+use crate::access::{with_search_path, Caller};
 use crate::cache::resolve;
 use crate::interrupts::PostgresInterrupts;
 use crate::source::{with_id_type, IdDatum};
@@ -114,7 +114,12 @@ fn mapped<E: IdDatum>(
             let columns = executor::referenced(&analysed);
             let loaded = operands(&mut vectors, &columns)?;
             let refs: Vec<&AnyVector> = loaded.iter().map(|operand| &**operand).collect();
-            executor::evaluate(&analysed, &columns, &refs, id_space, &vectors.memory)?
+            // Function bodies, PL/pgSQL statements and regclass casts the
+            // expression calls resolve names when they run, so they run
+            // under the caller's search_path, as the caller's own SQL would.
+            with_search_path(caller.search_path(), || {
+                executor::evaluate(&analysed, &columns, &refs, id_space, &vectors.memory)
+            })?
         }
     };
     vectors.save(y, result)?;
