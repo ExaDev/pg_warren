@@ -9,6 +9,7 @@
 
 mod adjacency;
 mod bfs;
+mod bfs_cursor;
 mod components;
 mod dijkstra;
 mod error;
@@ -28,6 +29,7 @@ mod reference;
 
 pub use adjacency::{Adjacency, Direction, DistinctNeighbours, RelationSelection};
 pub use bfs::{bfs, bfs_each, Visit};
+pub use bfs_cursor::BfsCursor;
 pub use components::components;
 pub use dijkstra::{dijkstra, WeightedPath};
 pub use error::TraversalError;
