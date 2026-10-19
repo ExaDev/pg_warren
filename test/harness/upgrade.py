@@ -152,9 +152,13 @@ SEED_VERSIONS = """
 def seed(released):
     """Writes the seed state with the released version's own functions."""
     released.execute(SEED_GRAPH)
-    has_vectors = released.query("SELECT to_regproc('warren.vector_const') IS NOT NULL")
+    has_vectors = released.query(
+        "SELECT EXISTS (SELECT FROM pg_proc"
+        " WHERE proname = 'vector_const' AND pronamespace = 'warren'::regnamespace)"
+    )
     released.execute(SEED_VECTOR if has_vectors == [["t"]] else SEED_VECTOR_DIRECTLY)
     released.execute(SEED_VERSIONS)
+
 
 # Versions as `id:staged`, by seq.
 VERSIONS = """
