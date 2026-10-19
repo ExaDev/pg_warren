@@ -30,7 +30,7 @@ pub struct GraphCsr {
     /// `None` exactly when there is one relation, which then serves as the
     /// all-relations CSR.
     merged: Option<RelationCsr>,
-    merged_edges: u64,
+    deduplicated_edges: u64,
 }
 
 impl GraphCsr {
@@ -70,7 +70,7 @@ impl GraphCsr {
         Ok(Self {
             relations: forward.relations.into_iter().map(with_reverse).collect::<Result<_, _>>()?,
             merged: forward.merged.map(with_reverse).transpose()?,
-            merged_edges: forward.merged_edges,
+            deduplicated_edges: forward.deduplicated_edges,
         })
     }
 
@@ -93,8 +93,8 @@ impl GraphCsr {
     }
 
     /// The number of parallel edges folded by deduplication.
-    pub fn merged_edges(&self) -> u64 {
-        self.merged_edges
+    pub fn deduplicated_edges(&self) -> u64 {
+        self.deduplicated_edges
     }
 }
 
@@ -131,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn parallel_edges_are_merged_summing_weights_and_self_loops_kept() {
+    fn parallel_edges_are_deduplicated_summing_weights_and_self_loops_kept() {
         let (_, a, _) = two_relations();
         let mut edges = EdgeList::new(true);
         edges.push(a, 2, 0, 1.0).unwrap();
@@ -142,7 +142,7 @@ mod tests {
         let graph = GraphCsr::build(edges, 1, 3, true).unwrap();
         let forward = graph.relations()[0].forward();
         assert_eq!(rows(forward), Naive::from([((0, 1), 2.0), ((1, 1), 4.0), ((2, 0), 9.0)]));
-        assert_eq!(graph.merged_edges(), 2);
+        assert_eq!(graph.deduplicated_edges(), 2);
         assert!(matches!(forward, AnyCsr::U32(_)));
     }
 
@@ -162,7 +162,7 @@ mod tests {
         let merged = graph.all_relations();
         assert_eq!(rows(merged.forward()), Naive::from([((0, 1), 3.0), ((1, 0), 3.0)]));
         assert_eq!(rows(merged.reverse().unwrap()), Naive::from([((1, 0), 3.0), ((0, 1), 3.0)]));
-        assert_eq!(graph.merged_edges(), 0);
+        assert_eq!(graph.deduplicated_edges(), 0);
     }
 
     #[test]
@@ -248,7 +248,7 @@ mod tests {
 
             let graph = GraphCsr::build(edges, scenario.relation_count, scenario.id_space, true).unwrap();
 
-            prop_assert_eq!(graph.merged_edges(), (scenario.edges.len() - distinct) as u64);
+            prop_assert_eq!(graph.deduplicated_edges(), (scenario.edges.len() - distinct) as u64);
             for (relation, naive) in graph.relations().iter().zip(&per_relation) {
                 prop_assert_eq!(relation.forward().id_space(), scenario.id_space);
                 prop_assert_eq!(relation.forward().is_weighted(), scenario.weighted);

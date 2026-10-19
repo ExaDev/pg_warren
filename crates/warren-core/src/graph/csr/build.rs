@@ -11,8 +11,9 @@ pub(super) struct Forward<T> {
     pub(super) relations: Vec<Csr<T>>,
     /// The all-relations CSR, unless there is exactly one relation.
     pub(super) merged: Option<Csr<T>>,
-    /// Parallel edges folded into another edge of the same relation.
-    pub(super) merged_edges: u64,
+    /// Deduplicated edges: parallel edges folded into another edge of the
+    /// same relation.
+    pub(super) deduplicated_edges: u64,
 }
 
 /// Builds the forward CSRs of `edges`, consuming them.
@@ -22,13 +23,13 @@ pub(super) fn forward<T: Target>(
     id_space: u64,
 ) -> Result<Forward<T>, GraphError> {
     let rows = grouped_by_source::<T>(edges, relation_count, id_space)?;
-    let (rows, merged_edges) = deduplicated(rows)?;
+    let (rows, deduplicated_edges) = deduplicated(rows)?;
     let relations = split_by_relation(&rows, relation_count, id_space)?;
     let merged = match relation_count {
         1 => None,
         _ => Some(united(&rows, id_space)?),
     };
-    Ok(Forward { relations, merged, merged_edges })
+    Ok(Forward { relations, merged, deduplicated_edges })
 }
 
 /// Edges grouped into rows by source: `entries[offsets[v]..offsets[v + 1]]`
@@ -106,7 +107,7 @@ fn grouped_by_source<T: Target>(
 /// summing their weights in input order. Returns the folded count.
 fn deduplicated<T: Target>(mut rows: Rows<T>) -> Result<(Rows<T>, u64), GraphError> {
     let mut scratch: Vec<(u32, T, f64)> = Vec::new();
-    let mut merged_edges = 0;
+    let mut deduplicated_edges = 0;
     let mut write = 0;
     let mut start = 0;
     for source in 0..rows.row_count() {
@@ -122,7 +123,7 @@ fn deduplicated<T: Target>(mut rows: Rows<T>) -> Result<(Rows<T>, u64), GraphErr
                 if let Some(weights) = &mut rows.weights {
                     weights[write - 1] += weight;
                 }
-                merged_edges += 1;
+                deduplicated_edges += 1;
             } else {
                 rows.entries[write] = (relation, target);
                 if let Some(weights) = &mut rows.weights {
@@ -138,7 +139,7 @@ fn deduplicated<T: Target>(mut rows: Rows<T>) -> Result<(Rows<T>, u64), GraphErr
     if let Some(weights) = &mut rows.weights {
         weights.truncate(write);
     }
-    Ok((rows, merged_edges))
+    Ok((rows, deduplicated_edges))
 }
 
 /// One CSR per relation from deduplicated rows.
