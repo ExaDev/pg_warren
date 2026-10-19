@@ -694,7 +694,7 @@ Implementation notes:
   - `node_filter` applies to the nodes a traversal reaches, never to its starts: starts are always admitted at depth 0, and repeated starts count once. `reachable_set` includes the starts.
   - `last_stats()` counts `nodes_visited` (nodes admitted or settled, starts included) and `edges_traversed` (CSR row entries scanned). The `Interrupts` hook is polled on the first unit of work (a visited node or a scanned row entry) and every 65,536th after.
   - `shortest_path` breaks ties between meeting nodes of equal combined distance by the smallest dense ID, so its result is deterministic.
-  - `dijkstra` reads each selected relation's own CSR rather than the merged one, because the merged CSR sums the weights of an edge present in several relations and a cheapest path wants the minimum. Unweighted graphs cost 1 per edge. A negative or NaN weight raises an error when the search scans it.
+  - `dijkstra` reads each selected relation's own CSR rather than the merged one, because the merged CSR sums the weights of an edge present in several relations and a cheapest path wants the minimum. Unweighted graphs cost 1 per edge. A negative or NaN weight raises an error when the search scans it. An edge whose cost would be infinite (an infinite weight, or an overflowing sum) is never followed, so a target reachable only at infinite cost returns no path.
   - `components` is union–find over the forward all-relations CSR. The domain labels every dense ID; a tombstoned node has no edges and so is its own component, and the adapter leaves tombstoned nodes out of the result.
 
 ## 10. Future directions (not v1)

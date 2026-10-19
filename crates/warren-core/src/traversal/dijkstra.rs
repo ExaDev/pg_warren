@@ -5,7 +5,9 @@
 //! graph is unweighted), so an edge present in several relations costs its
 //! cheapest weight. Weights are checked as edges are scanned: a negative or
 //! NaN weight stops the search with [`TraversalError::InvalidWeight`]. An
-//! infinite weight is allowed and never improves a path.
+//! edge whose cost would be infinite (an infinite weight, or finite weights
+//! whose sum overflows) is never followed, so a target reachable only at
+//! infinite cost has no path.
 
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
@@ -60,7 +62,10 @@ pub fn dijkstra(
                 return Err(TraversalError::InvalidWeight { from: node, to: next, weight });
             }
             let cost = cost + weight;
-            if settled.contains(next) || labels.get(next).is_some_and(|label| label.cost <= cost) {
+            if !cost.is_finite()
+                || settled.contains(next)
+                || labels.get(next).is_some_and(|label| label.cost <= cost)
+            {
                 continue;
             }
             labels.insert(next, Label { cost, predecessor: node })?;
@@ -165,6 +170,19 @@ mod tests {
     }
 
     #[test]
+    fn a_path_of_infinite_cost_is_no_path() {
+        let infinite = graph(3, 1, &[(0, 0, 1, f64::INFINITY), (0, 1, 2, 1.0)], true);
+        assert_eq!(cheapest(&infinite, Direction::Out, 0, 1), Ok(None));
+        assert_eq!(cheapest(&infinite, Direction::Out, 0, 2), Ok(None));
+        let overflowing = graph(3, 1, &[(0, 0, 1, f64::MAX), (0, 1, 2, f64::MAX)], true);
+        assert_eq!(cheapest(&overflowing, Direction::Out, 0, 2), Ok(None));
+        assert_eq!(
+            cheapest(&overflowing, Direction::Out, 0, 1),
+            Ok(weighted_path(&[0, 1], f64::MAX))
+        );
+    }
+
+    #[test]
     fn negative_or_nan_weights_reached_are_errors() {
         for weight in [-1.0, f64::NAN] {
             let graph = graph(3, 1, &[(0, 0, 1, 1.0), (0, 1, 2, weight)], true);
@@ -247,21 +265,19 @@ mod properties {
 
             let steps = scenario.steps(direction, &selection);
             let expected = distances(scenario.id_space, &steps, start)[target as usize];
-            match found {
-                None => prop_assert!(expected.is_infinite()),
-                Some(WeightedPath { path, cost }) => {
-                    prop_assert_eq!(cost, expected);
-                    prop_assert_eq!(path.first(), Some(&start));
-                    prop_assert_eq!(path.last(), Some(&target));
-                    let cheapest = cheapest_edges(&steps);
-                    let mut walked = 0.0;
-                    for hop in path.windows(2) {
-                        let weight = cheapest.get(&(hop[0], hop[1]));
-                        prop_assert!(weight.is_some(), "no edge {:?}", hop);
-                        walked += weight.copied().unwrap_or_default();
-                    }
-                    prop_assert_eq!(walked, cost);
+            let expected_cost = expected.is_finite().then_some(expected);
+            prop_assert_eq!(found.as_ref().map(|found| found.cost), expected_cost);
+            if let Some(WeightedPath { path, cost }) = found {
+                prop_assert_eq!(path.first(), Some(&start));
+                prop_assert_eq!(path.last(), Some(&target));
+                let cheapest = cheapest_edges(&steps);
+                let mut walked = 0.0;
+                for hop in path.windows(2) {
+                    let weight = cheapest.get(&(hop[0], hop[1]));
+                    prop_assert!(weight.is_some(), "no edge {:?}", hop);
+                    walked += weight.copied().unwrap_or_default();
                 }
+                prop_assert_eq!(walked, cost);
             }
         }
     }
