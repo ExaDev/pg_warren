@@ -359,7 +359,7 @@ Decisions made in M4 (`pg_warren::vector`, `pg_warren::compute_sql`):
 - **Persistence.** A vector's bytes are its elements in row-major order, little-endian (`bool` one byte, 0 or 1), with no header (dtype, width and length are `warren.vectors` columns), chunked like segments (`CHUNK_SIZE`); encoding streams chunk by chunk and decoding reserves the whole buffer up front (`compute::encode`, `compute::Decoder`), so persistence never holds a second copy. Every write is a new `warren.vectors` row; writing a name again replaces the old row, and the replaced vector's chunks cascade. A vector is written on every call that produces it: simple and transactional, at the cost of WAL per superstep (an unlogged or deferred write path is a later optimisation, to be measured).
 - **Transient vectors (decided in M4 review, §14 item 18).** Every vector-writing function (`vector_from_query`, `vector_const`, `vector_degree`, `vector_dense_id`, `spmv`/`spmm`'s `y`, `vector_map`'s `y`) takes `persist bool DEFAULT true`, just before `version`. With `persist := false` the result is a *transient* vector: kept only in this backend's memory, keyed by (graph, version, **current role**, name), so roles sharing a backend (`SET ROLE`, a connection pooler, a `SECURITY DEFINER` function) can neither see, shadow, replace nor drop each other's (decided in M4 re-review; `warren.evict` frees only the current role's), never written to `warren.vectors` (no WAL, no TOAST, no vacuum), and it returns NULL instead of a vector id. Reads resolve a name to the current role's transient vector first, then the persisted one, in every function (`vector_values`, `vector_map`'s columns, `explain_map`, `spmv` operands, …). Writing a persisted name drops this session's transient vector of that name, and writing a transient name deletes the persisted vector of that name (under the §7 ownership rule); `drop_vector` drops the transient one if there is one. Transient vectors are **not transactional**: a ROLLBACK (or a failed subtransaction) neither removes one written in it nor restores what it replaced, and a persisted vector it deleted comes back while the transient one remains, which then shadows it. They do not pin their version against retention (§7), are invisible to other sessions, and are freed at session end, by `warren.evict` (which counts them), by `drop_vector`, and when a later cache load finds their version dropped. They are not charged to any budget between calls (as cached vectors are not); each call that reads one is charged for it. Iterative programs keep scratch vectors transient and persist only results; the §6.7 library does so.
 - **Tombstoned rows hold zero** (`false`) in every vector, whatever produced it (fill, constants, kernel results), and the rows read back, ranked or summarised are the live nodes only: `vector_values`, `matrix_rows`, `vector_topk`, `vector_stats` and `vector_reduce` skip tombstones (`compute::reduce_live`, `compute::summarise`, `compute::top_k`), so a deleted node is never a minimum. `vector_norm_diff` reads every row, so a node live on one side and tombstoned on the other contributes its value.
-- **`vector_from_query`** runs the query as the caller, under the caller's `search_path`, as a read-only cursor wrapped as `SELECT q.id::<id_type>, q.value::<dtype's type>[[]] FROM (<query>) q(id, value)`. It is first prepared (`SPI_prepare`: parsed, analysed, rewritten; not planned or run) to read its column types, and must be one SELECT, VALUES or TABLE (`syntax_error` otherwise) of two columns whose first casts *implicitly* to the graph's id type (`datatype_mismatch` otherwise), so ids are never rounded: `int` ids work on a `bigint` graph, `double precision` ids do not. Values convert by Postgres's own `::` casts (`2.5` is 3 in an `i64` vector, as in SQL). An array value makes a matrix row; every row must have the same width (an empty query gives width 1). Nodes without a row get `fill` (cast as SQL casts `double precision`); NULL, unknown and tombstoned ids are skipped; two rows for one node are a `cardinality_violation`; a NULL value follows `vector_map`'s rule (§6.3: `NaN` in a float vector, 22004 otherwise).
+- **`vector_from_query`** runs the query as the caller, under the caller's `search_path`, as a read-only cursor in a read-only transaction state (*M5:* so a VOLATILE function it calls cannot write either, 25006), wrapped as `SELECT q.id::<id_type>, q.value::<dtype's type>[[]] FROM (<query>) q(id, value)`. It is first prepared (`SPI_prepare`: parsed, analysed, rewritten; not planned or run) to read its column types, and must be one SELECT, VALUES or TABLE (`syntax_error` otherwise) of two columns whose first casts *implicitly* to the graph's id type (`datatype_mismatch` otherwise), so ids are never rounded: `int` ids work on a `bigint` graph, `double precision` ids do not. Values convert by Postgres's own `::` casts (`2.5` is 3 in an `i64` vector, as in SQL). An array value makes a matrix row; every row must have the same width (an empty query gives width 1). Nodes without a row get `fill` (cast as SQL casts `double precision`); NULL, unknown and tombstoned ids are skipped; two rows for one node are a `cardinality_violation`; a NULL value follows `vector_map`'s rule (§6.3: `NaN` in a float vector, 22004 otherwise).
 - `vector_degree` counts distinct neighbours, as `warren.degree` does, and defaults to `f64` so `pr / NULLIF(deg, 0)` and `1.0 / deg` stay in `double precision`; `vector_dense_id` defaults to `i64`.
 - `vector_stats` returns `{count, min, max, mean, sd, l2, nnz}` over the elements of live rows; `sd` is the sample standard deviation (as `stddev`), combined pairwise (Chan et al.), so it can differ from `stddev` in the last bit; undefined statistics are `null`, and non-finite ones the text `double precision` reads (`"NaN"`, `"Infinity"`), since JSON has no such numbers.
 - **Access.** Functions that write vectors (`vector_*` constructors, `spmv`, `spmm`, `vector_map`) need reader access, like every compute function. Replacing or dropping a persisted vector is subject to the ownership rule of §7 (creator or owner). A write records `created_by`, the writing role (§5.1 `warren.vectors`).
@@ -966,23 +966,25 @@ SELECT warren.refresh('fraud');
 ```sql
 CREATE FUNCTION fraud_suspicion(graph text, hub_degree int DEFAULT 50, damping float8 DEFAULT 0.7)
 RETURNS int LANGUAGE plpgsql AS $$
-DECLARE i int; delta float8;
+DECLARE ran int := 0; delta float8; mass float8;
 BEGIN
   PERFORM warren.vector_from_query(graph, 'seed',       'SELECT id, 1.0 FROM accounts WHERE confirmed_fraud OR chargebacks >= 2');
+  mass := warren.vector_reduce(graph, 'seed', 'sum');
   PERFORM warren.vector_from_query(graph, 'is_account', 'SELECT id, 1.0 FROM accounts');
   PERFORM warren.vector_degree(graph, 'deg');
   PERFORM warren.vector_map(graph, 'live',    format('CASE WHEN is_account = 1 OR deg <= %s THEN 1 ELSE 0 END', hub_degree));
   PERFORM warren.vector_map(graph, 'inv_deg', 'CASE WHEN deg > 0 THEN 1.0 / deg ELSE 0 END');
   PERFORM warren.vector_map(graph, 'score',   'seed');
   FOR i IN 1..50 LOOP
+    ran := i;   -- the FOR variable is not visible after the loop
     PERFORM warren.vector_map(graph, 'msg',      'score * inv_deg * live');
     PERFORM warren.spmv(graph, 'msg', 'gathered', semiring := 'plus_times', mask := 'live');
     PERFORM warren.vector_map(graph, 'next',     format('%s * seed + %s * gathered', 1 - damping, damping));
     delta := warren.vector_norm_diff(graph, 'next', 'score', 'l1');
     PERFORM warren.vector_map(graph, 'score',    'next');
-    EXIT WHEN delta < 1e-6;
+    EXIT WHEN delta < 1e-6 * mass;   -- relative to the seed mass
   END LOOP;
-  RETURN i;
+  RETURN ran;
 END $$;
 ```
 
@@ -991,8 +993,8 @@ Then cluster the suspicious subgraph with min-label propagation on the masked gr
 ```sql
 WITH members AS (
   SELECT l.node_id, l.value::bigint AS ring, s.value AS score, n.kind
-  FROM warren.vector_values('fraud','label') l
-  JOIN warren.vector_values('fraud','score') s USING (node_id)
+  FROM warren.vector_values('fraud', 'label', NULL::bigint) l
+  JOIN warren.vector_values('fraud', 'score', NULL::bigint) s USING (node_id)
   JOIN fraud_nodes n ON n.id = l.node_id
   WHERE s.value > 0.01)
 SELECT ring,
@@ -1010,12 +1012,12 @@ v1.1 extension: `warren.contract('fraud', 'label', 'fraud_rings')` gives a ring-
 **Fixture.** Generator parameters: 100,000 honest accounts, each with 1–3 own identifiers (unique IPs/devices/emails); 20 planted rings of 5–40 accounts, each ring sharing 2–6 identifiers among its members; 3 hub identifiers (a NAT IP shared by 5,000 accounts, a shared device by 800, a disposable-email domain node by 2,000) attached to a random mix of honest and ring accounts; 30% of ring accounts and 0.5% of honest accounts are seeded as flagged.
 
 **Expected outcome (assertions).**
-- Every planted ring appears among the top 25 rings by `total_suspicion`; no ring with more than 500 accounts exists in the output (hubs did not merge the population).
+- Every planted ring with a flagged account appears among the top 25 rings by `total_suspicion` (a ring with no flagged account sends no suspicion, so seeded propagation cannot find it); no ring with more than 500 accounts exists in the output (hubs did not merge the population).
 - ≥ 90% of unflagged ring members have `score > 0.01`; ≤ 1% of honest accounts do.
-- Removing the hub mask (`hub_degree := 1e9`) causes at least one output ring to exceed 5,000 accounts — the test that the masking is doing the work.
-- `fraud_suspicion` converges in ≤ 30 iterations; every `vector_map` expression in it takes the compiled path.
+- Removing the hub mask (`hub_degree := 1e9`) makes output rings mix planted rings and the largest grow at least 5× — the test that the masking is doing the work. (Rings of thousands of accounts do not form: a hub passes on its score divided by its degree, below the 0.01 cut, so a hub joins only the suspicious accounts it links.)
+- `fraud_suspicion` converges within its 50-iteration cap: the accounts–identifiers graph is bipartite, so the L1 change contracts by exactly `damping` (0.7) per step, and the relative tolerance 1e-6 takes about 40 iterations (an absolute 1e-6 on ~700 units of seed mass would take ~57); every `vector_map` expression in it takes the compiled path.
 
-*Measured (M5, `test/sql/a1_fraud_rings.sql`, at the fixture scale above):* the program's `FOR i` loop returns NULL as written (PL/pgSQL's loop variable is not the declared `i`), so the test's copy returns the iterations it ran. Three expectations above did not hold and the test asserts what does. (1) A ring with no flagged account sends no suspicion, and seeded propagation cannot find it (one 6-account planted ring here): every planted ring *with a flagged account* is in the top 25. (2) The L1 change falls by about `damping` per iteration, so with the absolute tolerance 1e-6 on ~700 units of seed mass the loop stops at its 50-iteration cap, with a change below 1e-4; "≤ 30 iterations" would need a relative tolerance. (3) Without the hub mask the hubs merge rings (output rings mix planted rings, and the largest grows from 39 to 340 accounts) but no ring nears 5,000 accounts: a hub's neighbours get its score divided by its degree, below the 0.01 cut, so a hub joins only the suspicious accounts it links. The rest holds: no output ring exceeds 500 accounts, 98% of unflagged ring members and 0.5% of honest accounts (the flagged ones) score above 0.01, and every `vector_map` expression is compiled.
+*Measured (M5, `test/sql/a1_fraud_rings.sql`, at the fixture scale above):* the program converges in about 40 iterations; no output ring exceeds 500 accounts; 98% of unflagged ring members and 0.5% of honest accounts (the flagged ones) score above 0.01; one 6-account planted ring has no flagged account and is not found; without the hub mask output rings mix planted rings and the largest grows from 39 to 340 accounts.
 
 **Scale target.** 10M accounts, 100M edges, 8 threads: suspicion program < 60 s end-to-end; label propagation < 30 s; aggregation query < 30 s.
 
