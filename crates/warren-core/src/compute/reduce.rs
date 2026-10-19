@@ -154,7 +154,7 @@ fn reduce_rows<I: Interrupts>(
 
 /// The elements of `values` in `range` as `f64`, skipping those in rows
 /// (of `width` elements) that `skip` marks.
-fn kept<'a, E: Element>(
+pub(super) fn kept<'a, E: Element>(
     values: &'a [E],
     range: Range<usize>,
     width: usize,
@@ -201,12 +201,12 @@ pub fn norm_diff<I: Interrupts>(
 }
 
 /// `partial` of each chunk of `0..len`, in parallel, in chunk order.
-fn chunked<I: Interrupts>(
+pub(super) fn chunked<I: Interrupts, T: Send>(
     workers: &Workers,
     interrupts: &mut I,
     len: usize,
-    partial: impl Fn(Range<usize>) -> Option<f64> + Sync,
-) -> Result<Vec<Option<f64>>, ComputeError> {
+    partial: impl Fn(Range<usize>) -> T + Sync,
+) -> Result<Vec<T>, ComputeError> {
     workers.run(interrupts, |cancellation| {
         (0..len.div_ceil(CHUNK))
             .into_par_iter()
@@ -232,7 +232,7 @@ fn padded(x: &AnyVector, range: Range<usize>) -> Vec<f64> {
 }
 
 /// The larger in SQL order; the first on a tie.
-fn greatest(a: f64, b: f64) -> f64 {
+pub(super) fn greatest(a: f64, b: f64) -> f64 {
     if b.sql_cmp(a).is_gt() {
         b
     } else {
@@ -241,7 +241,7 @@ fn greatest(a: f64, b: f64) -> f64 {
 }
 
 /// The smaller in SQL order; the first on a tie.
-fn least(a: f64, b: f64) -> f64 {
+pub(super) fn least(a: f64, b: f64) -> f64 {
     if b.sql_cmp(a).is_lt() {
         b
     } else {
