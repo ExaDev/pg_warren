@@ -132,13 +132,9 @@ fn the_subspace_distance_tells_volume_from_restructuring() {
 fn the_edit_distance_measures_only_volume() {
     let base = graph(None);
     let base_edges = base.all_relations().forward().edge_count();
-    let workers = Workers::new(2).unwrap();
-    let memory = ComputeMemory::new(1 << 24);
-    let mut resources =
-        Resources { workers: &workers, memory: &memory, interrupts: &mut Uninterrupted };
     for ingest in [Ingest::Volume, Ingest::Novel, Ingest::Bridge] {
         let after = graph(Some(ingest));
-        let d = edit_distance(&mut resources, &base, &after).unwrap().overall;
+        let d = edit_distance(&base, &after).overall;
         assert_eq!((d.removed, d.union), (0, after.all_relations().forward().edge_count()));
         assert_eq!(d.distance, d.added as f64 / (base_edges + d.added) as f64);
     }

@@ -2,15 +2,9 @@ use proptest::prelude::*;
 
 use super::*;
 use crate::compute::reference::{self, Edges};
-use crate::compute::{ComputeMemory, Workers};
-use crate::interrupts::Uninterrupted;
 
 fn distance(before: &GraphCsr, after: &GraphCsr) -> EditDistance {
-    let workers = Workers::new(2).unwrap();
-    let memory = ComputeMemory::new(1 << 20);
-    let mut resources =
-        Resources { workers: &workers, memory: &memory, interrupts: &mut Uninterrupted };
-    edit_distance(&mut resources, before, after).unwrap()
+    edit_distance(before, after)
 }
 
 fn change(added: u64, removed: u64, union: u64) -> EdgeSetChange {
