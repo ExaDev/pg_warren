@@ -13,7 +13,9 @@
   node) above it, is now reloaded on every call, with a `NOTICE` once per
   statement. Raise `warren.max_cache_memory` for such graphs.
 
-## 0.2.0 — in development (until M6)
+## 0.2.0 — vectors, compute and spectral analysis
+
+Milestones M4–M6 of DESIGN.md §13.
 
 - Named vectors (`vector_from_query`, `vector_const`, `vector_degree`,
   `vector_dense_id`, `vector_values`, `matrix_rows`, `vector_topk`,
@@ -47,9 +49,12 @@
   "cannot assign XIDs during a parallel operation" when the query runs in
   parallel mode (`debug_parallel_query`, or a plan that costs out parallel,
   e.g. an InitPlan over a parallel scan). Parallel labels: every function
-  that reads a graph or vector is now `PARALLEL RESTRICTED` (the vector
-  reads, `explain_map`, `diff` and `info` change), writers stay `PARALLEL
-  UNSAFE` (DESIGN.md §9.3).
+  that reads a graph or vector is `PARALLEL RESTRICTED` (`diff` and `info`
+  change from `PARALLEL UNSAFE`), and writers are `PARALLEL UNSAFE`
+  (DESIGN.md §9.3).
+- Behaviour change: `evict` also frees the graph's cached and transient
+  vectors in this backend (transient vectors are gone afterwards), and
+  counts them in its result.
 - Upgrade from 0.1.0: install the new build, then run
   `ALTER EXTENSION pg_warren UPDATE;` in each database before using it.
 

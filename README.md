@@ -18,13 +18,13 @@ See [DESIGN.md](DESIGN.md) for the full design.
 
 ## Status
 
-**Pre-alpha.** Milestone M0 (skeleton): the extension installs and exposes
-`warren.version()`. Nothing else works yet.
+- **0.1.0**: versioned graphs and traversal, milestones M0–M3 of
+  DESIGN.md §13.
+- **0.2.0**: vectors, semiring compute, `gather`, the algorithm library,
+  `eigen` and `distance`, milestones M4–M6.
 
-```sql
-CREATE EXTENSION pg_warren;
-SELECT warren.version();
-```
+See [CHANGELOG.md](CHANGELOG.md). This is pre-1.0 software: the SQL surface
+may still change between minor versions, with an upgrade script each time.
 
 Targets PostgreSQL 15–18 (16 is the development baseline).
 
@@ -50,7 +50,7 @@ pg_warren's contribution is different:
   names).
 - Control flow stays in PL/pgSQL, with per-node logic written as SQL
   expressions.
-- Contraction gives community-level computation.
+- Contraction (planned, v1.1) will give community-level computation.
 
 pg_warren takes no code from either project. Ideas adopted from them are
 credited in [NOTICE](NOTICE) and in comments where they are used; the reading

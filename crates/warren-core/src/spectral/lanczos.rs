@@ -250,14 +250,14 @@ where
         })
     }
 
-    /// How close two magnitudes may be for `Largest` to treat them as tied:
-    /// the tolerance, or the precision's rounding if that is larger.
+    /// How close two magnitudes may be, relative to the largest, for
+    /// `Largest` to treat them as tied: the precision's rounding, never the
+    /// tolerance, which would let a loose `tol` reorder distinct values.
     fn tie(&self) -> f64 {
-        let rounding = match self.options.precision {
+        match self.options.precision {
             Precision::F32 => F32_TIE,
             Precision::F64 => F64_TIE,
-        };
-        self.options.tol.max(rounding)
+        }
     }
 
     fn size(&self) -> usize {
