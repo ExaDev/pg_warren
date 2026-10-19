@@ -20,8 +20,8 @@ mod tests;
 
 pub use distance::{
     align, degree_distance, edit_distance, embedding_distance, spectral_distance,
-    subspace_distance, DegreeDistance, EdgeSetChange, EditDistance, EmbeddingDistance, NodeSet,
-    SpectralDistance, SubspaceDistance,
+    subspace_distance, ComparedRows, DegreeDistance, EdgeSetChange, EditDistance,
+    EmbeddingDistance, SpectralDistance, SubspaceDistance,
 };
 pub use error::SpectralError;
 pub use lanczos::{eigen, Eigen, EigenOptions, Eigenpair, Precision, Which};

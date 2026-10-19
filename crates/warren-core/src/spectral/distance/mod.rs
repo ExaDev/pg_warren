@@ -8,18 +8,18 @@
 //! brought into the id space first with [`align`].
 
 mod alignment;
+mod compared_rows;
 mod degree;
 mod edit;
 mod eigenvalues;
 mod embedding;
-mod node_set;
 mod rows;
 mod subspace;
 
 pub use alignment::align;
+pub use compared_rows::ComparedRows;
 pub use degree::{degree_distance, DegreeDistance};
 pub use edit::{edit_distance, EdgeSetChange, EditDistance};
 pub use eigenvalues::{spectral_distance, SpectralDistance};
 pub use embedding::{embedding_distance, EmbeddingDistance};
-pub use node_set::NodeSet;
 pub use subspace::{subspace_distance, SubspaceDistance};

@@ -18,7 +18,7 @@ fn f32s(values: &[f32]) -> AnyVector {
 
 fn distance_over(
     threads: usize,
-    nodes: NodeSet,
+    nodes: ComparedRows,
     before: &[&AnyVector],
     after: &[&AnyVector],
 ) -> Result<SubspaceDistance, SpectralError> {
@@ -34,7 +34,7 @@ fn distance_on(
     before: &[&AnyVector],
     after: &[&AnyVector],
 ) -> Result<SubspaceDistance, SpectralError> {
-    distance_over(threads, NodeSet::All, before, after)
+    distance_over(threads, ComparedRows::All, before, after)
 }
 
 fn distance(before: &[&AnyVector], after: &[&AnyVector]) -> SubspaceDistance {
@@ -131,8 +131,8 @@ fn over_shared_nodes_rows_only_one_set_has_are_left_out() {
     let after = [f64s(&[0.0, 2.0, 1.0, 5.0]), f64s(&[0.0, 0.0, 1.0, -1.0])];
     let (x, y): (Vec<&AnyVector>, Vec<&AnyVector>) =
         (before.iter().collect(), after.iter().collect());
-    let all = distance_over(1, NodeSet::All, &x, &y).unwrap();
+    let all = distance_over(1, ComparedRows::All, &x, &y).unwrap();
     assert!(all.max_angle > 0.5);
     // On nodes 1 and 2 both spans are the whole plane.
-    assert_eq!(distance_over(1, NodeSet::Shared, &x, &y).unwrap().projection, 0.0);
+    assert_eq!(distance_over(1, ComparedRows::Shared, &x, &y).unwrap().projection, 0.0);
 }

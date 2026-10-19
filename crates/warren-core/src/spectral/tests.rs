@@ -7,7 +7,7 @@ use crate::compute::{ComputeMemory, Workers};
 use crate::graph::GraphCsr;
 use crate::interrupts::Uninterrupted;
 use crate::spectral::{
-    edit_distance, eigen, subspace_distance, EigenOptions, GraphMatrix, NodeSet, Operator,
+    edit_distance, eigen, subspace_distance, ComparedRows, EigenOptions, GraphMatrix, Operator,
     Precision, Resources, Which,
 };
 
@@ -105,7 +105,7 @@ fn subspace(base: &GraphCsr, after: &GraphCsr) -> f64 {
     assert!(before.converged && after.converged);
     let before: Vec<_> = before.pairs.iter().map(|p| &p.vector).collect();
     let after: Vec<_> = after.pairs.iter().map(|p| &p.vector).collect();
-    subspace_distance(&mut resources, &before, &after, NodeSet::Shared).unwrap().projection
+    subspace_distance(&mut resources, &before, &after, ComparedRows::Shared).unwrap().projection
 }
 
 /// Over the nodes both versions share, added volume barely turns the

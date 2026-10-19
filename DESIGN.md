@@ -603,12 +603,12 @@ COMMIT;
 
 **Implemented (M6, `warren_core::spectral`; the SQL binding follows).** Each method returns a small struct of scalars, which the binding returns as `jsonb` (§14 item 11). Versions are aligned by dense id; past a version's id space everything is absent.
 
-- `edit_distance` → per relation (by relation index) and overall over (relation, source, target) triples: `added`, `removed`, `union`, and the Jaccard distance `(added + removed)/union`. Weights are ignored. Row-wise merge of the two forward CSRs, O(N + M).
+- `edit_distance` → per relation (by relation index) and overall over (relation, source, target) triples: `added`, `removed`, `union`, and the Jaccard distance `(added + removed)/union`. Weights are ignored. The row-wise merge of the two forward CSRs is `warren.diff`'s (`EdgeDelta::between`), O(N + M).
 - `degree_distance` → `wasserstein` (W₁, in degrees) and `ks` between the distributions of distinct out-neighbour counts in the all-relations forward CSR, over live (not tombstoned) nodes; an empty version is a point mass at 0.
 - `spectral_distance` → `l2`, `relative` (over the larger norm) and `max` of the in-order difference of two eigenvalue sequences, missing as 0.
 - `subspace_distance` → `projection` (`‖P_X − P_Y‖_F = √(k₁ + k₂ − 2Σcos²θ)`), `max_angle` and the principal `angles`, from one block-ordered Gram pass over both vector sets, Cholesky and an SVD of `L_X⁻¹XᵀY L_Y⁻ᵀ` (inputs need only be independent; cosines within 8Kε of 1 count as 1, so identical inputs give exactly 0).
 - `embedding_distance` → `mean_l2`, `max_l2`, `mean_cosine`, `max_cosine` (1 − cos, from normalised rows) and `rows` compared, skipping rows zero on both sides.
-- `subspace` and `embedding` take a `NodeSet`: `All` reads every row with absent rows as zero (§7), so added and removed nodes count as change; `Shared` reads only nodes present (non-zero) on both sides. A.2 needs `Shared`: with `All`, added volume moves every eigenvector's mass onto the new rows and outweighs restructuring.
+- `subspace` and `embedding` take a `ComparedRows`: `All` reads every row with absent rows as zero (§7), so added and removed nodes count as change; `Shared` reads only nodes present (non-zero) on both sides. A.2 needs `Shared`: with `All`, added volume moves every eigenvector's mass onto the new rows and outweighs restructuring.
 - Cross-graph comparison: `align` moves a vector's rows by a dense-id mapping that the adapter builds by joining the two `id_map`s on external id; the binding then calls the same functions.
 - Small-instance A.2 check (unit test): 4 planted communities of 30, 48 nodes ingested; over shared nodes the subspace distance of the 4 smallest normalised-Laplacian eigenvectors is < 0.5 for *volume* and > 1 for *novel* and *bridge*, whose relative order depends on the sizes (it flips with communities of 40 and 64 ingested), so A.2's `novel < bridge` is checked at its own scale in the integration test.
 
