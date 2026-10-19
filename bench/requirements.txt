@@ -1,0 +1,6 @@
+# Python dependencies of bench/ and test/ (generators, oracle, pytest).
+# Pinned exactly: generator output must be reproducible from a seed, and
+# numpy's Generator streams may change between numpy releases.
+numpy==2.5.3
+networkx==3.7
+pytest==9.1.1
