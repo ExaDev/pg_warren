@@ -659,7 +659,7 @@ Decisions made in M3 (`pg_warren::traversal_sql`, the SQL binding):
 - A walk that reports a row per walk (`paths`, or `ends` without `distinct_ends`) is always bounded: `max_results` defaults to 100,000 for it, and a larger `max_results` than the `warren.max_walk_paths` GUC (default 10,000,000, `USERSET`) is refused with `program_limit_exceeded` (§14 item 15). Stopping at the default is truncation, with the `NOTICE`.
 - The domain's walks are callback-driven (`walk_ends_each`, `walk_paths_each`) rather than cursors, so `warren.walk` collects its rows (within the row limit above) before returning the first; SQL `LIMIT` does not shorten a walk.
 - `last_stats()` reports `function = 'walk'`; a step filter lowers `nodes_visited` (Appendix A.4, tested).
-- Oracle: each mode, forwards and reversed, against a chain of recursive CTEs with a depth column (one per step, tracking each walk's origin) and walk counts summed level by level in SQL, on random int8 and uuid graphs.
+- Oracle: each mode, forwards and reversed, against a chain of recursive CTEs with a depth column (one per step, tracking each walk's origin), walk counts summed level by level in SQL, and, up to 100,000 walks, every walk enumerated in SQL with its path and relations: `paths` without distinct ends must equal that multiset, and each distinct-ends path must be one of its walks. Graphs: int8 with relations, uuid undirected, int4 with tombstones and a tombstoned start, and int8 without a reverse CSR (whose `in` steps and reverse walks are refused). The §9.3 oracles run on 10K-node random graphs; the whole pgrx suite takes about 50 s on PG 16.
 
 `warren.bfs` is retained as the untyped special case (one step, any relation, `max_hops = depth`) with its own simpler signature.
 

@@ -1,6 +1,8 @@
 //! The oracle of `warren.walk` (DESIGN.md §9.2, §12): an equivalent chain
 //! of recursive CTEs, one per step, each with a depth column (walks, not
-//! shortest distances), and walk counts by level-by-level sums in SQL.
+//! shortest distances); walk counts by level-by-level sums in SQL; and,
+//! when there are few enough, every walk enumerated in SQL with its path
+//! and relations. Every mode is checked forwards and in reverse.
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
@@ -114,13 +116,48 @@ mod tests {
         format!("WITH RECURSIVE {} SELECT o, n FROM e{}", ctes.join(", "), chain.len())
     }
 
-    /// Counts the walks along `chain` from the live starts, by summing walk
-    /// counts level by level; leaves (end, walks) in `<g>_walks`.
-    fn count_walks(g: &str, chain: &[S]) -> Result<(), Error> {
+    /// Every walk along `chain` from every node of `origins`, as (origin,
+    /// end, path, rels): one recursive CTE per step carrying the walk so far,
+    /// with a depth column. A walk that splits the same hops differently
+    /// between steps is a different walk, so rows may repeat.
+    fn enumerated(g: &str, t: &str, chain: &[S], origins: &str) -> String {
+        let mut ctes = vec![format!(
+            "w0(o, n, path, rels) AS (
+                 SELECT DISTINCT id, id, ARRAY[id]::{t}[], ARRAY[]::text[] FROM ({origins}) x)"
+        )];
+        for (k, s) in (1..).zip(chain) {
+            let prev = k - 1;
+            let (enter, hand_on) = match s.filter {
+                true => (
+                    format!("AND h.b IN (SELECT id FROM {g}_filter)"),
+                    format!("AND n IN (SELECT id FROM {g}_filter)"),
+                ),
+                false => (String::new(), String::new()),
+            };
+            ctes.push(format!(
+                "s{k}(o, n, d, path, rels) AS (
+                     SELECT o, n, 0, path, rels FROM w{prev}
+                     UNION ALL
+                     SELECT x.o, h.b, x.d + 1, x.path || h.b, x.rels || h.rel
+                     FROM s{k} x JOIN {g}_hop{k} h ON h.a = x.n
+                     WHERE x.d < {max} {enter}),
+                 w{k}(o, n, path, rels) AS (
+                     SELECT o, n, path, rels FROM s{k} WHERE d >= {min} {hand_on})",
+                max = s.max,
+                min = s.min,
+            ));
+        }
+        format!("WITH RECURSIVE {} SELECT o, n, path, rels FROM w{}", ctes.join(", "), chain.len())
+    }
+
+    /// Counts the walks along `chain` from every node of `origins` by
+    /// summing walk counts level by level; leaves (origin, end, walks) in
+    /// `<g>_walks`.
+    fn count_walks(g: &str, chain: &[S], origins: &str) -> Result<(), Error> {
         let mut sql = format!(
             "DROP TABLE IF EXISTS {g}_walks;
-             CREATE TEMP TABLE {g}_walks AS SELECT id AS n, 1::numeric AS c FROM ({starts}) x;",
-            starts = live_starts(g)
+             CREATE TEMP TABLE {g}_walks AS
+                 SELECT DISTINCT id AS o, id AS n, 1::numeric AS c FROM ({origins}) x;"
         );
         for (k, s) in (1..).zip(chain) {
             let enter = match s.filter {
@@ -142,8 +179,8 @@ mod tests {
             for depth in 1..=s.max {
                 sql += &format!(
                     "CREATE TEMP TABLE {g}_next AS
-                         SELECT h.b AS n, sum(c.c) AS c FROM {g}_cur c
-                         JOIN {g}_hop{k} h ON h.a = c.n {enter} GROUP BY h.b;
+                         SELECT c.o, h.b AS n, sum(c.c) AS c FROM {g}_cur c
+                         JOIN {g}_hop{k} h ON h.a = c.n {enter} GROUP BY c.o, h.b;
                      DROP TABLE {g}_cur; ALTER TABLE {g}_next RENAME TO {g}_cur;"
                 );
                 if depth >= s.min {
@@ -152,7 +189,8 @@ mod tests {
             }
             sql += &format!(
                 "DROP TABLE {g}_walks;
-                 CREATE TEMP TABLE {g}_walks AS SELECT n, sum(c) AS c FROM {g}_acc GROUP BY n;"
+                 CREATE TEMP TABLE {g}_walks AS
+                     SELECT o, n, sum(c) AS c FROM {g}_acc GROUP BY o, n;"
             );
         }
         Spi::run(&sql)
@@ -162,121 +200,169 @@ mod tests {
         format!("warren.walk('{g}', {starts}, {steps}{rest})", starts = starts(g))
     }
 
-    /// Checks one chain in every mode, forwards and in reverse.
-    fn check_chain(shape: &Shape, chain: &[S]) -> Result<(), Error> {
-        let g = shape.name;
-        let what = format!("{g} walk of {} steps", chain.len());
-        hops(g, chain)?;
-        let steps = steps_sql(g, chain);
-        let forward = ends_by_origin(g, chain, &live_starts(g));
-        let ends = format!("SELECT DISTINCT n FROM ({forward}) f");
+    /// The most walks a per-walk check enumerates in SQL (the walk's own
+    /// default row limit).
+    const ENUMERABLE: i64 = 100_000;
 
-        same(&what, &format!("SELECT end_id FROM {}", walk(g, &steps, "")), &ends)?;
-        let jsonb = steps_jsonb(g, chain);
-        same(
-            &format!("{what} (jsonb)"),
-            &format!("SELECT end_id FROM {}", walk(g, &jsonb, "")),
-            &ends,
-        )?;
-        same(
-            &format!("{what} count"),
-            &format!("SELECT count FROM {}", walk(g, &steps, ", 'count'")),
-            &format!("SELECT count(*) FROM ({ends}) e"),
-        )?;
+    /// One direction of execution of a chain under test.
+    struct Run<'a> {
+        what: String,
+        g: &'a str,
+        steps: String,
+        /// The walk's extra arguments: `, reverse := true` or nothing.
+        reverse: &'static str,
+        /// Distinct (reported node) rows of the oracle.
+        reported: String,
+        /// (reported node, walks) of the oracle.
+        counts: String,
+        /// (reported node, path, rels) of every walk, when enumerable.
+        walks: Option<String>,
+        total: i64,
+    }
 
-        count_walks(g, chain)?;
-        let total =
-            Spi::get_one::<i64>(&format!("SELECT coalesce(sum(c), 0)::int8 FROM {g}_walks"))?
-                .unwrap_or(0);
-        same(
-            &format!("{what} count of walks"),
-            &format!("SELECT count FROM {}", walk(g, &steps, ", 'count', distinct_ends := false")),
-            &format!("SELECT {total}::int8"),
-        )?;
-        if total <= 100_000 {
+    impl Run<'_> {
+        fn call(&self, rest: &str) -> String {
+            walk(self.g, &self.steps, &format!("{rest}{}", self.reverse))
+        }
+
+        /// Every mode against the oracle.
+        fn check(&self) -> Result<(), Error> {
+            let what = &self.what;
+            let reported = &self.reported;
+            same(what, &format!("SELECT end_id FROM {}", self.call("")), reported)?;
+            same(
+                &format!("{what} count"),
+                &format!("SELECT count FROM {}", self.call(", 'count'")),
+                &format!("SELECT count(*) FROM ({reported}) e"),
+            )?;
+            same(
+                &format!("{what} count of walks"),
+                &format!("SELECT count FROM {}", self.call(", 'count', distinct_ends := false")),
+                &format!("SELECT {}::int8", self.total),
+            )?;
+            if self.total > ENUMERABLE {
+                return Ok(());
+            }
             same(
                 &format!("{what} ends per walk"),
                 &format!(
                     "SELECT end_id, count(*)::numeric FROM {} GROUP BY end_id",
-                    walk(g, &steps, ", distinct_ends := false")
+                    self.call(", distinct_ends := false")
                 ),
-                &format!("SELECT n, c FROM {g}_walks"),
+                &self.counts,
             )?;
+            let Some(walks) = &self.walks else {
+                return Ok(());
+            };
+            same(
+                &format!("{what} every walk"),
+                &format!(
+                    "SELECT end_id, path, rels FROM {}",
+                    self.call(", 'paths', distinct_ends := false")
+                ),
+                walks,
+            )?;
+            same(
+                &format!("{what} one path per end"),
+                &format!("SELECT end_id FROM {}", self.call(", 'paths'")),
+                reported,
+            )?;
+            let strays = Spi::get_one::<i64>(&format!(
+                "SELECT count(*) FROM {} p
+                 WHERE NOT EXISTS (SELECT 1 FROM ({walks}) w
+                                   WHERE w.r = p.end_id AND w.path = p.path AND w.rels = p.rels)",
+                self.call(", 'paths'")
+            ))?;
+            assert_eq!(strays, Some(0), "{what}: a path per end that is not a walk");
+            Ok(())
         }
-        check_paths(shape, chain, &steps, &ends, total)?;
-
-        // In reverse, the starts are the allowed ends and the result is the
-        // nodes walks start from: oracle from every node.
-        let every = format!("SELECT id FROM {g}_nodes WHERE id IS NOT NULL");
-        let all = ends_by_origin(g, chain, &every);
-        same(
-            &format!("{what} reverse"),
-            &format!("SELECT end_id FROM {}", walk(g, &steps, ", reverse := true")),
-            &format!("SELECT DISTINCT o FROM ({all}) f WHERE n IN (SELECT id FROM {g}_starts)"),
-        )?;
-        let bad = Spi::get_one::<i64>(&format!(
-            "SELECT count(*) FROM {}
-             WHERE path[1] <> end_id OR NOT path[array_length(path, 1)] IN (SELECT id FROM {g}_starts)",
-            walk(g, &steps, ", 'paths', reverse := true")
-        ))?;
-        assert_eq!(bad, Some(0), "{what} reverse paths");
-        Ok(())
     }
 
-    /// Paths: one per distinct end, or every walk, each a valid walk.
-    fn check_paths(
-        shape: &Shape,
-        chain: &[S],
-        steps: &str,
-        ends: &str,
-        total: i64,
-    ) -> Result<(), Error> {
+    /// Checks one chain in every mode, forwards and in reverse, and the
+    /// jsonb form of its steps.
+    fn check_chain(shape: &Shape, chain: &[S]) -> Result<(), Error> {
         let g = shape.name;
-        let what = format!("{g} walk paths of {} steps", chain.len());
-        same(&what, &format!("SELECT end_id FROM {}", walk(g, steps, ", 'paths'")), ends)?;
-        let min: u32 = chain.iter().map(|s| s.min).sum();
-        let max: u32 = chain.iter().map(|s| s.max).sum();
-        let hops = match chain.len() {
-            0 => format!(
-                "SELECT NULL::{t} AS a, NULL::{t} AS b, NULL::text AS rel WHERE false",
-                t = shape.id_type
-            ),
-            n => (1..=n)
-                .map(|k| format!("SELECT * FROM {g}_hop{k}"))
-                .collect::<Vec<_>>()
-                .join(" UNION "),
+        let t = shape.id_type;
+        let what = format!("{g} walk of {} steps", chain.len());
+        hops(g, chain)?;
+        let steps = steps_sql(g, chain);
+        let forward = ends_by_origin(g, chain, &live_starts(g));
+        same(
+            &format!("{what} (jsonb)"),
+            &format!("SELECT end_id FROM {}", walk(g, &steps_jsonb(g, chain), "")),
+            &format!("SELECT DISTINCT n FROM ({forward}) f"),
+        )?;
+
+        let total = |filter: &str| -> Result<i64, Error> {
+            Ok(Spi::get_one::<i64>(&format!(
+                "SELECT coalesce(sum(c), 0)::int8 FROM {g}_walks {filter}"
+            ))?
+            .unwrap_or(0))
         };
-        for rest in [", 'paths'", ", 'paths', distinct_ends := false"] {
-            let bad = Spi::get_one::<i64>(&format!(
-                "WITH p AS (SELECT * FROM {walk}), hop AS ({hops})
-                 SELECT count(*) FROM p
-                 WHERE NOT path[1] IN ({starts})
-                    OR path[array_length(path, 1)] <> end_id
-                    OR array_length(path, 1) - 1 NOT BETWEEN {min} AND {max}
-                    OR coalesce(array_length(rels, 1), 0) <> array_length(path, 1) - 1
-                    OR EXISTS (SELECT 1 FROM generate_subscripts(rels, 1) k
-                               WHERE NOT EXISTS (SELECT 1 FROM hop
-                                                 WHERE hop.a = path[k] AND hop.b = path[k + 1]
-                                                   AND hop.rel = rels[k]))",
-                walk = walk(g, steps, rest),
-                starts = live_starts(g),
+        count_walks(g, chain, &live_starts(g))?;
+        let forward_total = total("")?;
+        let forward_walks = (forward_total <= ENUMERABLE).then(|| {
+            format!(
+                "SELECT n AS r, path, rels FROM ({}) w",
+                enumerated(g, t, chain, &live_starts(g))
+            )
+        });
+        if let Some(walks) = &forward_walks {
+            Spi::run(&format!(
+                "DROP TABLE IF EXISTS {g}_fwd; CREATE TEMP TABLE {g}_fwd AS {walks}"
             ))?;
-            assert_eq!(bad, Some(0), "{what}{rest}: invalid paths");
         }
-        if total <= 100_000 {
-            let rows = Spi::get_one::<String>(&format!(
-                "SELECT count(*) || ' ' || count(DISTINCT (path, rels)) FROM {}",
-                walk(g, steps, ", 'paths', distinct_ends := false")
+        Run {
+            what: what.clone(),
+            g,
+            steps: steps.clone(),
+            reverse: "",
+            reported: format!("SELECT DISTINCT n FROM ({forward}) f"),
+            counts: format!("SELECT n, sum(c) FROM {g}_walks GROUP BY n"),
+            walks: forward_walks.map(|_| format!("SELECT r, path, rels FROM {g}_fwd")),
+            total: forward_total,
+        }
+        .check()?;
+        if !shape.reverse {
+            // Reversing a step reads the opposite CSR, which is missing.
+            return Ok(());
+        }
+
+        // In reverse the starts are the allowed ends and the walk reports
+        // the nodes walks start from: the oracle runs from every node.
+        let every = format!("SELECT id FROM {g}_nodes WHERE id IS NOT NULL");
+        let allowed = format!("n IN (SELECT id FROM {g}_starts)");
+        count_walks(g, chain, &every)?;
+        let reverse_total = total(&format!("WHERE {allowed}"))?;
+        let reverse_walks = (reverse_total <= ENUMERABLE).then(|| {
+            format!(
+                "SELECT o AS r, path, rels FROM ({}) w WHERE {allowed}",
+                enumerated(g, t, chain, &every)
+            )
+        });
+        if let Some(walks) = &reverse_walks {
+            Spi::run(&format!(
+                "DROP TABLE IF EXISTS {g}_rev; CREATE TEMP TABLE {g}_rev AS {walks}"
             ))?;
-            assert_eq!(rows, Some(format!("{total} {total}")), "{what}: every walk once");
         }
-        Ok(())
+        let all = ends_by_origin(g, chain, &every);
+        Run {
+            what: format!("{what} reverse"),
+            g,
+            steps,
+            reverse: ", reverse := true",
+            reported: format!("SELECT DISTINCT o FROM ({all}) f WHERE {allowed}"),
+            counts: format!("SELECT o, sum(c) FROM {g}_walks WHERE {allowed} GROUP BY o"),
+            walks: reverse_walks.map(|_| format!("SELECT r, path, rels FROM {g}_rev")),
+            total: reverse_total,
+        }
+        .check()
     }
 
-    fn chains(relations: bool) -> Vec<Vec<S>> {
+    fn chains(relations: bool, reverse: bool) -> Vec<Vec<S>> {
         let (some, other) =
             if relations { ("ARRAY['a', 'c']", "ARRAY['b']") } else { ("NULL", "ARRAY['']") };
-        vec![
+        let chains = vec![
             vec![
                 S { rels: some, direction: "out", filter: false, min: 1, max: 1 },
                 S { rels: "NULL", direction: "out", filter: true, min: 1, max: 2 },
@@ -286,44 +372,84 @@ mod tests {
                 S { rels: other, direction: "both", filter: true, min: 2, max: 2 },
             ],
             vec![S { rels: "NULL", direction: "out", filter: true, min: 1, max: 3 }],
+            vec![S { rels: other, direction: "out", filter: false, min: 0, max: 0 }],
             vec![],
-        ]
+        ];
+        chains
+            .into_iter()
+            .filter(|chain| reverse || chain.iter().all(|s| s.direction == "out"))
+            .collect()
     }
 
-    fn check_walks(shape: Shape) -> Result<(), Error> {
-        generate(&shape, false)?;
-        for chain in chains(shape.relations) {
+    fn check_walks(shape: Shape, tombstones: bool) -> Result<(), Error> {
+        generate(&shape, tombstones)?;
+        for chain in chains(shape.relations, shape.reverse) {
             check_chain(&shape, &chain)?;
         }
         Ok(())
     }
 
-    #[pg_test]
-    fn walk_oracle_int8_with_relations() -> Result<(), Error> {
-        check_walks(Shape {
-            name: "w_a",
-            id_type: "int8",
+    fn shape(name: &'static str, id_type: &'static str) -> Shape {
+        Shape {
+            name,
+            id_type,
             directed: true,
             weighted: false,
             relations: true,
             reverse: true,
             nodes: 300,
             edges: 700,
-        })
+        }
+    }
+
+    #[pg_test]
+    fn walk_oracle_int8_with_relations() -> Result<(), Error> {
+        check_walks(shape("w_a", "int8"), false)
     }
 
     #[pg_test]
     fn walk_oracle_uuid_undirected() -> Result<(), Error> {
-        check_walks(Shape {
-            name: "w_b",
-            id_type: "uuid",
+        let undirected = Shape {
             directed: false,
             weighted: true,
             relations: false,
-            reverse: true,
-            nodes: 250,
             edges: 300,
-        })
+            ..shape("w_b", "uuid")
+        };
+        check_walks(undirected, false)
+    }
+
+    #[pg_test]
+    fn walk_oracle_int4_with_tombstoned_starts() -> Result<(), Error> {
+        let tombstoned = shape("w_d", "int4");
+        check_walks(tombstoned, true)?;
+        let start_tombstoned = Spi::get_one::<bool>(
+            "SELECT EXISTS (SELECT 1 FROM w_d_starts s JOIN w_d_ix x ON x.id = s.id AND x.i = 17
+                            WHERE NOT EXISTS (SELECT 1 FROM w_d_nodes n WHERE n.id = s.id))",
+        )?;
+        assert_eq!(start_tombstoned, Some(true), "a start is tombstoned");
+        Ok(())
+    }
+
+    #[pg_test]
+    fn walk_oracle_without_a_reverse_csr() -> Result<(), Error> {
+        let forward_only = Shape { reverse: false, ..shape("w_e", "int8") };
+        check_walks(forward_only, false)?;
+        let refused = crate::fixture::failure(&format!(
+            "(SELECT count(*) FROM {})",
+            walk("w_e", "ARRAY[warren.s(NULL, 'in')]", "")
+        ))?;
+        let reversed = crate::fixture::failure(&format!(
+            "(SELECT count(*) FROM {})",
+            walk("w_e", "ARRAY[warren.s(NULL)]", ", reverse := true")
+        ))?;
+        for error in [refused, reversed] {
+            assert_eq!(
+                error.as_deref(),
+                Some("55000: direction 'in' or 'both' needs the reverse CSR, and this graph has none")
+            );
+        }
+        Ok(())
     }
 
     /// Appendix A.4: a step filter prunes the walk rather than its output,

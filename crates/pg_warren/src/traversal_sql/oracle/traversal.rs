@@ -81,7 +81,7 @@ mod tests {
                     &reached(&format!("{g}_starts")),
                 )?;
                 let start = format!(
-                    "(SELECT id FROM {g}_starts WHERE id IS NOT NULL ORDER BY md5(id::text) LIMIT 1)"
+                    "(SELECT id FROM {g}_starts WHERE id IN (SELECT id FROM {g}_nodes) ORDER BY md5(id::text) LIMIT 1)"
                 );
                 same(
                     &format!("{g} reachable {direction} {rels}"),
@@ -155,7 +155,7 @@ mod tests {
     fn check_shortest_paths(shape: &Shape) -> Result<(), Error> {
         let g = shape.name;
         let start = format!(
-            "(SELECT id FROM {g}_starts WHERE id IS NOT NULL ORDER BY md5(id::text) LIMIT 1)"
+            "(SELECT id FROM {g}_starts WHERE id IN (SELECT id FROM {g}_nodes) ORDER BY md5(id::text) LIMIT 1)"
         );
         for direction in shape.directions() {
             for rels in shape.selections() {
@@ -197,7 +197,7 @@ mod tests {
         let g = shape.name;
         let t = shape.id_type;
         let start = format!(
-            "(SELECT id FROM {g}_starts WHERE id IS NOT NULL ORDER BY md5(id::text) LIMIT 1)"
+            "(SELECT id FROM {g}_starts WHERE id IN (SELECT id FROM {g}_nodes) ORDER BY md5(id::text) LIMIT 1)"
         );
         for direction in shape.directions() {
             for rels in shape.selections() {
@@ -325,8 +325,8 @@ mod tests {
                 weighted: false,
                 relations: false,
                 reverse: true,
-                nodes: 2000,
-                edges: 5000,
+                nodes: 10000,
+                edges: 25000,
             },
             false,
         )
@@ -342,8 +342,8 @@ mod tests {
                 weighted: true,
                 relations: true,
                 reverse: true,
-                nodes: 1500,
-                edges: 2500,
+                nodes: 10000,
+                edges: 15000,
             },
             false,
         )
@@ -359,8 +359,8 @@ mod tests {
                 weighted: true,
                 relations: true,
                 reverse: false,
-                nodes: 1500,
-                edges: 4000,
+                nodes: 10000,
+                edges: 25000,
             },
             false,
         )
@@ -376,8 +376,8 @@ mod tests {
                 weighted: true,
                 relations: true,
                 reverse: true,
-                nodes: 3000,
-                edges: 9000,
+                nodes: 10000,
+                edges: 30000,
             },
             true,
         )
@@ -393,8 +393,8 @@ mod tests {
                 weighted: false,
                 relations: false,
                 reverse: true,
-                nodes: 1000,
-                edges: 1500,
+                nodes: 10000,
+                edges: 12000,
             },
             false,
         )
