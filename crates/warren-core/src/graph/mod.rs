@@ -4,6 +4,7 @@
 //! stable dense ids across versions, and the tombstone bitmap
 //! (DESIGN.md §5.2, §5.3).
 
+mod csr;
 mod edge_list;
 mod error;
 mod id_map;
@@ -11,6 +12,7 @@ mod memory;
 mod relation;
 mod tombstones;
 
+pub use csr::{AnyCsr, Csr, Neighbours, Target};
 pub use edge_list::{EdgeIntake, EdgeList};
 pub use error::GraphError;
 pub use id_map::{ExternalId, IdMap};
