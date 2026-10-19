@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.3.0 — in development (until M7)
+
 ## 0.2.0 — vectors, compute and spectral analysis
 
 Milestones M4–M6 of DESIGN.md §13.

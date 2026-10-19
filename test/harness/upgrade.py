@@ -114,10 +114,9 @@ def differences(expected, found):
 
 # State written under the released version, to exercise the upgrade's
 # backfills and what runs on the upgraded catalog: a graph with three
-# promoted versions (the first holding a vector inserted directly, since no
-# released version had vector-writing functions) and a staged one.
-SEED = """
-    CREATE ROLE upgrade_owner;
+# promoted versions (the first holding vector 'old', all ones) and a staged
+# one. Roles are cluster-wide, so check creates upgrade_owner once.
+SEED_GRAPH = """
     CREATE TABLE upgrade_nodes AS SELECT generate_series(1, 4)::bigint AS id;
     CREATE TABLE upgrade_edges AS SELECT id AS src, id % 4 + 1 AS dst FROM upgrade_nodes;
     GRANT SELECT ON upgrade_nodes, upgrade_edges TO upgrade_owner;
@@ -126,14 +125,36 @@ SEED = """
                                'SELECT src, dst FROM upgrade_edges');
     RESET ROLE;
     SELECT warren.refresh('upgrade');
+"""
+
+# Vector 'old' on the current version, written by the graph owner where the
+# release has vector functions, and directly into the catalog where it has
+# none (0.1.0, whose warren.vectors has no created_by).
+SEED_VECTOR = """
+    SET ROLE upgrade_owner;
+    SELECT warren.vector_const('upgrade', 'old', 1);
+    RESET ROLE;
+"""
+SEED_VECTOR_DIRECTLY = """
     INSERT INTO warren.vectors (graph_id, version_id, name, dtype, length)
     SELECT graph_id, current_version, 'old', 'f64', 4 FROM warren.graphs;
     INSERT INTO warren.vector_chunks
     SELECT vector_id, 0, decode(repeat('000000000000f03f', 4), 'hex') FROM warren.vectors;
+"""
+
+SEED_VERSIONS = """
     SELECT warren.refresh('upgrade');
     SELECT warren.refresh('upgrade');
     SELECT warren.refresh('upgrade', promote := false);
 """
+
+
+def seed(released):
+    """Writes the seed state with the released version's own functions."""
+    released.execute(SEED_GRAPH)
+    has_vectors = released.query("SELECT to_regproc('warren.vector_const') IS NOT NULL")
+    released.execute(SEED_VECTOR if has_vectors == [["t"]] else SEED_VECTOR_DIRECTLY)
+    released.execute(SEED_VERSIONS)
 
 # Versions as `id:staged`, by seq.
 VERSIONS = """
@@ -171,6 +192,7 @@ def after_update(upgraded):
 def check(cluster, current):
     """Checks every released version's upgrade path; returns the failures."""
     fresh = cluster.database("postgres")
+    fresh.execute("CREATE ROLE upgrade_owner")
     fresh.execute("CREATE DATABASE upgrade_fresh")
     expected_db = cluster.database("upgrade_fresh")
     expected_db.execute("CREATE EXTENSION pg_warren")
@@ -181,7 +203,7 @@ def check(cluster, current):
         fresh.execute(f"CREATE DATABASE {name}")
         upgraded = cluster.database(name)
         upgraded.execute(f"CREATE EXTENSION pg_warren VERSION '{version}'")
-        upgraded.execute(SEED)
+        seed(upgraded)
         upgraded.execute("ALTER EXTENSION pg_warren UPDATE")
         diff = differences(expected, describe(upgraded))
         if diff:
