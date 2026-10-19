@@ -69,26 +69,26 @@ pub(super) fn element<T: Element + FromDatum + IntoDatum>(
     Ok(())
 }
 
-/// The non-NULL `text` message of `row`, as its bytes.
-pub(super) fn text(
+/// The non-NULL `text` or `bytea` message of `row`, as the bytes of its
+/// detoasted varlena (text in the database encoding, never re-encoded).
+pub(super) fn payload(
     messages: &mut Messages<Bytes>,
     node: DenseId,
     row: &SpiHeapTupleData<'_>,
 ) -> Result<(), ComputeSqlError> {
-    if let Some(value) = row.get::<String>(2)? {
-        messages.push(node, value.as_bytes())?;
-    }
-    Ok(())
-}
-
-/// The non-NULL `bytea` message of `row`, as its bytes.
-pub(super) fn bytea(
-    messages: &mut Messages<Bytes>,
-    node: DenseId,
-    row: &SpiHeapTupleData<'_>,
-) -> Result<(), ComputeSqlError> {
-    if let Some(value) = row.get::<Vec<u8>>(2)? {
-        messages.push(node, &value)?;
+    let Some(value) = row.get::<AnyElement>(2)? else {
+        return Ok(());
+    };
+    // SAFETY: the value is a text or bytea datum, a varlena; detoasting
+    // returns it, or a palloc'd copy, which is freed after it is read.
+    unsafe {
+        let stored = value.datum().cast_mut_ptr::<pg_sys::varlena>();
+        let detoasted = pg_sys::pg_detoast_datum_packed(stored);
+        let pushed = messages.push(node, pgrx::varlena::varlena_to_byte_slice(detoasted));
+        if detoasted != stored {
+            pg_sys::pfree(detoasted.cast());
+        }
+        pushed?;
     }
     Ok(())
 }

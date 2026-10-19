@@ -494,3 +494,26 @@ proptest! {
         prop_assert_eq!(on_one, bits(check::<f64>(workers(), &scenario, &sent)?));
     }
 }
+
+#[test]
+fn a_cursor_walks_the_rows_iter_yields() {
+    let memory = memory();
+    let sent = messages::<f64>(&memory, &SENT);
+    let gathered = super::gather(
+        workers(),
+        &memory,
+        &mut Uninterrupted,
+        &example(true),
+        &Gather::new(Combiner::Collect),
+        &sent,
+    )
+    .unwrap();
+    let mut at = RowAt::default();
+    let mut walked = Vec::new();
+    while let Some((receiver, received)) = gathered.next_row(&mut at) {
+        let Received::Messages(messages) = received else { panic!("collect gives messages") };
+        walked.push((receiver, messages.iter().collect::<Vec<_>>()));
+    }
+    assert_eq!(walked, [(0, vec![3.0, 4.0]), (1, vec![1.0]), (2, vec![1.0, 2.0])]);
+    assert_eq!(gathered.next_row(&mut at).map(|(receiver, _)| receiver), None);
+}

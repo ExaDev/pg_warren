@@ -5,7 +5,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{failure, rows, small};
+    use crate::fixture::{failure, refresh, ring, rows, small};
 
     /// `warren.gather` over the small graph, as `node:value` text.
     fn gathered(messages: &str, value_type: &str, options: &str) -> Result<Option<String>, Error> {
@@ -148,6 +148,28 @@ mod tests {
         );
         let table = gathered("TABLE msgs", "bigint", ", 'sum'")?;
         assert_eq!(table.as_deref(), Some("1:400 2:100 3:200 4:400 5:500"));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn results_stream_row_by_row() -> Result<(), Error> {
+        ring("big", 20_000, 2)?;
+        refresh("big", true)?;
+        let call = "warren.gather('big', 'SELECT id, jsonb_build_array(id, id) FROM big_nodes, generate_series(1, 3)',
+                                  NULL::bigint, NULL::jsonb[])";
+        let first = rows(&format!("SELECT node_id || ':' || value::text FROM {call} LIMIT 1"))?;
+        assert_eq!(first.as_deref(), Some("1:{\"[20000, 20000]\",\"[20000, 20000]\",\"[20000, 20000]\"}"));
+        let all = Spi::get_one::<i64>(&format!("SELECT count(*) FROM {call} WHERE cardinality(value) = 3"))?;
+        assert_eq!(all, Some(20_000));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn concat_joins_bytes_whatever_their_encoding() -> Result<(), Error> {
+        small("t")?;
+        let bytes = "SELECT id, CASE WHEN id = 1 THEN '\\xff00'::bytea ELSE '\\x41'::bytea END FROM t_nodes";
+        let joined = gathered(bytes, "bytea", ", 'concat', direction := 'out'")?;
+        assert_eq!(joined.as_deref(), Some("1:\\x4141 2:\\x41 3:\\x41 4:\\xff00 5:\\x41"));
         Ok(())
     }
 

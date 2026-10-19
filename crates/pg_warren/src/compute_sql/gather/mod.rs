@@ -13,9 +13,11 @@ mod source;
 
 use pgrx::prelude::*;
 use pgrx::{AnyElement, FromDatum, IntoDatum};
+use std::sync::Arc;
+
 use warren_core::compute::{
-    gather as fan_in, AnyVector, Bytes, Combine, Combiner, Dtype, Gather, Mask, Messages,
-    SemiringElement,
+    gather as fan_in, AnyVector, Bytes, Combine, Combiner, ComputeError, Dtype, Gather, Mask,
+    Messages, RowAt, SemiringElement,
 };
 use warren_core::graph::RelationSelection;
 
@@ -31,7 +33,7 @@ use crate::selection::{direction, relations};
 use crate::source::{describe, type_name, with_id_type, IdDatum, SourceError};
 pub(crate) use codec::TypeError;
 use codec::{Codec, ResultType};
-use emit::Row;
+use emit::{Build, Row, Stream};
 use source::MessageSource;
 
 /// The arguments of a `gather` call.
@@ -50,10 +52,26 @@ struct Arguments<'a> {
 
 /// Where the messages are read from, once prepared.
 enum Input {
-    /// A width-1 vector.
-    Vector(std::sync::Arc<AnyVector>),
-    /// A query of `(id, value)` columns, wrapped to cast them.
-    Query(String),
+    /// A width-1 vector: its values take the fixed-width path.
+    Vector(Arc<AnyVector>),
+    /// A query of `(id, value)` columns, wrapped to cast them, read with
+    /// `codec`.
+    Query {
+        /// How its messages are read.
+        codec: Codec,
+        /// The wrapped query.
+        query: String,
+    },
+}
+
+impl Input {
+    /// How the messages are read.
+    fn codec(&self, combiner: Combiner) -> Result<Codec, ComputeSqlError> {
+        Ok(match self {
+            Self::Vector(vector) => Codec::choose(dtype_type(vector.dtype()), combiner)?,
+            Self::Query { codec, .. } => *codec,
+        })
+    }
 }
 
 /// The SQL type of a vector's elements.
@@ -119,12 +137,12 @@ fn result_oid(result: ResultType) -> Result<pg_sys::Oid, ComputeSqlError> {
 }
 
 impl Arguments<'_> {
-    /// The codec and input of the messages.
+    /// Where the messages come from.
     fn prepare<E: IdDatum>(
         &self,
         vectors: &mut Vectors<E>,
         caller: &Caller,
-    ) -> Result<(Codec, Input), ComputeSqlError> {
+    ) -> Result<Input, ComputeSqlError> {
         let names = vectors.names()?;
         let is_vector = |name: &str| names.iter().any(|bound| bound.name == name);
         let is_relation = |name: &str| relation_visible(caller, name);
@@ -143,8 +161,7 @@ impl Arguments<'_> {
                         vector.width()
                     )));
                 }
-                let codec = Codec::choose(dtype_type(vector.dtype()), self.combiner)?;
-                return Ok((codec, Input::Vector(vector)));
+                return Ok(Input::Vector(vector));
             }
             MessageSource::Relation(name) => format!("TABLE {name}"),
             MessageSource::Query(query) => query.trim_end().trim_end_matches(';').to_owned(),
@@ -167,7 +184,7 @@ impl Arguments<'_> {
             id_type_name::<E>(),
             qualified(codec.read_type())
         );
-        Ok((codec, Input::Query(wrapped)))
+        Ok(Input::Query { codec, query: wrapped })
     }
 
     /// Gathers at id type `E`.
@@ -175,10 +192,11 @@ impl Arguments<'_> {
         &self,
         resolved: Resolved,
         caller: &Caller,
-    ) -> Result<Vec<Row>, ComputeSqlError> {
+    ) -> Result<Rows, ComputeSqlError> {
         check_type::<E>(self.graph, "id_type", self.id_type, false)?;
         let mut vectors = Vectors::<E>::open(resolved)?;
-        let (codec, input) = self.prepare(&mut vectors, caller)?;
+        let input = self.prepare(&mut vectors, caller)?;
+        let codec = input.codec(self.combiner)?;
         let result = result_oid(codec.result(self.combiner))?;
         if self.value_type != result {
             return Err(ComputeSqlError::ValueType {
@@ -189,7 +207,7 @@ impl Arguments<'_> {
             });
         }
         let mask = self.mask.map(|name| vectors.get(name)).transpose()?;
-        let mut run = Run {
+        let run = Run {
             arguments: self,
             vectors: &vectors,
             caller,
@@ -197,16 +215,27 @@ impl Arguments<'_> {
             result,
             codec,
         };
-        match codec {
-            Codec::Element { dtype: Dtype::F64, .. } => run.elements::<f64>(&input),
-            Codec::Element { dtype: Dtype::F32, .. } => run.elements::<f32>(&input),
-            Codec::Element { dtype: Dtype::I64, .. } => run.elements::<i64>(&input),
-            Codec::Element { dtype: Dtype::Bool, .. } => run.elements::<bool>(&input),
-            Codec::Payload { sql } => run.bytes(&input, sql == pg_sys::BYTEAOID),
-            Codec::Binary { sql } => run.binary(&input, sql),
+        match (input, codec) {
+            (Input::Vector(vector), _) => match vector.dtype() {
+                Dtype::F64 => run.vector::<f64>(&vector),
+                Dtype::F32 => run.vector::<f32>(&vector),
+                Dtype::I64 => run.vector::<i64>(&vector),
+                Dtype::Bool => run.vector::<bool>(&vector),
+            },
+            (Input::Query { query, .. }, Codec::Element { dtype, .. }) => match dtype {
+                Dtype::F64 => run.elements::<f64>(&query),
+                Dtype::F32 => run.elements::<f32>(&query),
+                Dtype::I64 => run.elements::<i64>(&query),
+                Dtype::Bool => run.elements::<bool>(&query),
+            },
+            (Input::Query { query, .. }, Codec::Payload { .. }) => run.payloads(&query),
+            (Input::Query { query, .. }, Codec::Binary { sql }) => run.binary(&query, sql),
         }
     }
 }
+
+/// The result rows, streamed.
+type Rows = Box<dyn Iterator<Item = Row>>;
 
 /// A prepared gather.
 struct Run<'r, E> {
@@ -242,11 +271,13 @@ macro_rules! sql_element {
 sql_element!(f64, f32, bool);
 
 impl<E: IdDatum> Run<'_, E> {
-    /// Fans `messages` out and combines them.
-    fn gather<M: Combine>(
+    /// Fans `messages` out, combines them, and streams the result, whose
+    /// single values `build` makes.
+    fn stream<M: Combine + 'static>(
         &self,
-        messages: &Messages<M>,
-    ) -> Result<warren_core::compute::Gathered<M>, ComputeSqlError> {
+        messages: Messages<M>,
+        build: Build<M>,
+    ) -> Result<Rows, ComputeSqlError> {
         let loaded = &self.vectors.loaded;
         let selected = relations(&loaded.relations, self.arguments.rels.as_deref());
         let spec = Gather {
@@ -256,52 +287,49 @@ impl<E: IdDatum> Run<'_, E> {
             mask: self.mask.map(|vector| Mask { vector, complement: self.arguments.complement }),
         };
         let memory = &self.vectors.memory;
-        Ok(fan_in(&*workers()?, memory, &mut PostgresInterrupts, &loaded.graph, &spec, messages)?)
+        let gathered =
+            fan_in(&*workers()?, memory, &mut PostgresInterrupts, &loaded.graph, &spec, &messages)?;
+        drop(messages);
+        Ok(Box::new(Stream {
+            loaded: Arc::clone(loaded),
+            gathered,
+            result: self.result,
+            message: self.codec.message_type(),
+            build,
+            at: RowAt::default(),
+        }))
     }
 
-    /// Fixed-width messages of element type `T`.
-    fn elements<T: SqlElement>(&mut self, input: &Input) -> Result<Vec<Row>, ComputeSqlError> {
+    /// Every live node's value of width-1 `vector`, of element type `T`.
+    fn vector<T: SqlElement>(&self, vector: &AnyVector) -> Result<Rows, ComputeSqlError> {
+        let values = T::vector(vector)
+            .ok_or(ComputeError::DtypeMismatch { expected: T::DTYPE, found: vector.dtype() })?
+            .values();
         let mut messages = Messages::<T>::new(&self.vectors.memory)?;
-        match input {
-            Input::Vector(vector) => {
-                let values = T::vector(vector).map(|vector| vector.values()).unwrap_or_default();
-                read::from_vector(self.vectors, values, &mut messages)?;
-            }
-            Input::Query(query) => {
-                read::from_query(self.vectors, self.caller, query, |node, row| {
-                    read::element(&mut messages, node, row)
-                })?
-            }
-        }
-        let gathered = self.gather(&messages)?;
-        drop(messages);
-        let message = self.codec.message_type();
-        Ok(emit::rows(
-            &self.vectors.loaded.id_map,
-            &gathered,
-            self.result,
-            message,
-            |value: T, sql| value.datum(sql),
-        ))
+        read::from_vector(self.vectors, values, &mut messages)?;
+        self.stream(messages, Box::new(|value: T, sql| value.datum(sql)))
     }
 
-    /// `text` (or, if `bytea`, `bytea`) payloads, for `concat`.
-    fn bytes(&mut self, input: &Input, bytea: bool) -> Result<Vec<Row>, ComputeSqlError> {
-        let Input::Query(query) = input else { return Ok(Vec::new()) };
-        let mut messages = Messages::<Bytes>::new(&self.vectors.memory)?;
-        read::from_query(self.vectors, self.caller, query, |node, row| match bytea {
-            true => read::bytea(&mut messages, node, row),
-            false => read::text(&mut messages, node, row),
+    /// `query`'s fixed-width messages, read as element type `T`.
+    fn elements<T: SqlElement>(&self, query: &str) -> Result<Rows, ComputeSqlError> {
+        let mut messages = Messages::<T>::new(&self.vectors.memory)?;
+        read::from_query(self.vectors, self.caller, query, |node, row| {
+            read::element(&mut messages, node, row)
         })?;
-        let gathered = self.gather(&messages)?;
-        drop(messages);
-        let message = self.codec.message_type();
-        Ok(emit::rows(&self.vectors.loaded.id_map, &gathered, self.result, message, emit::payload))
+        self.stream(messages, Box::new(|value: T, sql| value.datum(sql)))
     }
 
-    /// Messages of type `sql` in their binary send form.
-    fn binary(&mut self, input: &Input, sql: pg_sys::Oid) -> Result<Vec<Row>, ComputeSqlError> {
-        let Input::Query(query) = input else { return Ok(Vec::new()) };
+    /// `query`'s `text` or `bytea` payloads, for `concat`.
+    fn payloads(&self, query: &str) -> Result<Rows, ComputeSqlError> {
+        let mut messages = Messages::<Bytes>::new(&self.vectors.memory)?;
+        read::from_query(self.vectors, self.caller, query, |node, row| {
+            read::payload(&mut messages, node, row)
+        })?;
+        self.stream(messages, Box::new(|bytes: &[u8], _| emit::payload(bytes)))
+    }
+
+    /// `query`'s messages of type `sql`, in their binary send form.
+    fn binary(&self, query: &str, sql: pg_sys::Oid) -> Result<Rows, ComputeSqlError> {
         let (mut send, mut varlena, mut receive, mut ioparam) =
             (pg_sys::Oid::INVALID, false, pg_sys::Oid::INVALID, pg_sys::Oid::INVALID);
         // SAFETY: the out-pointers point to live locals; both raise an
@@ -314,10 +342,7 @@ impl<E: IdDatum> Run<'_, E> {
         read::from_query(self.vectors, self.caller, query, |node, row| {
             read::binary(send, &mut messages, node, row)
         })?;
-        let gathered = self.gather(&messages)?;
-        drop(messages);
-        let rebuild = |bytes: &[u8], _| emit::received(bytes, receive, ioparam);
-        Ok(emit::rows(&self.vectors.loaded.id_map, &gathered, self.result, sql, rebuild))
+        self.stream(messages, emit::receiver(receive, ioparam))
     }
 }
 
