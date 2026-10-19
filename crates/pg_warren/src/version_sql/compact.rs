@@ -12,7 +12,7 @@ use crate::cache::load;
 use crate::catalog::{version_record, GraphDefinition, NewVersion, VersionId, VersionStats};
 use crate::segment::{write_version, SegmentStore, SpiSegmentStore, CHUNK_SIZE};
 use crate::source::with_id_type;
-use crate::vector::{carry_vectors, SpiVectorStore, VectorStore};
+use crate::vector::{move_vectors, moved_notice, SpiVectorStore, VectorStore};
 
 /// `warren.compact`: renumbers graph `name`'s current version to remove its
 /// tombstones, records the result as a new version with `compacted_from`
@@ -31,7 +31,7 @@ fn compact_graph(name: &str) -> Result<VersionId, VersionOperationError> {
         .current_version
         .ok_or_else(|| VersionOperationError::NoCurrentVersion(graph.name.clone()))?;
     let (carried, built_lsn) = version_record(source)?;
-    with_id_type!(graph.id_type, E => compact_version::<E>(
+    let (version, moved) = with_id_type!(graph.id_type, E => compact_version::<E>(
         &graph,
         source,
         &carried,
@@ -41,7 +41,11 @@ fn compact_graph(name: &str) -> Result<VersionId, VersionOperationError> {
             vectors: &mut SpiVectorStore,
             catalog: &mut SpiCatalog::at_lsn(built_lsn),
         },
-    ))
+    ))?;
+    if !moved.is_empty() {
+        notice!("{}", moved_notice(&moved, source, version));
+    }
+    Ok(version)
 }
 
 /// The stores a compaction reads and writes.
@@ -57,15 +61,15 @@ pub(crate) struct Stores<'a, S, V, C> {
 /// Compacts version `source` of `graph` into a new, promoted version.
 /// Its dropped and deduplicated edge counts are carried over from
 /// `carried`, the source's recorded statistics: the compacted version holds
-/// the same edges. The source's persisted vectors are carried too, with
-/// their rows in the new dense ids (the source keeps its own).
+/// the same edges. The source's persisted vectors move to it, with their
+/// rows in the new dense ids. Returns the version and the vectors moved.
 pub(crate) fn compact_version<E: ExternalId>(
     graph: &GraphDefinition,
     source: VersionId,
     carried: &VersionStats,
     chunk_size: usize,
     stores: &mut Stores<'_, impl SegmentStore, impl VectorStore, impl Catalog>,
-) -> Result<VersionId, VersionOperationError> {
+) -> Result<(VersionId, Vec<String>), VersionOperationError> {
     let Stores { segments, vectors, catalog } = stores;
     let loaded = load::<E>(*segments, source)?;
     let compaction = renumber(&loaded.version()?)?;
@@ -91,9 +95,10 @@ pub(crate) fn compact_version<E: ExternalId>(
     )?;
     catalog.record_bytes(version, bytes)?;
     let rows = compaction.renumbering.old_dense_ids();
-    carry_vectors(*vectors, graph.graph_id, source, version, rows, chunk_size)?;
+    let moved = move_vectors(*vectors, graph.graph_id, source, version, rows, chunk_size)?;
+    // With its vectors moved, retention may delete the source on promotion.
     catalog.promote(graph, version)?;
-    Ok(version)
+    Ok((version, moved))
 }
 
 #[cfg(test)]
@@ -150,7 +155,7 @@ mod unit {
         let mut stores =
             Stores { segments: &mut store, vectors: &mut vectors, catalog: &mut catalog };
         let compacted =
-            compact_version::<i64>(&graph(), source, &carried, 16, &mut stores).unwrap();
+            compact_version::<i64>(&graph(), source, &carried, 16, &mut stores).unwrap().0;
 
         let row = catalog.version(compacted).clone();
         assert_eq!(row.compacted_from, Some(source));
@@ -222,7 +227,7 @@ mod tests {
     }
 
     #[pg_test]
-    fn compact_carries_persisted_vectors_by_node_with_their_creators() -> Result<(), Error> {
+    fn compact_moves_persisted_vectors_by_node_with_their_creators() -> Result<(), Error> {
         let (_, second) = tombstoned()?;
         Spi::run(
             "CREATE ROLE c_reader; SELECT warren.grant('c', 'c_reader'); GRANT SELECT ON c_nodes TO c_reader;
@@ -261,13 +266,31 @@ mod tests {
             Some("0000000000000000000000000000f03f00000000000008400000000000001040"),
             "rows in the new dense ids, without the tombstone"
         );
-        // The source keeps its own; transient vectors are not carried.
+        // They moved: the source has none left (so retention can drop it),
+        // and transient vectors are not carried.
         let kept = Spi::get_one::<i64>(&format!(
             "SELECT count(*) FROM warren.vectors WHERE version_id = {second}"
         ))?;
-        assert_eq!(kept, Some(2));
+        assert_eq!(kept, Some(0));
         let scratch = failure("warren.vector_values('c', 'scratch', NULL::bigint)")?;
         assert!(scratch.unwrap_or_default().starts_with("42704"));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn after_moving_its_vectors_retention_drops_the_compacted_source() -> Result<(), Error> {
+        ring("k", 5, 1)?;
+        refresh("k", true)?;
+        Spi::run("DELETE FROM k_nodes WHERE id = 3; DELETE FROM k_edges WHERE 3 IN (src, dst)")?;
+        refresh("k", true)?;
+        Spi::run("SELECT warren.vector_const('k', 'rank', 1)")?;
+        let compacted = Spi::get_one::<i64>("SELECT warren.compact('k')")?.unwrap_or_default();
+        assert_eq!(versions("k")?, Some(format!("{compacted}:false")));
+        assert_eq!(
+            rows("SELECT node_id || ':' || value FROM warren.vector_values('k', 'rank', NULL::bigint)")?
+                .as_deref(),
+            Some("1:1 2:1 4:1 5:1")
+        );
         Ok(())
     }
 

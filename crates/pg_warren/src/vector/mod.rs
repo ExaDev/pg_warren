@@ -22,7 +22,7 @@ mod store;
 mod transient;
 
 pub(crate) use cache::{evict_vectors, forget, load, remember};
-pub(crate) use carry::carry_vectors;
+pub(crate) use carry::{move_vectors, moved_notice};
 pub(crate) use error::VectorError;
 pub(crate) use persist::{read_vector, write_vector};
 pub(crate) use spi::SpiVectorStore;
