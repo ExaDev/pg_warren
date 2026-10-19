@@ -8,6 +8,7 @@
 mod dtype;
 mod error;
 mod memory;
+mod message;
 mod product;
 mod reduce;
 #[cfg(test)]
@@ -19,6 +20,7 @@ mod workers;
 pub use dtype::{Dtype, Element};
 pub use error::{ArithmeticError, ComputeError};
 pub use memory::{ComputeMemory, MemoryCharge};
+pub use message::{Bytes, Message, MessageBuffer, PackedBytes};
 pub use product::{spmm, spmv, Mask, Product};
 pub use reduce::{norm_diff, reduce, Norm, Reduction};
 pub use semiring::{BinaryOp, Monoid, Semiring, SemiringElement};

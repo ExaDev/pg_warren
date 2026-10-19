@@ -36,6 +36,12 @@ impl ComputeMemory {
 
     /// Charges `bytes` to the budget until the returned charge is dropped.
     pub fn charge(&self, bytes: u64) -> Result<MemoryCharge, ComputeError> {
+        self.reserve(bytes)?;
+        Ok(MemoryCharge { memory: self.clone(), bytes })
+    }
+
+    /// Adds `bytes` to the bytes in use, if that stays within the limit.
+    fn reserve(&self, bytes: u64) -> Result<(), ComputeError> {
         let budget = &self.0;
         budget
             .in_use
@@ -47,7 +53,11 @@ impl ComputeMemory {
                 in_use,
                 limit: budget.limit,
             })?;
-        Ok(MemoryCharge { memory: self.clone(), bytes })
+        Ok(())
+    }
+
+    fn release(&self, bytes: u64) {
+        self.0.in_use.fetch_sub(bytes, Ordering::Relaxed);
     }
 }
 
@@ -89,9 +99,25 @@ impl MemoryCharge {
     }
 }
 
+impl MemoryCharge {
+    /// Charges `bytes` more to the same budget.
+    pub(crate) fn grow(&mut self, bytes: u64) -> Result<(), ComputeError> {
+        self.memory.reserve(bytes)?;
+        self.bytes += bytes;
+        Ok(())
+    }
+
+    /// Releases `bytes` of this charge.
+    pub(crate) fn shrink(&mut self, bytes: u64) {
+        let bytes = bytes.min(self.bytes);
+        self.memory.release(bytes);
+        self.bytes -= bytes;
+    }
+}
+
 impl Drop for MemoryCharge {
     fn drop(&mut self) {
-        self.memory.0.in_use.fetch_sub(self.bytes, Ordering::Relaxed);
+        self.memory.release(self.bytes);
     }
 }
 
@@ -126,6 +152,19 @@ mod tests {
         let _held = memory.clone().charge(10).unwrap();
         assert_eq!(memory.in_use(), 10);
         assert!(memory.charge(1).is_err());
+    }
+
+    #[test]
+    fn a_charge_grows_within_the_limit_and_shrinks() {
+        let memory = ComputeMemory::new(10);
+        let mut charge = memory.charge(4).unwrap();
+        charge.grow(6).unwrap();
+        assert!(matches!(charge.grow(1), Err(ComputeError::MemoryLimit { .. })));
+        assert_eq!((charge.bytes(), memory.in_use()), (10, 10));
+        charge.shrink(7);
+        assert_eq!((charge.bytes(), memory.in_use()), (3, 3));
+        charge.shrink(99);
+        assert_eq!((charge.bytes(), memory.in_use()), (0, 0));
     }
 
     #[test]
