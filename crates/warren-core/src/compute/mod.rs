@@ -9,8 +9,10 @@ mod dtype;
 mod error;
 mod memory;
 mod vector;
+mod workers;
 
 pub use dtype::{Dtype, Element};
 pub use error::ComputeError;
 pub use memory::{ComputeMemory, MemoryCharge};
 pub use vector::{AnyVector, Vector};
+pub use workers::Workers;

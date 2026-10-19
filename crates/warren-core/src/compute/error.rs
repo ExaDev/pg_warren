@@ -2,6 +2,8 @@
 
 use thiserror::Error;
 
+use crate::traversal::Cancelled;
+
 /// Why a compute kernel could not run to completion.
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum ComputeError {
@@ -37,4 +39,19 @@ pub enum ComputeError {
         /// The number of values given.
         found: u64,
     },
+    /// A pool of compute threads needs at least one thread.
+    #[error("compute needs at least one thread")]
+    NoThreads,
+    /// The compute threads could not be started.
+    #[error("could not start the compute threads: {0}")]
+    Threads(String),
+    /// The caller's interrupts asked the kernel to stop.
+    #[error("compute cancelled")]
+    Cancelled,
+}
+
+impl From<Cancelled> for ComputeError {
+    fn from(_: Cancelled) -> Self {
+        Self::Cancelled
+    }
 }
