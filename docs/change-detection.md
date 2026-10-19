@@ -84,6 +84,11 @@ What each step tells you:
 
 Pick the thresholds for your data from runs on batches you already judged.
 
+To compare two candidate batches, build each as a staged version from the
+same current version and compare each with `:base`. Comparing the two
+candidates with each other is refused (22023) if they added different new
+nodes, since both handed out the same new dense ids.
+
 After `COMMIT` without `promote`, the candidate is a staged version:
 queryable with `version := :candidate`, invisible by default, never deleted by
 retention. `promote` it or `drop_version` it. Its eigenvectors, and those on

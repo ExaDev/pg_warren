@@ -338,6 +338,20 @@ SELECT :'change'::jsonb ->> 'projection' AS projection, :'gap'::jsonb -> 'after'
 SELECT assert.that((:'change'::jsonb ->> 'projection')::float8 > 0, 'the bridge turns the subspace');
 SELECT assert.that((:'gap'::jsonb ->> 'max')::float8 > 0.2, 'the bridge raises the spectral gap');
 SELECT assert.equal((warren.diff('kg', :base, :candidate) #>> '{nodes,added}')::bigint, 1::bigint, 'diff');
+-- compute.md "distance": a stored-vector spectral distance needs its matrix
+SELECT assert.raises(format($$SELECT warren.distance('kg', %s, %s, 'spectral', vectors_prefix := 'lap', k := 2)$$,
+                            :base, :candidate), 'spectral with vectors_prefix needs matrix');
+-- change-detection.md: sibling staged versions with diverging new nodes
+SAVEPOINT siblings;
+DELETE FROM relations WHERE src = 9; DELETE FROM entities WHERE id = 9;
+INSERT INTO entities VALUES (10);
+INSERT INTO relations VALUES (10, 1);
+SELECT warren.refresh('kg', promote := false) AS sibling \gset
+SELECT assert.raises(format($$SELECT warren.distance('kg', %s, %s, 'edit')$$, :candidate, :sibling),
+                     'siblings whose new nodes diverge', '22023');
+SELECT assert.equal((warren.distance('kg', :base, :sibling, 'edit') #>> '{overall,added}')::bigint, 2::bigint,
+                    'each sibling compares with the base');
+ROLLBACK TO SAVEPOINT siblings;
 -- 5. decide: here, the change is too large
 ROLLBACK;
 SELECT assert.equal((SELECT count(*) FROM warren.versions WHERE version_id = :candidate), 0::bigint, 'gone');

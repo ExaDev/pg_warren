@@ -49,12 +49,13 @@ compute kernels from the main thread every millisecond), so
   versions of the graph, so after promotions a backend holds one copy per
   graph. Calls with an explicit `version :=` load that version too.
 - **The cache is not size-bounded yet.** Versions stay cached until the
-  connection ends, `warren.evict(name)` frees them (and this role's transient
-  vectors), or the version is dropped. A size-bounded cache
+  connection ends, `warren.evict(name)` frees them (with the graph's cached
+  vectors and this role's transient vectors, which are then gone), or the
+  version is dropped. A size-bounded cache
   (`warren.max_cache_memory`) is planned; a shared-memory cache across
   backends is a later release.
 - `warren.prewarm(name)` loads the current version ahead of first use, for
-  pooled connections; `warren.evict(name)` returns how many entries it freed.
+  pooled connections; `warren.evict(name)` returns how many versions and vectors it freed.
 - `warren.max_compute_memory` bounds one call. Cached versions, cached
   vectors and transient vectors held *between* calls are not charged to it.
 - Storage of a version, per direction: offsets 8 bytes × (id_space + 1) for
@@ -126,8 +127,9 @@ messages where totals may exceed 9.2 × 10¹⁸.
 **Repeated eigenvalues.** Lanczos from one start vector finds one direction
 per eigenspace, so a repeated eigenvalue may appear fewer times than its
 multiplicity. A graph with c connected components has Laplacian eigenvalue 0
-c times; when that matters, run `eigen` on a graph defined over the
-largest component only. `symmetrize := false` (non-symmetric spectra) is accepted
+c times; `eigen` warns when the active nodes form several components. When
+that matters, run `eigen` on a graph defined over the largest component
+only. `symmetrize := false` (non-symmetric spectra) is accepted
 only when the graph is already symmetric.
 
 **Stable functions in a `WHERE` clause are called per row.** Write

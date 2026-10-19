@@ -317,7 +317,17 @@ Top-k eigenpairs by Lanczos with full reorthogonalisation and thick restart.
   symmetrised as (A + Aᵀ)/2; `symmetrize := false` is accepted only for a
   graph that is already symmetric (undirected), and then halves the work.
 - `which`: `largest` (by magnitude) or `smallest` (algebraic; use it for the
-  Laplacians).
+  Laplacians). Under `largest`, magnitudes that differ only by rounding
+  (10⁻⁶ relative for `f32`, 10⁻¹² for `f64`; never `tol`) are ties, and a
+  run of ties lists its positive eigenvalues first, so `λ` comes before `−λ`
+  whichever rounding made larger.
+- **Not converging is a warning, not an error.** If `max_iter` runs out,
+  `eigen` returns the pairs it has, with a `WARNING` naming the steps taken
+  and the largest residual; each row's `residual` says which pairs are
+  unconverged. Raise `max_iter` or `tol`.
+- When the active nodes form several connected components, `eigen` warns
+  too: their repeated eigenvalues may not all be found (see
+  [limits.md](limits.md#known-limitations)).
 - `residual` is ‖Mx − λx‖₂ for the eigenvector as stored. With `f32` vectors
   (the default) it floors near 10⁻⁷ · ‖M‖; `dtype := 'f64'` doubles the
   memory and goes further.
@@ -341,7 +351,7 @@ SELECT * FROM warren.eigen('roads', 2, 'laplacian', 'smallest', vectors_prefix :
 
 ```
 warren.distance(graph, v1, v2, method, vectors_prefix := NULL, k := NULL, x := NULL, y := NULL,
-                compared_rows := 'shared', matrix := 'adjacency', which := 'largest', rels := NULL,
+                compared_rows := 'shared', matrix := NULL, which := 'largest', rels := NULL,
                 weighted := NULL, symmetrize := true, tol := 1e-8, max_iter := NULL, dtype := 'f32',
                 graph2 := NULL)
   RETURNS jsonb   -- {"method", "from", "to", ["graph2"], …the method's scalars}
@@ -354,16 +364,24 @@ are aligned by dense id; across graphs, by external id.
 |---|---|---|
 | `edit` | nothing | per relation and `overall`: `added`, `removed`, `union`, `distance` (Jaccard, `(added + removed) / union`); weights ignored |
 | `degree` | nothing | `wasserstein` (W₁, in degrees), `ks`, over live nodes' out-degrees |
-| `spectral` | `k`; optionally `vectors_prefix` | `l2`, `relative`, `max` of the eigenvalue difference, and `before`, `after`. With a prefix it uses the stored `<prefix>_1..k` (their Rayleigh quotients under `matrix`); without, it solves `k` eigenpairs on each side |
+| `spectral` | `k`; optionally `vectors_prefix` | `l2`, `relative`, `max` of the eigenvalue difference, and `before`, `after`. With a prefix it uses the stored `<prefix>_1..k` (their Rayleigh quotients under `matrix`, which you must then name, since a stored vector does not record its operator); without, it solves `k` eigenpairs of `matrix` (default `adjacency`) on each side and adds `converged` (true when both solves converged) |
 | `subspace` | `vectors_prefix`, `k` (run `eigen` on both versions first) | `projection` (‖P₁ − P₂‖_F), `max_angle`, `angles`: principal angles between the two eigenvector spans; the most sensitive to restructuring, the least to volume |
 | `embedding` | `x` (matrix of `v1`), `y` (of `v2`, default `x`) | `mean_l2`, `max_l2`, `mean_cosine`, `max_cosine` (1 − cos), `rows` compared |
 
 - `compared_rows` (`subspace`, `embedding`): `shared` (default) compares
   only nodes present on both sides; `all` counts absent rows as zero, so
   added and removed nodes dominate.
-- Versions of one graph separated by a `compact` are refused.
-- With `graph2`, both graphs need the same id type; a compaction is no
-  barrier there.
+- Versions of one graph are aligned by dense id, so `distance` refuses
+  (22023) when their shared dense ids name different nodes: across a
+  `compact`, and between two **sibling staged versions** (two
+  `refresh(promote := false)` from one current version) whose new nodes got
+  the same dense ids. Siblings that added the same new nodes, or none,
+  compare. Relations never cause a refusal: they are matched by name.
+- With `graph2`, both graphs need the same id type; the second version is
+  mapped into the first's ids by external id, so a compaction is no barrier.
+  For `edit`, the second graph's CSRs are rebuilt in the first's ids, which
+  is charged to `warren.max_compute_memory` (about the size of its forward
+  CSR) and can be cancelled.
 
 ```sql
 SELECT warren.distance('roads', :v, :v, 'edit');
