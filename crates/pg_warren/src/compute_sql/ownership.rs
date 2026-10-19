@@ -72,12 +72,7 @@ mod tests {
         assert_eq!(created.as_deref(), Some("t_owner"), "a replacement is the replacer's");
         assert_eq!(
             as_role("reader_a", "warren.drop_vector('t', 'score')")?.as_deref(),
-            Some(
-                REFUSED
-                    .replace("reader_a", "t_owner")
-                    .replace("role \"t_owner\"; only", "role \"t_owner\"; only")
-                    .as_str()
-            ),
+            Some(REFUSED.replace("reader_a", "t_owner").as_str()),
         );
         assert_eq!(as_role("t_owner", "warren.drop_vector('t', 'score')")?, None);
         Ok(())
