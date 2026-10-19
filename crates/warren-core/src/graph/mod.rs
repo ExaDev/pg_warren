@@ -13,7 +13,7 @@ mod csr;
 mod edge_list;
 mod error;
 mod id_map;
-mod memory;
+pub(crate) mod memory;
 mod relation;
 mod segment;
 mod tombstones;
