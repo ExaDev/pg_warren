@@ -77,7 +77,8 @@ mod tests {
     ];
 
     /// A call of every function that is not `PARALLEL UNSAFE`, on graph
-    /// `pp` with vector `c`; `{v}` is its current version.
+    /// `pp` with vector `c` and eigenvector `lap_1`; `{v}` is its current
+    /// version, `{w}` that of graph `pq`.
     const READS: &[&str] = &[
         // Transient vectors live only in the leader's backend (and before
         // `evict`, which frees them).
@@ -92,6 +93,10 @@ mod tests {
         "warren.distance('pp', {v}, {v}, 'degree')",
         "warren.distance('pp', {v}, {v}, 'spectral', k := 1)",
         "warren.distance('pp', {v}, {v}, 'embedding', x := 'c', compared_rows := 'all')",
+        "warren.distance('pp', {v}, {v}, 'subspace', vectors_prefix := 'lap', k := 1)",
+        "warren.distance('pp', {v}, {v}, 'spectral', vectors_prefix := 'lap', k := 1, matrix := 'laplacian')",
+        "warren.distance('pp', {v}, {w}, 'subspace', vectors_prefix := 'lap', k := 1, graph2 := 'pq')",
+        "warren.distance('pp', {v}, {w}, 'edit', graph2 := 'pq')",
         "warren.evict('pp')",
         "warren.explain_map('pp', 'c + 1')",
         "warren.has_edge('pp', 1::bigint, 2::bigint)",
@@ -125,6 +130,18 @@ mod tests {
              SELECT warren.vector_const('pp', 't', 2, persist := false)",
         )?;
         Ok(version)
+    }
+
+    /// Eigenvectors `lap_1` on `pp`'s current version and on graph `pq` (a
+    /// ring of 5 too), for the spectral reads; returns `pq`'s version.
+    fn eigenvectors_and_another_graph() -> Result<i64, Error> {
+        ring("pq", 5, 2)?;
+        let other = refresh("pq", true)?;
+        Spi::run(
+            "SELECT * FROM warren.eigen('pp', 1, 'laplacian', vectors_prefix := 'lap');
+             SELECT * FROM warren.eigen('pq', 1, 'laplacian', vectors_prefix := 'lap')",
+        )?;
+        Ok(other)
     }
 
     /// Runs `PERFORM <query>` in a subtransaction, which has no
@@ -164,9 +181,10 @@ mod tests {
     #[pg_test]
     fn every_read_runs_in_parallel_mode() -> Result<(), Error> {
         let version = graph_with_a_vector()?;
+        let other = eigenvectors_and_another_graph()?;
         Spi::run(&format!("SET {FORCE_PARALLEL} = on"))?;
         for read in READS {
-            let read = read.replace("{v}", &version.to_string());
+            let read = read.replace("{v}", &version.to_string()).replace("{w}", &other.to_string());
             // Without a transaction id: assigning one would fail.
             in_subtransaction(&read)?;
             // In the test's transaction, which holds one: SPI then reads
