@@ -112,9 +112,10 @@ def differences(expected, found):
     return "\n".join(lines)
 
 
-# Rows written under the released version, to exercise the upgrade's
-# backfills: a graph with a vector inserted directly (no released version
-# had vector-writing functions).
+# State written under the released version, to exercise the upgrade's
+# backfills and what runs on the upgraded catalog: a graph with three
+# promoted versions (the first holding a vector inserted directly, since no
+# released version had vector-writing functions) and a staged one.
 SEED = """
     CREATE ROLE upgrade_owner;
     CREATE TABLE upgrade_nodes AS SELECT generate_series(1, 4)::bigint AS id;
@@ -129,12 +130,42 @@ SEED = """
     SELECT graph_id, current_version, 'old', 'f64', 4 FROM warren.graphs;
     INSERT INTO warren.vector_chunks
     SELECT vector_id, 0, decode(repeat('000000000000f03f', 4), 'hex') FROM warren.vectors;
+    SELECT warren.refresh('upgrade');
+    SELECT warren.refresh('upgrade');
+    SELECT warren.refresh('upgrade', promote := false);
 """
 
-# What the upgraded data must look like.
-SEEDED = """
-    SELECT created_by::text || ':' || length FROM warren.vectors WHERE name = 'old'
+# Versions as `id:staged`, by seq.
+VERSIONS = """
+    SELECT string_agg(version_id || ':' || staged, ' ' ORDER BY seq) FROM warren.versions
 """
+
+
+def after_update(upgraded):
+    """Checks the upgraded state, then runs a promotion on it; returns the
+    problems found."""
+    problems = []
+    seeded = upgraded.query("SELECT created_by::text || ':' || length FROM warren.vectors WHERE name = 'old'")
+    if seeded != [["upgrade_owner:4"]]:
+        problems.append(f"backfilled vectors are {seeded}")
+    values = upgraded.query(
+        "SELECT string_agg(value::text, ',') FROM warren.vector_values('upgrade', 'old', NULL::bigint, 1)")
+    if values != [["1,1,1,1"]]:
+        problems.append(f"the old vector reads back as {values}")
+    before = upgraded.query(VERSIONS)
+    if before != [["1:false 2:false 3:false 4:true"]]:
+        problems.append(f"versions before the first promotion are {before}")
+    # Retention (retain_versions = 2) on the upgraded catalog: the current
+    # version and the newest other promoted one are kept, the one with a
+    # vector is kept, the staged one is never deleted, the rest go.
+    upgraded.execute("SELECT warren.refresh('upgrade')")
+    after = upgraded.query(VERSIONS)
+    if after != [["1:false 3:false 4:true 5:false"]]:
+        problems.append(f"retention after the update kept {after}")
+    written = upgraded.query("SELECT warren.vector_const('upgrade', 'new', 2) IS NOT NULL")
+    if written != [["t"]]:
+        problems.append(f"a new vector could not be written: {written}")
+    return problems
 
 
 def check(cluster, current):
@@ -155,11 +186,5 @@ def check(cluster, current):
         diff = differences(expected, describe(upgraded))
         if diff:
             failures.append(f"{version} -> {current}: the upgraded catalog differs\n{diff}")
-        seeded = upgraded.query(SEEDED)
-        if seeded != [["upgrade_owner:4"]]:
-            failures.append(f"{version} -> {current}: backfilled vectors are {seeded}")
-        values = upgraded.query(
-            "SELECT string_agg(value::text, ',') FROM warren.vector_values('upgrade', 'old', NULL::bigint)")
-        if values != [["1,1,1,1"]]:
-            failures.append(f"{version} -> {current}: the old vector reads back as {values}")
+        failures += [f"{version} -> {current}: {problem}" for problem in after_update(upgraded)]
     return failures

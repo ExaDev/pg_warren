@@ -11,7 +11,8 @@
   `vector_reduce`, `vector_norm_diff`; `warren.threads` and
   `warren.max_compute_memory`.
 - `compact` moves persisted vectors into the new id space.
-- Upgrade from 0.1.0 with `ALTER EXTENSION pg_warren UPDATE`.
+- Upgrade from 0.1.0: install the new build, then run
+  `ALTER EXTENSION pg_warren UPDATE;` in each database before using it.
 
 ## 0.1.0 — a usable traversal index
 
