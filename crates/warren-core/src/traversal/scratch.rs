@@ -4,6 +4,7 @@
 //! (DESIGN.md §9.3).
 
 use std::collections::{HashMap, HashSet};
+use std::ops::ControlFlow;
 
 use super::{NodeSet, TraversalError};
 use crate::graph::{memory, DenseId, GraphError};
@@ -136,6 +137,40 @@ impl<V: Copy + PartialEq> NodeMap<V> {
     }
 }
 
+/// Rows collected from a streaming traversal. An allocation failure stops
+/// the stream and is reported by [`Rows::finish`].
+pub(crate) struct Rows<T> {
+    rows: Vec<T>,
+    failure: Option<GraphError>,
+}
+
+impl<T> Rows<T> {
+    pub(crate) fn new() -> Self {
+        Self { rows: Vec::new(), failure: None }
+    }
+
+    /// Appends `row`, or stops the stream if there is no memory for it.
+    pub(crate) fn push(&mut self, row: T) -> ControlFlow<()> {
+        match memory::reserve_one(&mut self.rows) {
+            Ok(()) => {
+                self.rows.push(row);
+                ControlFlow::Continue(())
+            }
+            Err(failure) => {
+                self.failure = Some(failure);
+                ControlFlow::Break(())
+            }
+        }
+    }
+
+    pub(crate) fn finish(self) -> Result<Vec<T>, TraversalError> {
+        match self.failure {
+            Some(failure) => Err(failure.into()),
+            None => Ok(self.rows),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,5 +209,13 @@ mod tests {
         assert_eq!(map.get(63), Some(630));
         assert_eq!(map.get(1), None);
         assert_eq!(map.get(64), None);
+    }
+
+    #[test]
+    fn rows_collect_what_is_pushed() {
+        let mut rows = Rows::new();
+        assert_eq!(rows.push(1), ControlFlow::Continue(()));
+        assert_eq!(rows.push(2), ControlFlow::Continue(()));
+        assert_eq!(rows.finish(), Ok(vec![1, 2]));
     }
 }

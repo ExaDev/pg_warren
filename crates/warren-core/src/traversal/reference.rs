@@ -7,7 +7,7 @@ use proptest::prelude::*;
 
 use super::example::relations;
 use super::{Direction, RelationSelection};
-use crate::graph::{DenseId, EdgeList, GraphCsr, RelationIndex};
+use crate::graph::{AnyCsr, DenseId, EdgeList, GraphCsr, RelationIndex};
 
 /// A small random graph: relations, self-loops, parallel edges, weights and
 /// tombstoned nodes, whose edges the build never sees.
@@ -30,11 +30,21 @@ pub(crate) fn scenarios() -> impl Strategy<Value = Scenario> {
                 weighted,
                 edges: edges
                     .into_iter()
-                    .map(|(r, s, t, w)| (r, s, t, if weighted { f64::from(w) } else { 1.0 }))
+                    .map(|(r, s, t, w)| (r, s, t, weight(weighted, w)))
                     .collect(),
                 tombstones,
             })
     })
+}
+
+/// An edge weight: 1 if unweighted, else 0–6 or (one time in eight)
+/// infinite.
+fn weight(weighted: bool, draw: u8) -> f64 {
+    match (weighted, draw) {
+        (false, _) => 1.0,
+        (true, 7) => f64::INFINITY,
+        (true, draw) => f64::from(draw),
+    }
 }
 
 /// A relation selection: `None` for all, else the chosen relations.
@@ -49,12 +59,26 @@ pub(crate) fn directions() -> impl Strategy<Value = Direction> {
 impl Scenario {
     /// The graph the build makes of the live edges, with a reverse CSR.
     pub(crate) fn graph(&self) -> GraphCsr {
+        GraphCsr::build(self.edge_list(), self.relation_count, self.id_space, true).unwrap()
+    }
+
+    /// [`Self::graph`] with `u64` targets, which the build otherwise
+    /// chooses only for id spaces of 2³² or more.
+    pub(crate) fn wide_graph(&self) -> GraphCsr {
+        let graph =
+            GraphCsr::build_with::<u64>(self.edge_list(), self.relation_count, self.id_space, true)
+                .unwrap();
+        assert!(matches!(graph.all_relations().forward(), AnyCsr::U64(_)));
+        graph
+    }
+
+    fn edge_list(&self) -> EdgeList {
         let indexes = relations(self.relation_count);
         let mut list = EdgeList::new(self.weighted);
         for (r, s, t, w) in self.live_edges() {
             list.push(indexes[r], s, t, w).unwrap();
         }
-        GraphCsr::build(list, self.relation_count, self.id_space, true).unwrap()
+        list
     }
 
     /// The relation indexes of `selection`, owned so a test can borrow them.

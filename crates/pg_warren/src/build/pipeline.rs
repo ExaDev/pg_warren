@@ -170,9 +170,9 @@ impl<S: SegmentStore> SegmentWriter<'_, S> {
         csr: &AnyCsr,
     ) -> Result<(), BuildError> {
         let encoded = csr.encode()?;
-        self.write(&csr_segment(direction, CsrPart::Offsets, scope), &encoded.offsets)?;
-        self.write(&csr_segment(direction, CsrPart::Targets, scope), &encoded.targets)?;
-        if let Some(weights) = &encoded.weights {
+        self.write(&csr_segment(direction, CsrPart::Offsets, scope), encoded.offsets())?;
+        self.write(&csr_segment(direction, CsrPart::Targets, scope), encoded.targets())?;
+        if let Some(weights) = encoded.weights() {
             self.write(&csr_segment(direction, CsrPart::Weights, scope), weights)?;
         }
         Ok(())

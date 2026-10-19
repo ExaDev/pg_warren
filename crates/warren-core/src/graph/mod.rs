@@ -11,7 +11,7 @@
 //! [`GraphCsr::from_parts`], which validate the segments against each other.
 
 mod csr;
-mod edge_list;
+pub(crate) mod edge_list;
 mod error;
 mod id_map;
 pub(crate) mod memory;
@@ -24,7 +24,7 @@ pub use edge_list::{EdgeIntake, EdgeList};
 pub use error::GraphError;
 pub use id_map::{ExternalId, IdMap};
 pub use relation::{RelationDictionary, RelationIndex};
-pub use segment::{CsrSegments, SegmentKind};
+pub use segment::CsrSegments;
 pub use tombstones::Tombstones;
 
 /// A dense id: a node's position in the id space of a graph (DESIGN.md §5.2).

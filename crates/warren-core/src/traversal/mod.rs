@@ -4,15 +4,15 @@
 //!
 //! A traversal starts from an [`Adjacency`]: the CSRs of the selected
 //! relations, read in one [`Direction`]. It reports [`TraversalStats`]
-//! alongside its result, and stops with [`TraversalError::Cancelled`] once
-//! its [`Cancellation`] is raised.
+//! alongside its result, and stops with [`TraversalError::Cancelled`] when
+//! its [`Interrupts`] poll says so.
 
 mod adjacency;
 mod bfs;
-mod cancellation;
 mod components;
 mod dijkstra;
 mod error;
+mod interrupts;
 mod level;
 mod limits;
 mod node_set;
@@ -26,14 +26,14 @@ mod example;
 #[cfg(test)]
 mod reference;
 
-pub use adjacency::{Adjacency, Direction, RelationSelection};
-pub use bfs::{bfs, Visit};
-pub use cancellation::Cancellation;
+pub use adjacency::{Adjacency, Direction, DistinctNeighbours, RelationSelection};
+pub use bfs::{bfs, bfs_each, Visit};
 pub use components::components;
 pub use dijkstra::{dijkstra, WeightedPath};
 pub use error::TraversalError;
+pub use interrupts::{Cancellation, Cancelled, Interrupts, Uninterrupted};
 pub use limits::Limits;
 pub use node_set::NodeSet;
-pub use reachable::{reachable, reachable_set};
+pub use reachable::{reachable, reachable_set, reachable_set_each};
 pub use shortest_path::shortest_path;
 pub use stats::{TraversalStats, Traversed};

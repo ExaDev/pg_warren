@@ -12,7 +12,7 @@
 
 use super::scratch::NodeMap;
 use super::stats::Progress;
-use super::{Adjacency, Cancellation, TraversalError, Traversed};
+use super::{Adjacency, Interrupts, TraversalError, Traversed};
 use crate::graph::{memory, DenseId, GraphError};
 
 /// The shortest path from `start` to `target` along `adjacency`, of at
@@ -23,14 +23,14 @@ pub fn shortest_path(
     start: DenseId,
     target: DenseId,
     max_depth: Option<u32>,
-    cancellation: &Cancellation,
+    interrupts: &mut dyn Interrupts,
 ) -> Result<Traversed<Option<Vec<DenseId>>>, TraversalError> {
     for node in [start, target] {
         if node >= adjacency.id_space() {
             return Err(TraversalError::NodeOutsideIdSpace { node });
         }
     }
-    let mut progress = Progress::new(cancellation);
+    let mut progress = Progress::new(interrupts);
     progress.node_visited()?;
     if start == target {
         return Ok(progress.traversed(Some(vec![start])));
@@ -101,8 +101,8 @@ impl<'a, 'g> Side<'a, 'g> {
         let mut next = Vec::new();
         let mut best: Option<(u32, DenseId)> = None;
         for &via in &self.frontier {
-            for node in adjacency.neighbours(via) {
-                progress.edge_traversed();
+            for node in adjacency.row_entries(via) {
+                progress.edge_traversed()?;
                 if self.labels.get(node).is_some() {
                     continue;
                 }
@@ -143,6 +143,7 @@ mod tests {
     use super::*;
     use crate::graph::GraphCsr;
     use crate::traversal::example::{directed, graph, relations};
+    use crate::traversal::Uninterrupted;
     use crate::traversal::{Direction, RelationSelection};
 
     // 0 → 1 → 2 → 3 → 4, 0 → 5 → 4, 6 isolated
@@ -158,7 +159,7 @@ mod tests {
         max_depth: Option<u32>,
     ) -> Option<Vec<DenseId>> {
         let adjacency = Adjacency::new(graph, direction, RelationSelection::All).unwrap();
-        shortest_path(&adjacency, start, target, max_depth, &Cancellation::new()).unwrap().result
+        shortest_path(&adjacency, start, target, max_depth, &mut Uninterrupted).unwrap().result
     }
 
     #[test]
@@ -202,7 +203,7 @@ mod tests {
         let r = relations(2);
         let adjacency =
             Adjacency::new(&graph, Direction::Out, RelationSelection::Only(&r)).unwrap();
-        let found = shortest_path(&adjacency, 0, 1, None, &Cancellation::new()).unwrap();
+        let found = shortest_path(&adjacency, 0, 1, None, &mut Uninterrupted).unwrap();
         assert_eq!(found.result, Some(vec![0, 2, 1]));
     }
 
@@ -211,7 +212,7 @@ mod tests {
         let graph = example();
         let adjacency = Adjacency::new(&graph, Direction::Out, RelationSelection::All).unwrap();
         assert_eq!(
-            shortest_path(&adjacency, 0, 7, None, &Cancellation::new()).unwrap_err(),
+            shortest_path(&adjacency, 0, 7, None, &mut Uninterrupted).unwrap_err(),
             TraversalError::NodeOutsideIdSpace { node: 7 }
         );
     }
@@ -225,6 +226,7 @@ mod properties {
 
     use super::*;
     use crate::traversal::reference::{directions, scenarios, selections, Scenario};
+    use crate::traversal::Uninterrupted;
 
     proptest! {
         #[test]
@@ -235,12 +237,13 @@ mod properties {
                 (Just(scenario), selections(relation_count), 0..n, 0..n)
             }),
             direction in directions(),
+            wide in any::<bool>(),
             max_depth in prop::option::of(0u32..5),
         ) {
-            let graph = scenario.graph();
+            let graph = if wide { scenario.wide_graph() } else { scenario.graph() };
             let indexes = scenario.indexes(&selection);
             let adjacency = Adjacency::new(&graph, direction, Scenario::selection(&indexes)).unwrap();
-            let found = shortest_path(&adjacency, start, target, max_depth, &Cancellation::new())
+            let found = shortest_path(&adjacency, start, target, max_depth, &mut Uninterrupted)
                 .unwrap()
                 .result;
 

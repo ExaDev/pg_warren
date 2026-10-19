@@ -6,12 +6,26 @@ use crate::graph::{AnyCsr, Csr, GraphError, Target, TargetWidth};
 /// The encoded segments of one CSR.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsrSegments {
+    offsets: Vec<u8>,
+    targets: Vec<u8>,
+    weights: Option<Vec<u8>>,
+}
+
+impl CsrSegments {
     /// The `offsets` segment.
-    pub offsets: Vec<u8>,
+    pub fn offsets(&self) -> &[u8] {
+        &self.offsets
+    }
+
     /// The `targets` segment, `u32` or `u64` wide.
-    pub targets: Vec<u8>,
+    pub fn targets(&self) -> &[u8] {
+        &self.targets
+    }
+
     /// The `weights` segment, if the CSR is weighted.
-    pub weights: Option<Vec<u8>>,
+    pub fn weights(&self) -> Option<&[u8]> {
+        self.weights.as_deref()
+    }
 }
 
 impl AnyCsr {

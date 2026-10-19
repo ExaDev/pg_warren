@@ -172,4 +172,18 @@ pub enum GraphError {
         /// The number of relations.
         relations: usize,
     },
+    /// The offsets arrays of a build would exceed the caller's budget.
+    #[error("CSR offsets need {required} bytes, over the budget of {budget}")]
+    OffsetsOverBudget {
+        /// Bytes the offsets arrays need.
+        required: u64,
+        /// The caller's budget in bytes.
+        budget: u64,
+    },
+    /// A segment header's reserved byte must be 0.
+    #[error("segment reserved byte is {found}, expected 0")]
+    SegmentReserved {
+        /// The reserved byte.
+        found: u8,
+    },
 }

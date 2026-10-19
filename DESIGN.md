@@ -260,7 +260,11 @@ Per-relation CSRs are stored separately so a traversal or SpMV can be restricted
 | BFS, 1 / 2 / 3 / 5 of 5 relations | 2.0 / 4.9 / 7.2 / 5.3 ms | 5.4 / 8.7 / 9.3 / 6.0 ms |
 | weighted row sums, 1 / 2 / 3 / 5 of 5 | 0.88 / 1.8 / 2.7 / 1.7 ms | 3.0 / 5.0 / 4.4 / 2.2 ms |
 
-Masked traversal and SpMV are 1.1–3.4× faster per relation, which is the hot path; the cost is about 2× storage and a build that stays well inside the §12 `refresh()` budget. Revisit if the memory cap (not speed) becomes the binding constraint; dropping the stored merged CSR is the first lever. Alignment: every segment starts on a 64-byte boundary when loaded.
+Masked traversal and SpMV are 1.1–3.4× faster per relation, which is the hot path; the cost is about 2× storage and a build that stays well inside the §12 `refresh()` budget. Revisit if the memory cap (not speed) becomes the binding constraint; dropping the stored merged CSR is the first lever.
+
+Every per-relation CSR has a full `id_space + 1` offsets array, so offsets cost 8·(N+1)·(R + 1) bytes per direction regardless of edge count (1,000 relations over 10M nodes would need 80 GB forward). `GraphCsr::build_within` computes this (`GraphCsr::offsets_bytes`) and refuses the build before allocating when it exceeds the caller's budget; the adapter passes its memory cap (§14 item 17). Sparse per-relation offsets are the longer-term lever.
+
+Alignment: every segment starts on a 64-byte boundary when loaded.
 
 Every segment is validated on load, before any unchecked slice is formed: alignment and lengths, `offsets[0] = 0`, offsets monotonic, `offsets[id_space] = M`, every target `< id_space`, and `id_map` sorted. The check is O(N + M), which is cheap next to the detoast. The segment decoder has a fuzz target (§12). Each segment is encoded as a 16-byte little-endian header (magic `WRSG`, format, kind, element width, element count) followed by its payload, so a decoder can reject a segment of the wrong kind or width before reading it.
 
@@ -279,7 +283,7 @@ Before the build, `refresh` checks that the caller is a member of the owner role
 
 Because the build runs under the caller's snapshot, **it sees the caller's uncommitted writes**. This is the mechanism behind staged evaluation (§8).
 
-Memory discipline: a 100M-edge graph (~1.2 GB forward + ~1.2 GB reverse) should build in under 4 GB of backend RAM. Peak usage is the edge list (~1.8 GB weighted) plus the forward CSR, and the edge list is freed before the transpose. All graph-sized buffers use `try_reserve`. An external-sort spill is added only if M2 measurements show it is needed.
+Memory discipline: a 100M-edge graph (~1.2 GB forward + ~1.2 GB reverse) should build in under 4 GB of backend RAM. The edge list stores endpoints at the target width (20 B per weighted edge below 2³² nodes: `u32` source, target and relation, `f64` weight; the adapter passes the edge count to `EdgeIntake::reserve` so it is allocated once). The counting sort scatters it into rows one column at a time, freeing each input column as it goes, so the peak is about 28 B per weighted edge; the rows are freed once the per-relation CSRs exist, and the merged CSR is built from those. Measured peak (M1, 10M weighted edges over 1M nodes, scaled ×10): **~2.9 GB for one relation with reverse**, within the cap. With several relations the stored merged CSR doubles the result (~5.8 GB weighted with reverse, ~2.6 GB unweighted), so a weighted multi-relation graph of 100M edges exceeds the cap; the lever is not storing the merged CSR (§5.3). All graph-sized buffers use `try_reserve`. An external-sort spill is added only if M2 measurements show it is needed.
 
 ### 5.5 Backend-local cache
 
@@ -691,17 +695,19 @@ Implementation notes:
 - Traversal is level-synchronous BFS with frontier and next-frontier arrays (parallelisable later).
 - Per-call scratch (visited set, depth and predecessor arrays) starts sparse (a hash set or map) and turns dense once it holds more than about `id_space/16` nodes, so a small traversal on a big graph does not allocate O(N) and no visit budget has to be guessed up front. Predecessors are stored only when the signature needs them.
 - Truncation is never silent. `truncated = true` is set in `warren.last_stats()`, and a `NOTICE` is raised, exactly when the scan was stopped early by `max_results` or by a GUC ceiling (for example the `paths`-mode cap, §14 item 15). Reaching the caller's own `max_depth` is the requested result, not truncation.
-- Interrupts are checked every ~64K nodes.
+- Interrupts are checked every ~64K units of work (nodes visited plus CSR row entries scanned), so edge scans that admit no node are bounded too. Traversals take an `Interrupts` poll hook: on the main thread (M3) the adapter implements it with `pgrx::check_for_interrupts!()`, which unwinds through the traversal; worker threads (M4) poll a shared `Cancellation` flag the main thread raises.
 - There is no OFFSET-style pagination: SRFs stream rows (holding an `Arc` to the cached version) and SQL `LIMIT` stops them. Duplicate removal (`distinct_ends`, multi-start BFS) happens before any cap is applied.
 - `shortest_path`'s bidirectional BFS finishes scanning the current level before choosing the meeting node with the minimum combined distance. Taking the first meeting node can return a non-shortest path, a bug pgGraph shipped and fixed. A differential proptest checks it against single-direction BFS.
 - `components` labels each component with its minimum dense ID, so results are deterministic and comparable across versions.
 - Defaults for caps may come from GUCs inside the SQL `DEFAULT` expression (`current_setting('warren.…', true)`).
 - Decisions made in M1 (`warren-core::traversal`, dense ids in and out):
   - `direction` `in` and `both` read the reverse CSR and raise an error when the graph was built without one. `shortest_path` without a reverse CSR runs a forward-only BFS instead; `components` never needs one.
+  - `bfs` and `reachable_set` also come in streaming forms (`bfs_each`, `reachable_set_each`) that hand each row to a visitor, so an SRF under SQL `LIMIT` stops the scan by breaking. A visitor stopping the scan is not truncation.
+  - `neighbours` and `degree` count each neighbour once: `Adjacency::neighbours` returns the distinct dense IDs across the selected relations (and both directions for `both`) in ascending order, by a k-way merge of the sorted rows.
   - `node_filter` applies to the nodes a traversal reaches, never to its starts: starts are always admitted at depth 0, and repeated starts count once. `reachable_set` includes the starts.
-  - `last_stats()` counts `nodes_visited` (nodes admitted or settled, starts included) and `edges_traversed` (CSR row entries scanned). Cancellation is polled on the first visited node and every 65,536th after.
+  - `last_stats()` counts `nodes_visited` (nodes admitted or settled, starts included) and `edges_traversed` (CSR row entries scanned). The `Interrupts` hook is polled on the first unit of work (a visited node or a scanned row entry) and every 65,536th after.
   - `shortest_path` breaks ties between meeting nodes of equal combined distance by the smallest dense ID, so its result is deterministic.
-  - `dijkstra` reads each selected relation's own CSR rather than the merged one, because the merged CSR sums the weights of an edge present in several relations and a cheapest path wants the minimum. Unweighted graphs cost 1 per edge. A negative or NaN weight raises an error when the search scans it.
+  - `dijkstra` reads each selected relation's own CSR rather than the merged one, because the merged CSR sums the weights of an edge present in several relations and a cheapest path wants the minimum. Unweighted graphs cost 1 per edge. A negative or NaN weight raises an error when the search scans it. An edge whose cost would be infinite (an infinite weight, or an overflowing sum) is never followed, so a target reachable only at infinite cost returns no path.
   - `components` is union–find over the forward all-relations CSR. The domain labels every dense ID; a tombstoned node has no edges and so is its own component, and the adapter leaves tombstoned nodes out of the result.
 
 ## 10. Future directions (not v1)
@@ -819,6 +825,7 @@ Post-v0.3: contraction/project/lift and Louvain (§6.6), DSM cache + compute wor
 14. **`warren.step` as a composite type vs. `jsonb`.** Composite gives type-checking and a clean `warren.s()` constructor; `jsonb` is easier to generate from application code. Lean: composite as the canonical IR with a `jsonb → warren.step[]` cast for convenience.
 15. **`walk` path enumeration limits.** Hard cap on `max_results` for `mode = 'paths'` (lean: default 100,000, error above a GUC ceiling) and whether to support `'count'` exactly or approximately for variable-length segments (lean: exact).
 16. **Prior-art reading complete** (§4A). **Done (M0, 2026-10-19):** see [`docs/prior-art-notes.md`](docs/prior-art-notes.md) (pgGraph `b0f53df`, OneSparse `79a57cd`). Sections changed as a result (v0.6): §4A, §5.1, §5.3, §5.4, §5.5, §6.3, §6.7, §6.9, §7, §9.3, §10, §11, §12, §13, §14 items 2 and 4. Not a reuse decision (the policy is to build in full), but a gate.
+17. **Relation count × node count.** Per-relation offsets grow as R·N (§5.3). **Decided (M1):** no fixed relation limit; a build is refused up front when its offsets would exceed the memory budget the adapter passes (`warren.max_build_memory` or the compute cap, settled in M2). Revisit with sparse per-relation offsets if graphs with many relations appear.
 
 ## 15. Instructions to the implementing agent
 
