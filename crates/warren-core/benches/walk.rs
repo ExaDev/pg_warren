@@ -2,7 +2,7 @@
 //! in three relations, in each mode (DESIGN.md §9.2, Appendix A.4).
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use warren_core::graph::{EdgeList, GraphCsr, GraphError, RelationDictionary};
+use warren_core::graph::{EdgeList, GraphCsr, GraphError, RelationDictionary, RelationIndex};
 use warren_core::traversal::{
     walk, Direction, HopRange, NodeSet, Step, TraversalError, Uninterrupted, WalkMode, WalkOptions,
 };
@@ -11,52 +11,46 @@ mod random_graph;
 
 use random_graph::{random_edges, ID_SPACE};
 
-/// The benchmark edges, dealt round-robin into three relations.
-fn typed_graph() -> Result<GraphCsr, GraphError> {
+/// The relations of the benchmark graph.
+const RELATIONS: [&str; 3] = ["cites", "authored_by", "affiliated_with"];
+
+/// The benchmark edges, dealt round-robin into [`RELATIONS`], and the
+/// relations' indexes.
+fn typed_graph() -> Result<(GraphCsr, Vec<RelationIndex>), GraphError> {
     let mut dictionary = RelationDictionary::new();
-    let relations = [dictionary.intern("cites")?, dictionary.intern("authored_by")?, {
-        dictionary.intern("affiliated_with")?
-    }];
-    let edges = random_edges(false)?;
+    let relations =
+        RELATIONS.iter().map(|name| dictionary.intern(name)).collect::<Result<Vec<_>, _>>()?;
     let mut typed = EdgeList::for_id_space(ID_SPACE, false);
-    for (i, (_, source, target)) in edges.edges().enumerate() {
+    for (i, (_, source, target)) in random_edges(false)?.edges().enumerate() {
         typed.push(relations[i % relations.len()], source, target, 1.0)?;
     }
-    GraphCsr::build(typed, relations.len(), ID_SPACE, true)
+    Ok((GraphCsr::build(typed, relations.len(), ID_SPACE, true)?, relations))
 }
 
 /// cites 1–3 hops, then authored_by into even nodes, then affiliated_with.
-fn steps() -> Result<Vec<Step>, TraversalError> {
-    let mut dictionary = RelationDictionary::new();
-    let mut relation = |name: &str| dictionary.intern(name).map(|r| Some(vec![r]));
+fn steps(relations: &[RelationIndex]) -> Result<Vec<Step>, TraversalError> {
+    let step = |relation: RelationIndex, filter, hops| Step {
+        relations: Some(vec![relation]),
+        direction: Direction::Out,
+        filter,
+        hops,
+    };
     let even = NodeSet::from_dense_ids(ID_SPACE, (0..ID_SPACE).step_by(2))?;
     Ok(vec![
-        Step {
-            relations: relation("cites")?,
-            direction: Direction::Out,
-            filter: None,
-            hops: HopRange::new(1, 3)?,
-        },
-        Step {
-            relations: relation("authored_by")?,
-            direction: Direction::Out,
-            filter: Some(even),
-            hops: HopRange::default(),
-        },
-        Step {
-            relations: relation("affiliated_with")?,
-            direction: Direction::Out,
-            filter: None,
-            hops: HopRange::default(),
-        },
+        step(relations[0], None, HopRange::new(1, 3)?),
+        step(relations[1], Some(even), HopRange::default()),
+        step(relations[2], None, HopRange::default()),
     ])
 }
 
 fn bench_walk(c: &mut Criterion) {
-    let (graph, steps) = match (typed_graph(), steps()) {
-        (Ok(graph), Ok(steps)) => (graph, steps),
-        (Err(error), _) => return eprintln!("skipping walk benchmarks: {error}"),
-        (_, Err(error)) => return eprintln!("skipping walk benchmarks: {error}"),
+    let (graph, relations) = match typed_graph() {
+        Ok(typed) => typed,
+        Err(error) => return eprintln!("skipping walk benchmarks: {error}"),
+    };
+    let steps = match steps(&relations) {
+        Ok(steps) => steps,
+        Err(error) => return eprintln!("skipping walk benchmarks: {error}"),
     };
     let starts: Vec<u64> = (0..100).collect();
     let mut never = Uninterrupted;
