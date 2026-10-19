@@ -26,11 +26,12 @@ use super::constructors::{dtype as parse_dtype, literal};
 use super::settings::workers;
 use super::vectors::Vectors;
 use super::{entry, ComputeSqlError};
-use crate::access::{with_search_path, Caller};
+use crate::access::{with_read_only, with_search_path, Caller};
 use crate::cache::resolve;
 use crate::interrupts::PostgresInterrupts;
 use crate::source::{
-    describe, for_each_row, open_read_only, type_name, with_id_type, IdDatum, SourceError,
+    describe, for_each_row, open_read_only, type_name, with_id_type, ColumnType, IdDatum,
+    SourceError,
 };
 
 /// The SQL type a dtype's values are cast to.
@@ -79,8 +80,30 @@ fn vector_from_query(
     })
 }
 
+/// Checks that a query's id column casts implicitly to the graph's id
+/// type `E`, so ids are never rounded.
+pub(super) fn check_id_column<E: IdDatum>(column: &ColumnType) -> Result<(), ComputeSqlError> {
+    let id_type = E::Sql::type_oid();
+    // SAFETY: can_coerce_type reads one type pair from the catalogs.
+    let implicit = unsafe {
+        pg_sys::can_coerce_type(
+            1,
+            &column.oid,
+            &id_type,
+            pg_sys::CoercionContext::COERCION_IMPLICIT,
+        )
+    };
+    match implicit {
+        true => Ok(()),
+        false => Err(ComputeSqlError::IdColumnType {
+            found: column.name.clone(),
+            id_type: type_name(id_type),
+        }),
+    }
+}
+
 /// The qualified SQL name of `E`'s type.
-fn id_type_name<E: IdDatum>() -> String {
+pub(super) fn id_type_name<E: IdDatum>() -> String {
     // SAFETY: format_type_be_qualified returns a palloc'd NUL-terminated
     // string for any type oid.
     let name = unsafe { CStr::from_ptr(pg_sys::format_type_be_qualified(E::Sql::type_oid())) };
@@ -122,48 +145,34 @@ impl Read<'_> {
     {
         let query = self.query.trim_end().trim_end_matches(';');
         with_search_path(self.caller.search_path(), || {
-            Spi::connect(|client| {
-                let columns = describe::<ComputeSqlError>("query", query)?;
-                if columns.len() != 2 {
-                    return Err(SourceError::ColumnCount {
-                        query: "query",
-                        expected: "2 (id, value)",
-                        found: columns.len(),
+            with_read_only(|| {
+                Spi::connect(|client| {
+                    let columns = describe::<ComputeSqlError>("query", query)?;
+                    if columns.len() != 2 {
+                        return Err(SourceError::ColumnCount {
+                            query: "query",
+                            expected: "2 (id, value)",
+                            found: columns.len(),
+                        }
+                        .into());
                     }
-                    .into());
-                }
-                let id_type = E::Sql::type_oid();
-                // SAFETY: can_coerce_type reads one type pair from the
-                // catalogs.
-                let implicit = unsafe {
-                    pg_sys::can_coerce_type(
-                        1,
-                        &columns[0].oid,
-                        &id_type,
-                        pg_sys::CoercionContext::COERCION_IMPLICIT,
-                    )
-                };
-                if !implicit {
-                    return Err(ComputeSqlError::IdColumnType {
-                        found: columns[0].name.clone(),
-                        id_type: type_name(id_type),
-                    });
-                }
-                // SAFETY: get_element_type only reads the type cache.
-                let array =
-                    unsafe { pg_sys::get_element_type(columns[1].oid) } != pg_sys::Oid::INVALID;
-                let cast = format!("{}{}", sql_type(T::DTYPE), if array { "[]" } else { "" });
-                let wrapped = format!(
-                    "SELECT q.id::{}, q.value::{cast} FROM ({query}\n) AS q(id, value)",
-                    self.id_type
-                );
-                let mut opened = open_read_only::<ComputeSqlError>(client, "query", &wrapped)?;
-                let mut rows = Rows::<T>::new(vectors, self.fill_value::<E, T>(vectors)?)?;
-                for_each_row(&mut opened.cursor, |row| match array {
-                    true => rows.matrix_row(vectors, row),
-                    false => rows.scalar_row(vectors, row),
-                })?;
-                rows.finish(vectors)
+                    check_id_column::<E>(&columns[0])?;
+                    // SAFETY: get_element_type only reads the type cache.
+                    let array =
+                        unsafe { pg_sys::get_element_type(columns[1].oid) } != pg_sys::Oid::INVALID;
+                    let cast = format!("{}{}", sql_type(T::DTYPE), if array { "[]" } else { "" });
+                    let wrapped = format!(
+                        "SELECT q.id::{}, q.value::{cast} FROM ({query}\n) AS q(id, value)",
+                        self.id_type
+                    );
+                    let mut opened = open_read_only::<ComputeSqlError>(client, "query", &wrapped)?;
+                    let mut rows = Rows::<T>::new(vectors, self.fill_value::<E, T>(vectors)?)?;
+                    for_each_row(&mut opened.cursor, |row| match array {
+                        true => rows.matrix_row(vectors, row),
+                        false => rows.scalar_row(vectors, row),
+                    })?;
+                    rows.finish(vectors)
+                })
             })
         })
     }
@@ -371,6 +380,25 @@ mod tests {
             ragged.as_deref(),
             Some("22023: query rows have 1 values where earlier rows had 2")
         );
+        Ok(())
+    }
+
+    #[pg_test]
+    fn the_query_cannot_write_even_through_a_volatile_function() -> Result<(), Error> {
+        small("t")?;
+        Spi::run(
+            "CREATE TABLE t_log (n int);
+             CREATE FUNCTION t_write() RETURNS bigint VOLATILE LANGUAGE plpgsql AS
+                 $f$ BEGIN INSERT INTO t_log VALUES (1); RETURN 1; END $f$",
+        )?;
+        let refused =
+            failure("warren.vector_from_query('t', 'x', 'SELECT id, t_write() FROM t_nodes')")?;
+        let refused = refused.unwrap_or_default();
+        assert!(
+            refused.starts_with("25006: cannot execute INSERT in a read-only transaction"),
+            "{refused}"
+        );
+        assert_eq!(Spi::get_one::<i64>("SELECT count(*) FROM t_log")?, Some(0));
         Ok(())
     }
 

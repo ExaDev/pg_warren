@@ -2,10 +2,12 @@
 //! in three relations, in each mode (DESIGN.md §9.2, Appendix A.4).
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use warren_core::graph::{EdgeList, GraphCsr, GraphError, RelationDictionary, RelationIndex};
+use warren_core::graph::{
+    Direction, EdgeList, GraphCsr, GraphError, RelationDictionary, RelationIndex,
+};
 use warren_core::interrupts::Uninterrupted;
 use warren_core::traversal::{
-    walk, Direction, HopRange, NodeSet, Step, TraversalError, WalkMode, WalkOptions,
+    walk, HopRange, NodeSet, Step, TraversalError, WalkMode, WalkOptions,
 };
 
 mod random_graph;

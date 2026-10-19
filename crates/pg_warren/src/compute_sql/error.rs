@@ -55,6 +55,42 @@ pub(crate) enum ComputeSqlError {
         /// The graph's id type.
         id_type: String,
     },
+    /// `gather`'s combiner does not accept the messages' type.
+    #[error(transparent)]
+    GatherType(#[from] super::gather::TypeError),
+    /// `gather`'s `value_type` witness is not the combiner's result type.
+    #[error(
+        "gather with combine := {combiner} over {message} messages returns {result}: pass \
+         value_type := NULL::{result}, not {found}"
+    )]
+    ValueType {
+        /// The combiner.
+        combiner: warren_core::compute::Combiner,
+        /// The messages' type.
+        message: String,
+        /// The result type.
+        result: String,
+        /// The witness's type.
+        found: String,
+    },
+    /// `gather`'s `messages` names both a vector and a relation.
+    #[error(
+        "messages \"{name}\" names both a vector bound to version {version} and a relation: \
+         write TABLE {name} for the relation, or rename the vector"
+    )]
+    AmbiguousMessages {
+        /// The name.
+        name: String,
+        /// The version the vector is bound to.
+        version: VersionId,
+    },
+    /// Persisted vector names, and the library's arguments, must not use
+    /// the prefix of its intermediates.
+    #[error(
+        "vector names beginning with _warren_ are reserved for the library's intermediates, and \
+         are only ever transient: \"{0}\""
+    )]
+    ReservedName(String),
     /// A vector name must not be empty.
     #[error("a vector name must not be empty")]
     EmptyName,
@@ -105,7 +141,11 @@ impl SqlError for ComputeSqlError {
             Self::IdColumnType { .. } => PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
             Self::MapSyntax(_) => PgSqlErrorCode::ERRCODE_SYNTAX_ERROR,
             Self::MapUnsupported(_) => PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
-            Self::MapType(_) => PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+            Self::MapType(_) | Self::GatherType(_) | Self::ValueType { .. } => {
+                PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH
+            }
+            Self::AmbiguousMessages { .. } => PgSqlErrorCode::ERRCODE_AMBIGUOUS_FUNCTION,
+            Self::ReservedName(_) => PgSqlErrorCode::ERRCODE_RESERVED_NAME,
             Self::EmptyName | Self::InvalidArgument(_) => {
                 PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE
             }
@@ -133,11 +173,12 @@ pub(crate) fn compute_sqlstate(error: &ComputeError) -> PgSqlErrorCode {
         | ComputeError::UnknownBinaryOp(_)
         | ComputeError::UnknownReduction(_)
         | ComputeError::UnknownNorm(_)
+        | ComputeError::UnknownCombiner(_)
         | ComputeError::ZeroWidth
         | ComputeError::WidthMismatch { .. } => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
-        ComputeError::DtypeMismatch { .. } | ComputeError::OperandType { .. } => {
-            PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH
-        }
+        ComputeError::DtypeMismatch { .. }
+        | ComputeError::OperandType { .. }
+        | ComputeError::CombinerType { .. } => PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
         ComputeError::IdSpaceMismatch { .. } => {
             PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE
         }

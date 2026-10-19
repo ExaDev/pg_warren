@@ -2,10 +2,11 @@
 //! BFS from one node and weakly connected components (DESIGN.md §9.3, §12).
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
+use warren_core::graph::Direction;
 use warren_core::graph::GraphCsr;
 use warren_core::graph::RelationSelection;
 use warren_core::interrupts::Uninterrupted;
-use warren_core::traversal::{bfs, components, Adjacency, Direction, Limits};
+use warren_core::traversal::{bfs, components, Adjacency, Limits};
 
 mod random_graph;
 

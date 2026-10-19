@@ -4,8 +4,9 @@
 
 use pgrx::PgSqlErrorCode;
 use thiserror::Error;
+use warren_core::graph::Direction;
 use warren_core::graph::{GraphCsr, RelationDictionary, RelationIndex, RelationSelection};
-use warren_core::traversal::{Adjacency, Direction, TraversalError};
+use warren_core::traversal::{Adjacency, TraversalError};
 
 use crate::access::SqlError;
 use crate::extension::graph_sqlstate;

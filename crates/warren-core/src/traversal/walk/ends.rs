@@ -66,10 +66,11 @@ mod tests {
 
     use super::super::example::{knowledge_graph, step, AFFILIATED_WITH, AUTHORED_BY, CITES};
     use super::super::{walk, walk_ends_each, HopRange, Step, WalkMode, WalkOptions, WalkResult};
+    use crate::graph::Direction;
     use crate::graph::{DenseId, GraphCsr};
     use crate::interrupts::Uninterrupted;
     use crate::traversal::example::{directed, graph};
-    use crate::traversal::{Direction, NodeSet, TraversalError, TraversalStats, Traversed};
+    use crate::traversal::{NodeSet, TraversalError, TraversalStats, Traversed};
 
     fn ends_of(
         graph: &GraphCsr,

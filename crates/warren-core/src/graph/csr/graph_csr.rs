@@ -2,7 +2,7 @@
 //! relation, plus the merged all-relations CSR (DESIGN.md §5.3, §5.4 step 4).
 
 use super::{build, transpose::transpose, AnyCsr, Csr, Target, TargetWidth};
-use crate::graph::{EdgeList, GraphError, RelationIndex};
+use crate::graph::{EdgeList, GraphError, RelationIndex, RelationSelection};
 
 /// The forward CSR of a relation, and its reverse if the graph builds one.
 #[derive(Debug, Clone, PartialEq)]
@@ -222,6 +222,27 @@ impl GraphCsr {
         self.relations().get(relation.index())
     }
 
+    /// The CSRs `relations` selects: the all-relations CSRs for every
+    /// relation, else each named relation once, in index order. The error
+    /// is the smallest named relation that is not in the graph.
+    pub fn selected(
+        &self,
+        relations: RelationSelection<'_>,
+    ) -> Result<Vec<&RelationCsr>, RelationIndex> {
+        match relations {
+            RelationSelection::All => Ok(vec![self.all_relations()]),
+            RelationSelection::Only(indexes) => {
+                let mut indexes = indexes.to_vec();
+                indexes.sort_unstable();
+                indexes.dedup();
+                indexes
+                    .into_iter()
+                    .map(|relation| self.relation(relation).ok_or(relation))
+                    .collect()
+            }
+        }
+    }
+
     /// The merged all-relations CSRs, stored unless there is exactly one
     /// relation.
     pub fn merged(&self) -> Option<&RelationCsr> {
@@ -248,7 +269,9 @@ impl GraphCsr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{DenseId, EdgeIntake, IdMap, RelationDictionary, TargetWidth};
+    use crate::graph::{
+        DenseId, EdgeIntake, IdMap, RelationDictionary, RelationSelection, TargetWidth,
+    };
     use proptest::prelude::*;
     use std::collections::BTreeMap;
 
@@ -310,6 +333,23 @@ mod tests {
         assert_eq!(rows(merged.forward()), Naive::from([((0, 1), 3.0), ((1, 0), 3.0)]));
         assert_eq!(rows(merged.reverse().unwrap()), Naive::from([((1, 0), 3.0), ((0, 1), 3.0)]));
         assert_eq!(graph.deduplicated_edges(), 0);
+    }
+
+    #[test]
+    fn a_selection_names_the_all_relations_csrs_or_each_relation_once() {
+        let (mut dictionary, a, b) = two_relations();
+        let unknown = dictionary.intern("c").unwrap();
+        let mut edges = EdgeList::new(false);
+        edges.push(b, 0, 1, 1.0).unwrap();
+        let graph = GraphCsr::build(edges, 2, 2, false).unwrap();
+        assert_eq!(graph.selected(RelationSelection::All), Ok(vec![graph.all_relations()]));
+        let relation = |index| graph.relation(index).unwrap();
+        assert_eq!(
+            graph.selected(RelationSelection::Only(&[b, a, b])),
+            Ok(vec![relation(a), relation(b)])
+        );
+        assert_eq!(graph.selected(RelationSelection::Only(&[])), Ok(vec![]));
+        assert_eq!(graph.selected(RelationSelection::Only(&[unknown, a])), Err(unknown));
     }
 
     #[test]

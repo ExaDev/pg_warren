@@ -33,6 +33,21 @@ thread_local! {
     static FORCE_EXECUTOR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+#[cfg(any(test, feature = "pg_test"))]
+thread_local! {
+    /// Test hook: how many `vector_map` calls this backend evaluated with
+    /// the executor.
+    static EXECUTOR_MAPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Test hook: how many `vector_map` calls this backend has evaluated with
+/// the executor, so tests can assert that a program's expressions all
+/// take the compiled path.
+#[cfg(any(test, feature = "pg_test"))]
+pub(crate) fn executor_maps() -> u64 {
+    EXECUTOR_MAPS.get()
+}
+
 /// Test hook: makes `vector_map` use the executor for every expression.
 #[cfg(any(test, feature = "pg_test"))]
 pub(crate) fn force_executor(forced: bool) {
@@ -114,6 +129,8 @@ fn mapped<E: IdDatum>(
             map(&*workers()?, &vectors.memory, &mut PostgresInterrupts, id_space, &ir, &refs)?
         }
         _ => {
+            #[cfg(any(test, feature = "pg_test"))]
+            EXECUTOR_MAPS.set(EXECUTOR_MAPS.get() + 1);
             let columns = executor::referenced(&analysed);
             let loaded = operands(&mut vectors, &columns)?;
             let refs: Vec<&AnyVector> = loaded.iter().map(|operand| &**operand).collect();

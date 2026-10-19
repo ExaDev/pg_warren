@@ -9,7 +9,8 @@ use std::ops::ControlFlow;
 use super::bfs::Results;
 use super::level::{Admission, Edges, LevelSearch};
 use super::stats::{Progress, Tally};
-use super::{Adjacency, Direction, Limits, NodeSet, TraversalError, TraversalStats, Visit};
+use super::{Adjacency, Limits, NodeSet, TraversalError, TraversalStats, Visit};
+use crate::graph::Direction;
 use crate::graph::{DenseId, GraphCsr, RelationIndex, RelationSelection};
 use crate::interrupts::Interrupts;
 
@@ -118,10 +119,11 @@ mod tests {
     use std::ops::ControlFlow;
 
     use super::*;
+    use crate::graph::Direction;
     use crate::graph::{DenseId, GraphCsr};
     use crate::interrupts::{Cancellation, Uninterrupted};
     use crate::traversal::example::directed;
-    use crate::traversal::{bfs, Adjacency, Direction, Limits, NodeSet, TraversalError, Visit};
+    use crate::traversal::{bfs, Adjacency, Limits, NodeSet, TraversalError, Visit};
 
     // 0 → 1 → 2 → 3, 0 → 4 → 3, 2 → 2, 5 isolated
     fn example() -> GraphCsr {

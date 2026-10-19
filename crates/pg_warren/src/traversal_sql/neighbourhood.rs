@@ -7,7 +7,8 @@
 use pgrx::prelude::*;
 use pgrx::AnyElement;
 use warren_core::graph::DenseId;
-use warren_core::traversal::{Adjacency, Direction};
+use warren_core::graph::Direction;
+use warren_core::traversal::Adjacency;
 
 use super::{entry, TraversalSqlError};
 use crate::cache::{cached, resolve, LoadedVersion, Resolved};

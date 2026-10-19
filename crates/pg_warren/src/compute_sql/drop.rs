@@ -10,10 +10,17 @@ use crate::vector::{drop_transient, forget, SpiVectorStore, VectorError, VectorS
 
 /// `warren.drop_vector`: deletes vector `name` bound to `version` (the
 /// current version if NULL): the session's transient vector of that name
-/// if there is one, else the persisted one.
+/// if there is one, else the persisted one. With `if_exists`, a missing
+/// vector is not an error.
 #[pg_extern(schema = "warren", volatile, parallel_unsafe)]
-fn drop_vector(graph: Option<&str>, name: Option<&str>, version: default!(Option<i64>, "NULL")) {
+fn drop_vector(
+    graph: Option<&str>,
+    name: Option<&str>,
+    version: default!(Option<i64>, "NULL"),
+    if_exists: default!(Option<bool>, "false"),
+) {
     entry(|_| {
+        let if_exists = if_exists.ok_or(ComputeSqlError::NullArgument("if_exists"))?;
         let graph = graph.ok_or(ComputeSqlError::NullArgument("graph"))?;
         let name = name.ok_or(ComputeSqlError::NullArgument("name"))?;
         let resolved = resolve(graph, version, "write vectors of")?;
@@ -22,13 +29,16 @@ fn drop_vector(graph: Option<&str>, name: Option<&str>, version: default!(Option
         }
         let mut store = SpiVectorStore;
         let bound = store.bound(resolved.version)?;
-        let record = bound.iter().find(|record| record.name == name).ok_or_else(|| {
-            ComputeSqlError::VectorNotFound {
+        let Some(record) = bound.iter().find(|record| record.name == name) else {
+            if if_exists {
+                return Ok(());
+            }
+            return Err(ComputeSqlError::VectorNotFound {
                 graph: graph.to_owned(),
                 name: name.to_owned(),
                 version: resolved.version,
-            }
-        })?;
+            });
+        };
         require_creator_or_owner(record.created_by, resolved.graph.owner, graph, name)?;
         // By id: the row checked above, never one of that name committed
         // since by another transaction.
@@ -51,6 +61,15 @@ mod tests {
     use pgrx::spi::Error;
 
     use crate::fixture::{failure, refresh, ring, small, versions};
+
+    #[pg_test]
+    fn if_exists_drops_a_missing_vector_quietly() -> Result<(), Error> {
+        small("t")?;
+        Spi::run("SELECT warren.drop_vector('t', 'nope', if_exists := true)")?;
+        let missing = failure("warren.drop_vector('t', 'nope')")?.unwrap_or_default();
+        assert!(missing.starts_with("42704: graph \"t\" has no vector \"nope\""), "{missing}");
+        Ok(())
+    }
 
     #[pg_test]
     fn a_dropped_vector_is_gone_with_its_chunks() -> Result<(), Error> {

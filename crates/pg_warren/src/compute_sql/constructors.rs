@@ -1,15 +1,16 @@
-//! Vectors made from the graph alone (DESIGN.md §6.2): `vector_const`,
-//! `vector_degree` and `vector_dense_id`.
+//! Vectors made from the graph alone (DESIGN.md §6.2, §6.7):
+//! `vector_const`, `vector_degree`, `vector_dense_id` and `triangles`.
 
 use pgrx::prelude::*;
-use warren_core::compute::{map, AnyExpr, AnyVector, Dtype, Expr, Vector};
+use warren_core::compute::{self, map, AnyExpr, AnyVector, Dtype, Expr, Vector};
+use warren_core::graph::RelationSelection;
 
 use super::settings::workers;
 use super::vectors::Vectors;
 use super::{entry, ComputeSqlError};
 use crate::cache::resolve;
 use crate::interrupts::PostgresInterrupts;
-use crate::selection::{adjacency, direction};
+use crate::selection::{adjacency, direction, relations};
 use crate::source::{with_id_type, IdDatum};
 
 /// `value` as an expression of `dtype`: a `double precision` literal, cast
@@ -154,18 +155,95 @@ fn vector_dense_id(
     })
 }
 
+/// `warren.triangles` (§6.7): vector `out` (`i64`) holding each node's
+/// number of triangles in the undirected simple graph under the relations
+/// `rels` (all if NULL): edge directions and self-loops are ignored, as
+/// NetworkX's `triangles` does. Returns its vector id (NULL if not
+/// `persist`).
+#[pg_extern(schema = "warren", volatile, parallel_unsafe)]
+fn triangles(
+    graph: Option<&str>,
+    out: Option<&str>,
+    rels: default!(Option<Vec<Option<String>>>, "NULL"),
+    persist: default!(Option<bool>, "true"),
+    version: default!(Option<i64>, "NULL"),
+) -> Option<i64> {
+    entry(|_| {
+        let graph = graph.ok_or(ComputeSqlError::NullArgument("graph"))?;
+        let out = out.ok_or(ComputeSqlError::NullArgument("out"))?;
+        let persist = persist.ok_or(ComputeSqlError::NullArgument("persist"))?;
+        let resolved = resolve(graph, version, "write vectors of")?;
+        with_id_type!(resolved.graph.id_type, E => {
+            let mut vectors = Vectors::<E>::open(resolved)?;
+            let loaded = &vectors.loaded;
+            let selected = relations(&loaded.relations, rels.as_deref());
+            let selection = selected.as_deref().map_or(RelationSelection::All, RelationSelection::Only);
+            let counts = compute::triangles(
+                &*workers()?,
+                &vectors.memory,
+                &mut PostgresInterrupts,
+                &loaded.graph,
+                selection,
+            )?;
+            vectors.save(out, counts.into(), persist)
+        })
+    })
+}
+
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{refresh, rows, small};
+    use crate::fixture::{failure, refresh, rows, small};
 
     fn values(name: &str) -> Result<Option<String>, Error> {
         rows(&format!(
             "SELECT node_id || ':' || value FROM warren.vector_values('t', '{name}', NULL::bigint)"
         ))
+    }
+
+    #[pg_test]
+    fn reserved_names_are_only_transient() -> Result<(), Error> {
+        small("t")?;
+        let refused = failure("warren.vector_const('t', '_warren_x', 1)")?.unwrap_or_default();
+        assert!(
+            refused.starts_with("42939: vector names beginning with _warren_ are reserved"),
+            "{refused}"
+        );
+        Spi::run("SELECT warren.vector_const('t', '_warren_x', 1, persist := false)")?;
+        Ok(())
+    }
+
+    #[pg_test]
+    fn triangles_counts_each_nodes_triangles_ignoring_direction() -> Result<(), Error> {
+        Spi::run(
+            "CREATE TABLE tri_nodes (id bigint);
+             CREATE TABLE tri_edges (src bigint, dst bigint, rel text);
+             INSERT INTO tri_nodes SELECT generate_series(1, 5);
+             INSERT INTO tri_edges VALUES (1, 2, 'a'), (2, 3, 'a'), (3, 1, 'b'), (1, 3, 'a'),
+                                          (3, 4, 'a'), (4, 4, 'a');
+             SELECT warren.create_graph('tri', 'SELECT id FROM tri_nodes',
+                                        'SELECT src, dst, rel FROM tri_edges', has_relations := true,
+                                        build_reverse := false);
+             SELECT warren.refresh('tri');
+             SELECT warren.triangles('tri', 'all');
+             SELECT warren.triangles('tri', 'a', ARRAY['a'])",
+        )?;
+        let counts = |name: &str| {
+            rows(&format!(
+                "SELECT node_id || ':' || value FROM warren.vector_values('tri', '{name}', NULL::bigint)"
+            ))
+        };
+        assert_eq!(counts("all")?.as_deref(), Some("1:1 2:1 3:1 4:0 5:0"));
+        assert_eq!(counts("a")?.as_deref(), Some("1:1 2:1 3:1 4:0 5:0"));
+        Spi::run(
+            "DELETE FROM tri_edges WHERE (src, dst) = (1, 3); SELECT warren.refresh('tri');
+                  SELECT warren.triangles('tri', 'a', ARRAY['a'])",
+        )?;
+        assert_eq!(counts("a")?.as_deref(), Some("1:0 2:0 3:0 4:0 5:0"));
+        Ok(())
     }
 
     #[pg_test]

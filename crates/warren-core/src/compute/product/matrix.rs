@@ -4,7 +4,7 @@
 
 use super::super::ComputeError;
 use crate::graph::RelationSelection;
-use crate::graph::{AnyCsr, Csr, DenseId, GraphCsr, RelationCsr, Target};
+use crate::graph::{AnyCsr, Csr, DenseId, GraphCsr, Target};
 
 /// How a product walks the matrix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,7 +33,9 @@ impl<'g> Matrix<'g> {
         transpose: bool,
         weighted: Option<bool>,
     ) -> Result<Self, ComputeError> {
-        let selected = selected(graph, relations)?;
+        let selected = graph
+            .selected(relations)
+            .map_err(|relation| ComputeError::UnknownRelation { relation: relation.index() })?;
         let reverse: Option<Vec<&AnyCsr>> = selected.iter().map(|r| r.reverse()).collect();
         let (csrs, form) = match (transpose, reverse) {
             (true, Some(reverse)) => (reverse, Form::Pull),
@@ -105,28 +107,4 @@ fn entries<T: Target>(
         }
     }
     Ok(())
-}
-
-/// The relations a selection names: the all-relations CSRs for every
-/// relation, else each named relation once, in index order.
-fn selected<'g>(
-    graph: &'g GraphCsr,
-    relations: RelationSelection<'_>,
-) -> Result<Vec<&'g RelationCsr>, ComputeError> {
-    match relations {
-        RelationSelection::All => Ok(vec![graph.all_relations()]),
-        RelationSelection::Only(indexes) => {
-            let mut indexes = indexes.to_vec();
-            indexes.sort_unstable();
-            indexes.dedup();
-            indexes
-                .into_iter()
-                .map(|relation| {
-                    graph
-                        .relation(relation)
-                        .ok_or(ComputeError::UnknownRelation { relation: relation.index() })
-                })
-                .collect()
-        }
-    }
 }

@@ -401,10 +401,11 @@ mod tests {
     use super::super::{
         walk, walk_paths_each, HopRange, Step, WalkMode, WalkOptions, WalkPath, WalkResult,
     };
+    use crate::graph::Direction;
     use crate::graph::{DenseId, GraphCsr};
     use crate::interrupts::Uninterrupted;
     use crate::traversal::example::{directed, graph, relations};
-    use crate::traversal::{Direction, Traversed};
+    use crate::traversal::Traversed;
 
     fn paths_of(
         graph: &GraphCsr,

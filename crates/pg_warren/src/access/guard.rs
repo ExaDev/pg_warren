@@ -66,17 +66,51 @@ pub(crate) fn entry<T, E: SqlError>(body: impl FnOnce(&Caller) -> Result<T, E>) 
 /// Runs `f` with `search_path` set to `path`, then restores the previous
 /// value. If `f` raises an ERROR, the (sub)transaction abort restores it.
 pub(crate) fn with_search_path<R>(path: &str, f: impl FnOnce() -> R) -> R {
-    // A NUL cannot come from SQL text; an empty path is the safe fallback
-    // (only the implicit pg_catalog).
-    let path = CString::new(path).unwrap_or_default();
+    with_setting(c"search_path", path, f)
+}
+
+/// Runs `f` with the transaction read-only, then restores its previous
+/// state: the caller's SQL that a `warren.*` function runs to read (a
+/// source, message or value query) can then write nothing, not even
+/// through a VOLATILE function it calls, which a read-only cursor alone
+/// would allow. (The `transaction_read_only` GUC cannot be set inside a
+/// function, so this sets the backend's flag; an ERROR unwinds through the
+/// guard that restores it, as does a subtransaction abort.)
+pub(crate) fn with_read_only<R>(f: impl FnOnce() -> R) -> R {
+    /// Restores `XactReadOnly` when dropped, including while unwinding.
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            // SAFETY: the main thread's transaction state flag, restored to
+            // the value read below.
+            unsafe { pg_sys::XactReadOnly = self.0 };
+        }
+    }
+    // SAFETY: reads and sets the main thread's transaction state flag,
+    // which the executor checks before every write.
+    let _restore = unsafe {
+        let restore = Restore(pg_sys::XactReadOnly);
+        pg_sys::XactReadOnly = true;
+        restore
+    };
+    f()
+}
+
+/// Runs `f` with GUC `name` set to `value` at a new nest level, then pops
+/// it, restoring the previous value; if `f` raises an ERROR, the
+/// (sub)transaction abort pops it.
+fn with_setting<R>(name: &CStr, value: &str, f: impl FnOnce() -> R) -> R {
+    // A NUL cannot come from SQL text; an empty value is the safe fallback
+    // (for search_path, only the implicit pg_catalog).
+    let value = CString::new(value).unwrap_or_default();
     // SAFETY: plain backend calls with NUL-terminated strings that outlive
     // them; set_config_option raises an ERROR rather than return failure
     // for a session-level SET of a valid GUC.
     let level = unsafe {
         let level = pg_sys::NewGUCNestLevel();
         pg_sys::set_config_option(
-            c"search_path".as_ptr(),
-            path.as_ptr(),
+            name.as_ptr(),
+            value.as_ptr(),
             pg_sys::GucContext::PGC_USERSET,
             pg_sys::GucSource::PGC_S_SESSION,
             pg_sys::GucAction::GUC_ACTION_SAVE,
@@ -87,7 +121,7 @@ pub(crate) fn with_search_path<R>(path: &str, f: impl FnOnce() -> R) -> R {
         level
     };
     let result = f();
-    // SAFETY: pops the nest level opened above, restoring search_path.
+    // SAFETY: pops the nest level opened above, restoring the setting.
     unsafe { pg_sys::AtEOXact_GUC(true, level) };
     result
 }
@@ -202,14 +236,17 @@ mod tests {
     /// One call of every `warren.*` function, by name; `{v}` is a version
     /// of graph `victim`.
     const CALLS: &[(&str, &str)] = &[
+        ("aggregate_neighbours", "warren.aggregate_neighbours('victim', 'c', 'a')"),
         ("bfs", "warren.bfs('victim', ARRAY[1::bigint], 2)"),
         ("compact", "warren.compact('victim')"),
         ("components", "warren.components('victim', NULL::bigint)"),
+        ("components_vector", "warren.components_vector('victim', 'cc')"),
         (
             "create_graph",
             "warren.create_graph('eves', 'SELECT 1::bigint', 'SELECT 1::bigint, 2::bigint')",
         ),
         ("degree", "warren.degree('victim', 1::bigint)"),
+        ("degree_vector", "warren.degree_vector('victim', 'dv')"),
         ("diff", "warren.diff('victim', {v}, {v})"),
         ("dijkstra", "warren.dijkstra('victim', 1::bigint, 2::bigint)"),
         ("drop_graph", "warren.drop_graph('victim')"),
@@ -217,13 +254,16 @@ mod tests {
         ("drop_version", "warren.drop_version('victim', {v})"),
         ("evict", "warren.evict('victim')"),
         ("explain_map", "warren.explain_map('victim', 'c + 1')"),
+        ("gather", "warren.gather('victim', 'SELECT 1::bigint, 1', NULL::bigint, NULL::int[])"),
         ("grant", "warren.grant('victim', 'eve')"),
         ("has_edge", "warren.has_edge('victim', 1::bigint, 2::bigint)"),
         ("id_map", "warren.id_map('victim', NULL::bigint)"),
         ("info", "warren.info('victim')"),
+        ("label_propagation", "warren.label_propagation('victim', 'lp')"),
         ("last_stats", "warren.last_stats()"),
         ("matrix_rows", "warren.matrix_rows('victim', 'c', NULL::bigint)"),
         ("neighbours", "warren.neighbours('victim', 1::bigint)"),
+        ("pagerank", "warren.pagerank('victim', 'pr')"),
         ("prewarm", "warren.prewarm('victim')"),
         ("promote", "warren.promote('victim', {v})"),
         ("reachable", "warren.reachable('victim', 1::bigint, 2::bigint)"),
@@ -234,7 +274,9 @@ mod tests {
         ("shortest_path", "warren.shortest_path('victim', 1::bigint, 2::bigint)"),
         ("spmm", "warren.spmm('victim', 'c', 'y')"),
         ("spmv", "warren.spmv('victim', 'c', 'y', mask := 'c')"),
+        ("sssp_vector", "warren.sssp_vector('victim', 'sp', 1::bigint)"),
         ("steps", "warren.steps('[]')"),
+        ("triangles", "warren.triangles('victim', 't')"),
         ("vector_const", "warren.vector_const('victim', 'c', 1)"),
         ("vector_degree", "warren.vector_degree('victim', 'd')"),
         ("vector_dense_id", "warren.vector_dense_id('victim', 'i')"),
