@@ -30,9 +30,14 @@ before changing code. Commands, toolchain setup and environment gotchas are in
    concepts, not technical layers. No `utils`, `helpers`, `common`, `models`,
    `types` or `misc` modules.
    - `warren-core/src/`: `graph/` (csr, id_map, tombstones), `traversal/`,
-     `compute/` (semiring, kernels, message), `spectral/`.
-   - `pg_warren/src/`: `extension` (schema + `warren.version()`), `catalog/`,
-     `build/`, `cache/`, `traversal_sql/`, `compute_sql/`.
+     `compute/` (semiring, kernels, message), `spectral/`, `version/` (diff, compaction across versions).
+   - `pg_warren/src/`: `extension` (schema + `warren.version()`, SQL
+     errors), `access/` (identity switches, privilege checks), `source/`
+     (node/edge query columns and read-only cursors), `catalog/`,
+     `segment/` (chunked persistence), `cache/` (loader), `build/`,
+     `version_sql/` (compact, diff), `traversal_sql/`, `compute_sql/`.
+     Feature dependencies form a DAG: `access`, `source` → `catalog` →
+     `segment` → `cache` → `build` → `version_sql`; never the reverse.
    - Each module's `mod.rs` doc comment states its responsibility. Add a
      submodule when the code exists, not before.
 4. **Ubiquitous language (from DESIGN.md).** Use these terms exactly, in code,
@@ -64,7 +69,7 @@ before changing code. Commands, toolchain setup and environment gotchas are in
 | Domain unit + property (`proptest`) | `warren-core`, `#[cfg(test)]` next to the code | `cargo test -p warren-core` |
 | Adapter logic behind ports, against fakes | `pg_warren`, plain `#[test]` | `cargo pgrx test pgNN` (crate needs the pgrx harness) |
 | In-database (`#[pg_test]`): SQL surface, SPI adapters, transactions | `pg_warren`, `#[pg_schema] mod tests` per feature module | `cargo pgrx test pgNN` |
-| Integration / oracle / Appendix A use cases | `test/` | TBD (M2+) |
+| Integration / oracle / Appendix A use cases | `test/sql/` (+ generators in `bench/`) | `test/run.py` (and `pytest` for the generators) |
 | Domain tests under Miri | `warren-core` (same tests) | `cargo +$MIRI_NIGHTLY miri test -p warren-core` (pinned nightly, see `ci.yml`) |
 | Micro-benchmarks (`criterion`) | `warren-core/benches/` | `cargo bench -p warren-core` |
 
@@ -92,6 +97,15 @@ before changing code. Commands, toolchain setup and environment gotchas are in
 - Reserve graph-sized buffers with `try_reserve`; an allocation failure is a
   SQL error, never an abort.
 - SPI writes need `Spi::connect_mut` + `update()`. `Spi::connect` is read-only.
+- **Every SQL entry point uses the guard.** The body of every
+  `#[pg_extern]` is `access::entry(|caller| ...)`, which pins
+  `search_path = pg_catalog, pg_temp` for the whole call and raises errors
+  with their SQLSTATE (DESIGN.md §7). Write SPI SQL assuming that
+  `search_path`: schema-qualify `warren.*` objects, never rely on `public`.
+  Run user-supplied SQL only under the search_path it belongs to
+  (`access::with_search_path`: the caller's, or a graph's stored one).
+  `access::guard`'s test calls every `warren.*` function with a hostile
+  `search_path`; add each new function to its `CALLS` list.
 - Use pgrx `=0.19.3` (pinned). Upgrade pgrx and cargo-pgrx together, in their
   own change.
 

@@ -42,6 +42,17 @@ pub enum TraversalError {
         /// The offending weight.
         weight: f64,
     },
+    /// A walk step's hop range must have `min <= max <= HopRange::CAP`.
+    #[error("hop range {min}..{max} is invalid: need min <= max <= {cap}", cap = super::HopRange::CAP)]
+    InvalidHopRange {
+        /// The fewest hops asked for.
+        min: u32,
+        /// The most hops asked for.
+        max: u32,
+    },
+    /// A walk has more walks than a `u64` can count.
+    #[error("the walk has more than 2^64 - 1 walks")]
+    WalkCountOverflow,
     /// The traversal's [`Interrupts`](crate::interrupts::Interrupts) poll asked it to stop.
     #[error("traversal cancelled")]
     Cancelled,

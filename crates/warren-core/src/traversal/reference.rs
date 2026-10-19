@@ -131,6 +131,28 @@ impl Scenario {
         steps
     }
 
+    /// Each `(from, relation, to)` hop along a live edge of the selected
+    /// relations, as traversed in `direction`, once: an edge read both ways
+    /// by one relation, or a self-loop, is one hop.
+    pub(crate) fn hops(
+        &self,
+        direction: Direction,
+        selection: &Option<Vec<usize>>,
+    ) -> BTreeSet<(DenseId, usize, DenseId)> {
+        let mut hops = BTreeSet::new();
+        for (r, s, t, _) in self.live_edges() {
+            if selection.as_ref().is_none_or(|chosen| chosen.contains(&r)) {
+                if direction != Direction::In {
+                    hops.insert((s, r, t));
+                }
+                if direction != Direction::Out {
+                    hops.insert((t, r, s));
+                }
+            }
+        }
+        hops
+    }
+
     /// The BFS depth of every node reachable from `starts` along `steps`,
     /// entering only nodes in `filter` (starts excepted).
     pub(crate) fn depths(

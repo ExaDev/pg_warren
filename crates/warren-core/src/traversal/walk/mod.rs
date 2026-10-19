@@ -1,0 +1,144 @@
+//! Walks: typed path patterns executed over CSR without leaving the engine
+//! (DESIGN.md §9.2, `warren.walk`).
+//!
+//! A walk is a chain of [`Step`]s. Each step follows its relations in its
+//! direction for a number of hops in its [`HopRange`], entering only nodes
+//! in its filter; the nodes it ends on start the next step. Hops are walks,
+//! not paths: a walk may repeat nodes and edges, as a recursive CTE with a
+//! depth column does.
+//!
+//! A walk's [`TraversalStats`](super::TraversalStats) cover all its steps.
+//! `nodes_visited` counts each node admitted to a level of a step: the
+//! nodes each step starts from (the walk's starts, then the nodes each step
+//! hands on) and each node a hop admits. So a filter, which only ever
+//! removes nodes from levels, never makes a walk visit more nodes.
+
+mod count;
+mod ends;
+#[cfg(test)]
+mod example;
+mod paths;
+mod plan;
+#[cfg(test)]
+mod properties;
+mod reach;
+#[cfg(test)]
+mod reference;
+mod step;
+mod tally;
+
+use std::ops::ControlFlow;
+
+pub use ends::walk_ends_each;
+pub use paths::{walk_paths_each, WalkPath};
+pub use step::{HopRange, Step};
+
+use super::scratch::Rows;
+use super::stats::Progress;
+use super::{TraversalError, Traversed};
+use crate::graph::{DenseId, GraphCsr};
+use crate::interrupts::Interrupts;
+
+/// What a walk returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WalkMode {
+    /// The end frontier: each node a walk ends on.
+    Ends,
+    /// The number of ends, or of walks if ends are not distinct.
+    Count,
+    /// The walks, node by node with each hop's relation: one per distinct
+    /// end, or every walk if ends are not distinct.
+    Paths,
+}
+
+/// How a walk reports its result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WalkOptions {
+    /// Report each end once, however many walks end on it.
+    pub distinct_ends: bool,
+    /// The most rows to report; stopping because of it is truncation.
+    pub max_results: Option<u64>,
+    /// Execute the chain from its last step backwards, taking the starts as
+    /// the allowed ends and reporting the nodes walks would start from.
+    pub reverse: bool,
+}
+
+impl Default for WalkOptions {
+    /// Distinct ends, no row limit, forwards: the `warren.walk` defaults.
+    fn default() -> Self {
+        Self { distinct_ends: true, max_results: None, reverse: false }
+    }
+}
+
+/// A walk's result, by [`WalkMode`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WalkResult {
+    /// [`WalkMode::Ends`].
+    Ends(Vec<DenseId>),
+    /// [`WalkMode::Count`].
+    Count(u64),
+    /// [`WalkMode::Paths`].
+    Paths(Vec<WalkPath>),
+}
+
+/// Walks `steps` from `starts` over `graph` and collects the result `mode`
+/// asks for. `options.max_results` does not apply to a count. The streaming forms are [`walk_ends_each`].
+pub fn walk(
+    graph: &GraphCsr,
+    starts: &[DenseId],
+    steps: &[Step],
+    mode: WalkMode,
+    options: WalkOptions,
+    interrupts: &mut dyn Interrupts,
+) -> Result<Traversed<WalkResult>, TraversalError> {
+    match mode {
+        WalkMode::Ends => {
+            let mut ends = Rows::new();
+            let stats =
+                walk_ends_each(graph, starts, steps, options, interrupts, |end| ends.push(end))?;
+            Ok(Traversed { result: WalkResult::Ends(ends.finish()?), stats })
+        }
+        WalkMode::Paths => {
+            let mut paths = Rows::new();
+            let stats =
+                walk_paths_each(graph, starts, steps, options, interrupts, |p| paths.push(p))?;
+            Ok(Traversed { result: WalkResult::Paths(paths.finish()?), stats })
+        }
+        WalkMode::Count => {
+            let plan = plan::plan(graph, starts, steps, options.reverse)?;
+            let counted = count::count(&plan, options.distinct_ends, interrupts)?;
+            Ok(Traversed { result: WalkResult::Count(counted.result), stats: counted.stats })
+        }
+    }
+}
+
+/// Counts the rows a walk reports against `max_results`.
+struct RowLimit {
+    max: Option<u64>,
+    reported: u64,
+    truncated: bool,
+}
+
+impl RowLimit {
+    fn new(max: Option<u64>) -> Self {
+        Self { max, reported: 0, truncated: false }
+    }
+
+    /// Reports a row with `report`, or stops the walk if the limit is
+    /// reached.
+    fn offer(&mut self, report: impl FnOnce() -> ControlFlow<()>) -> ControlFlow<()> {
+        if self.max == Some(self.reported) {
+            self.truncated = true;
+            return ControlFlow::Break(());
+        }
+        self.reported += 1;
+        report()
+    }
+
+    /// Marks `progress` truncated if the limit stopped the walk.
+    fn record(&self, progress: &mut Progress<'_>) {
+        if self.truncated {
+            progress.truncate();
+        }
+    }
+}

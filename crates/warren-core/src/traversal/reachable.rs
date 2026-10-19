@@ -4,7 +4,7 @@
 
 use std::ops::ControlFlow;
 
-use super::level::{Admission, LevelSearch};
+use super::level::{Admission, Edges, LevelSearch};
 use super::scratch::Rows;
 use super::stats::Progress;
 use super::{bfs_each, Adjacency, Limits, TraversalError, TraversalStats, Traversed, Visit};
@@ -30,7 +30,14 @@ pub fn reachable(
         Ok(if found { Admission::AdmitAndStop } else { Admission::Admit })
     };
     let mut progress = Progress::new(interrupts);
-    LevelSearch::new(adjacency, None)?.run(&[start], max_depth, &mut progress, &mut admit)?;
+    let edges = Edges::new(adjacency, None)?;
+    LevelSearch::new(adjacency.id_space()).run(
+        edges,
+        &[start],
+        max_depth,
+        &mut progress,
+        &mut admit,
+    )?;
     Ok(progress.traversed(found))
 }
 

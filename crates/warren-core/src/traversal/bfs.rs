@@ -4,7 +4,7 @@
 
 use std::ops::ControlFlow;
 
-use super::level::{Admission, LevelSearch};
+use super::level::{Admission, Edges, LevelSearch};
 use super::scratch::Rows;
 use super::stats::Progress;
 use super::{Adjacency, Limits, NodeSet, TraversalError, TraversalStats, Traversed};
@@ -55,26 +55,53 @@ pub fn bfs_each(
     interrupts: &mut dyn Interrupts,
     mut visitor: impl FnMut(Visit) -> ControlFlow<()>,
 ) -> Result<TraversalStats, TraversalError> {
+    let edges = Edges::new(adjacency, filter)?;
     let mut progress = Progress::new(interrupts);
-    let mut search = LevelSearch::new(adjacency, filter)?;
-    let mut emitted = 0u64;
-    let mut truncated = false;
-    let mut admit = |visit: Visit| -> Result<Admission, TraversalError> {
-        if limits.max_results == Some(emitted) {
-            truncated = true;
+    let mut results = Results::new(limits.max_results);
+    let mut admit = |visit| results.admit(visit, &mut visitor);
+    LevelSearch::new(adjacency.id_space()).run(
+        edges,
+        starts,
+        limits.max_depth,
+        &mut progress,
+        &mut admit,
+    )?;
+    if results.truncated {
+        progress.truncate();
+    }
+    Ok(progress.finish())
+}
+
+/// Admits visits to a BFS's output until `max_results` would be exceeded,
+/// and remembers whether that cut it short.
+pub(crate) struct Results {
+    max_results: Option<u64>,
+    emitted: u64,
+    /// Whether a visit was refused because of `max_results`.
+    pub(crate) truncated: bool,
+}
+
+impl Results {
+    pub(crate) fn new(max_results: Option<u64>) -> Self {
+        Self { max_results, emitted: 0, truncated: false }
+    }
+
+    /// Hands `visit` to `visitor` unless the output is full.
+    pub(crate) fn admit(
+        &mut self,
+        visit: Visit,
+        visitor: &mut impl FnMut(Visit) -> ControlFlow<()>,
+    ) -> Result<Admission, TraversalError> {
+        if self.max_results == Some(self.emitted) {
+            self.truncated = true;
             return Ok(Admission::Stop);
         }
-        emitted += 1;
+        self.emitted += 1;
         Ok(match visitor(visit) {
             ControlFlow::Continue(()) => Admission::Admit,
             ControlFlow::Break(()) => Admission::AdmitAndStop,
         })
-    };
-    search.run(starts, limits.max_depth, &mut progress, &mut admit)?;
-    if truncated {
-        progress.truncate();
     }
-    Ok(progress.finish())
 }
 
 #[cfg(test)]
