@@ -11,7 +11,7 @@ mod error;
 mod gather;
 mod map;
 mod mask;
-mod memory;
+pub(crate) mod memory;
 mod message;
 mod product;
 mod reduce;

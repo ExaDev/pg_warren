@@ -1,5 +1,8 @@
-//! Each sender's messages by dense id: a stable counting sort of the
-//! messages by sender, so a sender's messages keep their push order.
+//! Each sender's messages by dense id: the messages copied in sender order
+//! by a stable counting sort, so a sender's messages are adjacent and keep
+//! their push order.
+
+use std::ops::Range;
 
 use super::Messages;
 use crate::compute::{ComputeError, ComputeMemory, MemoryCharge, Message};
@@ -7,21 +10,21 @@ use crate::graph::DenseId;
 use crate::interrupts::{Cancellation, Cancelled};
 
 /// How often a sequential pass checks the cancellation flag.
-pub(super) const ROWS_PER_CHECK: usize = 1 << 16;
+const ROWS_PER_CHECK: usize = 1 << 16;
 
-/// The messages of each sender, as indexes into [`Messages`].
+/// The messages, grouped by sender.
 #[derive(Debug)]
-pub(super) struct Outbox {
-    /// `id_space + 1` positions into `order`: sender `s`'s messages are
-    /// `order[offsets[s]..offsets[s + 1]]`.
+pub(super) struct Outbox<M: Message> {
+    /// `id_space + 1` positions into `messages`: sender `s`'s messages are
+    /// `offsets[s]..offsets[s + 1]`.
     offsets: Vec<u64>,
-    order: Vec<usize>,
+    messages: M::Storage,
     _charges: [MemoryCharge; 2],
 }
 
-impl Outbox {
+impl<M: Message> Outbox<M> {
     /// Sorts `messages` by sender, failing on a sender outside `id_space`.
-    pub(super) fn new<M: Message>(
+    pub(super) fn new(
         memory: &ComputeMemory,
         cancellation: &Cancellation,
         messages: &Messages<M>,
@@ -38,26 +41,53 @@ impl Outbox {
         }
         // Running sums make `offsets[s]` the end of sender `s`'s messages;
         // placing the messages last to first then moves it to their start.
-        let mut end = 0;
-        for offset in &mut offsets[..id_space as usize] {
-            end += *offset;
-            *offset = end;
-        }
-        offsets[id_space as usize] = end;
-        let (mut order, order_charge) = memory.filled(senders.len(), 0usize)?;
+        running_ends(&mut offsets);
+        let (mut order, _order) = memory.filled(senders.len(), 0usize)?;
         for (index, &sender) in senders.iter().enumerate().rev() {
             check(cancellation, index)?;
             let offset = &mut offsets[sender as usize];
             *offset -= 1;
             order[*offset as usize] = index;
         }
-        Ok(Self { offsets, order, _charges: [offsets_charge, order_charge] })
+        let messages_charge = memory.charge(messages.message_bytes())?;
+        let mut sorted = M::Storage::default();
+        for (position, &index) in order.iter().enumerate() {
+            check(cancellation, position)?;
+            if let Some(message) = messages.message(index) {
+                M::push(&mut sorted, message)
+                    .map_err(|_| ComputeError::OutOfMemory { bytes: messages_charge.bytes() })?;
+            }
+        }
+        Ok(Self { offsets, messages: sorted, _charges: [offsets_charge, messages_charge] })
     }
 
-    /// The indexes of `sender`'s messages, in push order.
-    pub(super) fn of(&self, sender: DenseId) -> &[usize] {
+    /// The positions of `sender`'s messages.
+    fn range(&self, sender: DenseId) -> Range<usize> {
         let sender = sender as usize;
-        &self.order[self.offsets[sender] as usize..self.offsets[sender + 1] as usize]
+        self.offsets[sender] as usize..self.offsets[sender + 1] as usize
+    }
+
+    /// Whether `sender` sends any message.
+    pub(super) fn sends(&self, sender: DenseId) -> bool {
+        !self.range(sender).is_empty()
+    }
+
+    /// `sender`'s messages, in push order.
+    pub(super) fn of(&self, sender: DenseId) -> impl Iterator<Item = M::View<'_>> + Clone {
+        self.range(sender).filter_map(|index| M::get(&self.messages, index))
+    }
+}
+
+/// Turns per-row counts in `offsets[..n]` into running ends, and sets
+/// `offsets[n]` to the total.
+pub(super) fn running_ends(offsets: &mut [u64]) {
+    let mut end = 0;
+    if let Some((total, counts)) = offsets.split_last_mut() {
+        for offset in counts {
+            end += *offset;
+            *offset = end;
+        }
+        *total = end;
     }
 }
 

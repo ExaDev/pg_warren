@@ -2,7 +2,8 @@
 //! ascending dense-id order, ready to stream to SQL.
 
 use super::{Combine, Combiner};
-use crate::compute::{ComputeError, ComputeMemory, MemoryCharge, Message, MessageBuffer};
+use crate::compute::memory::Allowance;
+use crate::compute::{ComputeError, ComputeMemory, Message};
 use crate::graph::DenseId;
 
 /// The receivers of a gather and their combined values, charged to the
@@ -47,12 +48,12 @@ impl<M: Message> Gathered<M> {
 
     /// The bytes charged for the result.
     pub fn bytes(&self) -> u64 {
-        self.parts.iter().map(|part| part.charge.bytes() + part.messages.bytes()).sum()
+        self.parts.iter().map(|part| part.allowance.used()).sum()
     }
 }
 
 /// A receiver's value.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub enum Received<'a, M: Message> {
     /// `count`: the number of messages received.
     Count(i64),
@@ -64,12 +65,29 @@ pub enum Received<'a, M: Message> {
 }
 
 /// The messages one receiver collected, each with its own boundaries.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub struct Collected<'a, M: Message> {
-    messages: &'a MessageBuffer<M>,
+    messages: &'a M::Storage,
     start: usize,
     end: usize,
 }
+
+// Not derived: a derive would require `M` and its storage to be `Clone`.
+impl<M: Message> Clone for Received<'_, M> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<M: Message> Copy for Received<'_, M> {}
+
+impl<M: Message> Clone for Collected<'_, M> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<M: Message> Copy for Collected<'_, M> {}
 
 impl<'a, M: Message> Collected<'a, M> {
     /// The number of messages.
@@ -85,7 +103,7 @@ impl<'a, M: Message> Collected<'a, M> {
     /// The messages in collect order.
     pub fn iter(&self) -> impl Iterator<Item = M::View<'a>> + 'a {
         let messages = self.messages;
-        (self.start..self.end).filter_map(move |index| messages.get(index))
+        (self.start..self.end).filter_map(move |index| M::get(messages, index))
     }
 }
 
@@ -98,8 +116,8 @@ pub(super) struct Part<M: Message> {
     /// `collect`: receiver `i`'s messages end at `ends[i]`.
     ends: Vec<usize>,
     /// The messages: one per receiver, or every collected message.
-    messages: MessageBuffer<M>,
-    charge: MemoryCharge,
+    messages: M::Storage,
+    allowance: Allowance,
 }
 
 impl<M: Combine> Part<M> {
@@ -109,9 +127,21 @@ impl<M: Combine> Part<M> {
             receivers: Vec::new(),
             counts: Vec::new(),
             ends: Vec::new(),
-            messages: MessageBuffer::new(memory)?,
-            charge: memory.charge(0)?,
+            messages: M::Storage::default(),
+            allowance: Allowance::new(memory)?,
         })
+    }
+
+    /// Appends `message`, charging it first.
+    fn push(&mut self, message: M::View<'_>) -> Result<(), ComputeError> {
+        let bytes = M::size(message);
+        self.allowance.take(bytes)?;
+        M::push(&mut self.messages, message).map_err(|_| ComputeError::OutOfMemory { bytes })
+    }
+
+    /// Releases what the part reserved ahead but did not use.
+    pub(super) fn settle(&mut self) {
+        self.allowance.settle();
     }
 
     /// Combines the messages `receiver` received, in collect order, adding
@@ -120,34 +150,37 @@ impl<M: Combine> Part<M> {
         &mut self,
         combiner: Combiner,
         receiver: DenseId,
-        mut received: impl Iterator<Item = M::View<'a>>,
+        mut received: impl Iterator<Item = M::View<'a>> + Clone,
     ) -> Result<(), ComputeError> {
         let any = match combiner {
             Combiner::Count => {
                 let count = received.count();
                 if count > 0 {
-                    self.charge.reserve_one(&mut self.counts)?;
+                    self.allowance.reserve_one(&mut self.counts)?;
                     self.counts.push(count as i64);
                 }
                 count > 0
             }
             Combiner::Collect => {
-                let start = self.messages.len();
+                let start = M::len(&self.messages);
                 for message in received {
-                    self.messages.push(message)?;
+                    self.push(message)?;
                 }
-                let any = self.messages.len() > start;
-                if any {
-                    self.charge.reserve_one(&mut self.ends)?;
-                    self.ends.push(self.messages.len());
+                let end = M::len(&self.messages);
+                if end > start {
+                    self.allowance.reserve_one(&mut self.ends)?;
+                    self.ends.push(end);
                 }
-                any
+                end > start
             }
             Combiner::First => match received.next() {
-                Some(first) => self.messages.push(first).map(|()| true)?,
+                Some(first) => self.push(first).map(|()| true)?,
                 None => false,
             },
-            Combiner::Concat => M::concat(&mut self.messages, received)?,
+            Combiner::Concat => {
+                let allowance = &mut self.allowance;
+                M::concat(&mut self.messages, received, |bytes| allowance.take(bytes))?
+            }
             Combiner::Sum
             | Combiner::Min
             | Combiner::Max
@@ -157,11 +190,11 @@ impl<M: Combine> Part<M> {
                 for message in received {
                     value = M::fold(combiner, value, message)?;
                 }
-                self.messages.push(value).map(|()| true)?
+                self.push(value).map(|()| true)?
             }
         };
         if any {
-            self.charge.reserve_one(&mut self.receivers)?;
+            self.allowance.reserve_one(&mut self.receivers)?;
             self.receivers.push(receiver);
         }
         Ok(())
@@ -180,7 +213,7 @@ impl<M: Message> Part<M> {
                 },
                 end: *self.ends.get(index)?,
             }),
-            _ => Received::Message(self.messages.get(index)?),
+            _ => Received::Message(M::get(&self.messages, index)?),
         })
     }
 }

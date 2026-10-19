@@ -9,8 +9,8 @@
 use std::iter::{Copied, Peekable};
 use std::slice::Iter;
 
-use super::outbox::{check, Outbox};
-use crate::compute::{ComputeError, ComputeMemory, MemoryCharge};
+use super::outbox::{check, running_ends, Outbox};
+use crate::compute::{ComputeError, ComputeMemory, MemoryCharge, Message};
 use crate::graph::{AnyCsr, DenseId, Direction, GraphCsr, Neighbours, RelationSelection};
 use crate::interrupts::Cancellation;
 
@@ -59,11 +59,11 @@ pub(super) struct Neighbourhood<'g> {
 impl<'g> Neighbourhood<'g> {
     /// The neighbourhood `sources` read, scattering the inbox for the
     /// receivers `selects` selects if there are rows to push.
-    pub(super) fn new(
+    pub(super) fn new<M: Message>(
         memory: &ComputeMemory,
         cancellation: &Cancellation,
         sources: Sources<'g>,
-        outbox: &Outbox,
+        outbox: &Outbox<M>,
         selects: &impl Fn(DenseId) -> bool,
         id_space: u64,
     ) -> Result<Self, ComputeError> {
@@ -78,7 +78,7 @@ impl<'g> Neighbourhood<'g> {
     }
 
     /// `receiver`'s senders, ascending and distinct.
-    pub(super) fn senders(&self, receiver: DenseId) -> impl Iterator<Item = DenseId> + '_ {
+    pub(super) fn senders(&self, receiver: DenseId) -> impl Iterator<Item = DenseId> + Clone + '_ {
         let rows = self.rows.iter().map(|csr| Row::Csr(csr.neighbours(receiver)));
         let inbox = self.inbox.iter().map(|inbox| Row::Inbox(inbox.row(receiver).iter().copied()));
         Senders::new(rows.chain(inbox))
@@ -87,16 +87,16 @@ impl<'g> Neighbourhood<'g> {
 
 /// What an inbox is scattered from: the forward CSRs, the senders with
 /// messages, and the receivers selected.
-struct Push<'p, S> {
+struct Push<'p, M: Message, S> {
     forward: &'p [&'p AnyCsr],
-    outbox: &'p Outbox,
+    outbox: &'p Outbox<M>,
     selects: &'p S,
 }
 
-impl<S: Fn(DenseId) -> bool> Push<'_, S> {
+impl<M: Message, S: Fn(DenseId) -> bool> Push<'_, M, S> {
     /// The selected receivers of `sender`'s messages, if it has any.
     fn receivers(&self, sender: DenseId) -> impl Iterator<Item = DenseId> + '_ {
-        let sends = !self.outbox.of(sender).is_empty();
+        let sends = self.outbox.sends(sender);
         let rows = self.forward.iter().filter(move |_| sends);
         let receivers = Senders::new(rows.map(move |csr| Row::Csr(csr.neighbours(sender))));
         receivers.filter(|&receiver| (self.selects)(receiver))
@@ -118,7 +118,7 @@ impl Inbox {
     fn new(
         memory: &ComputeMemory,
         cancellation: &Cancellation,
-        push: Push<'_, impl Fn(DenseId) -> bool>,
+        push: Push<'_, impl Message, impl Fn(DenseId) -> bool>,
         id_space: u64,
     ) -> Result<Self, ComputeError> {
         let (mut offsets, offsets_charge) = memory.filled(id_space as usize + 1, 0u64)?;
@@ -129,13 +129,9 @@ impl Inbox {
             }
         }
         // As in the outbox: running ends, then fill last to first.
-        let mut end = 0;
-        for offset in &mut offsets[..id_space as usize] {
-            end += *offset;
-            *offset = end;
-        }
-        offsets[id_space as usize] = end;
-        let (mut senders, senders_charge) = memory.filled(end as usize, 0 as DenseId)?;
+        running_ends(&mut offsets);
+        let pairs = offsets[id_space as usize] as usize;
+        let (mut senders, senders_charge) = memory.filled(pairs, 0 as DenseId)?;
         for sender in (0..id_space).rev() {
             check(cancellation, sender as usize)?;
             for receiver in push.receivers(sender) {

@@ -96,12 +96,11 @@ pub fn gather<M: Combine, I: Interrupts>(
                 let first = task * RECEIVERS_PER_TASK;
                 let receivers = first..id_space.min(first + RECEIVERS_PER_TASK);
                 for receiver in receivers.filter(|&receiver| selects(receiver)) {
-                    let received = neighbourhood
-                        .senders(receiver)
-                        .flat_map(|sender| outbox.of(sender))
-                        .filter_map(|&index| messages.message(index));
+                    let received =
+                        neighbourhood.senders(receiver).flat_map(|sender| outbox.of(sender));
                     part.receive(combiner, receiver as DenseId, received)?;
                 }
+                part.settle();
                 Ok(part)
             })
             .collect::<Result<Vec<_>, ComputeError>>()?;

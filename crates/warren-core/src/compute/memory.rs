@@ -131,6 +131,63 @@ impl MemoryCharge {
     }
 }
 
+/// The smallest and largest block an [`Allowance`] reserves ahead.
+const BLOCK: (u64, u64) = (1 << 12, 1 << 20);
+
+/// A charge for a buffer that grows by small steps, as a worker thread
+/// builds its part of a result: it reserves the budget ahead in blocks
+/// (growing with what it holds, up to 1 MiB), so the shared budget is
+/// touched rarely, and falls back to the exact bytes near the limit.
+/// [`Self::settle`] returns what it reserved but did not use.
+#[derive(Debug)]
+pub(crate) struct Allowance {
+    charge: MemoryCharge,
+    used: u64,
+}
+
+impl Allowance {
+    /// Nothing used or reserved yet.
+    pub(crate) fn new(memory: &ComputeMemory) -> Result<Self, ComputeError> {
+        Ok(Self { charge: memory.charge(0)?, used: 0 })
+    }
+
+    /// The bytes taken.
+    pub(crate) fn used(&self) -> u64 {
+        self.used
+    }
+
+    /// Takes `bytes` more, reserving ahead if the reserve runs out.
+    pub(crate) fn take(&mut self, bytes: u64) -> Result<(), ComputeError> {
+        let used = self.used.saturating_add(bytes);
+        let reserved = self.charge.bytes();
+        if used > reserved {
+            let short = used - reserved;
+            let ahead = reserved.clamp(BLOCK.0, BLOCK.1).max(short);
+            if self.charge.grow(ahead).is_err() {
+                self.charge.grow(short)?;
+            }
+        }
+        self.used = used;
+        Ok(())
+    }
+
+    /// Room for one more element in `buffer`, taken first and reserved
+    /// with `try_reserve`.
+    pub(crate) fn reserve_one<T>(&mut self, buffer: &mut Vec<T>) -> Result<(), ComputeError> {
+        let bytes = size_of::<T>() as u64;
+        self.take(bytes)?;
+        buffer.try_reserve(1).map_err(|_| {
+            self.used -= bytes;
+            ComputeError::OutOfMemory { bytes }
+        })
+    }
+
+    /// Releases the bytes reserved ahead.
+    pub(crate) fn settle(&mut self) {
+        self.charge.shrink(self.charge.bytes() - self.used);
+    }
+}
+
 impl Drop for MemoryCharge {
     fn drop(&mut self) {
         self.memory.release(self.bytes);
@@ -193,6 +250,37 @@ mod tests {
         assert_eq!(charge.bytes(), 8);
         assert!(matches!(charge.reserve_one(&mut buffer), Err(ComputeError::MemoryLimit { .. })));
         assert_eq!(memory.in_use(), 8);
+    }
+
+    #[test]
+    fn an_allowance_reserves_ahead_in_blocks_and_settles_to_what_it_used() {
+        let memory = ComputeMemory::new(1 << 20);
+        let mut allowance = Allowance::new(&memory).unwrap();
+        allowance.take(8).unwrap();
+        let reserved = memory.in_use();
+        assert!(reserved >= 4096);
+        let mut buffer = Vec::<u64>::new();
+        for _ in 0..10 {
+            allowance.reserve_one(&mut buffer).unwrap();
+            buffer.push(0);
+        }
+        assert_eq!((allowance.used(), memory.in_use()), (88, reserved));
+        allowance.settle();
+        assert_eq!((allowance.used(), memory.in_use()), (88, 88));
+        allowance.take(1 << 16).unwrap();
+        assert_eq!(memory.in_use(), 88 + (1 << 16));
+        drop(allowance);
+        assert_eq!(memory.in_use(), 0);
+    }
+
+    #[test]
+    fn an_allowance_takes_the_exact_bytes_near_the_limit() {
+        let memory = ComputeMemory::new(20);
+        let mut allowance = Allowance::new(&memory).unwrap();
+        allowance.take(8).unwrap();
+        allowance.take(8).unwrap();
+        assert!(matches!(allowance.take(8), Err(ComputeError::MemoryLimit { .. })));
+        assert_eq!((allowance.used(), memory.in_use()), (16, 16));
     }
 
     #[test]

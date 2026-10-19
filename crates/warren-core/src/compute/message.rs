@@ -167,44 +167,21 @@ impl<M: Message> MessageBuffer<M> {
     }
 }
 
-impl MessageBuffer<Bytes> {
-    /// Appends one message, the concatenation of `parts`, charging each
-    /// part before it is reserved. Appends nothing if there are no parts;
-    /// returns whether there were any. On an error nothing is kept.
+impl PackedBytes {
+    /// Appends one message, the concatenation of `parts`, whose lengths sum
+    /// to `len`.
     pub(crate) fn push_concatenation<'a>(
         &mut self,
         parts: impl Iterator<Item = &'a [u8]>,
-    ) -> Result<bool, ComputeError> {
-        let (bytes, charged) = (self.storage.bytes.len(), self.charge.bytes());
-        let appended = self.append(parts);
-        if appended.is_err() {
-            self.storage.bytes.truncate(bytes);
-            self.charge.shrink(self.charge.bytes() - charged);
-        }
-        appended
-    }
-
-    fn append<'a>(&mut self, parts: impl Iterator<Item = &'a [u8]>) -> Result<bool, ComputeError> {
-        let mut any = false;
+        len: usize,
+    ) -> Result<(), TryReserveError> {
+        self.ends.try_reserve(1)?;
+        self.bytes.try_reserve(len)?;
         for part in parts {
-            // The first part also pays for the message's end offset.
-            let size = if any { part.len() as u64 } else { Bytes::size(part) };
-            self.charge.grow(size)?;
-            let storage = &mut self.storage;
-            let reserved = match any {
-                true => storage.bytes.try_reserve(part.len()),
-                false => {
-                    storage.ends.try_reserve(1).and_then(|()| storage.bytes.try_reserve(part.len()))
-                }
-            };
-            reserved.map_err(|_| ComputeError::OutOfMemory { bytes: size })?;
-            storage.bytes.extend_from_slice(part);
-            any = true;
+            self.bytes.extend_from_slice(part);
         }
-        if any {
-            self.storage.ends.push(self.storage.bytes.len() as u64);
-        }
-        Ok(any)
+        self.ends.push(self.bytes.len() as u64);
+        Ok(())
     }
 }
 
@@ -252,19 +229,15 @@ mod tests {
     }
 
     #[test]
-    fn a_concatenation_is_one_message_charged_like_one() {
-        let memory = ComputeMemory::new(30);
-        let mut buffer = MessageBuffer::<Bytes>::new(&memory).unwrap();
-        assert_eq!(buffer.push_concatenation([&b"ab"[..], b"", b"c"].into_iter()), Ok(true));
-        assert_eq!(buffer.push_concatenation(std::iter::empty()), Ok(false));
-        assert_eq!(buffer.iter().collect::<Vec<_>>(), [&b"abc"[..]]);
-        assert_eq!(buffer.bytes(), 3 + 8);
-        let too_long = [&b"0123456789"[..], b"0123456789"];
-        assert!(buffer.push_concatenation(too_long.into_iter()).is_err());
-        assert_eq!(buffer.iter().collect::<Vec<_>>(), [&b"abc"[..]]);
-        assert_eq!((buffer.bytes(), memory.in_use()), (11, 11));
-        buffer.push(b"d").unwrap();
-        assert_eq!(buffer.get(1), Some(&b"d"[..]));
+    fn a_concatenation_is_one_message() {
+        let mut packed = PackedBytes::default();
+        packed.push_concatenation([&b"ab"[..], b"", b"c"].into_iter(), 3).unwrap();
+        Bytes::push(&mut packed, b"d").unwrap();
+        assert_eq!(
+            (Bytes::get(&packed, 0), Bytes::get(&packed, 1)),
+            (Some(&b"abc"[..]), Some(&b"d"[..]))
+        );
+        assert_eq!(Bytes::len(&packed), 2);
     }
 
     #[test]

@@ -62,6 +62,11 @@ impl<M: Message> Messages<M> {
         self.buffer.get(index)
     }
 
+    /// The bytes charged for the messages alone.
+    pub(super) fn message_bytes(&self) -> u64 {
+        self.buffer.bytes()
+    }
+
     /// The bytes charged for the messages and their senders.
     pub fn bytes(&self) -> u64 {
         self.charge.bytes() + self.buffer.bytes()

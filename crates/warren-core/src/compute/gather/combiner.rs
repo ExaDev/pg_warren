@@ -5,7 +5,7 @@ use std::fmt::{self, Display};
 use std::str::FromStr;
 
 use crate::compute::{
-    BinaryOp, Bytes, ComputeError, Dtype, Message, MessageBuffer, MessageKind, SemiringElement,
+    BinaryOp, Bytes, ComputeError, Dtype, Message, MessageKind, PackedBytes, SemiringElement,
 };
 
 /// How a receiver's messages are combined, named as `combine` names it.
@@ -98,11 +98,13 @@ pub trait Combine: Message + Sized {
         b: Self::View<'a>,
     ) -> Result<Self::View<'a>, ComputeError>;
 
-    /// Appends the concatenation of `parts` to `buffer` as one message,
-    /// unless there are no parts; returns whether there were any.
+    /// Appends the concatenation of `parts` to `storage` as one message,
+    /// unless there are no parts, calling `charge` with its size first;
+    /// returns whether there were any parts.
     fn concat<'a>(
-        buffer: &mut MessageBuffer<Self>,
-        parts: impl Iterator<Item = Self::View<'a>>,
+        storage: &mut Self::Storage,
+        parts: impl Iterator<Item = Self::View<'a>> + Clone,
+        charge: impl FnOnce(u64) -> Result<(), ComputeError>,
     ) -> Result<bool, ComputeError>;
 }
 
@@ -120,8 +122,9 @@ impl<E: SemiringElement> Combine for E {
     }
 
     fn concat<'a>(
-        _: &mut MessageBuffer<E>,
-        _: impl Iterator<Item = Self::View<'a>>,
+        _: &mut Vec<E>,
+        _: impl Iterator<Item = Self::View<'a>> + Clone,
+        _: impl FnOnce(u64) -> Result<(), ComputeError>,
     ) -> Result<bool, ComputeError> {
         Err(ComputeError::CombinerType { combiner: Combiner::Concat, message: E::KIND })
     }
@@ -137,10 +140,21 @@ impl Combine for Bytes {
     }
 
     fn concat<'a>(
-        buffer: &mut MessageBuffer<Bytes>,
-        parts: impl Iterator<Item = Self::View<'a>>,
+        storage: &mut PackedBytes,
+        parts: impl Iterator<Item = Self::View<'a>> + Clone,
+        charge: impl FnOnce(u64) -> Result<(), ComputeError>,
     ) -> Result<bool, ComputeError> {
-        buffer.push_concatenation(parts)
+        let (count, len) =
+            parts.clone().fold((0, 0), |(count, len), part| (count + 1, len + part.len()));
+        if count == 0 {
+            return Ok(false);
+        }
+        let size = Bytes::size(&[]) + len as u64;
+        charge(size)?;
+        storage
+            .push_concatenation(parts, len)
+            .map_err(|_| ComputeError::OutOfMemory { bytes: size })?;
+        Ok(true)
     }
 }
 
