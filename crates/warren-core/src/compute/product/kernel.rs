@@ -6,9 +6,7 @@ use rayon::prelude::*;
 
 use super::matrix::Matrix;
 use super::{Mask, Product};
-use crate::compute::{
-    AnyVector, ArithmeticError, BinaryOp, ComputeError, Element, Semiring, SemiringElement, Vector,
-};
+use crate::compute::{ArithmeticError, BinaryOp, ComputeError, Semiring, SemiringElement, Vector};
 use crate::graph::DenseId;
 use crate::interrupts::{Cancellation, Cancelled};
 
@@ -202,7 +200,7 @@ fn fold<E: SemiringElement, S: Ops<E>>(
 /// How a row's result `t` is written to `y`.
 #[derive(Debug)]
 pub(super) struct Write<'a, E> {
-    selection: Option<Selection<'a>>,
+    mask: Option<Mask<'a>>,
     replace: bool,
     accumulate: Option<BinaryOp>,
     identity: E,
@@ -211,7 +209,7 @@ pub(super) struct Write<'a, E> {
 impl<'a, E: SemiringElement> Write<'a, E> {
     pub(super) fn new(product: &Product<'a>) -> Self {
         Self {
-            selection: product.mask.map(Selection::new),
+            mask: product.mask,
             replace: product.replace,
             accumulate: product.accumulate,
             identity: E::identity(product.semiring.add()),
@@ -221,7 +219,7 @@ impl<'a, E: SemiringElement> Write<'a, E> {
     /// Writes `t` (`None`: the row of `A` is empty) to `out`, row `row` of
     /// `y`.
     fn row(&self, row: DenseId, out: &mut [E], t: Option<&[E]>) -> Result<(), ArithmeticError> {
-        if !self.selection.as_ref().is_none_or(|selection| selection.selects(row)) {
+        if !self.mask.is_none_or(|mask| mask.selects(row)) {
             if self.replace {
                 out.fill(self.identity);
             }
@@ -238,29 +236,5 @@ impl<'a, E: SemiringElement> Write<'a, E> {
             (Some(_), None) => {}
         }
         Ok(())
-    }
-}
-
-/// The rows a mask selects.
-#[derive(Debug)]
-struct Selection<'a> {
-    mask: &'a AnyVector,
-    complement: bool,
-}
-
-impl<'a> Selection<'a> {
-    fn new(mask: Mask<'a>) -> Self {
-        Self { mask: mask.vector, complement: mask.complement }
-    }
-
-    fn selects(&self, row: DenseId) -> bool {
-        let row = row as usize;
-        let set = match self.mask {
-            AnyVector::F32(mask) => mask.values()[row].is_nonzero(),
-            AnyVector::F64(mask) => mask.values()[row].is_nonzero(),
-            AnyVector::I64(mask) => mask.values()[row].is_nonzero(),
-            AnyVector::Bool(mask) => mask.values()[row].is_nonzero(),
-        };
-        set != self.complement
     }
 }

@@ -18,22 +18,12 @@ use kernel::{PushScratch, Write};
 use matrix::{Form, Matrix};
 
 use super::{
-    AnyVector, BinaryOp, ComputeError, ComputeMemory, Semiring, SemiringElement, Vector, Workers,
+    AnyVector, BinaryOp, ComputeError, ComputeMemory, Mask, Semiring, SemiringElement, Vector,
+    Workers,
 };
 use crate::graph::GraphCsr;
 use crate::graph::RelationSelection;
 use crate::interrupts::Interrupts;
-
-/// A value mask (GraphBLAS semantics): row `i` is selected when the mask's
-/// value there is non-zero (`NaN` included), or, with `complement`, when it
-/// is zero.
-#[derive(Debug, Clone, Copy)]
-pub struct Mask<'a> {
-    /// A width-1 vector of any element type.
-    pub vector: &'a AnyVector,
-    /// Select the rows whose mask value is zero instead.
-    pub complement: bool,
-}
 
 /// What to multiply and how to write the result to `y`.
 #[derive(Debug, Clone, Copy)]
@@ -126,8 +116,7 @@ fn multiply<I: Interrupts>(
     if x.dtype() != y.dtype() {
         return Err(ComputeError::DtypeMismatch { expected: y.dtype(), found: x.dtype() });
     }
-    let mask = product.mask.map(|mask| mask.vector);
-    for vector in [Some(x), Some(&*y), mask].into_iter().flatten() {
+    for vector in [x, &*y] {
         if vector.id_space() != id_space {
             return Err(ComputeError::IdSpaceMismatch {
                 expected: id_space,
@@ -135,8 +124,8 @@ fn multiply<I: Interrupts>(
             });
         }
     }
-    if let Some(mask) = mask.filter(|mask| mask.width() != 1) {
-        return Err(ComputeError::WidthMismatch { expected: 1, found: mask.width() });
+    if let Some(mask) = product.mask {
+        mask.check(id_space)?;
     }
     let matrix = Matrix::new(graph, product.relations, product.transpose, product.weighted)?;
     let mut run = Run { workers, memory, interrupts, matrix: &matrix, product };
