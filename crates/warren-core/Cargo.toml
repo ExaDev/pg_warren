@@ -18,5 +18,9 @@ criterion = { version = "0.5", default-features = false, features = ["cargo_benc
 name = "csr_build"
 harness = false
 
+[[bench]]
+name = "traversal"
+harness = false
+
 [lints]
 workspace = true
