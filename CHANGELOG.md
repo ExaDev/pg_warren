@@ -11,6 +11,9 @@
   `vector_reduce`, `vector_norm_diff`; `warren.threads` and
   `warren.max_compute_memory`.
 - `compact` moves persisted vectors into the new id space.
+- `gather`: messages of any SQL type from a query, relation or vector,
+  fanned out over the graph and combined per receiver (`collect`, `count`,
+  `sum`, `min`, `max`, `first`, `concat`, `bool_or`, `bool_and`).
 - Upgrade from 0.1.0: install the new build, then run
   `ALTER EXTENSION pg_warren UPDATE;` in each database before using it.
 

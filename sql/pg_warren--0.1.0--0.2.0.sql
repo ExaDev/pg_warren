@@ -183,3 +183,13 @@ CREATE FUNCTION warren.vector_values(graph text, name text, id_type anyelement,
                                      version bigint DEFAULT NULL)
 RETURNS TABLE (node_id anyelement, value float8)
 STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'vector_values_wrapper';
+
+-- gather (M5, DESIGN.md §6.4).
+
+CREATE FUNCTION warren.gather(graph text, messages text, id_type anyelement,
+                              value_type anycompatible, combine text DEFAULT 'collect',
+                              direction text DEFAULT 'in', rels text[] DEFAULT NULL,
+                              mask text DEFAULT NULL, mask_complement boolean DEFAULT false,
+                              version bigint DEFAULT NULL)
+RETURNS TABLE (node_id anyelement, value anycompatible)
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'gather_wrapper';

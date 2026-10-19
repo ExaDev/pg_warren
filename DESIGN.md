@@ -450,13 +450,15 @@ END $$;
 ```sql
 -- Fan a per-node message out over the graph and combine at the receiver, in-engine.
 warren.gather(graph text,
-              messages text,                 -- SQL: SELECT <id>, <msg of any type> ...  (or a vector name)
+              messages text,                 -- a vector name, a relation name, or SQL: SELECT <id>, <msg of any type> ...
+              id_type anyelement,            -- witness: NULL::<the graph's id type>
+              value_type anycompatible,      -- witness: NULL::<the combiner's result type>, e.g. NULL::text[] for collect over text
               combine text DEFAULT 'collect',-- collect | count | sum | min | max | first | concat | bool_or | bool_and
               direction text DEFAULT 'in',   -- messages travel along edges; 'in' = receive from in-neighbours
               rels text[] DEFAULT NULL,
-              mask text DEFAULT NULL,
+              mask text DEFAULT NULL, mask_complement boolean DEFAULT false,
               version bigint DEFAULT NULL)
-  RETURNS TABLE (node_id <id_type>, value anyelement);   -- value is <msg_type>[] for 'collect'
+  RETURNS TABLE (node_id anyelement, value anycompatible);   -- value is <msg_type>[] for 'collect'
 ```
 
 The engine reads the message relation once through SPI, maps IDs to dense IDs, fans out over CSR with the chosen combiner in-engine (variable-width messages via the `Message` trait), and returns one row per receiving node. `collect` returns the array of received messages and makes the operation fully general: any Pregel `compute()` is `collect` followed by SQL.
@@ -469,11 +471,8 @@ CREATE TEMP TABLE state (node_id uuid PRIMARY KEY, idents text[]);
 INSERT INTO state SELECT id, ARRAY[id::text] FROM fraud_nodes;
 FOR i IN 1..10 LOOP
   UPDATE state s
-     SET idents = (SELECT array_agg(DISTINCT x) FROM unnest(s.idents || g.merged) x)
-    FROM (SELECT node_id, array_agg(DISTINCT x) AS merged
-            FROM warren.gather('fraud', 'SELECT node_id, idents FROM state', combine := 'collect') r,
-                 unnest(r.value) a(arr), unnest(a.arr) x
-           GROUP BY node_id) g
+     SET idents = (SELECT array_agg(DISTINCT x) FROM unnest(s.idents || g.value) x)
+    FROM warren.gather('fraud', 'SELECT node_id, unnest(idents) FROM state', NULL::uuid, NULL::text[]) g
    WHERE s.node_id = g.node_id;
 END LOOP;
 ```
@@ -488,6 +487,13 @@ Decisions made in M5 (`warren-core::compute::gather`):
 - Kernel: messages are counting-sorted by sender into an outbox (`id_space + 1` offsets plus a sender-ordered copy). Receivers are pulled in parallel tasks of 4,096 over the CSR rows holding their senders: forward rows for `out`, reverse rows for `in`. Without a reverse CSR, `in` scatters the senders' forward rows into a per-receiver inbox of `(receiver, sender)` pairs (one thread, cancellation checked every 65,536 rows), charged to the memory budget like the outbox. Every buffer is charged its reserved capacity (`Message::growth`, exact geometric reservations). Result parts reserve the budget ahead in blocks (4 KiB doubling to 1 MiB, exact near the limit) and settle to their reserved capacity at the end of each task: charging every message to the shared atomic made `collect` slower on more threads.
 - Output: per receiver, ascending, a `count`, one message (fixed-width element or bytes), or for `collect` the receiver's messages with each message's boundaries kept (end offsets into packed storage), streamed to SQL row by row.
 - Throughput (`benches/gather.rs`, 100K nodes, 1M edges, every node sending, 4-vCPU Xeon): pulled, `sum` of f64 14 ms on one thread and 8 ms on four, `collect` of f64 19 ms and 8 ms, `collect` of 8-byte messages 46 ms and 18 ms; pushed (no reverse CSR) 30–70 ms.
+
+Decisions made in M5 (`pg_warren::compute_sql::gather`, the SQL binding):
+- The result types come from two witnesses, as `components` takes one (§9.3): `id_type` (`anyelement`, the graph's id type) and `value_type` (`anycompatible`, a separate polymorphic family, the combiner's result type). One signature cannot return `T[]` for `collect` and `bigint` for `count` from a run-time argument; a wrong witness is an error naming the right one (42804).
+- Message source (§14 item 13): `messages` is a vector bound to the version if one has exactly that name (every live node sends its value; width 1), else a relation if it is an identifier or `schema.identifier` (`TABLE <name>`), else a query. A relation or query must return two columns, `(id, message)`; the id must cast implicitly to the id type; it runs as the caller under the caller's `search_path` as a read-only cursor, as `vector_from_query` does. Rows with a NULL, unknown or tombstoned id, or a NULL message, send nothing; a node may send several messages (one row each).
+- Result types (`codec.rs`), with the message's base type: `count` → `bigint`; `first`, `min`, `max` → the message type; `sum` of `smallint`/`integer`/`bigint` → `bigint` (overflow is an error, where SQL's `sum(bigint)` widens to `numeric`), of `real` → `real`, of `double precision` → `double precision`; `bool_or`/`bool_and` → `boolean`; `concat` of `text`/`varchar`/`char` → `text`, of `bytea` → `bytea`; `collect` → `array_agg`'s type: `T[]`, or for array messages the same array type with one more dimension, built by `accumArrayResultAny`, so ragged arrays fail as `array_agg` fails (2202E). To collect sets of different sizes, send their elements as separate messages (`SELECT id, unnest(idents) ...`).
+- `smallint`, `integer`, `bigint`, `real`, `double precision` and `boolean` messages take the fixed-width path; `concat` reads text or bytea payloads; any other type travels as its binary send form and is rebuilt by its receive function (a type without binary I/O is Postgres's error). `sum`/`min`/`max` of other types (`numeric`, `text`) and `bool_*` of non-booleans are refused before any work.
+- `gather` reads (it needs read access to the graph, writes nothing) and runs within one `warren.max_compute_memory` budget: the messages, the kernel's buffers and the result are charged to it.
 
 ### 6.5 Spectral analysis
 
@@ -900,7 +906,7 @@ Post-v0.3: contraction/project/lift and Louvain (§6.6), DSM cache + compute wor
 10. **Compute threads inside the backend vs. requiring the background worker from day one.** Lean: in-backend threads for v1 (simpler lifecycle), worker in v1.1. M4 implements in-backend threads: a dedicated `rayon` pool per `compute::Workers` (§6.9). **Decided (M4):** in-backend, one pool per backend sized by `warren.threads`, its threads blocking every signal.
 11. **`distance` summary statistics**: which scalar(s) each method returns by default. Lean: return a `jsonb` with several and let users pick.
 12. **`vector_map` executor fallback.** Build it in v1 or raise "not in compiled subset" until v1.1? Lean: build it in v1 — the one-language guarantee is the point. **Decided (M4): built** — row-wise `ExecEvalExpr` over the same analysed tree, JIT-compiled per the `jit` settings, agreeing with the compiled path bit for bit (§6.3).
-13. **`gather` message source.** Accept only a SQL string, or also a relation name / vector name? Lean: all three, dispatched on the argument's form. M5: the domain kernel takes `(dense id, message)` pairs whatever the source; dispatching on the argument's form is the SQL binding's.
+13. **`gather` message source.** Accept only a SQL string, or also a relation name / vector name? Lean: all three, dispatched on the argument's form. **Decided (M5): all three** — a bound vector's name, else an identifier as a relation, else a query (§6.4); the domain kernel takes `(dense id, message)` pairs whatever the source.
 14. **`warren.step` as a composite type vs. `jsonb`.** Composite gives type-checking and a clean `warren.s()` constructor; `jsonb` is easier to generate from application code. Lean: composite as the canonical IR with a `jsonb → warren.step[]` cast for convenience.
 15. **`walk` path enumeration limits.** Hard cap on `max_results` for `mode = 'paths'` (lean: default 100,000, error above a GUC ceiling) and whether to support `'count'` exactly or approximately for variable-length segments (lean: exact). **Decided (M3, domain):** `count` is exact, for distinct ends and for walks (`u64`, an error on overflow); see §9.2. The domain bounds `paths` only by the `max_results` it is given; the default and ceiling are the adapter's (lean stands). **Decided (M3, adapter):** default 100,000 rows for any walk reporting a row per walk (`paths`, or `ends` without `distinct_ends`), and a `max_results` above the `warren.max_walk_paths` GUC (default 10,000,000) is refused (§9.2).
 16. **Prior-art reading complete** (§4A). **Done (M0, 2026-10-19):** see [`docs/prior-art-notes.md`](docs/prior-art-notes.md) (pgGraph `b0f53df`, OneSparse `79a57cd`). Sections changed as a result (v0.6): §4A, §5.1, §5.3, §5.4, §5.5, §6.3, §6.7, §6.9, §7, §9.3, §10, §11, §12, §13, §14 items 2 and 4. Not a reuse decision (the policy is to build in full), but a gate.
@@ -1085,5 +1091,5 @@ Writing these out surfaced several requirements that are now in the body of the 
 - `warren.explain_map(expr)` — tests assert that library expressions take the compiled path.
 - `warren.last_stats()` — nodes visited, edges traversed, path taken, for the last call in the session; needed to assert pruning and to record benchmarks.
 - `vector_map` must broadcast over width-d matrices, not just width-1 vectors.
-- `gather` must accept a SQL string, a relation name and a vector name as its message source, and `collect` must preserve element types (`text[]` in, `text[][]`-equivalent out, exposed as `anyarray`).
+- `gather` must accept a SQL string, a relation name and a vector name as its message source, and `collect` must preserve element types (`text[]` in, `text[][]`-equivalent out, exposed as `anyarray`). *M5:* `collect` follows `array_agg`, so `text[]` messages collect into a two-dimensional `text[]` of equal-length rows; ragged sets are sent one element per message (§6.4).
 - Cross-graph `distance` aligned by external ID is required by the shadow-schema pattern and is not optional.

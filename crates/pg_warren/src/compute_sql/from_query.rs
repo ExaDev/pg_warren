@@ -30,7 +30,8 @@ use crate::access::{with_search_path, Caller};
 use crate::cache::resolve;
 use crate::interrupts::PostgresInterrupts;
 use crate::source::{
-    describe, for_each_row, open_read_only, type_name, with_id_type, IdDatum, SourceError,
+    describe, for_each_row, open_read_only, type_name, with_id_type, ColumnType, IdDatum,
+    SourceError,
 };
 
 /// The SQL type a dtype's values are cast to.
@@ -79,8 +80,30 @@ fn vector_from_query(
     })
 }
 
+/// Checks that a query's id column casts implicitly to the graph's id
+/// type `E`, so ids are never rounded.
+pub(super) fn check_id_column<E: IdDatum>(column: &ColumnType) -> Result<(), ComputeSqlError> {
+    let id_type = E::Sql::type_oid();
+    // SAFETY: can_coerce_type reads one type pair from the catalogs.
+    let implicit = unsafe {
+        pg_sys::can_coerce_type(
+            1,
+            &column.oid,
+            &id_type,
+            pg_sys::CoercionContext::COERCION_IMPLICIT,
+        )
+    };
+    match implicit {
+        true => Ok(()),
+        false => Err(ComputeSqlError::IdColumnType {
+            found: column.name.clone(),
+            id_type: type_name(id_type),
+        }),
+    }
+}
+
 /// The qualified SQL name of `E`'s type.
-fn id_type_name<E: IdDatum>() -> String {
+pub(super) fn id_type_name<E: IdDatum>() -> String {
     // SAFETY: format_type_be_qualified returns a palloc'd NUL-terminated
     // string for any type oid.
     let name = unsafe { CStr::from_ptr(pg_sys::format_type_be_qualified(E::Sql::type_oid())) };
@@ -132,23 +155,7 @@ impl Read<'_> {
                     }
                     .into());
                 }
-                let id_type = E::Sql::type_oid();
-                // SAFETY: can_coerce_type reads one type pair from the
-                // catalogs.
-                let implicit = unsafe {
-                    pg_sys::can_coerce_type(
-                        1,
-                        &columns[0].oid,
-                        &id_type,
-                        pg_sys::CoercionContext::COERCION_IMPLICIT,
-                    )
-                };
-                if !implicit {
-                    return Err(ComputeSqlError::IdColumnType {
-                        found: columns[0].name.clone(),
-                        id_type: type_name(id_type),
-                    });
-                }
+                check_id_column::<E>(&columns[0])?;
                 // SAFETY: get_element_type only reads the type cache.
                 let array =
                     unsafe { pg_sys::get_element_type(columns[1].oid) } != pg_sys::Oid::INVALID;
