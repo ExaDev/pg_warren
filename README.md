@@ -38,12 +38,6 @@ backends) is **planned** as the power-user path; it is not there yet.
 pg_warren supports PostgreSQL 15, 16, 17 and 18 (16 is the development
 baseline). `CREATE EXTENSION pg_warren` needs a superuser.
 
-It runs wherever you can install extensions: self-hosted Postgres, and
-containers or Kubernetes (with the Dockerfile below). Managed services (RDS,
-Cloud SQL, Azure Database for PostgreSQL) load only extensions on their own
-allow-lists, so pg_warren is not available there unless the provider adopts
-it.
-
 **From source**, with Rust (the toolchain pinned in `rust-toolchain.toml`),
 the server headers (`postgresql-server-dev-NN`), `clang`/`libclang-dev`, and
 cargo-pgrx at exactly the version the extension uses:
