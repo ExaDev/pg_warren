@@ -8,13 +8,22 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+thiserror = "2"
 
 [dev-dependencies]
 proptest = "1"
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 
 [[bench]]
-name = "smoke"
+name = "csr_build"
+harness = false
+
+[[bench]]
+name = "relation_layout"
+harness = false
+
+[[bench]]
+name = "traversal"
 harness = false
 
 [lints]

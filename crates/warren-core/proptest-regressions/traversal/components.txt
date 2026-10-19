@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 1dfc60777d38c6dc2343693fe27f62fee0467a1a61ffdfdd6da8acf03f31be58 # shrinks to scenario = Scenario { id_space: 2, relation_count: 1, weighted: false, edges: [(0, 1, 0, 1.0)], tombstones: {} }
