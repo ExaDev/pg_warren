@@ -96,10 +96,11 @@ pub struct EigenOptions {
     pub k: usize,
     /// Which end of the spectrum.
     pub which: Which,
-    /// Converged when every residual is at most `tol · ‖M‖`.
+    /// Converged when every wanted pair's residual estimate is at most
+    /// `tol · max|θ|`, the largest Ritz value standing in for `‖M‖`.
     pub tol: f64,
-    /// The most Lanczos steps (operator applications); `None`: 100 times
-    /// the basis size.
+    /// The most Lanczos steps (operator applications), raised to `k`;
+    /// `None`: 100 times the basis size.
     pub max_iter: Option<usize>,
     /// The element type of the Lanczos vectors and the eigenvectors.
     pub precision: Precision,

@@ -29,6 +29,10 @@ name = "relation_layout"
 harness = false
 
 [[bench]]
+name = "spectral"
+harness = false
+
+[[bench]]
 name = "traversal"
 harness = false
 
