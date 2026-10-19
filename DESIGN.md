@@ -925,6 +925,15 @@ Targets on a commodity 8-core machine, graph in cache, 10M nodes / 100M edges, a
 | `refresh()` incl. reverse CSR | < 8 min, < 4 GB RAM |
 | `diff` between two versions | < 30 s |
 | Cold load into backend | < 15 s |
+| Memory | the whole graph fits within the default 4 GB per-backend limits (`warren.max_cache_memory`, `max_build_memory`, `max_compute_memory`), with a library run's scratch vectors alongside |
+
+The memory row is a positioning goal as much as a benchmark. Graphs of 10M nodes and 100M edges are beyond what most teams ever reach. Serving that scale from one ordinary backend, at default settings, removes the usual reason to export to a native graph database. The estimates (u32 targets, reverse CSR included, an `int8` id map, before the merged-CSR change below):
+- one relation, unweighted: ~1.2 GB;
+- one relation, weighted: ~2.8 GB;
+- five relations, unweighted: ~2.8 GB;
+- five relations, weighted: ~5.8 GB, so it misses until the merged CSR is optional.
+
+PageRank's transient scratch adds ~0.9 GB at 10M nodes. Workloads whose data is itself larger, such as d = 768 embeddings (~31 GB per f32 matrix, A.5), need the limits raised.
 
 Benchmark harness: generators for random, power-law (preferential attachment), grid, and *evolving* graphs (a base graph plus a parameterised perturbation, so `distance` methods can be evaluated for sensitivity and monotonicity); loads into `nodes`/`edges`; builds; runs the matrix against baselines (recursive CTE, NetworkX, igraph). Commit results per version to `bench/results/`. *Implemented (M2):* `bench/run.sh` runs `bench/matrix.json`; a workload names the functions it `requires` and is recorded as skipped until they exist. SNAP datasets (LiveJournal, Orkut, road networks) as secondary benchmarks.
 
@@ -968,7 +977,17 @@ Each milestone leaves `main` green and demonstrable.
 - Re-check §7's extension-owner identity switch. In a trusted install, the script runs as the bootstrap superuser while `pg_extension.extowner` is the calling role, so the role that owns the `warren.*` tables and the one the switch elevates to may differ.
 - Keep later features within those rules: the v1.1 `DROP ROLE` event trigger needs a superuser, so it must be optional or done another way.
 
-Test it by installing as a non-superuser in CI and running the suite. Tag `v0.3.0`.
+Test it by installing as a non-superuser in CI and running the suite. **Make the stored merged CSR optional:**
+- Today a graph with several relations also stores the all-relations CSR, which is about 40% of a weighted multi-relation graph's bytes (§5.3).
+- Add a per-graph choice. Without the merged CSR, all-relations reads (traversal over any relation, `spmv` without `rels`, `components`, `gather`, `diff`'s `all_relations`) merge the per-relation rows on the fly.
+- Benchmark the cost, using M1's `relation_layout` bench for 1–5 relations, and set the default from the result.
+- Aim: a five-relation weighted 10M/100M graph within the §12 memory row.
+
+**The 100M-edge soak** covers two cases:
+- an unweighted graph at default limits;
+- a weighted multi-relation graph, with and without the merged CSR, recording the measured peak of build, cache and compute against each limit.
+
+`docs/limits.md` gains a sizing table from those measurements. Tag `v0.3.0`.
 
 Post-v0.3: contraction/project/lift and Louvain (§6.6, whose `PᵀAP` is the first SpGEMM), sparse matrix algebra (§6.11), DSM cache + compute worker, incremental maintenance, WASM programs, in roughly that order; a GPU backend when there is demand.
 
