@@ -16,8 +16,9 @@ fn f32s(values: &[f32]) -> AnyVector {
     Vector::from_values(&memory(), values.len() as u64, 1, values.to_vec()).unwrap().into()
 }
 
-fn distance_on(
+fn distance_over(
     threads: usize,
+    nodes: NodeSet,
     before: &[&AnyVector],
     after: &[&AnyVector],
 ) -> Result<SubspaceDistance, SpectralError> {
@@ -25,7 +26,15 @@ fn distance_on(
     let memory = memory();
     let mut resources =
         Resources { workers: &workers, memory: &memory, interrupts: &mut Uninterrupted };
-    subspace_distance(&mut resources, before, after)
+    subspace_distance(&mut resources, before, after, nodes)
+}
+
+fn distance_on(
+    threads: usize,
+    before: &[&AnyVector],
+    after: &[&AnyVector],
+) -> Result<SubspaceDistance, SpectralError> {
+    distance_over(threads, NodeSet::All, before, after)
 }
 
 fn distance(before: &[&AnyVector], after: &[&AnyVector]) -> SubspaceDistance {
@@ -113,4 +122,17 @@ fn the_vectors_must_be_independent_float_columns() {
         distance_on(1, &[&matrix], &[&x]),
         Err(ComputeError::WidthMismatch { expected: 1, found: 2 }.into())
     );
+}
+
+#[test]
+fn over_shared_nodes_rows_only_one_set_has_are_left_out() {
+    // Node 3 is only in the later version; node 0 is only in the earlier.
+    let before = [f64s(&[1.0, 2.0, 1.0, 0.0]), f64s(&[3.0, 0.0, 1.0, 0.0])];
+    let after = [f64s(&[0.0, 2.0, 1.0, 5.0]), f64s(&[0.0, 0.0, 1.0, -1.0])];
+    let (x, y): (Vec<&AnyVector>, Vec<&AnyVector>) =
+        (before.iter().collect(), after.iter().collect());
+    let all = distance_over(1, NodeSet::All, &x, &y).unwrap();
+    assert!(all.max_angle > 0.5);
+    // On nodes 1 and 2 both spans are the whole plane.
+    assert_eq!(distance_over(1, NodeSet::Shared, &x, &y).unwrap().projection, 0.0);
 }

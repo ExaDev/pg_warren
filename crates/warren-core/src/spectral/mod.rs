@@ -14,10 +14,13 @@ mod random;
 mod reference;
 mod resources;
 mod ritz;
+#[cfg(test)]
+#[cfg(not(miri))]
+mod tests;
 
 pub use distance::{
     align, degree_distance, edit_distance, embedding_distance, spectral_distance,
-    subspace_distance, DegreeDistance, EdgeSetChange, EditDistance, EmbeddingDistance,
+    subspace_distance, DegreeDistance, EdgeSetChange, EditDistance, EmbeddingDistance, NodeSet,
     SpectralDistance, SubspaceDistance,
 };
 pub use error::SpectralError;

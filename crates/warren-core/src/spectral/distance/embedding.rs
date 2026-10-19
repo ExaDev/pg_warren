@@ -3,7 +3,7 @@
 //!
 //! Rows are aligned by dense id, a row past a matrix's id space is zero,
 //! and rows that are zero in both matrices (nodes in neither version) are
-//! left out. The cosine distance of a row is `1 − cos`, in `[0, 2]`, and 1
+//! always left out; over [`NodeSet::Shared`], so are rows zero in either. The cosine distance of a row is `1 − cos`, in `[0, 2]`, and 1
 //! when exactly one of the two rows is zero.
 
 use std::ops::Range;
@@ -11,6 +11,7 @@ use std::ops::Range;
 use super::super::dense::{self, BLOCK};
 use super::super::{Resources, SpectralError};
 use super::rows::Rows;
+use super::NodeSet;
 use crate::compute::{AnyVector, ComputeError};
 use crate::interrupts::Interrupts;
 
@@ -25,16 +26,17 @@ pub struct EmbeddingDistance {
     pub mean_cosine: f64,
     /// The largest cosine distance between corresponding rows.
     pub max_cosine: f64,
-    /// The rows compared: those non-zero in either matrix.
+    /// The rows compared.
     pub rows: u64,
 }
 
 /// The `embedding` distance between `before` and `after`, `f32` or `f64`
-/// matrices of the same width.
+/// matrices of the same width, over the rows of `nodes`.
 pub fn embedding_distance<I: Interrupts>(
     resources: &mut Resources<'_, I>,
     before: &AnyVector,
     after: &AnyVector,
+    nodes: NodeSet,
 ) -> Result<EmbeddingDistance, SpectralError> {
     let (before, after) = (Rows::new(before)?, Rows::new(after)?);
     if before.width() != after.width() {
@@ -43,7 +45,8 @@ pub fn embedding_distance<I: Interrupts>(
     }
     let rows = before.id_space().max(after.id_space()) as usize;
     let block = |range: Range<usize>| {
-        range.fold(Totals::default(), |totals, row| totals.add_row(before, after, row as u64))
+        range
+            .fold(Totals::default(), |totals, row| totals.add_row(before, after, row as u64, nodes))
     };
     let totals = dense::fold(resources, rows, BLOCK, Totals::default(), block, Totals::combine)?;
     let mean = |sum: f64| if totals.rows == 0 { 0.0 } else { sum / totals.rows as f64 };
@@ -67,13 +70,17 @@ struct Totals {
 }
 
 impl Totals {
-    fn add_row(self, before: Rows<'_>, after: Rows<'_>, row: u64) -> Self {
+    fn add_row(self, before: Rows<'_>, after: Rows<'_>, row: u64, nodes: NodeSet) -> Self {
         let columns = 0..before.width();
         let pairs = || columns.clone().map(|c| (before.get(row, c), after.get(row, c)));
         let (aa, bb, squares) = pairs().fold((0.0, 0.0, 0.0), |(aa, bb, s), (a, b)| {
             (aa + a * a, bb + b * b, s + (a - b) * (a - b))
         });
-        if aa == 0.0 && bb == 0.0 {
+        let compared = match nodes {
+            NodeSet::All => aa != 0.0 || bb != 0.0,
+            NodeSet::Shared => aa != 0.0 && bb != 0.0,
+        };
+        if !compared {
             return self;
         }
         let l2 = f64::sqrt(squares);
@@ -118,7 +125,7 @@ mod tests {
         let memory = ComputeMemory::new(1 << 20);
         let mut resources =
             Resources { workers: &workers, memory: &memory, interrupts: &mut Uninterrupted };
-        embedding_distance(&mut resources, before, after)
+        embedding_distance(&mut resources, before, after, NodeSet::All)
     }
 
     #[test]
@@ -150,6 +157,18 @@ mod tests {
         assert!((d.mean_cosine - 2.0 / 3.0).abs() < 1e-12);
         assert_eq!(d.max_cosine, 1.0);
         assert_eq!(distance(&after, &before).unwrap(), d);
+    }
+
+    #[test]
+    fn over_shared_nodes_rows_only_one_matrix_has_are_left_out() {
+        let before = matrix(1, vec![1.0f64, 0.0, 2.0]);
+        let after = matrix(1, vec![1.0f64, 4.0, 3.0, 5.0]);
+        let workers = Workers::new(1).unwrap();
+        let memory = ComputeMemory::new(1 << 20);
+        let mut resources =
+            Resources { workers: &workers, memory: &memory, interrupts: &mut Uninterrupted };
+        let d = embedding_distance(&mut resources, &before, &after, NodeSet::Shared).unwrap();
+        assert_eq!((d.rows, d.mean_l2, d.max_l2), (2, 0.5, 1.0));
     }
 
     #[test]

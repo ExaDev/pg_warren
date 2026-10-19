@@ -16,6 +16,7 @@ use nalgebra::{DMatrix, SVD};
 
 use super::super::{dense, Resources, SpectralError};
 use super::rows::Rows;
+use super::NodeSet;
 use crate::compute::{AnyVector, ComputeError};
 use crate::interrupts::Interrupts;
 
@@ -38,11 +39,13 @@ pub struct SubspaceDistance {
 }
 
 /// The `subspace` distance between the spans of `before` and `after`,
-/// width-1 `f32` or `f64` vectors aligned by dense id.
+/// width-1 `f32` or `f64` vectors aligned by dense id, over the rows of
+/// `nodes`.
 pub fn subspace_distance<I: Interrupts>(
     resources: &mut Resources<'_, I>,
     before: &[&AnyVector],
     after: &[&AnyVector],
+    nodes: NodeSet,
 ) -> Result<SubspaceDistance, SpectralError> {
     if before.is_empty() || after.is_empty() {
         return Err(SpectralError::EmptySubspace);
@@ -52,8 +55,8 @@ pub fn subspace_distance<I: Interrupts>(
     if let Some(wide) = columns.iter().find(|column| column.width() != 1) {
         return Err(ComputeError::WidthMismatch { expected: 1, found: wide.width() }.into());
     }
-    let gram = gram(resources, &columns)?;
     let (k1, k2) = (before.len(), after.len());
+    let gram = gram(resources, &columns, k1, nodes)?;
     let cross = gram.view((0, k1), (k1, k2)).into_owned();
     let lx = factor(gram.view((0, 0), (k1, k1)).into_owned())?;
     let ly = factor(gram.view((k1, k1), (k2, k2)).into_owned())?;
@@ -79,10 +82,13 @@ pub fn subspace_distance<I: Interrupts>(
     })
 }
 
-/// The Gram matrix `[X Y]ᵀ[X Y]` of the columns, over every row of any.
+/// The Gram matrix `[X Y]ᵀ[X Y]` of the columns, `X` the first `k1`,
+/// over the rows of `nodes`.
 fn gram<I: Interrupts>(
     resources: &mut Resources<'_, I>,
     columns: &[Rows<'_>],
+    k1: usize,
+    nodes: NodeSet,
 ) -> Result<DMatrix<f64>, SpectralError> {
     let k = columns.len();
     let rows = columns.iter().map(|column| column.id_space()).max().unwrap_or(0) as usize;
@@ -96,6 +102,10 @@ fn gram<I: Interrupts>(
         for i in range {
             for (value, column) in row.iter_mut().zip(columns) {
                 *value = column.get(i as u64, 0);
+            }
+            let present = |values: &[f64]| values.iter().any(|&v| v != 0.0);
+            if nodes == NodeSet::Shared && !(present(&row[..k1]) && present(&row[k1..])) {
+                continue;
             }
             for a in 0..k {
                 for b in a..k {
