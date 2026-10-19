@@ -14,6 +14,10 @@
 - `gather`: messages of any SQL type from a query, relation or vector,
   fanned out over the graph and combined per receiver (`collect`, `count`,
   `sum`, `min`, `max`, `first`, `concat`, `bool_or`, `bool_and`).
+- Algorithm library in PL/pgSQL over the primitives: `pagerank`
+  (personalised by a seed vector), `components_vector`,
+  `label_propagation`, `sssp_vector`, `degree_vector`,
+  `aggregate_neighbours`.
 - Upgrade from 0.1.0: install the new build, then run
   `ALTER EXTENSION pg_warren UPDATE;` in each database before using it.
 

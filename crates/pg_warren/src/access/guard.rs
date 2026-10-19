@@ -202,14 +202,17 @@ mod tests {
     /// One call of every `warren.*` function, by name; `{v}` is a version
     /// of graph `victim`.
     const CALLS: &[(&str, &str)] = &[
+        ("aggregate_neighbours", "warren.aggregate_neighbours('victim', 'c', 'a')"),
         ("bfs", "warren.bfs('victim', ARRAY[1::bigint], 2)"),
         ("compact", "warren.compact('victim')"),
         ("components", "warren.components('victim', NULL::bigint)"),
+        ("components_vector", "warren.components_vector('victim', 'cc')"),
         (
             "create_graph",
             "warren.create_graph('eves', 'SELECT 1::bigint', 'SELECT 1::bigint, 2::bigint')",
         ),
         ("degree", "warren.degree('victim', 1::bigint)"),
+        ("degree_vector", "warren.degree_vector('victim', 'dv')"),
         ("diff", "warren.diff('victim', {v}, {v})"),
         ("dijkstra", "warren.dijkstra('victim', 1::bigint, 2::bigint)"),
         ("drop_graph", "warren.drop_graph('victim')"),
@@ -222,9 +225,11 @@ mod tests {
         ("has_edge", "warren.has_edge('victim', 1::bigint, 2::bigint)"),
         ("id_map", "warren.id_map('victim', NULL::bigint)"),
         ("info", "warren.info('victim')"),
+        ("label_propagation", "warren.label_propagation('victim', 'lp')"),
         ("last_stats", "warren.last_stats()"),
         ("matrix_rows", "warren.matrix_rows('victim', 'c', NULL::bigint)"),
         ("neighbours", "warren.neighbours('victim', 1::bigint)"),
+        ("pagerank", "warren.pagerank('victim', 'pr')"),
         ("prewarm", "warren.prewarm('victim')"),
         ("promote", "warren.promote('victim', {v})"),
         ("reachable", "warren.reachable('victim', 1::bigint, 2::bigint)"),
@@ -235,6 +240,7 @@ mod tests {
         ("shortest_path", "warren.shortest_path('victim', 1::bigint, 2::bigint)"),
         ("spmm", "warren.spmm('victim', 'c', 'y')"),
         ("spmv", "warren.spmv('victim', 'c', 'y', mask := 'c')"),
+        ("sssp_vector", "warren.sssp_vector('victim', 'sp', 1::bigint)"),
         ("steps", "warren.steps('[]')"),
         ("vector_const", "warren.vector_const('victim', 'c', 1)"),
         ("vector_degree", "warren.vector_degree('victim', 'd')"),

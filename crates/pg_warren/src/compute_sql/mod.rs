@@ -17,6 +17,7 @@ mod drop;
 mod error;
 mod from_query;
 mod gather;
+mod library;
 #[cfg(any(test, feature = "pg_test"))]
 mod limits;
 mod map;
