@@ -43,16 +43,21 @@ impl ComputeMemory {
     /// Adds `bytes` to the bytes in use, if that stays within the limit.
     fn reserve(&self, bytes: u64) -> Result<(), ComputeError> {
         let budget = &self.0;
-        budget
-            .in_use
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |in_use| {
-                in_use.checked_add(bytes).filter(|&total| total <= budget.limit)
-            })
-            .map_err(|in_use| ComputeError::MemoryLimit {
-                requested: bytes,
+        let mut in_use = budget.in_use.load(Ordering::Relaxed);
+        loop {
+            let total = in_use.checked_add(bytes).filter(|&total| total <= budget.limit).ok_or(
+                ComputeError::MemoryLimit { requested: bytes, in_use, limit: budget.limit },
+            )?;
+            match budget.in_use.compare_exchange_weak(
                 in_use,
-                limit: budget.limit,
-            })?;
+                total,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(current) => in_use = current,
+            }
+        }
         Ok(())
     }
 

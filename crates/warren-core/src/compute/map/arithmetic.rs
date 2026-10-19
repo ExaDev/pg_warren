@@ -271,6 +271,8 @@ mod tests {
         assert_eq!(int_abs(-5), Ok(5));
     }
 
+    // Miri perturbs transcendental functions' results on purpose.
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn functions_check_like_float_c() {
         use Function::*;
@@ -304,6 +306,8 @@ mod tests {
         same(call(Abs, NAN), Ok(NAN));
     }
 
+    // Miri perturbs transcendental functions' results on purpose.
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn power_checks_like_dpow() {
         same(power(0.0, -1.0), Err(ZeroToNegativePower));

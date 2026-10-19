@@ -183,5 +183,9 @@ impl<I: Interrupts> Run<'_, '_, I> {
     }
 }
 
+// Not under Miri: the compute pool's work stealing runs through
+// crossbeam-epoch, which Miri's Stacked Borrows model rejects (a known
+// report against crossbeam-epoch 0.9, not this crate, which has no unsafe).
 #[cfg(test)]
+#[cfg(not(miri))]
 mod tests;

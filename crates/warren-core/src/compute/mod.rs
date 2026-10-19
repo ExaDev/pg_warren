@@ -14,6 +14,7 @@ mod message;
 mod product;
 mod reduce;
 #[cfg(test)]
+#[cfg(not(miri))]
 mod reference;
 mod semiring;
 mod vector;
