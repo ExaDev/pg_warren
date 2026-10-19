@@ -465,3 +465,25 @@ fn rows_span_many_tasks() {
         assert_eq!(values::<f64>(&y), expected);
     }
 }
+
+#[test]
+fn i64_min_times_and_max_times_supersteps_keep_unreached_nodes_at_the_identity() {
+    // 0 → 1 (2), 2 → 1 (3): node 2 is never reached from node 0.
+    let graph = reference::graph(3, 1, &vec![(0, 0, 1, 2.0), (0, 2, 1, 3.0)], true, true);
+    for (semiring, accumulate, identity) in
+        [("min_times", BinaryOp::Min, i64::MAX), ("max_times", BinaryOp::Max, i64::MIN)]
+    {
+        let product = Product {
+            transpose: true,
+            accumulate: Some(accumulate),
+            ..Product::new(semiring.parse().unwrap())
+        };
+        let mut x = vector(1, vec![5i64, identity, identity]);
+        for _ in 0..2 {
+            let input = vector(1, values::<i64>(&x));
+            run(&graph, &product, &input, &mut x);
+            assert_eq!(values::<i64>(&x)[2], identity, "{semiring}: node 2 stays unreached");
+        }
+        assert_eq!(values::<i64>(&x)[..2], [5, 10], "{semiring}: 2 · 5, the identity absorbed");
+    }
+}
