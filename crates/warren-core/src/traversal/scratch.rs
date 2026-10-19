@@ -113,6 +113,23 @@ impl<V: Copy + PartialEq> NodeMap<V> {
         Ok(())
     }
 
+    /// The nodes from `node` back along `predecessor` to the node that is
+    /// its own predecessor, `node` first.
+    pub(crate) fn trail(
+        &self,
+        node: DenseId,
+        predecessor: impl Fn(V) -> DenseId,
+    ) -> Result<Vec<DenseId>, TraversalError> {
+        let mut trail = vec![node];
+        let mut current = node;
+        while let Some(previous) = self.get(current).map(&predecessor).filter(|&p| p != current) {
+            memory::reserve_one(&mut trail)?;
+            trail.push(previous);
+            current = previous;
+        }
+        Ok(trail)
+    }
+
     #[cfg(test)]
     fn is_dense(&self) -> bool {
         matches!(self.store, Store::Dense(_))

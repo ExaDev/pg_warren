@@ -120,18 +120,6 @@ impl<'a, 'g> Side<'a, 'g> {
         self.depth = depth;
         Ok(best.map(|(_, node)| node))
     }
-
-    /// The nodes from `node` back to this side's origin, `node` first.
-    fn trail(&self, node: DenseId) -> Result<Vec<DenseId>, TraversalError> {
-        let mut trail = vec![node];
-        let mut current = node;
-        while let Some(label) = self.labels.get(current).filter(|l| l.predecessor != current) {
-            memory::reserve_one(&mut trail)?;
-            trail.push(label.predecessor);
-            current = label.predecessor;
-        }
-        Ok(trail)
-    }
 }
 
 /// The path through `meeting`: the forward trail reversed, then the
@@ -141,9 +129,9 @@ fn join(
     backward: &Side<'_, '_>,
     meeting: DenseId,
 ) -> Result<Vec<DenseId>, TraversalError> {
-    let mut path = forward.trail(meeting)?;
+    let mut path = forward.labels.trail(meeting, |label| label.predecessor)?;
     path.reverse();
-    let rest = backward.trail(meeting)?;
+    let rest = backward.labels.trail(meeting, |label| label.predecessor)?;
     path.try_reserve(rest.len())
         .map_err(|_| GraphError::OutOfMemory { elements: path.len() + rest.len() })?;
     path.extend_from_slice(&rest[1..]);

@@ -37,13 +37,18 @@ pub enum RelationSelection<'a> {
 
 /// The CSRs a traversal reads: the selected relations in one direction.
 ///
-/// Selecting every relation reads the merged CSR.
+/// Unweighted traversals read the merged CSR when every relation is
+/// selected. Weighted traversals read each relation's CSR instead, because
+/// the merged CSR sums the weights of an edge present in several relations,
+/// whereas a shortest path takes the cheapest of them.
 #[derive(Debug, Clone)]
 pub struct Adjacency<'g> {
     direction: Direction,
     id_space: u64,
     relations: Vec<&'g RelationCsr>,
+    weighted_relations: Vec<&'g RelationCsr>,
     rows: Vec<&'g AnyCsr>,
+    weighted_rows: Vec<&'g AnyCsr>,
 }
 
 impl<'g> Adjacency<'g> {
@@ -53,38 +58,52 @@ impl<'g> Adjacency<'g> {
         direction: Direction,
         relations: RelationSelection<'_>,
     ) -> Result<Self, TraversalError> {
-        let relations = match relations {
-            RelationSelection::All => vec![graph.all_relations()],
+        let (relations, weighted_relations) = match relations {
+            RelationSelection::All => {
+                let each = match graph.relations() {
+                    [] => vec![graph.all_relations()],
+                    each => each.iter().collect(),
+                };
+                (vec![graph.all_relations()], each)
+            }
             RelationSelection::Only(indexes) => {
                 let mut indexes = indexes.to_vec();
                 indexes.sort_unstable();
                 indexes.dedup();
-                indexes
+                let selected = indexes
                     .into_iter()
                     .map(|relation| {
                         graph
                             .relation(relation)
                             .ok_or(TraversalError::UnknownRelation { relation: relation.index() })
                     })
-                    .collect::<Result<Vec<_>, _>>()?
+                    .collect::<Result<Vec<_>, _>>()?;
+                (selected.clone(), selected)
             }
         };
         let id_space = graph.all_relations().forward().id_space();
-        Self::read(direction, id_space, relations)
+        Self::read(direction, id_space, relations, weighted_relations)
     }
 
     fn read(
         direction: Direction,
         id_space: u64,
         relations: Vec<&'g RelationCsr>,
+        weighted_relations: Vec<&'g RelationCsr>,
     ) -> Result<Self, TraversalError> {
         let rows = scanned(&relations, direction)?;
-        Ok(Self { direction, id_space, relations, rows })
+        let weighted_rows = scanned(&weighted_relations, direction)?;
+        Ok(Self { direction, id_space, relations, weighted_relations, rows, weighted_rows })
     }
 
     /// The same relations read in the opposite direction.
     pub fn reversed(&self) -> Result<Self, TraversalError> {
-        Self::read(self.direction.reversed(), self.id_space, self.relations.clone())
+        Self::read(
+            self.direction.reversed(),
+            self.id_space,
+            self.relations.clone(),
+            self.weighted_relations.clone(),
+        )
     }
 
     /// The direction the CSRs are read in.
@@ -101,6 +120,20 @@ impl<'g> Adjacency<'g> {
     /// CSRs (relations, or both directions) appears once per CSR.
     pub(crate) fn neighbours(&self, node: DenseId) -> impl Iterator<Item = DenseId> + '_ {
         self.rows.iter().flat_map(move |csr| csr.neighbours(node))
+    }
+
+    /// The nodes one edge away from `node` with each edge's weight (1 when
+    /// the graph is unweighted), one entry per relation the edge is in.
+    pub(crate) fn weighted_neighbours(
+        &self,
+        node: DenseId,
+    ) -> impl Iterator<Item = (DenseId, f64)> + '_ {
+        self.weighted_rows.iter().flat_map(move |csr| {
+            let weights = csr.neighbour_weights(node);
+            csr.neighbours(node).enumerate().map(move |(i, target)| {
+                (target, weights.and_then(|w| w.get(i)).map_or(1.0, |&w| w))
+            })
+        })
     }
 }
 
@@ -193,5 +226,23 @@ mod tests {
         assert_eq!(neighbours(&reversed, 1), [0]);
         assert_eq!(Direction::Both.reversed(), Direction::Both);
         assert_eq!(Direction::In.reversed(), Direction::Out);
+    }
+
+    #[test]
+    fn weighted_neighbours_keep_each_relation_s_own_weight() {
+        // The merged CSR sums 0 → 1 to 5; a weighted traversal sees 2 and 3.
+        let graph = graph(2, 2, &[(0, 0, 1, 2.0), (1, 0, 1, 3.0)], true);
+        let out = Adjacency::new(&graph, Direction::Out, RelationSelection::All).unwrap();
+        let mut weighted: Vec<(DenseId, f64)> = out.weighted_neighbours(0).collect();
+        weighted.sort_by(|a, b| a.1.total_cmp(&b.1));
+        assert_eq!(weighted, [(1, 2.0), (1, 3.0)]);
+        assert_eq!(neighbours(&out, 0), [1]);
+    }
+
+    #[test]
+    fn an_unweighted_graph_has_unit_weights() {
+        let graph = directed(2, &[(0, 1)]);
+        let into = Adjacency::new(&graph, Direction::In, RelationSelection::All).unwrap();
+        assert_eq!(into.weighted_neighbours(1).collect::<Vec<_>>(), [(0, 1.0)]);
     }
 }
