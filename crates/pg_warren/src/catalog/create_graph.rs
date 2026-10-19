@@ -184,6 +184,20 @@ mod tests {
         )
     }
 
+    // ... even through a VOLATILE function the query calls.
+    #[pg_test(error = "cannot execute INSERT in a read-only transaction")]
+    fn a_source_query_cannot_write_through_a_function() -> Result<(), Error> {
+        tables()?;
+        Spi::run(
+            "INSERT INTO cg_nodes (id) VALUES (1);
+             CREATE FUNCTION cg_write() RETURNS boolean VOLATILE LANGUAGE plpgsql AS
+                 $f$ BEGIN INSERT INTO cg_nodes VALUES (99); RETURN true; END $f$;
+             SELECT warren.create_graph('cg', 'SELECT id FROM cg_nodes WHERE cg_write()',
+                                        'SELECT src, dst FROM cg_edges');
+             SELECT warren.refresh('cg')",
+        )
+    }
+
     #[pg_test(error = "graph \"cg\" already exists")]
     fn graph_names_are_unique() -> Result<(), Error> {
         tables()?;
