@@ -16,8 +16,8 @@ mod resources;
 mod ritz;
 
 pub use distance::{
-    degree_distance, edit_distance, spectral_distance, DegreeDistance, EdgeSetChange, EditDistance,
-    SpectralDistance,
+    degree_distance, edit_distance, spectral_distance, subspace_distance, DegreeDistance,
+    EdgeSetChange, EditDistance, SpectralDistance, SubspaceDistance,
 };
 pub use error::SpectralError;
 pub use lanczos::{eigen, Eigen, EigenOptions, Eigenpair, Precision, Which};

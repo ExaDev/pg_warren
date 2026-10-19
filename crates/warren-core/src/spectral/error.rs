@@ -44,4 +44,10 @@ pub enum SpectralError {
     /// continue.
     #[error("the eigenproblem produced a non-finite value")]
     NotFinite,
+    /// A subspace needs at least one vector.
+    #[error("a subspace needs at least one vector")]
+    EmptySubspace,
+    /// The vectors spanning a subspace must be linearly independent.
+    #[error("the vectors spanning a subspace are linearly dependent")]
+    RankDeficient,
 }

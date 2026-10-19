@@ -3,6 +3,8 @@
 //! are combined in block order, so a result is the same for every thread
 //! count (DESIGN.md Appendix A.2).
 
+use std::ops::Range;
+
 use rayon::prelude::*;
 
 use super::Resources;
@@ -58,18 +60,33 @@ fn reduce<I: Interrupts>(
     combine: impl Fn(f64, f64) -> f64 + Sync,
     f: impl Fn(usize) -> f64 + Sync,
 ) -> Result<f64, ComputeError> {
-    let (mut partials, _charge) = resources.memory.filled(len.div_ceil(BLOCK), 0.0)?;
+    let block = |rows: Range<usize>| rows.map(&f).fold(0.0, &combine);
+    fold(resources, len, BLOCK, 0.0, block, &combine)
+}
+
+/// Splits `0..len` into blocks of `block` indexes, computes `f` of each
+/// block in parallel, and combines the results with `combine` in block
+/// order, starting from `identity`.
+pub(super) fn fold<I: Interrupts, T: Clone + Send + Sync>(
+    resources: &mut Resources<'_, I>,
+    len: usize,
+    block: usize,
+    identity: T,
+    f: impl Fn(Range<usize>) -> T + Sync,
+    combine: impl Fn(T, T) -> T,
+) -> Result<T, ComputeError> {
+    let block = block.max(1);
+    let (mut partials, _charge) = resources.memory.filled(len.div_ceil(block), identity.clone())?;
     resources.run(|cancellation| {
-        partials.par_iter_mut().enumerate().try_for_each(|(block, partial)| {
+        partials.par_iter_mut().enumerate().try_for_each(|(index, partial)| {
             if cancellation.is_cancelled() {
                 return Err(Cancelled.into());
             }
-            let rows = block * BLOCK..len.min((block + 1) * BLOCK);
-            *partial = rows.map(&f).fold(0.0, &combine);
+            *partial = f(index * block..len.min((index + 1) * block));
             Ok(())
         })
     })?;
-    Ok(partials.into_iter().fold(0.0, combine))
+    Ok(partials.into_iter().fold(identity, combine))
 }
 
 #[cfg(test)]
