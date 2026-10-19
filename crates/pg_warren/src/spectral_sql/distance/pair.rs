@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use warren_core::compute::AnyVector;
-use warren_core::graph::GraphCsr;
+use warren_core::graph::{GraphCsr, RelationDictionary};
 use warren_core::spectral::align;
 use warren_core::version::{self, Alignment};
 
@@ -26,7 +26,8 @@ pub(super) struct Pair<E> {
 
 impl<E: IdDatum> Pair<E> {
     /// Opens `before` and `after`. Versions of one graph must not have a
-    /// compaction between them; versions of two graphs are aligned.
+    /// compaction between them, and their shared dense ids must name the
+    /// same nodes; versions of two graphs are aligned by external id.
     pub(super) fn open(before: Resolved, after: Resolved) -> Result<Self, SpectralSqlError> {
         let same_graph = before.graph.graph_id == after.graph.graph_id;
         if same_graph {
@@ -49,25 +50,24 @@ impl<E: IdDatum> Pair<E> {
         let before = Vectors::<E>::open_within(before, &memory)?;
         let after = Vectors::<E>::open_within(after, &memory)?;
         let alignment = match same_graph {
-            true => None,
+            // One graph's versions are compared by dense id, so each shared
+            // dense id must name one node (not so for sibling staged
+            // versions); relations are matched by name.
+            true => {
+                version::shared_dense_ids(&before.loaded.id_map, &after.loaded.id_map)?;
+                None
+            }
             false => Some(version::align(&before.loaded.version()?, &after.loaded.version()?)?),
         };
         Ok(Self { before, after, alignment })
     }
 
-    /// The later version's CSRs in the shared id space and relation indexes.
-    pub(super) fn after_graph(&self) -> &GraphCsr {
-        self.alignment.as_ref().map_or(&self.after.loaded.graph, |a| &a.graph)
-    }
-
-    /// The relation names, by relation index of the shared dictionary.
-    pub(super) fn relation_names(&self) -> &[String] {
-        let (before, after) = (&self.before.loaded.relations, &self.after.loaded.relations);
+    /// The later version's relation dictionary and CSRs, in the shared id
+    /// space.
+    pub(super) fn after_relations(&self) -> (&RelationDictionary, &GraphCsr) {
         match &self.alignment {
-            Some(alignment) => alignment.relations.names(),
-            // One graph's dictionary only grows: the longer one names both.
-            None if before.len() >= after.len() => before.names(),
-            None => after.names(),
+            Some(alignment) => (&alignment.relations, &alignment.graph),
+            None => (&self.after.loaded.relations, &self.after.loaded.graph),
         }
     }
 

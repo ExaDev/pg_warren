@@ -19,7 +19,10 @@ mod history;
 pub use alignment::{align, Alignment};
 pub use compaction::{compact, Compaction, Renumbering};
 pub use dense_ids::shared_dense_ids;
-pub use diff::{diff, DegreeCount, DegreeShift, EdgeDelta, NodeDelta, RelationDelta, VersionDiff};
+pub use diff::{
+    diff, relation_deltas, DegreeCount, DegreeShift, EdgeDelta, NodeDelta, RelationDelta,
+    VersionDiff,
+};
 pub use error::VersionError;
 
 use crate::graph::{ExternalId, GraphCsr, IdMap, RelationDictionary};

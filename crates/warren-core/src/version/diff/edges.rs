@@ -3,8 +3,7 @@
 
 use std::cmp::Ordering;
 
-use crate::graph::{AnyCsr, ExternalId, Neighbours, RelationCsr};
-use crate::version::GraphVersion;
+use crate::graph::{AnyCsr, GraphCsr, Neighbours, RelationCsr, RelationDictionary};
 
 /// Edges before and after, and how many were added and removed. An edge is
 /// a (source, target) pair; a change of weight alone is not counted.
@@ -88,17 +87,18 @@ fn shared_targets(mut before: Neighbours<'_>, mut after: Neighbours<'_>) -> u64 
 }
 
 /// The edge delta of every relation, aligned by name: `after`'s relations
-/// in index order, then those found only in `before`.
-pub(super) fn relation_deltas<E: ExternalId>(
-    before: &GraphVersion<'_, E>,
-    after: &GraphVersion<'_, E>,
+/// in index order, then those found only in `before`. Each side is a
+/// relation dictionary and the CSRs it indexes.
+pub fn relation_deltas(
+    before: (&RelationDictionary, &GraphCsr),
+    after: (&RelationDictionary, &GraphCsr),
 ) -> Vec<RelationDelta> {
-    let in_after = after.relations().names().iter().filter_map(|name| {
+    let in_after = after.0.names().iter().filter_map(|name| {
         let edges = EdgeDelta::between(forward(before, name), Some(forward(after, name)?));
         Some(RelationDelta { name: name.clone(), edges })
     });
-    let only_before = before.relations().names().iter().filter_map(|name| {
-        if after.relations().get(name).is_some() {
+    let only_before = before.0.names().iter().filter_map(|name| {
+        if after.0.get(name).is_some() {
             return None;
         }
         let edges = EdgeDelta::all_removed(forward(before, name)?);
@@ -107,10 +107,12 @@ pub(super) fn relation_deltas<E: ExternalId>(
     in_after.chain(only_before).collect()
 }
 
-/// The forward CSR of the relation called `name` in `version`.
-fn forward<'v, E: ExternalId>(version: &GraphVersion<'v, E>, name: &str) -> Option<&'v AnyCsr> {
-    let relation = version.relations().get(name)?;
-    version.graph().relation(relation).map(RelationCsr::forward)
+/// The forward CSR of the relation called `name`.
+fn forward<'g>(
+    (dictionary, graph): (&RelationDictionary, &'g GraphCsr),
+    name: &str,
+) -> Option<&'g AnyCsr> {
+    graph.relation(dictionary.get(name)?).map(RelationCsr::forward)
 }
 
 #[cfg(test)]

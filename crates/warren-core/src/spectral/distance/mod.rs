@@ -19,7 +19,7 @@ mod subspace;
 pub use alignment::align;
 pub use compared_rows::ComparedRows;
 pub use degree::{degree_distance, DegreeDistance};
-pub use edit::{edit_distance, EdgeSetChange, EditDistance};
+pub use edit::{edit_distance, EdgeSetChange, EditDistance, RelationChange};
 pub use eigenvalues::{spectral_distance, SpectralDistance};
 pub use embedding::{embedding_distance, EmbeddingDistance};
 pub use subspace::{subspace_distance, SubspaceDistance};

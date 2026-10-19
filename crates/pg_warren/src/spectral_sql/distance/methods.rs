@@ -18,17 +18,16 @@ use crate::compute_sql::{workers, Vectors};
 use crate::interrupts::PostgresInterrupts;
 use crate::source::IdDatum;
 
-/// `edit`: per relation (named) and overall.
+/// `edit`: per relation (matched by name) and overall.
 pub(super) fn edit<E: IdDatum>(pair: &Pair<E>) -> Value {
-    let distance = edit_distance(&pair.before.loaded.graph, pair.after_graph());
-    let names = pair.relation_names();
+    let before = (&pair.before.loaded.relations, &pair.before.loaded.graph);
+    let distance = edit_distance(before, pair.after_relations());
     let relations: Vec<Value> = distance
         .relations
         .iter()
-        .enumerate()
-        .map(|(index, change)| {
-            let mut entry = change_json(change);
-            entry["relation"] = json!(names.get(index));
+        .map(|relation| {
+            let mut entry = change_json(&relation.change);
+            entry["relation"] = json!(relation.name);
             entry
         })
         .collect();

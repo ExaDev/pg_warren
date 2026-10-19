@@ -279,6 +279,43 @@ mod tests {
     }
 
     #[pg_test]
+    fn sibling_staged_versions_are_refused() -> Result<(), Error> {
+        // Two staged builds from one current version: node 10 in one and node
+        // 20 in the other get the same new dense id, relations x and y the
+        // same relation index. Like diff, distance refuses to compare them.
+        graph()?;
+        Spi::run("INSERT INTO g_nodes VALUES (10); INSERT INTO g_edges VALUES (4, 10, 'x')")?;
+        let with_10 = staged("g")?;
+        Spi::run(
+            "DELETE FROM g_edges WHERE dst = 10; DELETE FROM g_nodes WHERE id = 10;
+             INSERT INTO g_nodes VALUES (20); INSERT INTO g_edges VALUES (1, 20, 'y')",
+        )?;
+        let with_20 = staged("g")?;
+        for version in [with_10, with_20] {
+            Spi::run(&format!(
+                "SELECT warren.vector_from_query('g', 'e', 'SELECT id, ARRAY[id::float8] FROM g_nodes',
+                                                 version := {version})"
+            ))?;
+        }
+        let diff = failure(&format!("warren.diff('g', {with_10}, {with_20})"))?.unwrap_or_default();
+        assert!(diff.starts_with("22023: dense id"), "{diff}");
+        for method in ["'edit'", "'degree'", "'spectral', k := 1", "'embedding', x := 'e'"] {
+            let found = failure(&format!("warren.distance('g', {with_10}, {with_20}, {method})"))?
+                .unwrap_or_default();
+            assert!(
+                found.starts_with("22023: dense id 6 names different nodes"),
+                "{method}: {found}"
+            );
+        }
+        Ok(())
+    }
+
+    fn staged(graph: &str) -> Result<i64, Error> {
+        Spi::get_one::<i64>(&format!("SELECT warren.refresh('{graph}', promote := false)"))?
+            .ok_or(Error::InvalidPosition)
+    }
+
+    #[pg_test]
     fn another_graph_is_compared_by_external_id() -> Result<(), Error> {
         // `h` holds g's later version, built at once from tables where node 0
         // comes first: every dense id differs from g's.

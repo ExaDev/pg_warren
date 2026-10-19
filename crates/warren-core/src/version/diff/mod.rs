@@ -9,11 +9,11 @@ mod edges;
 mod nodes;
 
 pub use degree::{DegreeCount, DegreeShift};
-pub use edges::{EdgeDelta, RelationDelta};
+pub use edges::{relation_deltas, EdgeDelta, RelationDelta};
 pub use nodes::NodeDelta;
 
 use degree::{degree_shift, in_degree_counts, out_degree_counts};
-use edges::{edge_delta, relation_deltas};
+use edges::edge_delta;
 use nodes::node_delta;
 
 use super::{shared_dense_ids, GraphVersion, VersionError};
@@ -64,7 +64,10 @@ pub fn diff<E: ExternalId>(
     );
     Ok(VersionDiff {
         nodes: node_delta(earlier, later),
-        relations: relation_deltas(before, after),
+        relations: relation_deltas(
+            (before.relations(), before.graph()),
+            (after.relations(), after.graph()),
+        ),
         all_relations: edge_delta(forward_before, forward_after),
         out_degree,
         in_degree,
