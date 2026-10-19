@@ -1,0 +1,46 @@
+# Fuzz targets for the warren-core segment decoders (DESIGN.md §5.3, §12).
+# Not a workspace member: it needs nightly and cargo-fuzz. Run with
+#   cargo +$MIRI_NIGHTLY fuzz run <target> -- -max_total_time=30
+[package]
+name = "warren-core-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+warren-core = { path = "../crates/warren-core" }
+
+# Its own workspace, so the root workspace never builds it.
+[workspace]
+
+[[bin]]
+name = "decode_csr"
+path = "fuzz_targets/decode_csr.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_id_map"
+path = "fuzz_targets/decode_id_map.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_tombstones"
+path = "fuzz_targets/decode_tombstones.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_relation_dictionary"
+path = "fuzz_targets/decode_relation_dictionary.rs"
+test = false
+doc = false
+bench = false

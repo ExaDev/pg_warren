@@ -251,7 +251,16 @@ Per relation *r* (a single implicit relation if `has_relations = false`):
 
 `u32` targets when `id_space < 2³²`, else `u64`; width recorded in `versions.target_width`. Sorted targets allow `has_edge` by binary search and make set-intersection algorithms (triangles, Jaccard) straightforward.
 
-Per-relation CSRs are stored separately so a traversal or SpMV can be restricted to a relation mask without filtering; a "merged" all-relations CSR is built additionally if `has_relations` (it is the common case for global computation). An M1 benchmark checks this choice against the alternative of a single merged CSR with a parallel adaptive-width (`u8`/`u16`/`u32`) relation array, which pgGraph uses and which needs about half the storage when `has_relations`. The result is recorded here. Alignment: every segment starts on a 64-byte boundary when loaded.
+Per-relation CSRs are stored separately so a traversal or SpMV can be restricted to a relation mask without filtering; a "merged" all-relations CSR is built additionally if `has_relations` (it is the common case for global computation). An M1 benchmark checks this choice against the alternative of a single merged CSR with a parallel adaptive-width (`u8`/`u16`/`u32`) relation array, which pgGraph uses and which needs about half the storage when `has_relations`. **Decided (M1): keep per-relation CSRs plus the merged CSR.** `benches/relation_layout.rs` (100K nodes, 1M weighted edges, 5 relations, single thread, 4-vCPU Xeon) measured:
+
+| | per-relation + merged | one CSR + `u8` relation array |
+|---|---|---|
+| forward bytes | 28.8 MB (16.0 MB without merged) | 13.8 MB |
+| build, forward + reverse | 104 ms | 40 ms |
+| BFS, 1 / 2 / 3 / 5 of 5 relations | 2.0 / 4.9 / 7.2 / 5.3 ms | 5.4 / 8.7 / 9.3 / 6.0 ms |
+| weighted row sums, 1 / 2 / 3 / 5 of 5 | 0.88 / 1.8 / 2.7 / 1.7 ms | 3.0 / 5.0 / 4.4 / 2.2 ms |
+
+Masked traversal and SpMV are 1.1–3.4× faster per relation, which is the hot path; the cost is about 2× storage and a build that stays well inside the §12 `refresh()` budget. Revisit if the memory cap (not speed) becomes the binding constraint; dropping the stored merged CSR is the first lever. Alignment: every segment starts on a 64-byte boundary when loaded.
 
 Every segment is validated on load, before any unchecked slice is formed: alignment and lengths, `offsets[0] = 0`, offsets monotonic, `offsets[id_space] = M`, every target `< id_space`, and `id_map` sorted. The check is O(N + M), which is cheap next to the detoast. The segment decoder has a fuzz target (§12). Each segment is encoded as a 16-byte little-endian header (magic `WRSG`, format, kind, element width, element count) followed by its payload, so a decoder can reject a segment of the wrong kind or width before reading it.
 
@@ -788,9 +797,9 @@ Post-v0.3: contraction/project/lift and Louvain (§6.6), DSM cache + compute wor
 1. **Polymorphism over `id_type`** in SQL: `anyelement` runtime dispatch vs. generated overloads. Lean: `anyelement`.
 2. **Persistent store**: chunked `bytea` only, or additionally a regenerable `$PGDATA/pg_warren/*.csr` file for mmap? Lean: `bytea` only; measure before adding. Evidence from pgGraph (`docs/prior-art-notes.md` §1.3–1.4) supports this. Its file artifacts are copied and fully validated on every load anyway, so they are not zero-copy. They needed MVCC catalog publication, per-database namespacing and interrupted-replacement recovery added after the fact, and they have no standby support. M2 measures cold load from `warren.segments`; revisit only if it falls below ~300 MB/s.
 3. **Chunk size** (4/8/32 MB). Measure.
-4. **Parallel-edge deduplication**: drop with count; if weighted, sum or keep-first? Lean: sum, counted in `versions.deduplicated_edges`. pgGraph keeps parallel edges only because it returns per-edge source-row identities, which pg_warren does not.
-5. **Self-loops**: keep. Lean: yes.
-6. **Undirected weighted**: duplicate weight both directions. Lean: yes.
+4. **Parallel-edge deduplication**: drop with count; if weighted, sum or keep-first? **Decided (M1): sum**, in input order, counted in `versions.deduplicated_edges`; unweighted duplicates are dropped with the same count. pgGraph keeps parallel edges only because it returns per-edge source-row identities, which pg_warren does not.
+5. **Self-loops**: keep. **Decided (M1): kept**; an undirected self-loop is stored once.
+6. **Undirected weighted**: duplicate weight both directions. **Decided (M1): yes**, both directions carry the same weight.
 7. **Default `max_depth`** on `reachable_set`: unbounded vs. cap. Lean: unbounded, documented.
 8. **Lanczos precision default**: f32 vectors/f64 accumulate vs. all f64. Lean: f32 by default with an option.
 9. **Native kernels vs. SuiteSparse:GraphBLAS** (§6.10). Lean: native for v1; revisit after M6.
