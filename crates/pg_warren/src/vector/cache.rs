@@ -156,9 +156,8 @@ mod tests {
         store.chunks.clear();
         let again = load(&mut store, &memory(), 5, &first).unwrap();
         assert!(Arc::ptr_eq(&loaded, &again), "the second load is a cache hit");
-        let second =
-            write_vector(&mut store, &Binding::new(5, 7, "x", pg_sys::Oid::INVALID), &ones, 64)
-                .unwrap();
+        let binding = Binding::new(5, 7, "x", pg_sys::Oid::INVALID).replacing(Some(first.vector));
+        let second = write_vector(&mut store, &binding, &ones, 64).unwrap();
         load(&mut store, &memory(), 5, &second).unwrap();
         let cached = CACHE.with_borrow(VectorCache::vectors);
         assert_eq!(cached, [second.vector], "the replaced vector was pruned");

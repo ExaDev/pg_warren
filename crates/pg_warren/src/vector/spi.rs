@@ -54,13 +54,23 @@ impl VectorStore for SpiVectorStore {
         width: usize,
         length: u64,
     ) -> Result<VectorId, VectorError> {
-        self.delete(binding.version, binding.name)?;
+        // Delete only the row the writer checked, by id: under READ
+        // COMMITTED a by-name delete would also see a row another role
+        // committed since, and delete it unchecked (DESIGN.md §7). Any other
+        // row of that name then conflicts with the insert below.
+        if let Some(old) = binding.replacing {
+            if !self.delete(old)? {
+                return Err(VectorError::WrittenConcurrently {
+                    name: binding.name.to_owned(),
+                    version: binding.version,
+                });
+            }
+        }
         let width = i32::try_from(width).unwrap_or(i32::MAX);
         let length = i64::try_from(length).unwrap_or(i64::MAX);
-        // A concurrent transaction that deleted the old row first makes
-        // this one wait on it, then find nothing to delete; its own new row
-        // is then a conflict, reported as such rather than as a raw
-        // unique_violation.
+        // A row of that name this writer did not check (committed since, or
+        // in progress, which the insert waits for) is a conflict, reported
+        // as a concurrent write rather than as a raw unique_violation.
         let id = as_extension_owner(|| {
             Spi::connect_mut(|client| {
                 let rows = client.update(
@@ -148,13 +158,13 @@ impl VectorStore for SpiVectorStore {
         })
     }
 
-    fn delete(&mut self, version: VersionId, name: &str) -> Result<bool, VectorError> {
+    fn delete(&mut self, vector: VectorId) -> Result<bool, VectorError> {
         as_extension_owner(|| {
             Spi::connect_mut(|client| {
                 let deleted = client.update(
-                    "DELETE FROM warren.vectors WHERE version_id = $1 AND name = $2",
+                    "DELETE FROM warren.vectors WHERE vector_id = $1",
                     None,
-                    &[version.into(), name.into()],
+                    &[vector.into()],
                 )?;
                 Ok(!deleted.is_empty())
             })
@@ -188,7 +198,7 @@ mod tests {
     use super::SpiVectorStore;
     use crate::fixture::{refresh, ring};
     use crate::segment::CHUNK_SIZE;
-    use crate::vector::{read_vector, write_vector, Binding, VectorStore};
+    use crate::vector::{read_vector, write_vector, Binding, VectorError, VectorStore};
 
     /// The session's current role.
     fn me() -> pg_sys::Oid {
@@ -248,16 +258,22 @@ mod tests {
         let first =
             write_vector(&mut store, &Binding::new(graph, version, "x", me()), &ones, CHUNK_SIZE)
                 .map_err(|_| Error::InvalidPosition)?;
+        let binding = Binding::new(graph, version, "x", me());
+        let unchecked = write_vector(&mut store, &binding, &ones, CHUNK_SIZE);
+        assert!(
+            matches!(unchecked, Err(VectorError::WrittenConcurrently { .. })),
+            "a write that found no x must not delete the one there"
+        );
         let second =
-            write_vector(&mut store, &Binding::new(graph, version, "x", me()), &ones, CHUNK_SIZE)
+            write_vector(&mut store, &binding.replacing(Some(first.vector)), &ones, CHUNK_SIZE)
                 .map_err(|_| Error::InvalidPosition)?;
         let existing =
             store.existing(&[first.vector, second.vector]).map_err(|_| Error::InvalidPosition)?;
         assert_eq!(existing, [second.vector]);
         let chunks = Spi::get_one::<i64>("SELECT count(*) FROM warren.vector_chunks")?;
         assert_eq!(chunks, Some(1));
-        assert!(store.delete(version, "x").map_err(|_| Error::InvalidPosition)?);
-        assert!(!store.delete(version, "x").map_err(|_| Error::InvalidPosition)?);
+        assert!(store.delete(second.vector).map_err(|_| Error::InvalidPosition)?);
+        assert!(!store.delete(second.vector).map_err(|_| Error::InvalidPosition)?);
         let left = Spi::get_one::<i64>("SELECT count(*) FROM warren.vector_chunks")?;
         assert_eq!(left, Some(0));
         Ok(())

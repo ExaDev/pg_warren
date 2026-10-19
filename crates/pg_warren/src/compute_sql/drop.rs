@@ -6,7 +6,7 @@ use pgrx::prelude::*;
 use super::{entry, ComputeSqlError};
 use crate::access::require_creator_or_owner;
 use crate::cache::resolve;
-use crate::vector::{drop_transient, forget, SpiVectorStore, VectorStore};
+use crate::vector::{drop_transient, forget, SpiVectorStore, VectorError, VectorStore};
 
 /// `warren.drop_vector`: deletes vector `name` bound to `version` (the
 /// current version if NULL): the session's transient vector of that name
@@ -30,8 +30,16 @@ fn drop_vector(graph: Option<&str>, name: Option<&str>, version: default!(Option
             }
         })?;
         require_creator_or_owner(record.created_by, resolved.graph.owner, graph, name)?;
+        // By id: the row checked above, never one of that name committed
+        // since by another transaction.
+        if !store.delete(record.vector)? {
+            return Err(VectorError::WrittenConcurrently {
+                name: name.to_owned(),
+                version: resolved.version,
+            }
+            .into());
+        }
         forget(record.vector);
-        store.delete(resolved.version, name)?;
         Ok(())
     })
 }

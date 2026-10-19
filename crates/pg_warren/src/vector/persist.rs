@@ -90,12 +90,25 @@ mod tests {
             write_vector(&mut store, &Binding::new(1, 7, "x", pg_sys::Oid::INVALID), &sample(), 64)
                 .unwrap();
         let ones = Vector::filled(&memory(), 20, 1, 1i64).unwrap().into();
+        let binding = Binding::new(1, 7, "x", pg_sys::Oid::INVALID);
         let second =
-            write_vector(&mut store, &Binding::new(1, 7, "x", pg_sys::Oid::INVALID), &ones, 64)
-                .unwrap();
+            write_vector(&mut store, &binding.replacing(Some(first.vector)), &ones, 64).unwrap();
         assert_ne!(first.vector, second.vector);
         assert_eq!(store.existing(&[first.vector, second.vector]).unwrap(), [second.vector]);
         assert_eq!(read_vector(&mut store, &memory(), &second).unwrap(), ones);
+    }
+
+    #[test]
+    fn a_write_never_deletes_a_vector_it_did_not_check() {
+        let mut store = MemoryVectorStore::default();
+        let binding = Binding::new(1, 7, "x", pg_sys::Oid::INVALID);
+        let first = write_vector(&mut store, &binding, &sample(), 64).unwrap();
+        // The writer found no "x", or an older one: someone wrote it since.
+        for checked in [None, Some(first.vector + 100)] {
+            let error = write_vector(&mut store, &binding.replacing(checked), &sample(), 64);
+            assert!(matches!(error, Err(VectorError::WrittenConcurrently { .. })), "{error:?}");
+            assert_eq!(store.existing(&[first.vector]).unwrap(), [first.vector]);
+        }
     }
 
     #[test]

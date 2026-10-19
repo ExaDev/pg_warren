@@ -19,7 +19,7 @@ use crate::segment::CHUNK_SIZE;
 use crate::source::IdDatum;
 use crate::vector::{
     drop_transient, forget, keep_transient, load, remember, transient, transients, write_vector,
-    Binding, SpiVectorStore, VectorId, VectorRecord, VectorStore,
+    Binding, SpiVectorStore, VectorError, VectorId, VectorRecord, VectorStore,
 };
 
 /// The budget cached vectors are charged to while cached: unlimited, since
@@ -178,16 +178,27 @@ impl<E: IdDatum> Vectors<E> {
             return Err(ComputeSqlError::EmptyName);
         }
         let graph_id = self.graph.graph_id;
-        if let Some(old) = self.record(name) {
-            require_creator_or_owner(old.created_by, self.graph.owner, &self.graph.name, name)?;
-            forget(old.vector);
+        let old = self.record(name).map(|old| (old.vector, old.created_by));
+        if let Some((_, created_by)) = old {
+            require_creator_or_owner(created_by, self.graph.owner, &self.graph.name, name)?;
         }
+        let replacing = old.map(|(vector, _)| vector);
         vector.clear_tombstoned(self.tombstones());
-        drop_transient(graph_id, self.version, name);
         self.held.remove(name);
+        // The catalog change comes first: if it fails (a concurrent write),
+        // this session's transient vectors are left as they were.
         if !persist {
-            if self.record(name).is_some() {
-                SpiVectorStore.delete(self.version, name)?;
+            if let Some(old) = replacing {
+                // Only the row checked above: a row of that name committed
+                // since is another transaction's, not ours to delete.
+                if !SpiVectorStore.delete(old)? {
+                    return Err(VectorError::WrittenConcurrently {
+                        name: name.to_owned(),
+                        version: self.version,
+                    }
+                    .into());
+                }
+                forget(old);
                 self.records.retain(|bound| bound.name != name);
             }
             keep_transient(graph_id, self.version, name, Arc::new(vector));
@@ -195,8 +206,12 @@ impl<E: IdDatum> Vectors<E> {
         }
         // SAFETY: reads the backend's current user id: the caller's role.
         let caller = unsafe { pgrx::pg_sys::GetUserId() };
-        let binding = Binding::new(graph_id, self.version, name, caller);
+        let binding = Binding::new(graph_id, self.version, name, caller).replacing(replacing);
         let record = write_vector(&mut SpiVectorStore, &binding, &vector, CHUNK_SIZE)?;
+        if let Some(old) = replacing {
+            forget(old);
+        }
+        drop_transient(graph_id, self.version, name);
         let id = record.vector;
         remember(graph_id, id, Arc::new(vector));
         self.records.retain(|bound| bound.name != name);

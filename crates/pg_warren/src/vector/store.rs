@@ -38,6 +38,10 @@ pub(crate) struct Binding<'a> {
     pub(crate) name: &'a str,
     /// The role writing it.
     pub(crate) created_by: pg_sys::Oid,
+    /// The vector of that name it replaces, as the writer checked it
+    /// (`None`: the writer found none). Any other row of that name is a
+    /// concurrent write ([`VectorError::WrittenConcurrently`]).
+    pub(crate) replacing: Option<VectorId>,
 }
 
 impl<'a> Binding<'a> {
@@ -49,7 +53,12 @@ impl<'a> Binding<'a> {
         name: &'a str,
         created_by: pg_sys::Oid,
     ) -> Self {
-        Self { graph_id, version, name, created_by }
+        Self { graph_id, version, name, created_by, replacing: None }
+    }
+
+    /// The same binding, replacing vector `replacing` (as checked).
+    pub(crate) fn replacing(self, replacing: Option<VectorId>) -> Self {
+        Self { replacing, ..self }
     }
 }
 
@@ -67,9 +76,10 @@ pub(crate) trait VectorStore {
     /// The vectors bound to `version`, by name.
     fn bound(&mut self, version: VersionId) -> Result<Vec<VectorRecord>, VectorError>;
 
-    /// Records a vector at `binding`, replacing any of that name, and
-    /// returns its id. A vector of that name written meanwhile by a
-    /// concurrent transaction is [`VectorError::WrittenConcurrently`].
+    /// Records a vector at `binding`, replacing `binding.replacing`, and
+    /// returns its id. Any other vector of that name (written, replaced or
+    /// dropped by a concurrent transaction since the writer checked) is
+    /// [`VectorError::WrittenConcurrently`]: nothing unchecked is deleted.
     fn insert(
         &mut self,
         binding: &Binding<'_>,
@@ -95,9 +105,9 @@ pub(crate) trait VectorStore {
         each: &mut ChunkVisitor<'_>,
     ) -> Result<(), VectorError>;
 
-    /// Deletes the vector named `name` bound to `version`; returns whether
-    /// there was one.
-    fn delete(&mut self, version: VersionId, name: &str) -> Result<bool, VectorError>;
+    /// Deletes vector `vector` (its chunks with it); returns whether it
+    /// still existed.
+    fn delete(&mut self, vector: VectorId) -> Result<bool, VectorError>;
 
     /// Which of `vectors` still exist.
     fn existing(&mut self, vectors: &[VectorId]) -> Result<Vec<VectorId>, VectorError>;
@@ -135,7 +145,23 @@ pub(crate) mod tests {
             width: usize,
             length: u64,
         ) -> Result<VectorId, VectorError> {
-            self.delete(binding.version, binding.name)?;
+            let existing: Vec<VectorId> = self
+                .rows
+                .iter()
+                .filter(|(_, (v, record))| *v == binding.version && record.name == binding.name)
+                .map(|(id, _)| *id)
+                .collect();
+            if existing != binding.replacing.into_iter().collect::<Vec<_>>() {
+                return Err(VectorError::WrittenConcurrently {
+                    name: binding.name.to_owned(),
+                    version: binding.version,
+                });
+            }
+            for id in existing {
+                self.delete(id)?;
+            }
+            // (The SPI adapter deletes the checked id, then lets the insert
+            // conflict with any other row of that name: the same outcome.)
             self.next += 1;
             let record = VectorRecord {
                 vector: self.next,
@@ -176,17 +202,9 @@ pub(crate) mod tests {
             Ok(())
         }
 
-        fn delete(&mut self, version: VersionId, name: &str) -> Result<bool, VectorError> {
-            let found = self
-                .rows
-                .iter()
-                .find(|(_, (v, record))| *v == version && record.name == name)
-                .map(|(id, _)| *id);
-            if let Some(id) = found {
-                self.rows.remove(&id);
-                self.chunks.retain(|(vector, _), _| *vector != id);
-            }
-            Ok(found.is_some())
+        fn delete(&mut self, vector: VectorId) -> Result<bool, VectorError> {
+            self.chunks.retain(|(id, _), _| *id != vector);
+            Ok(self.rows.remove(&vector).is_some())
         }
 
         fn existing(&mut self, vectors: &[VectorId]) -> Result<Vec<VectorId>, VectorError> {

@@ -60,8 +60,15 @@ pub(crate) fn move_vectors(
         drop(vector);
         let binding = Binding::new(graph_id, to, &record.name, record.created_by);
         write_vector(store, &binding, &moved, chunk_size)?;
+        // By id: a vector of that name written to the source since it was
+        // listed is not moved, so it must not be deleted either.
+        if !store.delete(record.vector)? {
+            return Err(VectorError::WrittenConcurrently {
+                name: record.name.clone(),
+                version: from,
+            });
+        }
         forget(record.vector);
-        store.delete(from, &record.name)?;
     }
     Ok(records.into_iter().map(|record| record.name).collect())
 }
