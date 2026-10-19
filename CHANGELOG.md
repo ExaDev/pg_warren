@@ -18,6 +18,12 @@
   (personalised by a seed vector), `components_vector`,
   `label_propagation`, `sssp_vector`, `degree_vector`,
   `aggregate_neighbours`; and `triangles`, a per-node triangle count.
+- Behaviour change: SQL a user wrote now runs in Postgres's read-only
+  transaction state while warren reads it, so a graph's source queries
+  (at `refresh`), `vector_from_query`'s query and `gather`'s message query
+  that write through a function they call now fail with 25006 (`cannot
+  execute … in a read-only transaction`). This is an integrity guard, not
+  a sandbox (DESIGN.md §7).
 - Upgrade from 0.1.0: install the new build, then run
   `ALTER EXTENSION pg_warren UPDATE;` in each database before using it.
 
