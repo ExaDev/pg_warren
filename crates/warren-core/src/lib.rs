@@ -14,6 +14,7 @@ pub mod compute;
 pub mod graph;
 pub mod spectral;
 pub mod traversal;
+pub mod version;
 
 /// The version of this crate, as recorded in its `Cargo.toml`.
 pub fn version() -> &'static str {
