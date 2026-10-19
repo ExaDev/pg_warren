@@ -8,6 +8,7 @@ use warren_core::graph::{AnyCsr, ExternalId, GraphCsr, IdMap};
 use super::retention::{retention, VersionSummary};
 use super::{CatalogError, GraphDefinition};
 use crate::access::as_extension_owner;
+use crate::read_only::read_one;
 
 /// A version id: `warren.versions.version_id`.
 pub(crate) type VersionId = i64;
@@ -69,7 +70,7 @@ pub(crate) struct NewVersion<'a> {
 
 /// The current WAL position, as `pg_lsn` text, for `versions.built_lsn`.
 pub(crate) fn current_wal_lsn() -> Result<String, CatalogError> {
-    Ok(Spi::get_one::<String>("SELECT pg_current_wal_lsn()::text")?.unwrap_or_default())
+    Ok(read_one::<String>("SELECT pg_current_wal_lsn()::text", &[])?.unwrap_or_default())
 }
 
 /// Inserts a staged version of graph `graph_id` with the next sequence
@@ -287,7 +288,7 @@ pub(crate) fn require_version(
     version: VersionId,
 ) -> Result<(), CatalogError> {
     let found = as_extension_owner(|| {
-        Ok::<_, CatalogError>(Spi::get_one_with_args::<bool>(
+        Ok::<_, CatalogError>(read_one::<bool>(
             "SELECT EXISTS (SELECT 1 FROM warren.versions WHERE version_id = $1 AND graph_id = $2)",
             &[version.into(), graph.graph_id.into()],
         )?)

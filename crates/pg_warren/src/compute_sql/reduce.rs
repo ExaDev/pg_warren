@@ -15,7 +15,7 @@ use crate::source::with_id_type;
 /// `warren.vector_reduce`: `op` (`sum`, `max`, `min`, `l1`, `l2` or `nnz`)
 /// over every element of the live rows of vector `x`, read as `double
 /// precision`; NULL for the `max` or `min` of no elements.
-#[pg_extern(schema = "warren", stable, parallel_safe)]
+#[pg_extern(schema = "warren", stable, parallel_restricted)]
 fn vector_reduce(
     graph: Option<&str>,
     x: Option<&str>,
@@ -41,7 +41,7 @@ fn vector_reduce(
 /// current version if NULL), aligned by dense id: a row past the end of
 /// the shorter vector counts as zero (DESIGN.md §7). Versions on either
 /// side of a compaction are not comparable.
-#[pg_extern(schema = "warren", stable, parallel_safe)]
+#[pg_extern(schema = "warren", stable, parallel_restricted)]
 fn vector_norm_diff(
     graph: Option<&str>,
     a: Option<&str>,

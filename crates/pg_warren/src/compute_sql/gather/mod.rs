@@ -29,6 +29,7 @@ use crate::access::{with_search_path, Caller};
 use crate::cache::{resolve, Resolved};
 use crate::external_ids::check_type;
 use crate::interrupts::PostgresInterrupts;
+use crate::read_only::read_one;
 use crate::selection::{direction, relations};
 use crate::source::{describe, type_name, with_id_type, IdDatum, SourceError};
 pub(crate) use codec::TypeError;
@@ -105,7 +106,7 @@ fn qualified(oid: pg_sys::Oid) -> String {
 /// Whether `name` is a relation on the caller's `search_path`.
 fn relation_visible(caller: &Caller, name: &str) -> bool {
     with_search_path(caller.search_path(), || {
-        Spi::get_one_with_args::<pg_sys::Oid>("SELECT pg_catalog.to_regclass($1)", &[name.into()])
+        read_one::<pg_sys::Oid>("SELECT pg_catalog.to_regclass($1)", &[name.into()])
     })
     .ok()
     .flatten()
