@@ -10,6 +10,7 @@
 
 mod alignment;
 mod compaction;
+mod dense_ids;
 mod diff;
 mod error;
 #[cfg(test)]
@@ -17,6 +18,7 @@ mod history;
 
 pub use alignment::{align, Alignment};
 pub use compaction::{compact, Compaction, Renumbering};
+pub use dense_ids::shared_dense_ids;
 pub use diff::{diff, DegreeCount, DegreeShift, EdgeDelta, NodeDelta, RelationDelta, VersionDiff};
 pub use error::VersionError;
 
