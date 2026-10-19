@@ -165,8 +165,9 @@ jobs:
 
   harness:
     # The out-of-crate harness (DESIGN.md §12): generator and harness pytest
-    # tests, the test/ SQL suite against an installed pg_warren, and one smoke
-    # run of the benchmark matrix.
+    # tests, the test/ SQL suite against an installed pg_warren, the upgrade
+    # path from every release (§13), and one smoke run of the benchmark
+    # matrix.
     name: Generators + SQL harness (PG 16)
     runs-on: ubuntu-latest
     steps:
@@ -204,6 +205,10 @@ jobs:
         run: cargo pgrx init --pg16 "$PG_CONFIG"
       - name: SQL harness (test/run.py)
         run: python test/run.py --pg-config "$PG_CONFIG"
+      - name: Upgrade path from every release (test/upgrade.py)
+        # ALTER EXTENSION UPDATE from each released version must give the
+        # catalog of a fresh install of the version in development.
+        run: python test/upgrade.py --no-install --pg-config "$PG_CONFIG"
       - name: Benchmark matrix smoke run
         run: bench/run.sh smoke --no-install --pg-config "$PG_CONFIG" --results bench/tmp
 

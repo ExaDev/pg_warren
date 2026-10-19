@@ -90,6 +90,11 @@ before changing code. Commands, toolchain setup and environment gotchas are in
   schema outside the extension, and the script's `CREATE SCHEMA IF NOT EXISTS`
   then fails with "schema warren is not a member of extension"
   (CVE-2022-2625 hardening).
+- **Releases are frozen.** Released `sql/pg_warren--X.Y.Z.sql` files
+  (listed in `sql/released.sha256`) never change. Any schema change after a
+  release also updates `sql/pg_warren--<released>--<current>.sql` in the
+  same commit; `test/upgrade.py` checks it (CONTRIBUTING.md, "Releases and
+  upgrades").
 - `#[pg_test]` names are prefixed `pg_` in test output. Running them as root
   (`--runas`) and their `Result` return convention are covered in
   CONTRIBUTING.md.

@@ -10,6 +10,8 @@ recursive CTEs / NetworkX on generated fixtures, and the Appendix A use cases
 - `sql/` holds the tests; `sql/include/` holds scripts they `\ir`.
 - `lib/assert.sql` is the `assert` schema every test database gets.
 - `oracle.py` writes a NetworkX reference table into any database.
+- `upgrade.py` checks `ALTER EXTENSION pg_warren UPDATE` from every released
+  version against a fresh install of the version in development.
 - `harness/` is the Python behind both; `tests/` are its pytest tests.
 
 ## Writing a SQL test
