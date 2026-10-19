@@ -6,6 +6,12 @@
 //! in its filter; the nodes it ends on start the next step. Hops are walks,
 //! not paths: a walk may repeat nodes and edges, as a recursive CTE with a
 //! depth column does.
+//!
+//! A walk's [`TraversalStats`](super::TraversalStats) cover all its steps.
+//! `nodes_visited` counts each node admitted to a level of a step: the
+//! nodes each step starts from (the walk's starts, then the nodes each step
+//! hands on) and each node a hop admits. So a filter, which only ever
+//! removes nodes from levels, never makes a walk visit more nodes.
 
 mod count;
 mod ends;
@@ -13,7 +19,11 @@ mod ends;
 mod example;
 mod paths;
 mod plan;
+#[cfg(test)]
+mod properties;
 mod reach;
+#[cfg(test)]
+mod reference;
 mod step;
 mod tally;
 

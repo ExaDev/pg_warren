@@ -216,10 +216,11 @@ mod tests {
             step(Some(AFFILIATED_WITH), 1, 1, None),
         ];
         let filtered = ends_of(&graph, &[0], &steps, WalkOptions::default()).unwrap();
-        // start 0; papers 1, 4, 2, 3; person 7; institution 8
+        // Step one: start 0, then papers 1, 4, 2, 3. Step two: those four,
+        // then person 7. Step three: 7, then institution 8.
         assert_eq!(
             filtered.stats,
-            TraversalStats { nodes_visited: 7, edges_traversed: 9, truncated: false }
+            TraversalStats { nodes_visited: 12, edges_traversed: 9, truncated: false }
         );
         steps[1].filter = None;
         let unfiltered = ends_of(&graph, &[0], &steps, WalkOptions::default()).unwrap();

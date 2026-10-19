@@ -103,17 +103,15 @@ pub(super) trait Observer<L> {
 }
 
 /// Runs `plan`, reporting to `observer`, until the last step is done or
-/// `observer` stops the walk. Distinct starts count as visited nodes.
+/// `observer` stops the walk.
 pub(super) fn reach<H: Hops>(
     plan: &WalkPlan<'_>,
     progress: &mut Progress<'_>,
     observer: &mut impl Observer<H::Label>,
 ) -> Result<(), TraversalError> {
-    for _ in &plan.starts {
-        progress.node_visited()?;
-    }
     if plan.steps.is_empty() {
         for &start in &plan.starts {
+            progress.node_visited()?;
             if observer.ended(None, start)?.is_break() {
                 break;
             }
@@ -123,6 +121,9 @@ pub(super) fn reach<H: Hops>(
     let mut inputs = memory::with_capacity(plan.starts.len())?;
     inputs.extend_from_slice(&plan.starts);
     for (index, step) in plan.steps.iter().enumerate() {
+        for _ in &inputs {
+            progress.node_visited()?;
+        }
         let mut search =
             StepSearch { index, step, last: index + 1 == plan.steps.len(), handed: Vec::new() };
         if search.run::<H>(inputs, progress, observer)?.is_break() {

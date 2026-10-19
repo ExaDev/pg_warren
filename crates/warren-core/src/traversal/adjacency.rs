@@ -469,5 +469,34 @@ mod properties {
                 prop_assert_eq!(adjacency.degree(node), expected.len() as u64);
             }
         }
+
+        #[test]
+        fn labelled_neighbours_match_the_naive_hops(
+            (scenario, selection) in scenarios().prop_flat_map(|scenario| {
+                let relation_count = scenario.relation_count;
+                (Just(scenario), selections(relation_count))
+            }),
+            direction in directions(),
+            wide in any::<bool>(),
+        ) {
+            let graph = if wide { scenario.wide_graph() } else { scenario.graph() };
+            let indexes = scenario.indexes(&selection);
+            let adjacency = Adjacency::new(&graph, direction, Scenario::selection(&indexes)).unwrap();
+            let hops = scenario.hops(direction, &selection);
+            for node in 0..scenario.id_space {
+                let labelled: Vec<(usize, DenseId)> = adjacency
+                    .labelled_neighbours(node)
+                    .map(|(relation, neighbour)| (relation.index(), neighbour))
+                    .collect();
+                let distinct: BTreeSet<_> = labelled.iter().copied().collect();
+                prop_assert_eq!(distinct.len(), labelled.len(), "a hop was repeated");
+                let expected: BTreeSet<_> = hops
+                    .iter()
+                    .filter(|&&(from, _, _)| from == node)
+                    .map(|&(_, relation, to)| (relation, to))
+                    .collect();
+                prop_assert_eq!(distinct, expected);
+            }
+        }
     }
 }

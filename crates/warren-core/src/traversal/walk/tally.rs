@@ -49,8 +49,7 @@ impl Tally {
 }
 
 /// Counts the walks of `plan` level by level, handing each finished level
-/// to `level_done`, and returns the walks ending on each end. Distinct
-/// starts count as visited nodes; so does each node new to a level.
+/// to `level_done`, and returns the walks ending on each end.
 pub(super) fn tally(
     plan: &WalkPlan<'_>,
     progress: &mut Progress<'_>,
@@ -59,10 +58,15 @@ pub(super) fn tally(
     let id_space = plan.id_space;
     let mut inputs = Tally::new(id_space);
     for &start in &plan.starts {
-        progress.node_visited()?;
         inputs.add(start, 1)?;
+        if plan.steps.is_empty() {
+            progress.node_visited()?;
+        }
     }
     for (index, step) in plan.steps.iter().enumerate() {
+        for _ in inputs.iter() {
+            progress.node_visited()?;
+        }
         let (min, max) = (step.hops.min(), step.hops.max());
         let mut ends = Tally::new(id_space);
         let mut level = inputs;
