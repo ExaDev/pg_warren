@@ -1,0 +1,11 @@
+/target
+**/*.rs.bk
+.DS_Store
+.idea/
+*.iml
+# pgrx
+crates/pg_warren/tests/pg_regress/results
+crates/pg_warren/tests/pg_regress/regression.diffs
+crates/pg_warren/tests/pg_regress/regression.out
+# benchmark scratch output (committed results live in bench/results/)
+bench/tmp/

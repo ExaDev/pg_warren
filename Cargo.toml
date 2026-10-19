@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = ["crates/warren-core", "crates/pg_warren"]
+# Bare `cargo build` / `cargo test` at the root touch only the Postgres-free
+# domain crate. Use `--workspace` (lint) or `cargo pgrx test` for pg_warren.
+default-members = ["crates/warren-core"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/ExaDev/pg_warren"
+rust-version = "1.85"
+
+[profile.dev]
+panic = "unwind"
+
+[profile.release]
+panic = "unwind"
+opt-level = 3
+lto = "fat"
+codegen-units = 1

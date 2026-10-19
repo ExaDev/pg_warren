@@ -1,0 +1,11 @@
+# Schema `warren` is created by the extension script (`#[pg_schema] mod warren`
+# in src/lib.rs) so that it is a member of the extension and is dropped with it.
+# Do NOT add `schema = warren` here: Postgres would then pre-create the schema
+# outside the extension, and the script's CREATE SCHEMA IF NOT EXISTS would fail
+# with "schema warren is not a member of extension" (CVE-2022-2625 hardening).
+comment = 'pg_warren: index-free-adjacency traversal and graph compute'
+default_version = '@CARGO_VERSION@'
+module_pathname = 'pg_warren'
+relocatable = false
+superuser = true
+trusted = false
