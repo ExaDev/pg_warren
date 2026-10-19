@@ -88,6 +88,11 @@ impl<E: Element> Vector<E> {
         self.width
     }
 
+    /// The heap bytes its elements hold.
+    pub fn bytes(&self) -> u64 {
+        (self.values.capacity() as u64).saturating_mul(size_of::<E>() as u64)
+    }
+
     /// Every element, row-major.
     pub fn values(&self) -> &[E] {
         &self.values
@@ -169,6 +174,16 @@ impl AnyVector {
         }
     }
 
+    /// The heap bytes its elements hold.
+    pub fn bytes(&self) -> u64 {
+        match self {
+            Self::F32(vector) => vector.bytes(),
+            Self::F64(vector) => vector.bytes(),
+            Self::I64(vector) => vector.bytes(),
+            Self::Bool(vector) => vector.bytes(),
+        }
+    }
+
     /// The number of elements per row.
     pub fn width(&self) -> usize {
         match self {
@@ -199,6 +214,14 @@ mod tests {
         assert_eq!(memory.in_use(), 48);
         drop(matrix);
         assert_eq!(memory.in_use(), 0);
+    }
+
+    #[test]
+    fn a_vector_holds_the_bytes_of_its_elements() {
+        let matrix: AnyVector = Vector::filled(&memory(), 3, 2, 1.5f32).unwrap().into();
+        assert_eq!(matrix.bytes(), 3 * 2 * 4);
+        let flags: AnyVector = Vector::filled(&memory(), 5, 1, true).unwrap().into();
+        assert_eq!(flags.bytes(), 5);
     }
 
     #[test]
