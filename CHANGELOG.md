@@ -17,7 +17,7 @@
 - Algorithm library in PL/pgSQL over the primitives: `pagerank`
   (personalised by a seed vector), `components_vector`,
   `label_propagation`, `sssp_vector`, `degree_vector`,
-  `aggregate_neighbours`.
+  `aggregate_neighbours`; and `triangles`, a per-node triangle count.
 - Upgrade from 0.1.0: install the new build, then run
   `ALTER EXTENSION pg_warren UPDATE;` in each database before using it.
 

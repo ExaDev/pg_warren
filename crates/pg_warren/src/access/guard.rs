@@ -242,6 +242,7 @@ mod tests {
         ("spmv", "warren.spmv('victim', 'c', 'y', mask := 'c')"),
         ("sssp_vector", "warren.sssp_vector('victim', 'sp', 1::bigint)"),
         ("steps", "warren.steps('[]')"),
+        ("triangles", "warren.triangles('victim', 't')"),
         ("vector_const", "warren.vector_const('victim', 'c', 1)"),
         ("vector_degree", "warren.vector_degree('victim', 'd')"),
         ("vector_dense_id", "warren.vector_dense_id('victim', 'i')"),

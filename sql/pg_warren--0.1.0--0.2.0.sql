@@ -426,3 +426,16 @@ BEGIN
   FROM unnest(ARRAY['x', 'degree']) part
   WHERE part = 'x' OR agg = 'mean';
 END $$;
+
+-- triangles (M5, DESIGN.md §6.7).
+
+CREATE  FUNCTION warren."triangles"(
+	"graph" TEXT, /* Option < & str > */
+	"out" TEXT, /* Option < & str > */
+	"rels" TEXT[] DEFAULT NULL, /* :: std :: option :: Option < Vec < Option < String > > > */
+	"persist" bool DEFAULT true, /* Option < bool > */
+	"version" bigint DEFAULT NULL /* Option < i64 > */
+) RETURNS bigint /* Option < i64 > */
+VOLATILE PARALLEL UNSAFE 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'triangles_wrapper';
