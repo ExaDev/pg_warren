@@ -33,7 +33,7 @@ pub trait Message {
     /// What the messages hold.
     const KIND: MessageKind;
     /// A message as it is pushed and read back.
-    type View<'a>: Copy;
+    type View<'a>: Copy + Debug;
     /// Where a buffer keeps its messages.
     type Storage: Default + Debug + Send + Sync;
 
@@ -167,6 +167,47 @@ impl<M: Message> MessageBuffer<M> {
     }
 }
 
+impl MessageBuffer<Bytes> {
+    /// Appends one message, the concatenation of `parts`, charging each
+    /// part before it is reserved. Appends nothing if there are no parts;
+    /// returns whether there were any. On an error nothing is kept.
+    pub(crate) fn push_concatenation<'a>(
+        &mut self,
+        parts: impl Iterator<Item = &'a [u8]>,
+    ) -> Result<bool, ComputeError> {
+        let (bytes, charged) = (self.storage.bytes.len(), self.charge.bytes());
+        let appended = self.append(parts);
+        if appended.is_err() {
+            self.storage.bytes.truncate(bytes);
+            self.charge.shrink(self.charge.bytes() - charged);
+        }
+        appended
+    }
+
+    fn append<'a>(&mut self, parts: impl Iterator<Item = &'a [u8]>) -> Result<bool, ComputeError> {
+        let mut any = false;
+        for part in parts {
+            // The first part also pays for the message's end offset.
+            let size = if any { part.len() as u64 } else { Bytes::size(part) };
+            self.charge.grow(size)?;
+            let storage = &mut self.storage;
+            let reserved = match any {
+                true => storage.bytes.try_reserve(part.len()),
+                false => {
+                    storage.ends.try_reserve(1).and_then(|()| storage.bytes.try_reserve(part.len()))
+                }
+            };
+            reserved.map_err(|_| ComputeError::OutOfMemory { bytes: size })?;
+            storage.bytes.extend_from_slice(part);
+            any = true;
+        }
+        if any {
+            self.storage.ends.push(self.storage.bytes.len() as u64);
+        }
+        Ok(any)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,6 +249,22 @@ mod tests {
         assert_eq!(buffer.get(3), None);
         // Each message costs its bytes plus its 8-byte end offset.
         assert_eq!(buffer.bytes(), 5 + 3 + 3 * 8);
+    }
+
+    #[test]
+    fn a_concatenation_is_one_message_charged_like_one() {
+        let memory = ComputeMemory::new(30);
+        let mut buffer = MessageBuffer::<Bytes>::new(&memory).unwrap();
+        assert_eq!(buffer.push_concatenation([&b"ab"[..], b"", b"c"].into_iter()), Ok(true));
+        assert_eq!(buffer.push_concatenation(std::iter::empty()), Ok(false));
+        assert_eq!(buffer.iter().collect::<Vec<_>>(), [&b"abc"[..]]);
+        assert_eq!(buffer.bytes(), 3 + 8);
+        let too_long = [&b"0123456789"[..], b"0123456789"];
+        assert!(buffer.push_concatenation(too_long.into_iter()).is_err());
+        assert_eq!(buffer.iter().collect::<Vec<_>>(), [&b"abc"[..]]);
+        assert_eq!((buffer.bytes(), memory.in_use()), (11, 11));
+        buffer.push(b"d").unwrap();
+        assert_eq!(buffer.get(1), Some(&b"d"[..]));
     }
 
     #[test]

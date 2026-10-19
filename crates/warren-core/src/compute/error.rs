@@ -102,6 +102,14 @@ pub enum ComputeError {
         /// The messages' kind.
         message: MessageKind,
     },
+    /// A message's sender is not a dense id of the graph.
+    #[error("message sender {sender} is outside the id space {id_space}")]
+    SenderOutsideIdSpace {
+        /// The sender's dense id.
+        sender: u64,
+        /// The graph's id space.
+        id_space: u64,
+    },
     /// An expression refers to an operand vector that was not given.
     #[error("expression refers to operand {index}, but {operands} were given")]
     UnknownOperand {

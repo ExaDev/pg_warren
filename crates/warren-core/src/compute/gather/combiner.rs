@@ -4,7 +4,9 @@
 use std::fmt::{self, Display};
 use std::str::FromStr;
 
-use crate::compute::{ComputeError, Dtype, MessageKind};
+use crate::compute::{
+    BinaryOp, Bytes, ComputeError, Dtype, Message, MessageBuffer, MessageKind, SemiringElement,
+};
 
 /// How a receiver's messages are combined, named as `combine` names it.
 /// Messages are combined in collect order: ascending sender dense id, and a
@@ -80,6 +82,65 @@ impl Combiner {
             true => Ok(()),
             false => Err(ComputeError::CombinerType { combiner: self, message: kind }),
         }
+    }
+}
+
+/// A message type `gather` can combine: how the folding combiners (`sum`,
+/// `min`, `max`, `bool_or`, `bool_and`) fold two messages, and how
+/// `concat` joins them. A combiner [`Combiner::check`] refuses for the
+/// message kind, or one that does not fold or concatenate, is a
+/// [`ComputeError::CombinerType`] error here too.
+pub trait Combine: Message + Sized {
+    /// `a` folded with `b` under `combiner`.
+    fn fold<'a>(
+        combiner: Combiner,
+        a: Self::View<'a>,
+        b: Self::View<'a>,
+    ) -> Result<Self::View<'a>, ComputeError>;
+
+    /// Appends the concatenation of `parts` to `buffer` as one message,
+    /// unless there are no parts; returns whether there were any.
+    fn concat<'a>(
+        buffer: &mut MessageBuffer<Self>,
+        parts: impl Iterator<Item = Self::View<'a>>,
+    ) -> Result<bool, ComputeError>;
+}
+
+impl<E: SemiringElement> Combine for E {
+    fn fold<'a>(combiner: Combiner, a: E, b: E) -> Result<Self::View<'a>, ComputeError> {
+        let op = match combiner {
+            Combiner::Sum => BinaryOp::Plus,
+            Combiner::Min => BinaryOp::Min,
+            Combiner::Max => BinaryOp::Max,
+            Combiner::BoolOr => BinaryOp::Lor,
+            Combiner::BoolAnd => BinaryOp::Land,
+            combiner => return Err(ComputeError::CombinerType { combiner, message: E::KIND }),
+        };
+        Ok(E::apply(op, a, b)?)
+    }
+
+    fn concat<'a>(
+        _: &mut MessageBuffer<E>,
+        _: impl Iterator<Item = Self::View<'a>>,
+    ) -> Result<bool, ComputeError> {
+        Err(ComputeError::CombinerType { combiner: Combiner::Concat, message: E::KIND })
+    }
+}
+
+impl Combine for Bytes {
+    fn fold<'a>(
+        combiner: Combiner,
+        _: Self::View<'a>,
+        _: Self::View<'a>,
+    ) -> Result<Self::View<'a>, ComputeError> {
+        Err(ComputeError::CombinerType { combiner, message: MessageKind::Bytes })
+    }
+
+    fn concat<'a>(
+        buffer: &mut MessageBuffer<Bytes>,
+        parts: impl Iterator<Item = Self::View<'a>>,
+    ) -> Result<bool, ComputeError> {
+        buffer.push_concatenation(parts)
     }
 }
 

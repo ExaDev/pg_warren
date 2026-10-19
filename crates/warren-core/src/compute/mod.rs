@@ -24,7 +24,7 @@ mod workers;
 
 pub use dtype::{Dtype, Element};
 pub use error::{ArithmeticError, ComputeError};
-pub use gather::{Combiner, Messages};
+pub use gather::{gather, Collected, Combine, Combiner, Gather, Gathered, Messages, Received};
 pub use map::{
     map, AnyExpr, Arithmetic, BoolOp, Comparands, Comparison, Expr, F32Op, F64Op, Function, I64Op,
     Value,

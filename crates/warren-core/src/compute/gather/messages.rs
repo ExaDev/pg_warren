@@ -52,6 +52,16 @@ impl<M: Message> Messages<M> {
         self.senders.iter().copied().zip(self.buffer.iter())
     }
 
+    /// Every message's sender, in push order.
+    pub(super) fn senders(&self) -> &[DenseId] {
+        &self.senders
+    }
+
+    /// The message at `index`.
+    pub(super) fn message(&self, index: usize) -> Option<M::View<'_>> {
+        self.buffer.get(index)
+    }
+
     /// The bytes charged for the messages and their senders.
     pub fn bytes(&self) -> u64 {
         self.charge.bytes() + self.buffer.bytes()
