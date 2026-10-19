@@ -1,13 +1,16 @@
 use std::fmt::Debug;
 use std::sync::OnceLock;
 
+use proptest::prelude::*;
+
+use super::reference::{self as naive, Naive, Own, Owned, Rows};
 use super::*;
-use crate::compute::reference;
+use crate::compute::reference::{self, Edges};
 use crate::compute::{
-    AnyVector, ArithmeticError, Bytes, ComputeMemory, Element, Mask, Message, MessageKind,
-    SemiringElement, Vector, Workers,
+    AnyVector, ArithmeticError, Bytes, ComputeMemory, Element, Mask, Message, MessageKind, Vector,
+    Workers,
 };
-use crate::graph::{DenseId, Direction, GraphCsr, RelationIndex};
+use crate::graph::{DenseId, Direction, EdgeList, GraphCsr, RelationIndex};
 use crate::interrupts::{Cancelled, Uninterrupted};
 
 fn workers() -> &'static Workers {
@@ -18,36 +21,6 @@ fn workers() -> &'static Workers {
 fn memory() -> ComputeMemory {
     ComputeMemory::new(1 << 24)
 }
-
-/// A received value, owned so tests can compare it.
-#[derive(Debug, Clone, PartialEq)]
-enum Owned<T> {
-    Count(i64),
-    One(T),
-    Many(Vec<T>),
-}
-
-/// A message type whose views tests can own.
-trait Own: Combine {
-    type Owned: Debug + Clone + PartialEq;
-    fn own(view: Self::View<'_>) -> Self::Owned;
-}
-
-impl<E: SemiringElement> Own for E {
-    type Owned = E;
-    fn own(view: E) -> E {
-        view
-    }
-}
-
-impl Own for Bytes {
-    type Owned = Vec<u8>;
-    fn own(view: &[u8]) -> Vec<u8> {
-        view.to_vec()
-    }
-}
-
-type Rows<T> = Vec<(DenseId, Owned<T>)>;
 
 fn owned<M: Own>(gathered: &Gathered<M>) -> Rows<M::Owned> {
     gathered
@@ -329,4 +302,194 @@ fn an_interrupt_cancels_the_gather() {
         &messages,
     );
     assert_eq!(result.unwrap_err(), ComputeError::Cancelled);
+}
+
+/// A random gather over a random graph.
+#[derive(Debug, Clone)]
+struct Scenario {
+    id_space: u64,
+    relation_count: usize,
+    edges: Edges,
+    reverse: bool,
+    wide: bool,
+    direction: Direction,
+    selected: Option<Vec<usize>>,
+    mask: Option<(Vec<f64>, bool)>,
+    combiner: Combiner,
+}
+
+impl Scenario {
+    /// The graph, with `u64` targets if `wide` (which the build otherwise
+    /// chooses only for id spaces of 2³² or more).
+    fn graph(&self) -> GraphCsr {
+        let indexes = reference::relations(self.relation_count);
+        let mut list = EdgeList::new(false);
+        for &(relation, source, target, weight) in &self.edges {
+            list.push(indexes[relation], source, target, weight).unwrap();
+        }
+        let (count, id_space, reverse) = (self.relation_count, self.id_space, self.reverse);
+        let graph = match self.wide {
+            true => GraphCsr::build_with::<u64>(list, count, id_space, reverse),
+            false => GraphCsr::build(list, count, id_space, reverse),
+        };
+        graph.unwrap()
+    }
+
+    fn naive<'a, T>(&'a self, sent: &'a [(DenseId, T)]) -> Naive<'a, T> {
+        let selects = match &self.mask {
+            None => vec![true; self.id_space as usize],
+            Some((values, complement)) => {
+                values.iter().map(|&value| naive::selects(value, *complement)).collect()
+            }
+        };
+        Naive {
+            id_space: self.id_space,
+            edges: &self.edges,
+            selected: self.selected.as_deref(),
+            direction: self.direction,
+            selects,
+            sent,
+        }
+    }
+}
+
+fn scenarios() -> impl Strategy<Value = Scenario> {
+    (1u64..14, 1usize..4).prop_flat_map(|(id_space, relation_count)| {
+        let edge = (0..relation_count, 0..id_space, 0..id_space, Just(1.0));
+        let mask_value = prop::sample::select(vec![0.0, -0.0, 1.0, f64::NAN]);
+        (
+            prop::collection::vec(edge, 0..50),
+            any::<(bool, bool)>(),
+            prop_oneof![Just(Direction::In), Just(Direction::Out), Just(Direction::Both)],
+            prop::option::of(prop::collection::vec(0..relation_count, 0..3)),
+            prop::option::of((prop::collection::vec(mask_value, id_space as usize), any::<bool>())),
+            prop::sample::select(Combiner::all().collect::<Vec<_>>()),
+        )
+            .prop_map(
+                move |(edges, (reverse, wide), direction, selected, mask, combiner)| Scenario {
+                    id_space,
+                    relation_count,
+                    edges,
+                    reverse,
+                    wide,
+                    direction,
+                    selected,
+                    mask,
+                    combiner,
+                },
+            )
+    })
+}
+
+/// Senders mostly inside the id space (one in sixteen just outside it),
+/// with messages drawn from `message`.
+fn with_messages<T: Debug + Clone + 'static>(
+    message: impl Strategy<Value = T> + Clone + 'static,
+) -> impl Strategy<Value = (Scenario, Vec<(DenseId, T)>)> {
+    scenarios().prop_flat_map(move |scenario| {
+        let id_space = scenario.id_space;
+        let sender = prop_oneof![15 => 0..id_space, 1 => Just(id_space)];
+        (Just(scenario), prop::collection::vec((sender, message.clone()), 0..30))
+    })
+}
+
+/// Runs the scenario through the kernel on `workers` and the reference.
+fn check<M: Own>(
+    workers: &Workers,
+    s: &Scenario,
+    sent: &[(DenseId, M::Owned)],
+) -> Result<Rows<M::Owned>, TestCaseError> {
+    let graph = s.graph();
+    let indexes = reference::relations(s.relation_count);
+    let selected: Option<Vec<RelationIndex>> =
+        s.selected.as_ref().map(|r| r.iter().map(|&r| indexes[r]).collect());
+    let mask = s.mask.as_ref().map(|(values, _)| vector(values.clone()));
+    let gather = Gather {
+        combiner: s.combiner,
+        direction: s.direction,
+        relations: selected.as_deref().map_or(RelationSelection::All, RelationSelection::Only),
+        mask: mask
+            .as_ref()
+            .zip(s.mask.as_ref())
+            .map(|(vector, &(_, complement))| Mask { vector, complement }),
+    };
+    let memory = memory();
+    let mut messages = Messages::<M>::new(&memory).unwrap();
+    for (sender, message) in sent {
+        messages.push(*sender, M::view(message)).unwrap();
+    }
+    let found = super::gather(workers, &memory, &mut Uninterrupted, &graph, &gather, &messages)
+        .map(|gathered| owned(&gathered));
+    let expected = naive::gather::<M>(&s.naive(sent), s.combiner);
+    match (&found, &expected) {
+        (Ok(found), Ok(expected)) => prop_assert!(
+            naive::same_rows::<M>(found, expected),
+            "found {:?}, expected {:?}",
+            found,
+            expected
+        ),
+        _ => prop_assert_eq!(&found, &expected),
+    }
+    prop_assert_eq!(memory.in_use(), messages.bytes());
+    Ok(found.unwrap_or_default())
+}
+
+fn f64s() -> impl Strategy<Value = f64> + Clone {
+    prop_oneof![
+        8 => (-4i8..5).prop_map(f64::from),
+        1 => Just(f64::NAN),
+        1 => Just(f64::INFINITY),
+        1 => Just(-0.0),
+        1 => Just(0.1),
+    ]
+}
+
+proptest! {
+    #[test]
+    fn f64_gathers_match_the_naive_join((scenario, sent) in with_messages(f64s())) {
+        check::<f64>(workers(), &scenario, &sent)?;
+    }
+
+    #[test]
+    fn f32_gathers_match_the_naive_join(
+        (scenario, sent) in with_messages(f64s().prop_map(|v| v as f32))
+    ) {
+        check::<f32>(workers(), &scenario, &sent)?;
+    }
+
+    #[test]
+    fn i64_gathers_match_the_naive_join(
+        (scenario, sent) in with_messages(prop_oneof![8 => -4i64..5, 1 => Just(i64::MAX), 1 => Just(i64::MIN)])
+    ) {
+        check::<i64>(workers(), &scenario, &sent)?;
+    }
+
+    #[test]
+    fn bool_gathers_match_the_naive_join((scenario, sent) in with_messages(any::<bool>())) {
+        check::<bool>(workers(), &scenario, &sent)?;
+    }
+
+    #[test]
+    fn byte_gathers_match_the_naive_join(
+        (scenario, sent) in with_messages(prop::collection::vec(any::<u8>(), 0..4))
+    ) {
+        check::<Bytes>(workers(), &scenario, &sent)?;
+    }
+
+    #[test]
+    fn results_do_not_depend_on_the_thread_count((scenario, sent) in with_messages(f64s())) {
+        static ONE: OnceLock<Workers> = OnceLock::new();
+        let one = ONE.get_or_init(|| Workers::new(1).unwrap());
+        let bits = |rows: Rows<f64>| -> Vec<(DenseId, Owned<u64>)> {
+            rows.into_iter()
+                .map(|(receiver, value)| (receiver, match value {
+                    Owned::Count(count) => Owned::Count(count),
+                    Owned::One(value) => Owned::One(value.to_bits()),
+                    Owned::Many(values) => Owned::Many(values.iter().map(|v| v.to_bits()).collect()),
+                }))
+                .collect()
+        };
+        let on_one = bits(check::<f64>(one, &scenario, &sent)?);
+        prop_assert_eq!(on_one, bits(check::<f64>(workers(), &scenario, &sent)?));
+    }
 }

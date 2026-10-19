@@ -114,4 +114,7 @@ pub fn gather<M: Combine, I: Interrupts>(
 // report against crossbeam-epoch 0.9, not this crate, which has no unsafe).
 #[cfg(test)]
 #[cfg(not(miri))]
+mod reference;
+#[cfg(test)]
+#[cfg(not(miri))]
 mod tests;
