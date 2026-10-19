@@ -2,10 +2,13 @@
 //! with its depth and the node it was reached from (DESIGN.md §9.3,
 //! `warren.bfs`).
 
+use std::ops::ControlFlow;
+
 use super::level::{Admission, LevelSearch};
+use super::scratch::Rows;
 use super::stats::Progress;
-use super::{Adjacency, Cancellation, Limits, NodeSet, TraversalError, Traversed};
-use crate::graph::{memory, DenseId};
+use super::{Adjacency, Interrupts, Limits, NodeSet, TraversalError, TraversalStats, Traversed};
+use crate::graph::DenseId;
 
 /// A node reached by a BFS.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,32 +28,52 @@ pub struct Visit {
 /// once. Other nodes are admitted only if they are in `filter`, when given,
 /// so the filter prunes the search rather than its output. Stopping at
 /// `limits.max_depth` is not truncation; stopping because another row would
-/// exceed `limits.max_results` is.
+/// exceed `limits.max_results` is. Collects [`bfs_each`].
 pub fn bfs(
     adjacency: &Adjacency<'_>,
     starts: &[DenseId],
     filter: Option<&NodeSet>,
     limits: Limits,
-    cancellation: &Cancellation,
+    interrupts: &mut dyn Interrupts,
 ) -> Result<Traversed<Vec<Visit>>, TraversalError> {
-    let mut progress = Progress::new(cancellation);
+    let mut visits = Rows::new();
+    let stats =
+        bfs_each(adjacency, starts, filter, limits, interrupts, |visit| visits.push(visit))?;
+    Ok(Traversed { result: visits.finish()?, stats })
+}
+
+/// [`bfs`], handing each visit to `visitor` as it is made instead of
+/// collecting them, so a caller (a set-returning function under SQL
+/// `LIMIT`) can stop the scan by returning [`ControlFlow::Break`]. The visit
+/// that breaks is the last one; stopping this way is not truncation.
+pub fn bfs_each(
+    adjacency: &Adjacency<'_>,
+    starts: &[DenseId],
+    filter: Option<&NodeSet>,
+    limits: Limits,
+    interrupts: &mut dyn Interrupts,
+    mut visitor: impl FnMut(Visit) -> ControlFlow<()>,
+) -> Result<TraversalStats, TraversalError> {
+    let mut progress = Progress::new(interrupts);
     let mut search = LevelSearch::new(adjacency, filter)?;
-    let mut visits = Vec::new();
+    let mut emitted = 0u64;
     let mut truncated = false;
     let mut admit = |visit: Visit| -> Result<Admission, TraversalError> {
-        if limits.max_results == Some(visits.len() as u64) {
+        if limits.max_results == Some(emitted) {
             truncated = true;
             return Ok(Admission::Stop);
         }
-        memory::reserve_one(&mut visits)?;
-        visits.push(visit);
-        Ok(Admission::Admit)
+        emitted += 1;
+        Ok(match visitor(visit) {
+            ControlFlow::Continue(()) => Admission::Admit,
+            ControlFlow::Break(()) => Admission::AdmitAndStop,
+        })
     };
     search.run(starts, limits.max_depth, &mut progress, &mut admit)?;
     if truncated {
         progress.truncate();
     }
-    Ok(progress.traversed(visits))
+    Ok(progress.finish())
 }
 
 #[cfg(test)]
@@ -58,6 +81,7 @@ mod tests {
     use super::*;
     use crate::graph::GraphCsr;
     use crate::traversal::example::directed;
+    use crate::traversal::{Cancellation, Uninterrupted};
     use crate::traversal::{Direction, RelationSelection, TraversalStats};
 
     // 0 → 1 → 2 → 3, 0 → 4 → 3, 2 → 2, 5 isolated
@@ -73,7 +97,7 @@ mod tests {
         limits: Limits,
     ) -> Result<Traversed<Vec<Visit>>, TraversalError> {
         let adjacency = Adjacency::new(graph, direction, RelationSelection::All)?;
-        bfs(&adjacency, starts, filter, limits, &Cancellation::new())
+        bfs(&adjacency, starts, filter, limits, &mut Uninterrupted)
     }
 
     fn visit(node: DenseId, depth: u32, via: Option<DenseId>) -> Visit {
@@ -166,13 +190,47 @@ mod tests {
     }
 
     #[test]
+    fn bfs_each_streams_visits_until_the_visitor_stops_it() {
+        let graph = example();
+        let adjacency = Adjacency::new(&graph, Direction::Out, RelationSelection::All).unwrap();
+        let mut seen = Vec::new();
+        let stats = bfs_each(&adjacency, &[0], None, Limits::default(), &mut Uninterrupted, |v| {
+            seen.push(v);
+            if seen.len() == 2 {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        })
+        .unwrap();
+        assert_eq!(seen, [visit(0, 0, None), visit(1, 1, Some(0))]);
+        assert_eq!(stats.nodes_visited, 2);
+        assert!(!stats.truncated, "a visitor stopping the scan is the caller's LIMIT");
+    }
+
+    #[test]
+    fn bfs_each_honours_max_results_as_truncation() {
+        let graph = example();
+        let adjacency = Adjacency::new(&graph, Direction::Out, RelationSelection::All).unwrap();
+        let limits = Limits { max_results: Some(1), ..Limits::default() };
+        let mut count = 0;
+        let stats = bfs_each(&adjacency, &[0], None, limits, &mut Uninterrupted, |_| {
+            count += 1;
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+        assert_eq!(count, 1);
+        assert!(stats.truncated);
+    }
+
+    #[test]
     fn a_raised_cancellation_stops_the_search() {
         let graph = example();
         let adjacency = Adjacency::new(&graph, Direction::Out, RelationSelection::All).unwrap();
-        let cancellation = Cancellation::new();
+        let mut cancellation = Cancellation::new();
         cancellation.cancel();
         assert_eq!(
-            bfs(&adjacency, &[0], None, Limits::default(), &cancellation).unwrap_err(),
+            bfs(&adjacency, &[0], None, Limits::default(), &mut cancellation).unwrap_err(),
             TraversalError::Cancelled
         );
     }
@@ -186,6 +244,7 @@ mod properties {
 
     use super::*;
     use crate::traversal::reference::{directions, scenarios, selections, Scenario};
+    use crate::traversal::Uninterrupted;
     use crate::traversal::{Direction, RelationSelection};
 
     proptest! {
@@ -211,7 +270,7 @@ mod properties {
                 .as_ref()
                 .map(|f| NodeSet::from_dense_ids(scenario.id_space, f.iter().copied()).unwrap());
             let limits = Limits { max_depth, max_results: None };
-            let found = bfs(&adjacency, &starts, node_filter.as_ref(), limits, &Cancellation::new())
+            let found = bfs(&adjacency, &starts, node_filter.as_ref(), limits, &mut Uninterrupted)
                 .unwrap();
 
             let steps = scenario.steps(direction, &selection);
@@ -247,10 +306,10 @@ mod properties {
             let graph = scenario.graph();
             let adjacency = Adjacency::new(&graph, Direction::Both, RelationSelection::All).unwrap();
             let start = [start % scenario.id_space];
-            let never = Cancellation::new();
-            let full = bfs(&adjacency, &start, None, Limits::default(), &never).unwrap().result;
+            let mut never = Uninterrupted;
+            let full = bfs(&adjacency, &start, None, Limits::default(), &mut never).unwrap().result;
             let limits = Limits { max_depth: None, max_results: Some(max_results) };
-            let capped = bfs(&adjacency, &start, None, limits, &never).unwrap();
+            let capped = bfs(&adjacency, &start, None, limits, &mut never).unwrap();
             let kept = full.len().min(max_results as usize);
             prop_assert_eq!(&capped.result[..], &full[..kept]);
             prop_assert_eq!(capped.stats.truncated, full.len() > kept);

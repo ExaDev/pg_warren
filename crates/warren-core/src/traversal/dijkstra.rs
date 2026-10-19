@@ -5,14 +5,16 @@
 //! graph is unweighted), so an edge present in several relations costs its
 //! cheapest weight. Weights are checked as edges are scanned: a negative or
 //! NaN weight stops the search with [`TraversalError::InvalidWeight`]. An
-//! infinite weight is allowed and never improves a path.
+//! edge whose cost would be infinite (an infinite weight, or finite weights
+//! whose sum overflows) is never followed, so a target reachable only at
+//! infinite cost has no path.
 
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 
 use super::scratch::{NodeMap, Visited};
 use super::stats::Progress;
-use super::{Adjacency, Cancellation, TraversalError, Traversed};
+use super::{Adjacency, Interrupts, TraversalError, Traversed};
 use crate::graph::{DenseId, GraphError};
 
 /// A path with its total weight.
@@ -31,14 +33,14 @@ pub fn dijkstra(
     adjacency: &Adjacency<'_>,
     start: DenseId,
     target: DenseId,
-    cancellation: &Cancellation,
+    interrupts: &mut dyn Interrupts,
 ) -> Result<Traversed<Option<WeightedPath>>, TraversalError> {
     for node in [start, target] {
         if node >= adjacency.id_space() {
             return Err(TraversalError::NodeOutsideIdSpace { node });
         }
     }
-    let mut progress = Progress::new(cancellation);
+    let mut progress = Progress::new(interrupts);
     let mut labels = NodeMap::new(adjacency.id_space(), UNREACHED);
     let mut settled = Visited::new(adjacency.id_space());
     let mut queue = BinaryHeap::new();
@@ -55,12 +57,15 @@ pub fn dijkstra(
             return Ok(progress.traversed(Some(WeightedPath { path, cost })));
         }
         for (next, weight) in adjacency.weighted_neighbours(node) {
-            progress.edge_traversed();
+            progress.edge_traversed()?;
             if weight.is_nan() || weight < 0.0 {
                 return Err(TraversalError::InvalidWeight { from: node, to: next, weight });
             }
             let cost = cost + weight;
-            if settled.contains(next) || labels.get(next).is_some_and(|label| label.cost <= cost) {
+            if !cost.is_finite()
+                || settled.contains(next)
+                || labels.get(next).is_some_and(|label| label.cost <= cost)
+            {
                 continue;
             }
             labels.insert(next, Label { cost, predecessor: node })?;
@@ -115,6 +120,7 @@ mod tests {
     use super::*;
     use crate::graph::GraphCsr;
     use crate::traversal::example::{directed, graph};
+    use crate::traversal::{Cancellation, Uninterrupted};
     use crate::traversal::{Direction, RelationSelection};
 
     fn cheapest(
@@ -124,7 +130,7 @@ mod tests {
         target: DenseId,
     ) -> Result<Option<WeightedPath>, TraversalError> {
         let adjacency = Adjacency::new(graph, direction, RelationSelection::All)?;
-        Ok(dijkstra(&adjacency, start, target, &Cancellation::new())?.result)
+        Ok(dijkstra(&adjacency, start, target, &mut Uninterrupted)?.result)
     }
 
     fn weighted_path(path: &[DenseId], cost: f64) -> Option<WeightedPath> {
@@ -164,6 +170,19 @@ mod tests {
     }
 
     #[test]
+    fn a_path_of_infinite_cost_is_no_path() {
+        let infinite = graph(3, 1, &[(0, 0, 1, f64::INFINITY), (0, 1, 2, 1.0)], true);
+        assert_eq!(cheapest(&infinite, Direction::Out, 0, 1), Ok(None));
+        assert_eq!(cheapest(&infinite, Direction::Out, 0, 2), Ok(None));
+        let overflowing = graph(3, 1, &[(0, 0, 1, f64::MAX), (0, 1, 2, f64::MAX)], true);
+        assert_eq!(cheapest(&overflowing, Direction::Out, 0, 2), Ok(None));
+        assert_eq!(
+            cheapest(&overflowing, Direction::Out, 0, 1),
+            Ok(weighted_path(&[0, 1], f64::MAX))
+        );
+    }
+
+    #[test]
     fn negative_or_nan_weights_reached_are_errors() {
         for weight in [-1.0, f64::NAN] {
             let graph = graph(3, 1, &[(0, 0, 1, 1.0), (0, 1, 2, weight)], true);
@@ -188,9 +207,9 @@ mod tests {
     fn a_raised_cancellation_stops_the_search() {
         let graph = example();
         let adjacency = Adjacency::new(&graph, Direction::Out, RelationSelection::All).unwrap();
-        let cancellation = Cancellation::new();
+        let mut cancellation = Cancellation::new();
         cancellation.cancel();
-        assert_eq!(dijkstra(&adjacency, 0, 3, &cancellation), Err(TraversalError::Cancelled));
+        assert_eq!(dijkstra(&adjacency, 0, 3, &mut cancellation), Err(TraversalError::Cancelled));
     }
 }
 
@@ -202,6 +221,7 @@ mod properties {
 
     use super::*;
     use crate::traversal::reference::{directions, scenarios, selections, Scenario};
+    use crate::traversal::Uninterrupted;
 
     /// The cheapest cost of every edge, by `(from, to)`.
     fn cheapest_edges(steps: &[(DenseId, DenseId, f64)]) -> BTreeMap<(DenseId, DenseId), f64> {
@@ -241,25 +261,23 @@ mod properties {
             let graph = scenario.graph();
             let indexes = scenario.indexes(&selection);
             let adjacency = Adjacency::new(&graph, direction, Scenario::selection(&indexes)).unwrap();
-            let found = dijkstra(&adjacency, start, target, &Cancellation::new()).unwrap().result;
+            let found = dijkstra(&adjacency, start, target, &mut Uninterrupted).unwrap().result;
 
             let steps = scenario.steps(direction, &selection);
             let expected = distances(scenario.id_space, &steps, start)[target as usize];
-            match found {
-                None => prop_assert!(expected.is_infinite()),
-                Some(WeightedPath { path, cost }) => {
-                    prop_assert_eq!(cost, expected);
-                    prop_assert_eq!(path.first(), Some(&start));
-                    prop_assert_eq!(path.last(), Some(&target));
-                    let cheapest = cheapest_edges(&steps);
-                    let mut walked = 0.0;
-                    for hop in path.windows(2) {
-                        let weight = cheapest.get(&(hop[0], hop[1]));
-                        prop_assert!(weight.is_some(), "no edge {:?}", hop);
-                        walked += weight.copied().unwrap_or_default();
-                    }
-                    prop_assert_eq!(walked, cost);
+            let expected_cost = expected.is_finite().then_some(expected);
+            prop_assert_eq!(found.as_ref().map(|found| found.cost), expected_cost);
+            if let Some(WeightedPath { path, cost }) = found {
+                prop_assert_eq!(path.first(), Some(&start));
+                prop_assert_eq!(path.last(), Some(&target));
+                let cheapest = cheapest_edges(&steps);
+                let mut walked = 0.0;
+                for hop in path.windows(2) {
+                    let weight = cheapest.get(&(hop[0], hop[1]));
+                    prop_assert!(weight.is_some(), "no edge {:?}", hop);
+                    walked += weight.copied().unwrap_or_default();
                 }
+                prop_assert_eq!(walked, cost);
             }
         }
     }

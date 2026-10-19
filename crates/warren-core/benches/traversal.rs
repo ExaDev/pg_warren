@@ -4,7 +4,7 @@
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use warren_core::graph::GraphCsr;
 use warren_core::traversal::{
-    bfs, components, Adjacency, Cancellation, Direction, Limits, RelationSelection,
+    bfs, components, Adjacency, Direction, Limits, RelationSelection, Uninterrupted,
 };
 
 mod random_graph;
@@ -20,7 +20,7 @@ fn bench_traversal(c: &mut Criterion) {
                 return;
             }
         };
-    let never = Cancellation::new();
+    let mut never = Uninterrupted;
     let mut group = c.benchmark_group("traversal");
     group.throughput(Throughput::Elements(EDGES));
     group.sample_size(10);
@@ -29,10 +29,10 @@ fn bench_traversal(c: &mut Criterion) {
             continue;
         };
         group.bench_function(name, |b| {
-            b.iter(|| bfs(&adjacency, &[0], None, Limits::default(), &never))
+            b.iter(|| bfs(&adjacency, &[0], None, Limits::default(), &mut never))
         });
     }
-    group.bench_function("components", |b| b.iter(|| components(&graph, &never)));
+    group.bench_function("components", |b| b.iter(|| components(&graph, &mut never)));
     group.finish();
 }
 

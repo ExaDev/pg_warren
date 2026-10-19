@@ -30,11 +30,21 @@ pub(crate) fn scenarios() -> impl Strategy<Value = Scenario> {
                 weighted,
                 edges: edges
                     .into_iter()
-                    .map(|(r, s, t, w)| (r, s, t, if weighted { f64::from(w) } else { 1.0 }))
+                    .map(|(r, s, t, w)| (r, s, t, weight(weighted, w)))
                     .collect(),
                 tombstones,
             })
     })
+}
+
+/// An edge weight: 1 if unweighted, else 0–6 or (one time in eight)
+/// infinite.
+fn weight(weighted: bool, draw: u8) -> f64 {
+    match (weighted, draw) {
+        (false, _) => 1.0,
+        (true, 7) => f64::INFINITY,
+        (true, draw) => f64::from(draw),
+    }
 }
 
 /// A relation selection: `None` for all, else the chosen relations.
