@@ -20,6 +20,8 @@ mod stats;
 
 #[cfg(test)]
 mod example;
+#[cfg(test)]
+mod reference;
 
 pub use adjacency::{Adjacency, Direction, RelationSelection};
 pub use bfs::{bfs, Visit};

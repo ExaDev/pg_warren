@@ -116,3 +116,49 @@ mod tests {
         assert_eq!(reachable_set(&out, &[], None, &never).unwrap().result, [] as [DenseId; 0]);
     }
 }
+
+#[cfg(test)]
+mod properties {
+    use std::collections::BTreeSet;
+
+    use proptest::prelude::*;
+
+    use super::*;
+    use crate::traversal::reference::{directions, scenarios, selections, Scenario};
+
+    proptest! {
+        #[test]
+        fn reachability_matches_a_naive_reference(
+            (scenario, selection, starts) in scenarios().prop_flat_map(|scenario| {
+                let n = scenario.id_space;
+                let relation_count = scenario.relation_count;
+                (Just(scenario), selections(relation_count), prop::collection::vec(0..n, 1..3))
+            }),
+            direction in directions(),
+            max_depth in prop::option::of(0u32..4),
+        ) {
+            let graph = scenario.graph();
+            let indexes = scenario.indexes(&selection);
+            let adjacency = Adjacency::new(&graph, direction, Scenario::selection(&indexes)).unwrap();
+            let never = Cancellation::new();
+            let depths = Scenario::depths(&scenario.steps(direction, &selection), &starts, None);
+            let expected: BTreeSet<DenseId> = depths
+                .iter()
+                .filter(|&(_, &depth)| max_depth.is_none_or(|max| depth <= max))
+                .map(|(&node, _)| node)
+                .collect();
+
+            let set = reachable_set(&adjacency, &starts, max_depth, &never).unwrap().result;
+            prop_assert_eq!(set.len(), expected.len());
+            prop_assert_eq!(set.into_iter().collect::<BTreeSet<_>>(), expected.clone());
+
+            let from = [starts[0]];
+            let depths = Scenario::depths(&scenario.steps(direction, &selection), &from, None);
+            for target in 0..scenario.id_space {
+                let within = depths.get(&target).is_some_and(|&d| max_depth.is_none_or(|max| d <= max));
+                let found = reachable(&adjacency, from[0], target, max_depth, &never).unwrap();
+                prop_assert_eq!(found.result, within, "target {}", target);
+            }
+        }
+    }
+}

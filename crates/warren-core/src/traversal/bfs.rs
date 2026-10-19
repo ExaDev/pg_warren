@@ -177,3 +177,83 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod properties {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use proptest::prelude::*;
+
+    use super::*;
+    use crate::traversal::reference::{directions, scenarios, selections, Scenario};
+    use crate::traversal::{Direction, RelationSelection};
+
+    proptest! {
+        #[test]
+        fn bfs_matches_a_naive_reference(
+            (scenario, selection, starts, filter) in scenarios().prop_flat_map(|scenario| {
+                let n = scenario.id_space;
+                let relation_count = scenario.relation_count;
+                (
+                    Just(scenario),
+                    selections(relation_count),
+                    prop::collection::vec(0..n, 0..3),
+                    prop::option::of(prop::collection::btree_set(0..n, 0..n as usize)),
+                )
+            }),
+            direction in directions(),
+            max_depth in prop::option::of(0u32..4),
+        ) {
+            let graph = scenario.graph();
+            let indexes = scenario.indexes(&selection);
+            let adjacency = Adjacency::new(&graph, direction, Scenario::selection(&indexes)).unwrap();
+            let node_filter = filter
+                .as_ref()
+                .map(|f| NodeSet::from_dense_ids(scenario.id_space, f.iter().copied()).unwrap());
+            let limits = Limits { max_depth, max_results: None };
+            let found = bfs(&adjacency, &starts, node_filter.as_ref(), limits, &Cancellation::new())
+                .unwrap();
+
+            let steps = scenario.steps(direction, &selection);
+            let expected: BTreeMap<DenseId, u32> = Scenario::depths(&steps, &starts, filter.as_ref())
+                .into_iter()
+                .filter(|&(_, depth)| max_depth.is_none_or(|max| depth <= max))
+                .collect();
+            let reported: BTreeMap<DenseId, u32> =
+                found.result.iter().map(|visit| (visit.node, visit.depth)).collect();
+            prop_assert_eq!(reported.len(), found.result.len(), "a node was reported twice");
+            prop_assert_eq!(&reported, &expected);
+            prop_assert!(found.result.windows(2).all(|w| w[0].depth <= w[1].depth));
+            prop_assert!(!found.stats.truncated);
+            prop_assert_eq!(found.stats.nodes_visited, expected.len() as u64);
+            let edges: BTreeSet<(DenseId, DenseId)> = steps.iter().map(|&(s, t, _)| (s, t)).collect();
+            for visit in &found.result {
+                match visit.via {
+                    None => prop_assert!(visit.depth == 0 && starts.contains(&visit.node)),
+                    Some(via) => {
+                        prop_assert_eq!(reported.get(&via), Some(&(visit.depth - 1)));
+                        prop_assert!(edges.contains(&(via, visit.node)));
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn max_results_keeps_a_prefix_of_the_full_bfs(
+            scenario in scenarios(),
+            start in 0u64..14,
+            max_results in 0u64..6,
+        ) {
+            let graph = scenario.graph();
+            let adjacency = Adjacency::new(&graph, Direction::Both, RelationSelection::All).unwrap();
+            let start = [start % scenario.id_space];
+            let never = Cancellation::new();
+            let full = bfs(&adjacency, &start, None, Limits::default(), &never).unwrap().result;
+            let limits = Limits { max_depth: None, max_results: Some(max_results) };
+            let capped = bfs(&adjacency, &start, None, limits, &never).unwrap();
+            let kept = full.len().min(max_results as usize);
+            prop_assert_eq!(&capped.result[..], &full[..kept]);
+            prop_assert_eq!(capped.stats.truncated, full.len() > kept);
+        }
+    }
+}
