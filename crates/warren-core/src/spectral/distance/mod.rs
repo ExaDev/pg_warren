@@ -6,8 +6,10 @@
 //! be larger, and rows past a version's id space, like tombstoned rows,
 //! count as absent (no edges, zero values).
 
+mod degree;
 mod edit;
 mod eigenvalues;
 
+pub use degree::{degree_distance, DegreeDistance};
 pub use edit::{edit_distance, EdgeSetChange, EditDistance};
 pub use eigenvalues::{spectral_distance, SpectralDistance};
