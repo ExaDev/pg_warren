@@ -50,4 +50,26 @@ pub enum SpectralError {
     /// The vectors spanning a subspace must be linearly independent.
     #[error("the vectors spanning a subspace are linearly dependent")]
     RankDeficient,
+    /// An alignment mapping needs one entry per row of the vector.
+    #[error("the mapping has {found} entries, expected one per row: {expected}")]
+    MappingLength {
+        /// The vector's id space.
+        expected: u64,
+        /// The mapping's length.
+        found: u64,
+    },
+    /// An alignment mapping names a row past the target id space.
+    #[error("dense id {target} is outside the id space {id_space}")]
+    MappedOutside {
+        /// The target dense id.
+        target: DenseId,
+        /// The target id space.
+        id_space: u64,
+    },
+    /// An alignment mapping must be one-to-one.
+    #[error("two rows map to dense id {target}")]
+    MappedTwice {
+        /// The target dense id.
+        target: DenseId,
+    },
 }

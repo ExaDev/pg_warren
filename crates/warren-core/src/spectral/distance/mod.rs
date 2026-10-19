@@ -4,8 +4,10 @@
 //! Versions of a graph share its id space (DESIGN.md §5.2, §7), so their
 //! vectors and CSRs are aligned by dense id: a later version's id space may
 //! be larger, and rows past a version's id space, like tombstoned rows,
-//! count as absent (no edges, zero values).
+//! count as absent (no edges, zero values). Vectors of another graph are
+//! brought into the id space first with [`align`].
 
+mod alignment;
 mod degree;
 mod edit;
 mod eigenvalues;
@@ -13,6 +15,7 @@ mod embedding;
 mod rows;
 mod subspace;
 
+pub use alignment::align;
 pub use degree::{degree_distance, DegreeDistance};
 pub use edit::{edit_distance, EdgeSetChange, EditDistance};
 pub use eigenvalues::{spectral_distance, SpectralDistance};
