@@ -110,12 +110,16 @@ pub fn align_graph<E: ExternalId, I: Interrupts>(
 
 /// The bytes a rebuild of `edges` edges holds at its peak, over-estimated:
 /// the edge list (endpoints, relation and weight), each relation's and the
-/// merged CSR's targets and weights, doubled for a reverse, and the offsets.
+/// merged CSR's targets and weights, doubled for a reverse, the offsets,
+/// and the build's per-node temporaries. Those are the rows' offsets, kept
+/// until the relations' CSRs are split off, and a scatter cursor (one per
+/// transpose too, after the rows are freed): 16 bytes a node at once.
 fn rebuild_bytes(edges: u64, relation_count: usize, id_space: u64, reverse: bool) -> u64 {
     let directions: u64 = if reverse { 2 } else { 1 };
     let list = edges.saturating_mul(32);
     let csrs = edges.saturating_mul(16 * 2 * directions);
-    list.saturating_add(csrs).saturating_add(GraphCsr::offsets_bytes(
+    let temporaries = id_space.saturating_add(1).saturating_mul(16);
+    list.saturating_add(csrs).saturating_add(temporaries).saturating_add(GraphCsr::offsets_bytes(
         relation_count,
         id_space,
         reverse,
