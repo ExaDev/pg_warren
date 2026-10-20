@@ -349,6 +349,9 @@ where
                 Outcome::Continue(converged) => {
                     self.restart(resources, &ritz, converged)?;
                     if !self.extend(resources, beta)? {
+                        // `finish` decomposes again: release this one first,
+                        // so the peak stays within `WorkingSet::bytes`.
+                        drop(ritz);
                         return self.finish(resources, Outcome::Converged);
                     }
                     // The residual couples to every kept Ritz vector.
