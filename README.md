@@ -74,6 +74,15 @@ to the bootstrap superuser. Every role, the installer included, reaches
 graphs only through the `warren.*` functions and their access checks
 (DESIGN.md §7).
 
+On PG 15+ the database owner also owns schema `public`. A graph's source
+queries run as the graph's owner, under the `search_path` it was created
+with. If that path includes a schema another role can create in, such as
+`public` when someone else owns the database, that role could add a function
+or operator that the queries then call as the graph's owner at every
+`refresh`. Schema-qualify the functions and operators in source queries, or
+create graphs under a `search_path` of schemas only their owner can write;
+`create_graph` raises a `NOTICE` when it finds such a schema.
+
 Graphs, versions and vectors are ordinary tables, so a superuser's
 `pg_dump` includes them, and a plain (`psql`) or custom (`pg_restore`)
 restore brings them back. The roles that own and read graphs must exist

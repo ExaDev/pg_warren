@@ -5,7 +5,21 @@ use pgrx::prelude::*;
 
 use super::{CatalogError, NewGraph};
 use crate::access::{current_user, entry, with_search_path};
+use crate::read_only::read_one;
 use crate::source::{check_edge_columns, check_node_columns, source_columns};
+
+/// Of the schemas in `$1`, those, in order, in which a role other than the
+/// caller that is not a superuser and not predefined (`pg_*`;
+/// `pg_database_owner` counts through the database's owner) may create
+/// objects. (Membership is not excluded: a superuser is a member of every
+/// role, and a group role's other members could create there too.)
+const WRITABLE_SCHEMAS: &str = "SELECT pg_catalog.string_agg(s.name, ', ' ORDER BY s.position)
+     FROM pg_catalog.unnest($1::pg_catalog.name[]) WITH ORDINALITY AS s (name, position)
+     JOIN pg_catalog.pg_namespace n ON n.nspname = s.name
+     WHERE EXISTS (SELECT FROM pg_catalog.pg_roles r
+                   WHERE NOT r.rolsuper AND NOT pg_catalog.starts_with(r.rolname, 'pg_')
+                     AND r.rolname <> pg_catalog.current_user()
+                     AND pg_catalog.has_schema_privilege(r.oid, n.oid, 'CREATE'))";
 
 /// `warren.create_graph`: records graph `name` over `node_query` and
 /// `edge_query`, owned by the calling role, with the caller's
@@ -54,7 +68,35 @@ fn record(graph: &NewGraph<'_>) -> Result<(), CatalogError> {
     })?;
     let id_type = check_node_columns(&node_columns)?;
     check_edge_columns(&edge_columns, id_type, graph.has_relations, graph.weighted)?;
-    NewGraph { id_type: id_type.oid(), ..*graph }.create()
+    NewGraph { id_type: id_type.oid(), ..*graph }.create()?;
+    if let Some(schemas) = writable_schemas(graph.search_path)? {
+        notice!("{}", writable_notice(graph.name, graph.search_path, &schemas));
+    }
+    Ok(())
+}
+
+/// The schemas of `search_path` that roles other than the caller can create
+/// objects in (`WRITABLE_SCHEMAS`), comma-separated, or `None`. A function
+/// or operator planted there can capture an unqualified name in the source
+/// queries, which every refresh runs as the graph owner (DESIGN.md §7).
+fn writable_schemas(search_path: &str) -> Result<Option<String>, CatalogError> {
+    // Only the effective schemas are read under that search_path; the
+    // check runs under the pinned one.
+    let schemas = with_search_path(search_path, || {
+        read_one::<Vec<String>>("SELECT pg_catalog.current_schemas(false)::pg_catalog.text[]", &[])
+    })?
+    .unwrap_or_default();
+    Ok(read_one::<String>(WRITABLE_SCHEMAS, &[schemas.into()])?)
+}
+
+fn writable_notice(graph: &str, search_path: &str, schemas: &str) -> String {
+    format!(
+        "graph \"{graph}\" runs its source queries under search_path \"{search_path}\", in which \
+         other roles can create objects (in {schemas}): a function or operator created there \
+         could run as the graph's owner at every refresh; schema-qualify the source queries' \
+         functions and operators, or create the graph under a search_path of schemas only its \
+         owner can write"
+    )
 }
 
 #[cfg(any(test, feature = "pg_test"))]
@@ -69,6 +111,24 @@ mod tests {
             "CREATE TABLE cg_nodes (id bigint, small int, u uuid);
              CREATE TABLE cg_edges (src bigint, dst bigint, rel text, w float8)",
         )
+    }
+
+    /// DESIGN.md §7: a schema on the graph's search_path that another
+    /// role can create in lets that role plant functions or operators that
+    /// refresh runs as the graph owner.
+    #[pg_test]
+    fn schemas_others_can_create_in_are_found_on_the_search_path() -> Result<(), Error> {
+        Spi::run(
+            "CREATE ROLE cg_other;
+             CREATE SCHEMA cg_shared; GRANT CREATE ON SCHEMA cg_shared TO cg_other;
+             CREATE SCHEMA cg_private; GRANT USAGE ON SCHEMA cg_private TO cg_other",
+        )?;
+        let found = |path: &str| super::writable_schemas(path).map_err(|_| Error::InvalidPosition);
+        assert_eq!(found("cg_private, cg_shared, public")?.as_deref(), Some("cg_shared"));
+        assert_eq!(found("cg_private")?, None, "only the owner (a superuser) can create there");
+        assert_eq!(found("public")?, None, "PG 15+: only the database owner, here a superuser");
+        assert_eq!(found("cg_missing, pg_catalog")?, None, "missing and system schemas");
+        Ok(())
     }
 
     #[pg_test]

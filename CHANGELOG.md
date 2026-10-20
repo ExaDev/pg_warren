@@ -20,6 +20,13 @@
   or read graphs and wrote vectors. Upgrade note: run
   `ALTER EXTENSION pg_warren UPDATE` (the update drops the two keys and
   adds the triggers).
+- A call that reads a graph's current version refuses (55000) when the
+  stored current version is not one of the graph's versions, as a restore
+  or a direct write can leave it, instead of reading it.
+- `create_graph` raises a `NOTICE` when the graph's `search_path` contains
+  a schema that roles other than its owner can create objects in. Those
+  roles could plant functions or operators that `refresh` would run as
+  the graph's owner.
 - `warren.max_cache_memory` (default `4GB`): a size-bound on what a
   backend's cache holds between calls. Cached graph versions and vectors
   are evicted least recently used first and reloaded when next used;

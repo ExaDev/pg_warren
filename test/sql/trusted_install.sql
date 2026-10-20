@@ -53,7 +53,7 @@ GRANT SELECT ON public.secret_nodes, public.secret_edges TO trusted_owner;
 SET ROLE trusted_owner;
 SELECT warren.create_graph('secret',
     $$SELECT public.must_run_as('trusted_owner', id) FROM public.secret_nodes$$,
-    $$SELECT src, dst FROM public.secret_edges$$);
+    $$SELECT public.must_run_as('trusted_owner', src), dst FROM public.secret_edges$$);
 SELECT assert.that(warren.refresh('secret') IS NOT NULL, 'a non-superuser owner refreshes');
 SELECT assert.equal((SELECT count(*) FROM warren.bfs('secret', ARRAY[1::bigint], 6)), 6::bigint,
                     'a non-superuser owner traverses');
@@ -93,10 +93,18 @@ SELECT assert.raises($$ALTER TABLE warren.graphs ENABLE ROW LEVEL SECURITY$$,
                      'installer alters the catalog', '42501');
 SELECT assert.raises($$ALTER EXTENSION pg_warren DROP TABLE warren.graphs$$,
                      'installer detaches the catalog', '42501');
+SELECT assert.raises($$ALTER EXTENSION pg_warren ADD TABLE public.secret_nodes$$,
+                     'installer adds another role''s table to the extension', '42501');
 SELECT assert.raises($$CREATE FUNCTION warren.planted() RETURNS int LANGUAGE sql AS 'SELECT 1'$$,
                      'installer creates in schema warren', '42501');
 CREATE FUNCTION public.planted_trigger() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN RETURN NEW; END $$;
+-- As the extension's owner it may add an object it owns to the extension
+-- (DESIGN.md §7). That is harmless: the object keeps its owner and
+-- privileges, gains none on the catalog, and goes with DROP EXTENSION.
+ALTER EXTENSION pg_warren ADD FUNCTION public.planted_trigger();
+SELECT assert.equal((SELECT proowner::regrole::text FROM pg_proc WHERE proname = 'planted_trigger'),
+                    'trusted_installer', 'an added function keeps its owner');
 SELECT assert.raises($$CREATE TRIGGER planted BEFORE INSERT ON warren.vectors
                        FOR EACH ROW EXECUTE FUNCTION public.planted_trigger()$$,
                      'installer adds a trigger to the catalog', '42501');
@@ -141,3 +149,5 @@ DROP EXTENSION pg_warren;
 RESET ROLE;
 SELECT assert.equal((SELECT count(*) FROM pg_namespace WHERE nspname = 'warren'), 0::bigint,
                     'dropping the extension drops the catalog');
+SELECT assert.equal((SELECT count(*) FROM pg_proc WHERE proname = 'planted_trigger'), 0::bigint,
+                    'a function added to the extension is dropped with it');
