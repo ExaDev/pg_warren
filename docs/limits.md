@@ -253,7 +253,7 @@ Smaller-scale kernel numbers (100K nodes, 1M edges unless stated):
 | `gather`, every node sending | `sum` of f64 14 ms (1 thread) / 8 ms (4); `collect` of f64 19 / 8 ms; `collect` of 8-byte messages 46 / 18 ms; pushed 30–70 ms | DESIGN §6.4, `benches/gather.rs` |
 | `diff` between two versions | ~25 ms, 1 thread | DESIGN §7, `benches/version_diff.rs` |
 | `eigen`, k = 20, f32, adjacency, largest | 1,037 steps: 9.9 s (1 thread) / 3.7 s (4); ARPACK 1,020–1,313 matvecs | DESIGN §6.5, `bench/results/eigen/` |
-| `eigen`, k = 20, f32, normalised Laplacian, smallest | 1,342 steps: 13.1 s / 5.1 s; ARPACK 1,406–1,477 matvecs. At 1M nodes and 10M edges: not converged in the default 4,100 steps (226 s, 4 threads) where ARPACK took 4,343 matvecs (712 s); adjacency 3,174 steps (173 s) vs ARPACK 3,325 (499 s) | DESIGN §6.5, `bench/results/eigen/` |
+| `eigen`, k = 20, f32, normalised Laplacian, smallest | 1,342 steps: 13.1 s / 5.1 s; ARPACK 1,406–1,477 matvecs. At 1M nodes and 10M edges: not converged in the then default 4,100 steps; 4,590 steps to converge under the M7 default (`results/eigen/scaling/`). Steps grow as √N on a uniform random graph and stay flat (300–386) on a 40-community block model, DESIGN §12 (226 s, 4 threads) where ARPACK took 4,343 matvecs (712 s); adjacency 3,174 steps (173 s) vs ARPACK 3,325 (499 s) | DESIGN §6.5, `bench/results/eigen/` |
 | BFS, 1 / 2 / 3 / 5 of 5 relations (1M weighted edges, 1 thread) | 2.0 / 4.9 / 7.2 / 5.3 ms | DESIGN §5.3, `benches/relation_layout.rs` |
 | Build, forward + reverse, 5 relations | 104 ms, 28.8 MB forward | DESIGN §5.3 |
 
