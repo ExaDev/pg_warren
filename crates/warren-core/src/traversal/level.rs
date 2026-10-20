@@ -4,10 +4,10 @@
 //! will run it per step, with that step's adjacency and node filter.
 //!
 //! A level is pushed (each frontier node's row scanned for unvisited
-//! nodes) or, when the search was given the edges read backwards and the
-//! frontier is wide, pulled (each unvisited node's reverse row scanned
-//! until it meets the frontier): Beamer's direction-optimising BFS
-//! (DESIGN.md §10).
+//! nodes) or, when the search was given the edges read backwards and
+//! pulling looks cheaper, pulled (each unvisited node's reverse row
+//! scanned until it meets the frontier): Beamer's direction-optimising BFS
+//! (DESIGN.md §9.3, §10).
 
 use std::ops::ControlFlow;
 
@@ -16,9 +16,17 @@ use super::stats::Progress;
 use super::{Adjacency, NodeSet, TraversalError, Visit};
 use crate::graph::{memory, DenseId};
 
-/// A frontier is wide enough to pull once it holds more than
-/// `1/PULL_FRACTION` of the id space (Beamer's β).
-const PULL_FRACTION: u64 = 20;
+/// A level is pulled only if the unvisited nodes' reverse rows hold fewer
+/// than `ALPHA` times the frontier's row entries (Beamer's α). Beamer
+/// suggests 14; at 10M nodes and 100M edges (G(n, m)) 14 and 1 took the
+/// same time (1.03 and 1.15 s, medians of 3, which is noise here: 14 pulls
+/// one level earlier and scans 73M row entries instead of 17M), and only
+/// 1 guarantees that a pulled level scans no more than a push would.
+const ALPHA: u64 = 1;
+
+/// A level is pulled only if the frontier holds more than `1/BETA` of the
+/// id space (Beamer's β); a smaller one is pushed.
+const BETA: u64 = 24;
 
 /// What to do with a node the search is about to admit.
 pub(crate) enum Admission {
@@ -63,7 +71,7 @@ impl<'a, 'g> Edges<'a, 'g> {
         self.adjacency.id_space()
     }
 
-    /// These edges, letting wide levels be pulled through `reverse` (the
+    /// These edges, letting levels be pulled through `reverse` (the
     /// adjacency read in the opposite direction), if given. A pulled level
     /// admits its nodes in ascending dense id order, each via the first
     /// frontier node its reverse rows name, so only searches that promise
@@ -139,30 +147,59 @@ impl LevelSearch {
     }
 
     /// Expands the current frontier by one level: pulled if `edges` allow
-    /// it and the frontier is wide, pushed otherwise.
+    /// it and [`Self::pulls`] says so, pushed otherwise.
     pub(crate) fn expand(
         &mut self,
         edges: Edges<'_, '_>,
         progress: &mut Progress<'_>,
         admit: &mut impl FnMut(Visit) -> Result<Admission, TraversalError>,
     ) -> Result<ControlFlow<()>, TraversalError> {
-        match edges.reverse {
-            Some(reverse) if self.wide(edges.adjacency.id_space()) => {
-                self.pull(edges, reverse, progress, admit)
-            }
-            _ => self.push(edges, progress, admit),
+        let reverse = match edges.reverse {
+            Some(reverse) if self.pulls(edges, reverse, progress)? => Some(reverse),
+            _ => None,
+        };
+        match reverse {
+            Some(reverse) => self.pull(edges, reverse, progress, admit),
+            None => self.push(edges, progress, admit),
         }
     }
 
-    /// Whether the frontier is wide enough to pull: more than
-    /// `1/PULL_FRACTION` of the id space, and more nodes than are left
-    /// unvisited. This is Beamer's switch with node counts standing in
-    /// for edge counts, so it assumes no great skew in degree between the
-    /// frontier and the unvisited nodes.
-    fn wide(&self, id_space: u64) -> bool {
-        let frontier = self.frontier.len() as u64;
-        let unvisited = id_space - self.visited.len();
-        frontier * PULL_FRACTION > id_space && frontier > unvisited
+    /// Beamer's switch, decided afresh for each level: pull if the frontier
+    /// holds more than `1/BETA` of the id space and the unvisited nodes'
+    /// reverse rows hold fewer than `ALPHA` times the frontier's row
+    /// entries (m_u < α·m_f). A pull scans at most those m_u entries and a
+    /// push exactly the m_f, so with α = 1 a pulled level scans fewer row
+    /// entries than a push of it would. Row lengths are read from the CSR
+    /// offsets; where relations are merged on the fly they are upper
+    /// bounds (a target in several relations counts once per relation),
+    /// so there the comparison is between bounds and a pull can scan more
+    /// than the push would. m_u is summed over the unvisited nodes only
+    /// until it reaches α·m_f, each node examined a unit of work.
+    fn pulls(
+        &mut self,
+        edges: Edges<'_, '_>,
+        reverse: &Adjacency<'_>,
+        progress: &mut Progress<'_>,
+    ) -> Result<bool, TraversalError> {
+        let id_space = edges.id_space();
+        if self.frontier.len() as u64 * BETA <= id_space {
+            return Ok(false);
+        }
+        let frontier_entries: u64 =
+            self.frontier.iter().map(|&node| edges.adjacency.row_entry_bound(node)).sum();
+        let limit = frontier_entries.saturating_mul(ALPHA);
+        let visited = self.visited.densify()?;
+        let mut unvisited_entries = 0;
+        for word in 0..visited.word_count() {
+            for node in unvisited(visited.word(word), word, id_space) {
+                progress.node_examined()?;
+                unvisited_entries += reverse.row_entry_bound(node);
+                if unvisited_entries >= limit {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
     }
 
     /// Pushes the current frontier one level: scans each frontier node's
@@ -204,16 +241,13 @@ impl LevelSearch {
         admit: &mut impl FnMut(Visit) -> Result<Admission, TraversalError>,
     ) -> Result<ControlFlow<()>, TraversalError> {
         let depth = self.depth + 1;
-        let id_space = edges.adjacency.id_space();
+        let id_space = edges.id_space();
         let frontier = NodeSet::from_dense_ids(id_space, self.frontier.iter().copied())?;
-        self.visited.densify()?;
-        for word in 0..frontier.word_count() {
-            let mut unvisited = !self.visited.word(word);
-            while unvisited != 0 {
-                let node =
-                    word as u64 * u64::from(u64::BITS) + u64::from(unvisited.trailing_zeros());
-                unvisited &= unvisited - 1;
-                if node >= id_space || edges.filter.is_some_and(|f| !f.contains(node)) {
+        let visited = self.visited.densify()?;
+        for word in 0..visited.word_count() {
+            for node in unvisited(visited.word(word), word, id_space) {
+                progress.node_examined()?;
+                if edges.filter.is_some_and(|f| !f.contains(node)) {
                     continue;
                 }
                 for via in reverse.row_entries(node) {
@@ -222,7 +256,11 @@ impl LevelSearch {
                         continue;
                     }
                     let visit = Visit { node, depth, via: Some(via) };
-                    if self.offer(visit, progress, admit)?.is_break() {
+                    let insert = |node| {
+                        visited.insert(node);
+                        Ok(())
+                    };
+                    if offer_into(&mut self.next, visit, progress, admit, insert)?.is_break() {
                         return Ok(ControlFlow::Break(()));
                     }
                     break;
@@ -241,18 +279,8 @@ impl LevelSearch {
         progress: &mut Progress<'_>,
         admit: &mut impl FnMut(Visit) -> Result<Admission, TraversalError>,
     ) -> Result<ControlFlow<()>, TraversalError> {
-        let admission = admit(visit)?;
-        if matches!(admission, Admission::Stop) {
-            return Ok(ControlFlow::Break(()));
-        }
-        progress.node_visited()?;
-        self.visited.insert(visit.node)?;
-        memory::reserve_one(&mut self.next)?;
-        self.next.push(visit.node);
-        Ok(match admission {
-            Admission::Admit => ControlFlow::Continue(()),
-            Admission::AdmitAndStop | Admission::Stop => ControlFlow::Break(()),
-        })
+        let insert = |node| self.visited.insert(node).map(drop);
+        offer_into(&mut self.next, visit, progress, admit, insert)
     }
 
     /// Makes the next frontier current, reusing the old one's buffer.
@@ -260,4 +288,39 @@ impl LevelSearch {
         std::mem::swap(&mut self.frontier, &mut self.next);
         self.next.clear();
     }
+}
+
+/// Offers an unvisited node for admission to `next`, marking it visited
+/// with `insert` if admitted.
+fn offer_into(
+    next: &mut Vec<DenseId>,
+    visit: Visit,
+    progress: &mut Progress<'_>,
+    admit: &mut impl FnMut(Visit) -> Result<Admission, TraversalError>,
+    insert: impl FnOnce(DenseId) -> Result<(), TraversalError>,
+) -> Result<ControlFlow<()>, TraversalError> {
+    let admission = admit(visit)?;
+    if matches!(admission, Admission::Stop) {
+        return Ok(ControlFlow::Break(()));
+    }
+    progress.node_visited()?;
+    insert(visit.node)?;
+    memory::reserve_one(next)?;
+    next.push(visit.node);
+    Ok(match admission {
+        Admission::Admit => ControlFlow::Continue(()),
+        Admission::AdmitAndStop | Admission::Stop => ControlFlow::Break(()),
+    })
+}
+
+/// The ids of word `index` of a visited bitmap whose bits in `visited` are
+/// clear, ascending, below `id_space`.
+fn unvisited(visited: u64, index: usize, id_space: u64) -> impl Iterator<Item = DenseId> {
+    let first = index as u64 * u64::from(u64::BITS);
+    let mut clear = !visited;
+    std::iter::from_fn(move || {
+        let bit = (clear != 0).then(|| clear.trailing_zeros())?;
+        clear &= clear - 1;
+        Some(first + u64::from(bit)).filter(|&node| node < id_space)
+    })
 }

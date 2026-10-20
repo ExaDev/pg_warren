@@ -31,7 +31,7 @@ pub struct BfsCursor<G> {
     tally: Tally,
     /// The starts, until the first level seeds the search with them.
     starts: Option<Vec<DenseId>>,
-    /// Whether wide levels may be pulled (a reachable set).
+    /// Whether levels may be pulled (a reachable set).
     pull: bool,
     finished: bool,
 }
@@ -74,7 +74,7 @@ impl<G: Borrow<GraphCsr>> BfsCursor<G> {
 
     /// [`reachable_set_each`](super::reachable_set_each) as a cursor: the
     /// visits of a BFS from `starts` with no filter or result limit, whose
-    /// wide levels may be pulled, so that within a depth they may come in
+    /// levels may be pulled, so that within a depth they may come in
     /// ascending dense id order and `via` is any frontier node with an
     /// edge to the visit.
     pub fn reachable_set(

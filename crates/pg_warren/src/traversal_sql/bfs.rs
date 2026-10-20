@@ -80,9 +80,10 @@ fn bfs(
 }
 
 /// `warren.reachable_set`: every node within `max_depth` edges of `start`
-/// (unbounded if NULL), the starts included, once each, by depth. Wide
-/// levels are pulled through the reverse CSR when there is one, and come
-/// in dense id order ([`BfsCursor::reachable_set`]).
+/// (unbounded if NULL), the starts included, once each, by depth. A level
+/// whose unvisited nodes' in-edges are fewer than its frontier's
+/// out-edges is pulled through the reverse CSR when there is one, and
+/// comes in dense id order ([`BfsCursor::reachable_set`]).
 #[pg_extern(
     schema = "warren",
     sql = r#"
@@ -132,7 +133,7 @@ struct Request<'a> {
     rels: Option<Vec<Option<String>>>,
     node_filter: Option<AnyArray>,
     max_results: Option<i64>,
-    /// Whether wide levels may be pulled: a reachable set, which reports
+    /// Whether levels may be pulled: a reachable set, which reports
     /// no `via` and promises no order within a depth.
     pull: bool,
 }
@@ -354,11 +355,12 @@ mod tests {
 
     #[pg_test]
     fn reachable_set_pulls_a_wide_level_but_bfs_keeps_its_order_and_via() -> Result<(), Error> {
-        // 1 → 2, 3, 4; 2 → 6; 3 → 5: the frontier {2, 3, 4} outnumbers the
-        // unvisited {5, 6}, so reachable_set pulls depth 2 in dense id order.
+        // 1 → 2, 3, 4; 2 → 6; 3 → 5; 4 → 2: the frontier {2, 3, 4} has three
+        // row entries and the unvisited {5, 6} two in-edges, so
+        // reachable_set pulls depth 2 in dense id order.
         Spi::run(
             "CREATE TABLE wide_edges (src bigint, dst bigint);
-             INSERT INTO wide_edges VALUES (1, 2), (1, 3), (1, 4), (2, 6), (3, 5);
+             INSERT INTO wide_edges VALUES (1, 2), (1, 3), (1, 4), (2, 6), (3, 5), (4, 2);
              SELECT warren.create_graph('wide', 'SELECT generate_series(1::bigint, 6)',
                                         'SELECT src, dst FROM wide_edges');
              SELECT warren.refresh('wide')",

@@ -113,6 +113,14 @@ impl<'g> CsrRows<'g> {
         }
     }
 
+    /// An upper bound on the length of `source`'s row, in O(1) per CSR
+    /// read: its degree in one CSR, or the sum of its degrees in the
+    /// relations merged on the fly (a target in several counts once in
+    /// the merged row). Zero outside the id space.
+    pub fn degree_bound(&self, source: DenseId) -> u64 {
+        self.csrs().map(|csr| csr.degree(source)).sum()
+    }
+
     /// Whether the edge `source → target` exists in any of the CSRs.
     pub fn has_edge(&self, source: DenseId, target: DenseId) -> bool {
         self.csrs().any(|csr| csr.has_edge(source, target))

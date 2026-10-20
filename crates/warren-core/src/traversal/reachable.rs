@@ -61,14 +61,21 @@ pub fn reachable_set(
 /// instead of collecting them; returning [`ControlFlow::Break`] stops the
 /// scan after that node.
 ///
-/// Nodes come by depth. A level whose frontier is wide (more than a
-/// twentieth of the id space, and more nodes than are left unvisited) is
-/// pulled through the adjacency read backwards, when the graph has the
-/// CSRs for that, and its nodes come in ascending dense id order; other
-/// levels come in the order reached, as in [`bfs`](super::bfs). A pulled
-/// level scans only unvisited nodes' rows, and each only until it meets
-/// the frontier, so `edges_traversed` counts fewer row entries than a
-/// push-only search would.
+/// Nodes come by depth. When the graph has the CSRs to read the
+/// adjacency backwards, a level is pulled if its frontier holds more than
+/// a twenty-fourth of the id space and the unvisited nodes' reverse rows
+/// hold fewer entries than the frontier's rows (Beamer's switch with
+/// α = 1, β = 24; row lengths from the CSR offsets): each unvisited node
+/// scans its reverse row only until it meets the frontier, and the level's
+/// nodes come in ascending dense id order. Other levels are pushed and
+/// come in the order reached, as in [`bfs`](super::bfs). A pulled level
+/// therefore scans fewer row entries than pushing it would, so
+/// `edges_traversed` is at most a push-only search's, except where
+/// relations are merged on the fly (several relations, no stored merged
+/// CSR, every relation selected): there row lengths are upper bounds, and
+/// a pulled level can scan more than its push would. Deciding costs one
+/// pass over the frontier and, for frontiers over the size bound, over
+/// the unvisited ids until their rows outweigh it.
 pub fn reachable_set_each(
     adjacency: &Adjacency<'_>,
     starts: &[DenseId],
@@ -148,10 +155,11 @@ mod tests {
         assert_eq!(stats.nodes_visited, 2);
     }
 
-    // 0 → 1, 2, 3; 1 → 5; 2 → 4: the frontier {1, 2, 3} outnumbers the
-    // unvisited {4, 5}, so depth 2 is pulled from the reverse CSR.
-    fn wide() -> [(DenseId, DenseId); 5] {
-        [(0, 1), (0, 2), (0, 3), (1, 5), (2, 4)]
+    // 0 → 1, 2, 3; 1 → 5; 2 → 4; 3 → 1: the frontier {1, 2, 3} has three
+    // row entries and the unvisited {4, 5} two in-edges, so depth 2 is
+    // pulled from the reverse CSR.
+    fn wide() -> [(DenseId, DenseId); 6] {
+        [(0, 1), (0, 2), (0, 3), (1, 5), (2, 4), (3, 1)]
     }
 
     #[test]
@@ -161,9 +169,50 @@ mod tests {
         assert_eq!(found.result, [0, 1, 2, 3, 4, 5]);
         assert_eq!(found.stats.nodes_visited, 6);
         assert_eq!(found.stats.edges_traversed, 5, "three pushed, one in-edge each for 4 and 5");
+        assert_eq!(bfs_entries(&graph), 6, "a push of depth 2 scans three");
         let bfs = bfs(&out(&graph), &[0], None, Limits::default(), &mut Uninterrupted).unwrap();
         let order: Vec<_> = bfs.result.iter().map(|visit| visit.node).collect();
         assert_eq!(order, [0, 1, 2, 3, 5, 4], "bfs always pushes");
+    }
+
+    /// The row entries a push-only search of `graph` from 0 scans.
+    fn bfs_entries(graph: &GraphCsr) -> u64 {
+        let pushed = bfs(&out(graph), &[0], None, Limits::default(), &mut Uninterrupted).unwrap();
+        pushed.stats.edges_traversed
+    }
+
+    #[test]
+    fn a_level_is_not_pulled_when_the_unvisited_rows_outweigh_the_frontier_s() {
+        // 0 → 1, 2, 3; 4 ⇄ 5 unreachable. A pull of depth 1 or 2 would scan
+        // 4's and 5's in-edges, which push never reads; their two entries
+        // outweigh the frontier's (three at depth 1, none at depth 2).
+        let graph = directed(6, &[(0, 1), (0, 2), (0, 3), (4, 5), (5, 4)]);
+        let pulled = reachable_set(&out(&graph), &[0], None, &mut Uninterrupted).unwrap();
+        let pushed = bfs(&out(&graph), &[0], None, Limits::default(), &mut Uninterrupted).unwrap();
+        assert!(pulled.stats.edges_traversed <= pushed.stats.edges_traversed);
+    }
+
+    #[test]
+    fn a_pulled_level_polls_while_it_examines_unvisited_nodes_with_empty_rows() {
+        struct Polls(u32);
+        impl crate::interrupts::Interrupts for Polls {
+            fn check(&mut self) -> Result<(), crate::interrupts::Cancelled> {
+                self.0 += 1;
+                Ok(())
+            }
+        }
+        // 0 → 1..=12000, each i → 24001 - i and i → 0; the other ~250K
+        // ids have no edges. Depth 2 is pulled and examines every unvisited id, but
+        // admits and scans only 12,000 each: under 65,536 units without
+        // the examined ids.
+        let id_space = 1 << 18;
+        let edges: Vec<_> = (1..=12_000).flat_map(|i| [(0, i), (i, 24_001 - i), (i, 0)]).collect();
+        let graph = directed(id_space, &edges);
+        let mut polls = Polls(0);
+        let found = reachable_set(&out(&graph), &[0], None, &mut polls).unwrap();
+        assert_eq!(found.result.len(), 24_001);
+        assert_eq!(found.result[12_001], 12_001, "depth 2 was pulled, in dense id order");
+        assert!(polls.0 >= 4, "polled {} times", polls.0);
     }
 
     #[test]
@@ -193,6 +242,7 @@ mod properties {
 
     use super::*;
     use crate::interrupts::Uninterrupted;
+    use crate::traversal::bfs;
     use crate::traversal::reference::{directions, scenarios, selections, Scenario};
 
     proptest! {
@@ -217,7 +267,14 @@ mod properties {
                 .map(|(&node, _)| node)
                 .collect();
 
-            let set = reachable_set(&adjacency, &starts, max_depth, &mut never).unwrap().result;
+            let found = reachable_set(&adjacency, &starts, max_depth, &mut never).unwrap();
+            let limits = Limits { max_depth, max_results: None };
+            let pushed = bfs(&adjacency, &starts, None, limits, &mut never).unwrap();
+            let exact_rows = scenario.store_merged || scenario.relation_count == 1 || indexes.is_some();
+            if exact_rows {
+                prop_assert!(found.stats.edges_traversed <= pushed.stats.edges_traversed);
+            }
+            let set = found.result;
             prop_assert!(set.windows(2).all(|w| depths[&w[0]] <= depths[&w[1]]), "not by depth");
             prop_assert_eq!(set.len(), expected.len());
             prop_assert_eq!(set.into_iter().collect::<BTreeSet<_>>(), expected.clone());
