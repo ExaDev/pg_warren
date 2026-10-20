@@ -11,7 +11,7 @@ between graph versions.
 
 It is not a graph database and has no query language. Your tables stay the
 source of truth, and `warren.*` calls compose with ordinary SQL on either
-side: node ids go in, relations keyed by node id come out, and you join them
+side: node ids go in, rows keyed by node id come out, and you join them
 back. Think "pgvector for graphs": an index plus compute engine beside your
 data, not a replacement for it.
 
@@ -24,7 +24,7 @@ committed or rolled back with it.
 
 pg_warren is an escape valve for graph workloads that Postgres alone handles
 badly, without leaving Postgres or fighting it. Your data stays in your
-tables. Vertex programs are SQL: PL/pgSQL loops over whole-graph calls, with
+tables. Node programs are SQL: PL/pgSQL loops over whole-graph calls, with
 per-node logic as SQL expressions. Transactions, backups and replicas cover
 the graph like everything else, because its versions are ordinary rows.
 
@@ -137,7 +137,7 @@ A graph query has two forms, and you choose per query:
   `nodes`/`edges` tables. Fully transactional, planner-optimised, never
   stale. This is the default and covers most queries.
 - **Deep, large frontier:** one `warren.*` call, joined back to your tables
-  for filtering and projection. Reads a snapshot (a version).
+  for filtering and projection. Reads a version, not the live tables.
 
 The criterion is **how many rows the traversal touches, not how many hops it
 takes.** Three hops at average degree 10 is about a thousand intermediate rows
@@ -145,29 +145,34 @@ and belongs in SQL; three hops at degree 1,000 is a billion and belongs in
 the engine. Rule of thumb: if `EXPLAIN` of the CTE shows the recursive term
 producing more than about 10⁵–10⁶ rows, or the computation is iterative at
 all (PageRank, components, propagation), move it into pg_warren. Both forms
-produce a relation keyed by node id, so switching changes one clause, not the
+produce rows keyed by node id, so switching changes one clause, not the
 surrounding query.
 
 ## The SQL surface at a glance
 
-Every function takes the graph name first and, where it reads a graph, an
-optional `version` (default: the current version).
+Every function that works on a graph takes its name first and, where it
+reads the graph, an optional `version` (default: the current version).
+`version`, `last_stats`, `s` and `steps` take no graph.
 
 | Area | Functions |
 |---|---|
 | Graphs and versions | `create_graph`, `refresh`, `promote`, `drop_version`, `compact`, `diff`, `info`, `drop_graph`, `grant`, `revoke`, `prewarm`, `evict` |
-| Traversal | `bfs`, `neighbours`, `degree`, `has_edge`, `reachable`, `reachable_set`, `shortest_path`, `dijkstra`, `components`, `walk` with `warren.s` / `warren.step`, `last_stats` |
+| Traversal | `bfs`, `neighbours`, `degree`, `has_edge`, `reachable`, `reachable_set`, `shortest_path`, `dijkstra`, `components`, `walk`, `last_stats` |
+| Walk steps | `s` and `steps` (jsonb), which build the composite type `warren.step`; the cast `jsonb::warren.step[]` |
 | Vectors | `vector_from_query`, `vector_const`, `vector_degree`, `vector_dense_id`, `vector_values`, `matrix_rows`, `vector_topk`, `vector_stats`, `id_map`, `drop_vector` |
 | Compute | `spmv`, `spmm`, `vector_map`, `explain_map`, `vector_reduce`, `vector_norm_diff`, `gather` |
 | Library | `pagerank`, `components_vector`, `label_propagation`, `sssp_vector`, `degree_vector`, `aggregate_neighbours`, `triangles` |
 | Spectral | `eigen`, `distance` |
+| Extension | `version` |
 
 Signatures are in `\df warren.*` and in DESIGN.md (§6, §8, §9.3).
 
 ## Documentation
 
 - [docs/semantics.md](docs/semantics.md): graphs, versions, dense ids,
-  snapshots and staleness, transactions, retention, access, id types.
+  staleness, transactions, retention, access, id types.
+- [docs/traversal.md](docs/traversal.md): `bfs`, paths, components, `walk`
+  and its steps, `last_stats`.
 - [docs/compute.md](docs/compute.md): vectors, semiring products, masks,
   `vector_map`, `gather`, the algorithm library, `eigen` and `distance`.
 - [docs/change-detection.md](docs/change-detection.md): measuring structural
@@ -208,7 +213,7 @@ traversal behind SQL functions, and
 semiring model into Postgres as datatypes.
 
 pg_warren's contribution is different:
-- Every build is a versioned snapshot with a stable dense-ID space.
+- Every build is an immutable version with a stable id space.
 - Builds are stored transactionally in ordinary tables, so they are WAL-logged,
   replicated, and rolled back with your transaction.
 - A version can be built *inside* the transaction that changes the data and

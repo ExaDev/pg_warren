@@ -9,7 +9,7 @@ All are ordinary GUCs, settable per session or per transaction
 
 | Setting | Default | Range | What it bounds | When exceeded |
 |---|---|---|---|---|
-| `warren.threads` | half the cores, at least 1 | 1–1024 | threads a compute kernel runs on (`spmv`, `spmm`, `vector_map`, reductions, `gather`, `eigen`, `triangles`) | — |
+| `warren.threads` | half the cores, at least 1 | 1–1024 | threads a compute kernel runs on (`spmv`, `spmm`, `vector_map`, reductions, `gather`, `eigen`, `distance`, `triangles`) | — |
 | `warren.max_compute_memory` | `4GB` | `64kB` up | memory one call holds: every vector it reads (once, cached or not), every vector and work buffer it allocates | `configuration_limit_exceeded` (53400), before allocating |
 | `warren.max_cache_memory` | `4GB` | `64kB` up | what this backend's cache holds *between* calls: cached versions, cached persisted vectors, and every role's transient vectors | versions and persisted vectors are evicted, least recently used first; a transient write that would go over is refused with 53400 |
 | `warren.max_build_memory` | `4GB` | `1MB` up | the CSR offsets a `refresh` builds (8 bytes × (id_space + 1) per relation's CSR, merged CSR included, per direction) | 53400, before anything is allocated or written |
@@ -181,8 +181,8 @@ per eigenspace, so a repeated eigenvalue may appear fewer times than its
 multiplicity. A graph with c connected components has Laplacian eigenvalue 0
 c times; `eigen` warns when the active nodes form several components. When
 that matters, run `eigen` on a graph defined over the largest component
-only. `symmetrize := false` (non-symmetric spectra) is accepted
-only when the graph is already symmetric.
+only. Non-symmetric spectra are not computed: `symmetrize := false` is
+accepted only when the matrix is already symmetric.
 
 **Stable functions in a `WHERE` clause are called per row.** Write
 `WHERE x < (SELECT warren.vector_reduce(…))`, not `WHERE x <

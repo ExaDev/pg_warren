@@ -29,6 +29,9 @@ SELECT assert.equal((SELECT array_agg(p.name || ':' || b.depth ORDER BY b.depth,
 SELECT assert.equal((SELECT array_agg(p.name ORDER BY r.value DESC, p.name)
                      FROM warren.vector_topk('social', 'pr', 3, NULL::bigint) r JOIN people p ON p.id = r.node_id),
                     ARRAY['cy', 'bob', 'eve'], 'README pagerank top 3');
+SELECT assert.equal((SELECT array_agg(round(r.value::numeric, 3) ORDER BY r.value DESC, p.name)
+                     FROM warren.vector_topk('social', 'pr', 3, NULL::bigint) r JOIN people p ON p.id = r.node_id),
+                    ARRAY[0.243, 0.209, 0.209], 'README pagerank ranks');
 SELECT assert.that(abs(warren.vector_reduce('social', 'pr', 'sum') - 1) < 1e-9, 'pagerank sums to 1');
 
 ------------------------------------------------------------------------
@@ -217,6 +220,12 @@ SELECT warren.explain_map('roads', 'pop / NULLIF(nbr_pop, 0)');
 SELECT warren.explain_map('roads', 'pop::numeric + 1');
 SELECT assert.equal(warren.explain_map('roads', 'pop / NULLIF(nbr_pop, 0)') ->> 'path', 'compiled', 'compiled');
 SELECT assert.equal(warren.explain_map('roads', 'pop::numeric + 1') ->> 'path', 'executor', 'executor');
+SELECT assert.equal(warren.explain_map('roads', 'pop / NULLIF(nbr_pop, 0)'),
+                    '{"path": "compiled", "dtype": "f64", "reason": "every operation is in the compiled subset"}'::jsonb,
+                    'explain_map compiled');
+SELECT assert.equal(warren.explain_map('roads', 'pop::numeric + 1'),
+                    '{"path": "executor", "dtype": "f64", "reason": "function numeric is not in the compiled subset"}'::jsonb,
+                    'explain_map executor');
 SELECT assert.equal(warren.vector_reduce('roads', 'pop', 'sum'), 260::float8, 'reduce');
 CREATE FUNCTION my_pagerank(graph text, damping float8 DEFAULT 0.85, tol float8 DEFAULT 1e-6)
 RETURNS int LANGUAGE plpgsql AS $$
@@ -224,12 +233,13 @@ DECLARE i int := 0; delta float8;
 BEGIN
   PERFORM warren.vector_degree(graph, 'deg', persist := false);
   PERFORM warren.vector_const(graph, 'pr', 1.0, persist := false);
+  PERFORM warren.vector_const(graph, 'teleport', 1 - damping, persist := false);
+  PERFORM warren.vector_const(graph, 'damping', damping, persist := false);
   LOOP
     i := i + 1;
     PERFORM warren.vector_map(graph, 'msg', 'pr / NULLIF(deg, 0)', persist := false);
     PERFORM warren.spmv(graph, 'msg', 'gathered', 'plus_second', transpose := true, persist := false);
-    PERFORM warren.vector_map(graph, 'next', format('%s + %s * gathered', 1 - damping, damping),
-                              persist := false);
+    PERFORM warren.vector_map(graph, 'next', 'teleport + damping * gathered', persist := false);
     delta := warren.vector_norm_diff(graph, 'next', 'pr', 'l1');
     PERFORM warren.vector_map(graph, 'pr', 'next', persist := false);
     EXIT WHEN delta < tol OR i >= 100;
@@ -270,6 +280,11 @@ SELECT assert.raises($$SELECT * FROM warren.gather('roads', 'SELECT docs_writes(
                      'a write through a called function is refused', '25006');
 SELECT assert.raises($$SELECT warren.vector_from_query('roads', 'w', 'SELECT docs_writes(id), pop FROM city')$$,
                      'vector_from_query is read-only too', '25006');
+SELECT assert.raises($$SELECT warren.vector_map('roads', 'w', 'docs_writes(pop::int)')$$,
+                     'a vector_map expression cannot write', '25006');
+CREATE SEQUENCE docs_seq;
+SELECT assert.raises($$SELECT warren.vector_map('roads', 'w', 'nextval(''docs_seq'')')$$,
+                     'nor take nextval of a non-temporary sequence', '25006');
 SELECT assert.equal((SELECT count(*) FROM city), 5::bigint, 'nothing was deleted');
 
 -- "The algorithm library"
@@ -304,6 +319,134 @@ SELECT assert.that((SELECT abs(eigenvalue) < 1e-9 FROM warren.eigen('roads', 2, 
 -- "distance"
 SELECT warren.distance('roads', :v, :v, 'edit');
 SELECT assert.equal((warren.distance('roads', :v, :v, 'edit') #>> '{overall,distance}')::float8, 0::float8, 'edit 0');
+SELECT assert.equal((warren.distance('roads', :v, :v, 'edit') #>> '{overall,union}')::bigint, 10::bigint, 'edit union');
+
+-- compute.md "Vectors": return values, persist, transient over persisted
+SELECT assert.equal(pg_typeof(warren.spmv('roads', 'pop', 'tmp_y', 'plus_second', persist := false))::text, 'void', 'spmv is void');
+SELECT assert.raises($$SELECT warren.pagerank('roads', 'pr2', persist := false)$$, 'the library takes no persist', '42883');
+SELECT warren.vector_const('roads', 'p1', 1);
+BEGIN;
+SELECT warren.vector_const('roads', 'p1', 2, persist := false);
+ROLLBACK;
+SELECT assert.equal((SELECT count(*) FROM warren.vectors v JOIN warren.graphs g USING (graph_id)
+                     WHERE g.name = 'roads' AND v.name = 'p1'), 1::bigint, 'the persisted row is back');
+SELECT assert.equal(warren.vector_reduce('roads', 'p1', 'sum'), 10::float8, 'but the transient one hides it');
+SELECT warren.drop_vector('roads', 'p1');                             -- drops the transient one
+SELECT assert.equal(warren.vector_reduce('roads', 'p1', 'sum'), 5::float8, 'the persisted one shows again');
+-- compute.md "Semiring products": unweighted A[i][j] is 1 across relations
+CREATE TABLE multi_edges (src int, dst int, rel text);
+INSERT INTO multi_edges VALUES (1, 2, 'a'), (1, 2, 'b');
+SELECT warren.create_graph('multi', 'SELECT 1 UNION SELECT 2', 'SELECT src, dst, rel FROM multi_edges', has_relations := true);
+SELECT warren.refresh('multi');
+SELECT warren.vector_const('multi', 'one', 1, persist := false);
+SELECT warren.spmv('multi', 'one', 'y', persist := false);
+SELECT assert.equal((SELECT value FROM warren.vector_values('multi', 'y', NULL::int) WHERE node_id = 1), 1::float8,
+                    'an unweighted pair in two relations counts once');
+-- symmetrize := false checks the matrix, not directed
+SELECT warren.create_graph('bidir', 'SELECT id FROM city', 'SELECT a, b FROM road UNION ALL SELECT b, a FROM road');
+SELECT warren.refresh('bidir');
+SELECT assert.equal((SELECT count(*) FROM warren.eigen('bidir', 1, symmetrize := false, persist := false)), 1::bigint,
+                    'a directed graph with every edge both ways is symmetric');
+SELECT assert.raises($$SELECT * FROM warren.eigen('multi', 1, symmetrize := false, persist := false)$$,
+                     'a one-way edge is not', '22023');
+-- compute.md "gather": a vector source must have width 1
+SELECT assert.raises($$SELECT * FROM warren.gather('roads', 'emb', NULL::int, NULL::float8[])$$, 'a matrix is not a message vector');
+-- semantics.md "Graphs": without a reverse CSR, 'in' is refused, except by gather
+SELECT warren.create_graph('fwd', 'SELECT id FROM city', 'SELECT a, b FROM road', build_reverse := false);
+SELECT warren.refresh('fwd');
+SELECT assert.raises($$SELECT warren.degree('fwd', 1, 'in')$$, 'degree in needs the reverse CSR', '55000');
+SELECT assert.raises($$SELECT warren.vector_degree('fwd', 'd', 'in')$$, 'vector_degree in needs the reverse CSR', '55000');
+SELECT assert.equal((SELECT count(*) FROM warren.gather('fwd', 'SELECT id, pop FROM city', NULL::int, NULL::bigint, 'sum',
+                                                      direction := 'in')), 4::bigint, 'gather in works by push');
+
+------------------------------------------------------------------------
+-- docs/traversal.md
+------------------------------------------------------------------------
+-- "Lookups"
+SELECT warren.neighbours('roads', 4, rels := ARRAY['lane']);          -- 1, 5
+SELECT warren.degree('roads', 4), warren.degree('roads', 4, rels := ARRAY['highway']);   -- 3, 1
+SELECT warren.has_edge('roads', 1, 2), warren.has_edge('roads', 1, 2, 'lane');           -- true, false
+SELECT warren.reachable('roads', 1, 5, max_depth := 1), warren.reachable('roads', 1, 5, max_depth := 2);
+SELECT warren.neighbours('social', 3::bigint, 'both');                -- 1, 2, 4
+SELECT assert.equal((SELECT array_agg(n ORDER BY n) FROM warren.neighbours('roads', 4, rels := ARRAY['lane']) n),
+                    ARRAY[1, 5], 'neighbours over lanes');
+SELECT assert.equal(ARRAY[warren.degree('roads', 4), warren.degree('roads', 4, rels := ARRAY['highway'])],
+                    ARRAY[3, 1]::bigint[], 'degree');
+SELECT assert.equal(ARRAY[warren.has_edge('roads', 1, 2), warren.has_edge('roads', 1, 2, 'lane')],
+                    ARRAY[true, false], 'has_edge');
+SELECT assert.equal(ARRAY[warren.reachable('roads', 1, 5, max_depth := 1), warren.reachable('roads', 1, 5, max_depth := 2)],
+                    ARRAY[false, true], 'reachable');
+SELECT assert.equal((SELECT array_agg(n ORDER BY n) FROM warren.neighbours('social', 3::bigint, 'both') n),
+                    ARRAY[1, 2, 4]::bigint[], 'neighbours both ways');
+
+-- "Breadth-first search"
+SELECT * FROM warren.bfs('roads', ARRAY[1], 2) ORDER BY depth, node_id;
+SELECT * FROM warren.bfs('roads', ARRAY[1], 3, node_filter := ARRAY[1, 2, 3]) ORDER BY depth, node_id;
+SELECT * FROM warren.bfs('social', ARRAY[3::bigint], 2, direction := 'in') ORDER BY depth, node_id;
+SELECT warren.reachable_set('roads', ARRAY[3], rels := ARRAY['highway']);   -- 3, 4
+SELECT assert.equal((SELECT array_agg(format('%s,%s,%s', node_id, depth, via) ORDER BY depth, node_id)
+                     FROM warren.bfs('roads', ARRAY[1], 2)),
+                    ARRAY['1,0,', '2,1,1', '4,1,1', '3,2,2', '5,2,4'], 'bfs');
+SELECT assert.equal((SELECT array_agg(node_id ORDER BY node_id)
+                     FROM warren.bfs('roads', ARRAY[1], 3, node_filter := ARRAY[1, 2, 3])),
+                    ARRAY[1, 2, 3], 'node_filter prunes');
+SELECT assert.equal((SELECT array_agg(format('%s,%s,%s', node_id, depth, via) ORDER BY depth, node_id)
+                     FROM warren.bfs('social', ARRAY[3::bigint], 2, direction := 'in')),
+                    ARRAY['3,0,', '2,1,3', '1,2,2'], 'bfs in');
+SELECT assert.equal((SELECT array_agg(n ORDER BY n) FROM warren.reachable_set('roads', ARRAY[3], rels := ARRAY['highway']) n),
+                    ARRAY[3, 4], 'reachable_set');
+
+-- "Paths"
+SELECT warren.shortest_path('roads', 1, 5);                           -- {1,4,5}: 2 hops
+SELECT * FROM warren.dijkstra('roads', 1, 5);                         -- {1,2,3,4,5}, 23 km
+SELECT * FROM warren.dijkstra('roads', 1, 5, rels := ARRAY['lane']);  -- {1,4,5}, 32 km
+SELECT warren.shortest_path('social', 7::bigint, 1::bigint, direction := 'in');   -- {7,6,4,3,2,1}
+SELECT assert.equal(warren.shortest_path('roads', 1, 5), ARRAY[1, 4, 5], 'shortest_path');
+SELECT assert.equal((SELECT path || cost::int FROM warren.dijkstra('roads', 1, 5)), ARRAY[1, 2, 3, 4, 5, 23], 'dijkstra');
+SELECT assert.equal((SELECT path || cost::int FROM warren.dijkstra('roads', 1, 5, rels := ARRAY['lane'])),
+                    ARRAY[1, 4, 5, 32], 'dijkstra over lanes');
+SELECT assert.equal(warren.shortest_path('social', 7::bigint, 1::bigint, direction := 'in'),
+                    ARRAY[7, 6, 4, 3, 2, 1]::bigint[], 'shortest_path in');
+SELECT assert.equal(warren.shortest_path('social', 7::bigint, 1::bigint), NULL::bigint[], 'no path along edges');
+
+-- "Components"
+SELECT * FROM warren.components('roads', NULL::int);                  -- all five: component 0
+SELECT assert.equal((SELECT array_agg(DISTINCT component_id) FROM warren.components('roads', NULL::int)),
+                    ARRAY[0]::bigint[], 'one component');
+
+-- "walk"
+SELECT * FROM warren.walk('roads', ARRAY[1], ARRAY[warren.s(ARRAY['highway']), warren.s(ARRAY['lane'])]);
+SELECT * FROM warren.walk('roads', ARRAY[1], ARRAY[warren.s(ARRAY['highway']), warren.s(ARRAY['lane'])],
+                          mode := 'paths');
+SELECT end_id FROM warren.walk('roads', ARRAY[1], ARRAY[warren.s(NULL, 'out', NULL::int[], 2, 2)]);
+SELECT count FROM warren.walk('roads', ARRAY[1], ARRAY[warren.s(NULL, 'out', NULL::int[], 2, 2)],
+                              mode := 'count', distinct_ends := false);
+SELECT * FROM warren.walk('roads', ARRAY[3], ARRAY[warren.s(ARRAY['highway']), warren.s(ARRAY['lane'])],
+                          reverse := true);
+SELECT * FROM warren.walk('roads', ARRAY[1],
+    '[{"rels": ["highway"]}, {"rels": ["lane"], "filter": [3, 5]}]'::jsonb::warren.step[]);
+SELECT assert.equal((SELECT array_agg(end_id) FROM warren.walk('roads', ARRAY[1],
+                       ARRAY[warren.s(ARRAY['highway']), warren.s(ARRAY['lane'])])), ARRAY[3], 'walk ends');
+SELECT assert.equal((SELECT format('%s|%s|%s', end_id, path, rels) FROM warren.walk('roads', ARRAY[1],
+                       ARRAY[warren.s(ARRAY['highway']), warren.s(ARRAY['lane'])], mode := 'paths')),
+                    '3|{1,2,3}|{highway,lane}', 'walk paths');
+SELECT assert.equal((SELECT array_agg(end_id ORDER BY end_id) FROM warren.walk('roads', ARRAY[1],
+                       ARRAY[warren.s(NULL, 'out', NULL::int[], 2, 2)])), ARRAY[1, 3, 5], 'two hops');
+SELECT assert.equal((SELECT count FROM warren.walk('roads', ARRAY[1], ARRAY[warren.s(NULL, 'out', NULL::int[], 2, 2)],
+                       mode := 'count', distinct_ends := false)), 5::bigint, 'five walks');
+SELECT assert.equal((SELECT array_agg(end_id) FROM warren.walk('roads', ARRAY[3],
+                       ARRAY[warren.s(ARRAY['highway']), warren.s(ARRAY['lane'])], reverse := true)), ARRAY[1], 'reverse');
+SELECT assert.equal((SELECT array_agg(end_id) FROM warren.walk('roads', ARRAY[1],
+                       '[{"rels": ["highway"]}, {"rels": ["lane"], "filter": [3, 5]}]'::jsonb::warren.step[])),
+                    ARRAY[3], 'jsonb steps');
+SELECT assert.raises($$SELECT warren.steps('[{"relz": ["highway"]}]')$$, 'an unknown key', '22023');
+
+-- "last_stats()"
+SELECT * FROM warren.bfs('roads', ARRAY[1], 3, max_results := 2);      -- NOTICE: truncated
+SELECT warren.last_stats();
+SELECT assert.equal(warren.last_stats() - 'version',
+                    '{"graph": "roads", "function": "bfs", "truncated": true, "nodes_visited": 2, "edges_traversed": 2}'::jsonb,
+                    'last_stats keys');
 
 ------------------------------------------------------------------------
 -- docs/change-detection.md, pattern 1: a staged build in the transaction
@@ -338,6 +481,12 @@ SELECT :'change'::jsonb ->> 'projection' AS projection, :'gap'::jsonb -> 'after'
 SELECT assert.that((:'change'::jsonb ->> 'projection')::float8 > 0, 'the bridge turns the subspace');
 SELECT assert.that((:'gap'::jsonb ->> 'max')::float8 > 0.2, 'the bridge raises the spectral gap');
 SELECT assert.equal((warren.diff('kg', :base, :candidate) #>> '{nodes,added}')::bigint, 1::bigint, 'diff');
+SELECT assert.equal((warren.diff('kg', :base, :candidate) #>> '{all_relations,added}')::bigint, 16::bigint, 'edges added');
+SELECT assert.equal(round((:'change'::jsonb ->> 'projection')::numeric, 3), 0.022, 'projection');
+SELECT assert.equal(ARRAY(SELECT round(e::numeric, 3) FROM jsonb_array_elements_text(:'gap'::jsonb -> 'after') e),
+                    ARRAY[0, 0.328]::numeric[], 'eigenvalues after');
+SELECT assert.equal(ARRAY(SELECT round(e::numeric, 3) FROM jsonb_array_elements_text(:'gap'::jsonb -> 'before') e),
+                    ARRAY[0, 0.113]::numeric[], 'eigenvalues before');
 -- compute.md "distance": a stored-vector spectral distance needs its matrix
 SELECT assert.raises(format($$SELECT warren.distance('kg', %s, %s, 'spectral', vectors_prefix := 'lap', k := 2)$$,
                             :base, :candidate), 'spectral with vectors_prefix needs matrix');
@@ -351,6 +500,11 @@ SELECT assert.raises(format($$SELECT warren.distance('kg', %s, %s, 'edit')$$, :c
                      'siblings whose new nodes diverge', '22023');
 SELECT assert.equal((warren.distance('kg', :base, :sibling, 'edit') #>> '{overall,added}')::bigint, 2::bigint,
                     'each sibling compares with the base');
+SELECT assert.raises(format($$SELECT warren.diff('kg', %s, %s)$$, :candidate, :sibling), 'diff refuses siblings', '22023');
+SELECT warren.vector_const('kg', 'd', 1, version := :candidate);
+SELECT warren.vector_const('kg', 'd', 1, version := :sibling);
+SELECT assert.raises(format($$SELECT warren.vector_norm_diff('kg', 'd', 'd', 'l2', %s, %s)$$, :candidate, :sibling),
+                     'vector_norm_diff refuses siblings', '22023');
 ROLLBACK TO SAVEPOINT siblings;
 -- 5. decide: here, the change is too large
 ROLLBACK;
@@ -377,6 +531,9 @@ SELECT assert.that(abs((:'cross_change'::jsonb ->> 'projection')::float8
                    'the shadow graph gives the same subspace distance');
 SELECT assert.equal((warren.distance('kg', :base, :shadow, 'edit', graph2 := 'kg_shadow') #>> '{overall,removed}')::bigint,
                     0::bigint, 'aligned by external id, the shadow graph only adds edges');
+SELECT assert.equal((SELECT jsonb_set(o, '{distance}', to_jsonb(round((o ->> 'distance')::numeric, 3)))
+                     FROM (SELECT warren.distance('kg', :base, :shadow, 'edit', graph2 := 'kg_shadow') -> 'overall' o) x),
+                    '{"added": 16, "union": 42, "removed": 0, "distance": 0.381}'::jsonb, 'shadow edit overall');
 
 ------------------------------------------------------------------------
 -- docs/limits.md
