@@ -348,22 +348,18 @@ mod tests {
         }
     }
 
-    // Not under Miri: it runs on the compute pool, whose work stealing goes
-    // through crossbeam-epoch, which Miri's Stacked Borrows model rejects (a
-    // known report against crossbeam-epoch 0.9, see compute::workers).
-    #[test]
+    /// Rotates a basis of `vectors` (rows × len) by `combinations` (len ×
+    /// kept) and checks every new value against each row's combination
+    /// summed in basis order, then rounded to `f32`: the bits, not a bound.
     #[cfg(not(miri))]
-    fn a_rotation_is_each_row_s_combination_summed_in_basis_order() {
+    fn rotation_is_exact(vectors: &[Vec<f64>], combinations: &DMatrix<f64>) {
         let workers = Workers::new(2).unwrap();
-        let memory = ComputeMemory::new(1 << 20);
+        let memory = ComputeMemory::new(1 << 22);
         let mut resources =
             Resources { workers: &workers, memory: &memory, interrupts: &mut Uninterrupted };
-        let (rows, len) = (17, 4);
-        let vectors: Vec<Vec<f64>> = (0..len)
-            .map(|j| (0..rows).map(|r| ((r * 7 + j * 3) % 11) as f64 / 7.0 - 0.6).collect())
-            .collect();
+        let (rows, len, kept) = (vectors[0].len(), vectors.len(), combinations.ncols());
         let mut basis = Basis::<f32>::new(&mut resources, rows, len).unwrap();
-        for v in &vectors {
+        for v in vectors {
             basis.push(&mut resources, v, 1.0).unwrap();
         }
         let stored: Vec<Vec<f64>> = (0..len)
@@ -373,10 +369,9 @@ mod tests {
                 out
             })
             .collect();
-        let combinations = DMatrix::from_fn(len, 3, |j, l| 0.3 * j as f64 - 0.7 * l as f64 + 0.1);
-        basis.rotate(&mut resources, &combinations).unwrap();
-        assert_eq!(basis.len(), 3);
-        for l in 0..3 {
+        basis.rotate(&mut resources, combinations).unwrap();
+        assert_eq!(basis.len(), kept);
+        for l in 0..kept {
             let mut got = vec![0.0; rows];
             basis.column(&mut resources, l, &mut got).unwrap();
             let want: Vec<f64> = (0..rows)
@@ -386,6 +381,27 @@ mod tests {
                 })
                 .collect();
             assert_eq!(got, want, "vector {l}");
+        }
+    }
+
+    // Not under Miri: it runs on the compute pool, whose work stealing goes
+    // through crossbeam-epoch, which Miri's Stacked Borrows model rejects (a
+    // known report against crossbeam-epoch 0.9, see compute::workers).
+    #[cfg(not(miri))]
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(48))]
+
+        #[test]
+        fn a_rotation_is_each_row_s_combination_summed_in_basis_order(
+            (rows, len, kept) in (1usize..40, 1usize..7).prop_flat_map(|(r, l)| (Just(r), Just(l), 1..=l)),
+            seed in any::<u64>(),
+        ) {
+            let value = |i: u64| crate::spectral::random::uniform(seed, 0, i);
+            let vectors: Vec<Vec<f64>> =
+                (0..len).map(|j| (0..rows).map(|r| value((j * rows + r) as u64)).collect()).collect();
+            let combinations =
+                DMatrix::from_fn(len, kept, |j, l| value(10_000 + (j * kept + l) as u64));
+            rotation_is_exact(&vectors, &combinations);
         }
     }
 

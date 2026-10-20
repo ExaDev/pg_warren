@@ -231,3 +231,46 @@ proptest! {
         }
     }
 }
+
+/// `(A·x + Aᵀ·x)/2` with two plain SpMVs, as the operator computed it
+/// before it learned to skip the transposed product.
+fn two_products(graph: &GraphCsr, x: &[f64]) -> Vec<f64> {
+    let memory = ComputeMemory::new(1 << 24);
+    let input: AnyVector =
+        Vector::from_values(&memory, x.len() as u64, 1, x.to_vec()).unwrap().into();
+    let mut forward: AnyVector = Vector::filled(&memory, x.len() as u64, 1, 0.0f64).unwrap().into();
+    let mut transposed: AnyVector =
+        Vector::filled(&memory, x.len() as u64, 1, 0.0f64).unwrap().into();
+    let product = Product::new(Semiring::PlusTimes);
+    let run = |product: &Product<'_>, y: &mut AnyVector| {
+        spmv(workers(), &memory, &mut Uninterrupted, graph, product, &input, y).unwrap();
+    };
+    run(&product, &mut forward);
+    run(&Product { transpose: true, ..product }, &mut transposed);
+    values(&forward).iter().zip(values(&transposed)).map(|(a, b)| (a + b) / 2.0).collect()
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    #[test]
+    fn an_undirected_graph_s_one_product_is_the_two_products_to_the_bit(
+        (n, edges, x, _) in scenarios(),
+        store_merged in any::<bool>(),
+    ) {
+        let undirected: Edges = edges
+            .iter()
+            .flat_map(|&(r, s, t, w)| [(r, s, t, w), (r, t, s, w)])
+            .filter(|&(_, s, t, _)| s != t)
+            .collect();
+        let layout = crate::graph::CsrLayout { build_reverse: true, store_merged };
+        let graph = reference::graph_as(n, 2, &undirected, true, layout);
+        prop_assert!(!transposes(&graph, RelationSelection::All));
+        let got = apply(&graph, &GraphMatrix::new(Operator::Adjacency), &x).unwrap();
+        let want = two_products(&graph, &x);
+        prop_assert_eq!(got.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                        want.iter().map(|v| v.to_bits()).collect::<Vec<_>>());
+        let dense = dense(n, &undirected, None, true, true, Operator::Adjacency, &x);
+        prop_assert!(close(&got, &dense), "{:?} != {:?}", got, dense);
+    }
+}
