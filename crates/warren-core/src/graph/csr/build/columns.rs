@@ -86,18 +86,56 @@ pub(super) fn group_rows<T: Target, S: Target>(
         group.contains(&relation).then(|| relation - group.start)
     };
     count(&columns.sources, |edge| slot(columns, edge), &mut rows);
-    let targets = |edge| target::<T, S>(columns.targets[edge]);
-    scatter(&columns.sources, |edge| slot(columns, edge), &mut rows, Output::Targets(&targets));
-    if release {
-        columns.targets.release();
-    }
-    if columns.weights.is_some() {
-        for (relation, rows) in group.clone().zip(&mut rows) {
+    let allocate_weights = |rows: &mut [Rows<T>]| -> Result<(), GraphError> {
+        for (relation, rows) in group.clone().zip(rows) {
             rows.weights =
                 Some(BuildBuffer::filled(&memory, length(relation_edges[relation])?, 0.0)?);
         }
-        let weights = |edge| columns.weights.as_ref().map_or(0.0, |weights| weights[edge]);
-        scatter(&columns.sources, |edge| slot(columns, edge), &mut rows, Output::Weights(&weights));
+        Ok(())
+    };
+    match (&columns.weights, release) {
+        // Inputs kept for later groups: targets and weights in one pass.
+        (Some(weights), false) => {
+            allocate_weights(&mut rows)?;
+            scatter(
+                &columns.sources,
+                |edge| slot(columns, edge),
+                &mut rows,
+                |rows, at, edge| {
+                    rows.targets[at] = target::<T, S>(columns.targets[edge]);
+                    if let Some(out) = &mut rows.weights {
+                        out[at] = weights[edge];
+                    }
+                },
+            );
+        }
+        // Inputs freed as they go: targets first, then weights.
+        (weights, _) => {
+            scatter(
+                &columns.sources,
+                |edge| slot(columns, edge),
+                &mut rows,
+                |rows, at, edge| {
+                    rows.targets[at] = target::<T, S>(columns.targets[edge]);
+                },
+            );
+            if release {
+                columns.targets.release();
+            }
+            if let Some(weights) = weights {
+                allocate_weights(&mut rows)?;
+                scatter(
+                    &columns.sources,
+                    |edge| slot(columns, edge),
+                    &mut rows,
+                    |rows, at, edge| {
+                        if let Some(out) = &mut rows.weights {
+                            out[at] = weights[edge];
+                        }
+                    },
+                );
+            }
+        }
     }
     if release {
         columns.release();
@@ -117,32 +155,33 @@ pub(super) fn merged_rows<T: Target, S: Target>(
     let mut rows = [Rows::new(&memory, id_space, edges as u64)?];
     let all = |_| Some(0);
     count(&columns.sources, all, &mut rows);
-    let targets = |edge| target::<T, S>(columns.targets[edge]);
-    scatter(&columns.sources, all, &mut rows, Output::Targets(&targets));
+    scatter(&columns.sources, all, &mut rows, |rows, at, edge| {
+        rows.targets[at] = target::<T, S>(columns.targets[edge]);
+    });
     columns.targets.release();
     if let Some(input) = &columns.weights {
         if let Some(relations) = &columns.relations {
             rows[0].relations =
                 Some(BuildBuffer::filled(&memory, edges, RelationIndex::default())?);
-            let relation = |edge| relations[edge];
-            scatter(&columns.sources, all, &mut rows, Output::Relations(&relation));
+            scatter(&columns.sources, all, &mut rows, |rows, at, edge| {
+                if let Some(out) = &mut rows.relations {
+                    out[at] = relations[edge];
+                }
+            });
         }
         if let Some(relations) = &mut columns.relations {
             relations.release();
         }
         rows[0].weights = Some(BuildBuffer::filled(&memory, edges, 0.0)?);
-        scatter(&columns.sources, all, &mut rows, Output::Weights(&|edge| input[edge]));
+        scatter(&columns.sources, all, &mut rows, |rows, at, edge| {
+            if let Some(out) = &mut rows.weights {
+                out[at] = input[edge];
+            }
+        });
     }
     columns.release();
     let [rows] = rows;
     Ok(rows)
-}
-
-/// Which column of the rows a scatter fills, and each edge's value in it.
-enum Output<'a, T> {
-    Targets(&'a dyn Fn(usize) -> T),
-    Weights(&'a dyn Fn(usize) -> f64),
-    Relations(&'a dyn Fn(usize) -> RelationIndex),
 }
 
 /// Counts each selected edge into `offsets[source + 2]` of its slot's
@@ -162,14 +201,15 @@ fn count<S: Target, T>(sources: &[S], slot: impl Fn(usize) -> Option<usize>, row
     }
 }
 
-/// Scatters one column into row order, stable in input order; leaves each
-/// slot's offsets the CSR's. Offsets left by an earlier scatter are first
-/// shifted back to the row starts.
-fn scatter<S: Target, T: Copy>(
+/// Scatters selected edges into row order, stable in input order: `place`
+/// fills the row entry at the given position from the given edge. Leaves
+/// each slot's offsets the CSR's; offsets left by an earlier scatter are
+/// first shifted back to the row starts.
+fn scatter<S: Target, T>(
     sources: &[S],
     slot: impl Fn(usize) -> Option<usize>,
     rows: &mut [Rows<T>],
-    output: Output<'_, T>,
+    mut place: impl FnMut(&mut Rows<T>, usize, usize),
 ) {
     for rows in rows.iter_mut() {
         if rows.scattered {
@@ -183,19 +223,7 @@ fn scatter<S: Target, T: Copy>(
         let cursor = &mut rows.offsets[source.dense() as usize + 1];
         let position = *cursor as usize;
         *cursor += 1;
-        match &output {
-            Output::Targets(value) => rows.targets[position] = value(edge),
-            Output::Weights(value) => {
-                if let Some(weights) = &mut rows.weights {
-                    weights[position] = value(edge);
-                }
-            }
-            Output::Relations(value) => {
-                if let Some(relations) = &mut rows.relations {
-                    relations[position] = value(edge);
-                }
-            }
-        }
+        place(rows, position, edge);
     }
 }
 

@@ -187,6 +187,11 @@ impl EdgeList {
         self.weights.as_deref()
     }
 
+    /// The relation and endpoint columns, for the CSR build to scan.
+    pub(crate) fn columns(&self) -> (&[RelationIndex], &Endpoints) {
+        (&self.relations, &self.endpoints)
+    }
+
     /// The columns, for the CSR build.
     pub(crate) fn into_columns(self) -> EdgeColumns {
         EdgeColumns { relations: self.relations, endpoints: self.endpoints, weights: self.weights }

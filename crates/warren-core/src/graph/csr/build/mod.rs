@@ -81,23 +81,15 @@ impl BuildPlan {
         if id_space == u64::MAX {
             return Err(GraphError::IdSpaceTooLarge);
         }
-        let rows = usize::try_from(id_space).map_err(|_| GraphError::IdSpaceTooLarge)?;
-        let mut degrees = BuildBuffer::filled(memory, rows, 0u64)?;
-        let mut relation_edges = vec![0u64; relation_count];
-        for (relation, source, target) in edges.edges() {
-            if source >= id_space || target >= id_space {
-                return Err(GraphError::EdgeOutsideIdSpace { from: source, to: target });
+        let (relations, endpoints) = edges.columns();
+        let (relation_edges, longest_row) = match endpoints {
+            Endpoints::U32 { sources, targets } => {
+                counted(relations, sources, targets, relation_count, id_space, memory)
             }
-            let Some(count) = relation_edges.get_mut(relation.index()) else {
-                return Err(GraphError::RelationOutsideDictionary {
-                    relation: relation.index() as u64,
-                });
-            };
-            *count += 1;
-            degrees[source as usize] += 1;
-        }
-        let longest_row = degrees.iter().copied().max().unwrap_or(0);
-        drop(degrees);
+            Endpoints::U64 { sources, targets } => {
+                counted(relations, sources, targets, relation_count, id_space, memory)
+            }
+        }?;
         let weighted = edges.weights().is_some();
         let target_bytes = target_bytes(id_space);
         let entry_bytes = target_bytes + if weighted { 8 } else { 0 };
@@ -224,6 +216,36 @@ impl BuildPlan {
         }
         Ok(())
     }
+}
+
+/// Each relation's edges and the most edges from one source, after
+/// checking that every edge lies in the id space and names a relation of
+/// the dictionary (the first edge that does not is the error).
+fn counted<S: Target>(
+    relations: &[crate::graph::RelationIndex],
+    sources: &[S],
+    targets: &[S],
+    relation_count: usize,
+    id_space: u64,
+    memory: &BuildMemory,
+) -> Result<(Vec<u64>, u64), GraphError> {
+    let rows = usize::try_from(id_space).map_err(|_| GraphError::IdSpaceTooLarge)?;
+    let mut degrees = BuildBuffer::filled(memory, rows, 0u64)?;
+    let mut relation_edges = vec![0u64; relation_count];
+    for ((relation, source), target) in relations.iter().zip(sources).zip(targets) {
+        let (source, target) = (source.dense(), target.dense());
+        if source >= id_space || target >= id_space {
+            return Err(GraphError::EdgeOutsideIdSpace { from: source, to: target });
+        }
+        let Some(count) = relation_edges.get_mut(relation.index()) else {
+            return Err(GraphError::RelationOutsideDictionary {
+                relation: relation.index() as u64,
+            });
+        };
+        *count += 1;
+        degrees[source as usize] += 1;
+    }
+    Ok((relation_edges, degrees.iter().copied().max().unwrap_or(0)))
 }
 
 /// The bytes of one target in the CSRs of `id_space`.
