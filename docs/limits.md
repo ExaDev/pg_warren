@@ -10,8 +10,8 @@ All are ordinary GUCs, settable per session or per transaction
 | Setting | Default | Range | What it bounds | When exceeded |
 |---|---|---|---|---|
 | `warren.threads` | half the cores, at least 1 | 1–1024 | threads a compute kernel runs on (`spmv`, `spmm`, `vector_map`, reductions, `gather`, `eigen`, `distance`, `triangles`) | — |
-| `warren.max_compute_memory` | `4GB` | `64kB` up | memory one call holds: every vector it reads (once, cached or not), every vector and work buffer it allocates | `configuration_limit_exceeded` (53400), before allocating |
-| `warren.max_cache_memory` | `4GB` | `64kB` up | what this backend's cache holds *between* calls: cached versions, cached persisted vectors, and every role's transient vectors | versions and persisted vectors are evicted, least recently used first; a transient write that would go over is refused with 53400 |
+| `warren.max_compute_memory` | `4GB` | `64kB` up | memory one call holds: every vector it reads (once, cached or not), every vector and work buffer it allocates, and what its statement holds in the cache past `warren.max_cache_memory` | `configuration_limit_exceeded` (53400), before allocating or loading |
+| `warren.max_cache_memory` | `4GB` | `64kB` up | what this backend's cache holds *between* statements: cached versions, cached persisted vectors, and every role's transient vectors | versions and persisted vectors no running statement has read are evicted, least recently used first; a transient write that would go over is refused with 53400 |
 | `warren.max_build_memory` | `4GB` | `1MB` up | the CSR offsets a `refresh` builds (8 bytes × (id_space + 1) per relation's CSR, and the merged CSR's if stored, per direction) | 53400, before anything is allocated or written |
 | `warren.max_walk_paths` | `10000000` | 1 up | the largest `max_results` for a `walk` that returns a row per walk (`mode := 'paths'`, or `'ends'` without `distinct_ends`) | `program_limit_exceeded` (54000) |
 
@@ -51,13 +51,29 @@ compute kernels from the main thread every millisecond), so
   graph. Calls with an explicit `version :=` load that version too.
 - **The cache is bounded by `warren.max_cache_memory`** (default `4GB`,
   per backend). When it is over the cap, cached versions and persisted
-  vectors are evicted, least recently used first. A version larger than the
-  cap is loaded for the call that needs it and then dropped (with a
-  `NOTICE`), without flushing everything else. Before a load, room is made
-  for the version first, so a load does not take the cache past the cap.
-  Evicted entries are simply reloaded on next use (about a second per GB), so
-  a cap below your working set makes every call reload. A call or streaming
-  function that is using an evicted version keeps its copy until it ends.
+  vectors are evicted, least recently used first. Before a load, room is
+  made for the version first. Evicted entries are simply reloaded on next
+  use (about a second per GB), so a cap below what one statement reads
+  makes every statement reload. A call or streaming function that is
+  using an evicted version keeps its copy until it ends.
+- **A statement keeps what it reads.** Every version and persisted vector
+  a top-level statement reads or writes stays cached until the statement
+  ends, even past the cap, so a statement that makes many calls loads
+  each version once. A library function such as `pagerank` is one
+  statement, however many calls it makes inside. When the statement ends,
+  normally or with an error, what it held is released and the cap holds
+  again, also between the statements of a transaction block. (Several
+  statements sent as one query string, as `psql -c 'a; b'` does, count as
+  one.) A version larger than the cap is held for the statement that
+  reads it, with a `NOTICE` once per statement, and reloaded by the next
+  one.
+- **What a statement holds past the cap is charged to
+  `warren.max_compute_memory`.** Each call in the statement has that much
+  less compute memory, and a version load that would take it past
+  `warren.max_compute_memory` is refused with 53400 before anything is
+  loaded; the message names both settings and the bytes needed. So
+  `warren.max_cache_memory` plus `warren.max_compute_memory` bounds what
+  the cache and a call hold together.
 - **Transient vectors are never evicted**, since they cannot be reloaded.
   They count against the cap, and a transient write that would take the
   transient vectors alone past it is refused with 53400 before anything
@@ -66,25 +82,31 @@ compute kernels from the main thread every millisecond), so
   Roles sharing a backend share its cap. Transient vectors of a version
   dropped elsewhere are freed once the drop has committed.
 - The library's scratch is transient (`pagerank` holds about eleven
-  full-length `f64` vectors, ~88 bytes per node), so the version and the
-  scratch must fit the cap together; otherwise the version reloads on every
-  superstep, or, if the scratch alone does not fit, the call fails with
-  53400. Raise `warren.max_cache_memory` for large graphs.
+  full-length `f64` vectors, ~88 bytes per node). The version stays
+  cached beside it for the whole run; if the two exceed the cap, the
+  excess comes out of `warren.max_compute_memory`, and if the scratch
+  alone does not fit the cap, the call fails with 53400. Raise
+  `warren.max_cache_memory` for large graphs, so the version also stays
+  cached between runs.
 - `warren.evict(name)` frees a graph's cached versions and vectors, and this
   role's transient vectors of it (which are then gone), at once. Lowering the
   cap takes effect at the next lookup or load. A shared-memory cache across
   backends is a later release.
 - `warren.prewarm(name)` loads the current version ahead of first use, for
   pooled connections; `warren.evict(name)` returns how many versions and vectors it freed.
-- `warren.max_compute_memory` bounds what one call reads and allocates;
-  `warren.max_cache_memory` bounds what is held between calls. A backend's
-  peak is therefore about the sum of the two, plus, while a version loads,
+- `warren.max_compute_memory` bounds what one call reads and allocates,
+  and what its statement holds past the cap; `warren.max_cache_memory`
+  bounds what is held between statements. A backend's peak is therefore
+  bounded by the sum of the two (a traversal's visited set and frontier
+  aside), plus, while a version loads,
   one CSR's raw segments (at most ~1.3 GB, the merged weighted CSR of 100M
   edges; measured: a 1.2 GB version loads at a 1.69 GB peak, a 6.0 GB one at
-  7.3 GB). Two exceptions are bounded by neither limit: `refresh` (below)
-  and `diff`, which holds both versions it compares (a 7.2 GB peak for two
-  3.44 GB versions; on two 6.0 GB versions the soak's backend was killed for
-  memory at 12.8 GB), as `distance` between versions does.
+  7.3 GB). `refresh` (below) is bounded by neither. `diff`, `distance` and
+  `vector_norm_diff` read their two versions through the cache under the
+  same rule, and refuse two that do not fit the two settings together
+  before loading either (before 0.3.0, `diff` held both outside every
+  limit: on two 6.0 GB versions the soak's backend was killed for memory
+  at 12.8 GB).
 - Storage of a version, per direction: offsets 8 bytes × (id_space + 1) for
   each relation, plus the merged CSR's when there is more than one relation
   and the graph stores it (`store_merged`, the default; see below);
@@ -119,7 +141,7 @@ memory (shared buffers excluded).
 |---|---|---|---|---|---|
 | one relation, unweighted | 1.12 GB | 1.20 GB | 2.0 GB | 2.2–2.9 s | yes: 1.20 + 0.88 GB |
 | five relations, weighted, merged CSR (default) | 5.92 GB | 6.00 GB | 9.0 GB | 23 s | no: the graph alone is over the cap |
-| five relations, weighted, `store_merged := false` | 3.36 GB | 3.44 GB | 5.5 GB | 6.2 s | no: 3.44 + 0.88 = 4.32 GB, 30 MB over |
+| five relations, weighted, `store_merged := false` | 3.36 GB | 3.44 GB | 5.5 GB | 6.2 s | no: 3.44 + 0.88 = 4.32 GB, 30 MB over (charged to compute memory) |
 
 Not measured, and estimated the same way (the estimates matched the
 measured cached bytes to 0.1%): one weighted relation ~2.8 GB; five
@@ -127,19 +149,25 @@ unweighted relations ~2.8 GB, or ~1.84 GB with `store_merged := false`.
 `pagerank`'s transient scratch is ~0.88 GB at 10M nodes (88 bytes per
 node).
 
-**A version larger than `warren.max_cache_memory`, or one that does not fit
-beside a library run's transient scratch, is reloaded on every call.** The
-SQL library makes several calls per superstep (`pagerank` makes 8 per
-iteration, each opening the version), so at the default cap `pagerank` on
-the five-relation weighted graph reloads it about 170 times: more than 15
-minutes (where it was stopped) with the merged CSR, at 23 s a load, and as
-long without it. Single calls pay one load each (`bfs` 21.9 s instead of
-0.73 s). The remedy is to raise `warren.max_cache_memory` to hold the graph
-and the scratch (`SET warren.max_cache_memory = '8GB'`: `pagerank` then
-takes 15.1 s with the merged CSR and 31.6 s without), or, for a graph that
-is only just over, `store_merged := false`. Weighted multi-relation builds
-of 100M edges also exceed 4 GB of build memory either way: give the
-`refresh` backend 6–10 GB.
+**A version that does not fit `warren.max_cache_memory`, alone or beside
+a library run's transient scratch, is held for the statement that reads
+it and reloaded by the next.** A library run is one statement, so it loads
+its version once, and what it holds past the cap is charged to
+`warren.max_compute_memory`. A statement that would hold more than the two
+settings together fails with 53400 before loading. Before this, the soak
+measured the cliff it replaces: the version was reloaded on every call,
+and since `pagerank` makes 8 calls per iteration, a default-cap run on the
+five-relation weighted graph reloaded it about 170 times, more than 15
+minutes (where it was stopped) instead of 32 s at an 8GB cap. The new
+behaviour has not been re-measured at this scale. Raising
+`warren.max_cache_memory` to hold the graph and the scratch (`SET
+warren.max_cache_memory = '8GB'`: `pagerank` took 15.1 s with the merged
+CSR and 31.6 s without) still saves the reload between statements, and
+single calls on a graph over the cap still pay one load each (`bfs` 21.9 s
+instead of 0.73 s). For a graph that is only just over, `store_merged :=
+false` also helps. Weighted multi-relation builds of 100M edges also
+exceed 4 GB of build memory either way: give the `refresh` backend
+6–10 GB.
 
 ### The merged CSR (`store_merged`)
 
@@ -181,10 +209,11 @@ DESIGN.md §12 and `bench/results/soak/`:
 | `diff` (< 30 s) | 13.5–22.3 s | killed for memory (12.8 GB) | **47.7–55.2 s** |
 | Cold load (< 15 s) | 2.2–2.9 s | **23 s** | 6.2 s |
 
-Bold misses a target. Why, in short: a graph over the cache cap (or over
-it with a library run's scratch) reloads on every call (see
-[Sizing](#sizing)); weighted multi-relation builds and `diff` are bounded by
-no limit; `eigen`'s step count grows with N on a random graph's clustered
+Bold misses a target; the reload and `diff` rows were measured before the
+statement pin. Why, in short: a graph over the cache cap (or over it with a
+library run's scratch) reloaded on every call, and now reloads once per
+statement (see [Sizing](#sizing)); weighted multi-relation builds are
+bounded by no limit, and `diff` was not before the pin; `eigen`'s step count grows with N on a random graph's clustered
 spectrum, beyond the default `max_iter` (DESIGN.md §6.5), at ~1 s a step;
 and BFS and `reachable_set` are timed through SQL, row emission included.
 
