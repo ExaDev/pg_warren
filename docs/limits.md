@@ -176,25 +176,23 @@ RESET warren.max_cache_memory;
 
 ### Sizing
 
-Measured by the 100M-edge soak (`bench/soak.py`, DESIGN.md §12): 10M nodes,
-100M edges, u32 targets, reverse CSR included, a `bigint` id map; decimal
-GB, while `4GB` in a setting is 4 GiB ≈ 4.29 GB. "Cached" is what the cache
-counts against `warren.max_cache_memory`; peaks are a backend's private
-memory (shared buffers excluded).
+Measured by the 100M-edge soak (`bench/soak.py`, DESIGN.md §12; the
+full-scale re-run after M7, at 10f68ab): 10M nodes, 100M edges, u32
+targets, reverse CSR included, a `bigint` id map; decimal GB, while `4GB`
+in a setting is 4 GiB ≈ 4.29 GB. "Cached" is what the cache counts against
+`warren.max_cache_memory`; peaks are a backend's private memory (shared
+buffers excluded).
 
 | Graph (10M nodes, 100M edges) | Stored | Cached | `refresh` peak | Cold load | Fits the 4 GiB cap with `pagerank`'s scratch? |
 |---|---|---|---|---|---|
-| one relation, unweighted | 1.12 GB | 1.20 GB | ~1.6 GB (2.0 GB before 0.3.0) | 2.2–2.9 s | yes: 1.20 + 0.88 GB |
-| five relations, weighted, merged CSR (default) | 5.92 GB | 6.00 GB | ~3.3 GB (9.0 GB before) | 23 s | no: the graph alone is over the cap |
-| five relations, weighted, `store_merged := false` | 3.36 GB | 3.44 GB | ~3.3 GB (5.5 GB before) | 6.2 s | no: 3.44 + 0.88 = 4.32 GB, 30 MB over (charged to compute memory) |
+| one relation, unweighted | 1.12 GB | 1.20 GB | 1.55 GB (2.0 GB before 0.3.0) | 1.9–2.2 s | yes: 1.20 + 0.88 GB |
+| five relations, weighted, merged CSR (default) | 5.92 GB | 6.00 GB | 3.26 GB (9.0 GB before) | 23 s | no: the graph alone is over the cap |
+| five relations, weighted, `store_merged := false` | 3.36 GB | 3.44 GB | 3.26 GB (5.5 GB before) | 7–13 s | no: 3.44 + 0.88 = 4.32 GB, 30 MB over (charged to compute memory) |
 
-The `refresh` peaks are what the build charges at full scale (1.56,
-3.24 and 3.24 GB, run in `warren-core`) plus what a backend was measured
-to hold past that charge through SQL at 10M and 30M edges (about 18 MB,
-not growing with the edges) and the edge query's own execution memory,
-which `work_mem` bounds (DESIGN.md §5.4). All are within 4 GiB; the
-earlier figures were measured by the soak before the build was charged
-and streamed, and the soak's full-scale re-run is due before 0.3.0.
+The `refresh` peaks are measured through SQL, and match what the build
+charges (1.56, 3.24 and 3.24 GB) plus the little a backend holds past the
+charge and the edge query's own execution memory, which `work_mem` bounds
+(DESIGN.md §5.4). All are within 4 GiB.
 `warren.max_build_memory` is the build's alone: what the backend's cache
 holds (`warren.max_cache_memory`) comes on top of it during a `refresh`.
 
@@ -213,16 +211,24 @@ settings together fails with 53400 before loading. Before this, the soak
 measured the cliff it replaces: the version was reloaded on every call,
 and since `pagerank` makes 8 calls per iteration, a default-cap run on the
 five-relation weighted graph reloaded it about 170 times, more than 15
-minutes (where it was stopped) instead of 32 s at an 8GB cap. Measured at
-a tenth of the scale with the cap as far under the graph and scratch
-(`bench/results/soak/`): `pagerank` now loads the version once, 6.1 s
-against 5.8 s at a raised cap, where the build before took 60.7 s over
-156 loads. Raising
+minutes (where it was stopped). Measured again at full scale
+(`bench/results/soak/`): `pagerank` now loads the version once at the
+default limits, 40.1 s with the merged CSR (23 s of it the load) and
+35.6 s without, against 17.4 s and 32.7 s at an 8GB cap. Raising
 `warren.max_cache_memory` to hold the graph and the scratch (`SET
-warren.max_cache_memory = '8GB'`: `pagerank` took 15.1 s with the merged
-CSR and 31.6 s without) still saves the reload between statements, and
-single calls on a graph over the cap still pay one load each (`bfs` 21.9 s
-instead of 0.73 s). For a graph that is only just over, `store_merged :=
+warren.max_cache_memory = '8GB'`) still saves the reload between
+statements, and single calls on a graph over the cap still pay one load
+each (`bfs` 23.4 s instead of 0.71 s). A statement that needs more than
+the two settings together is refused: on the merged graph, `diff` and
+`distance` between two versions (12.0 GB) and `eigen` (~3 GB beside the
+6.0 GB version) fail with 53400 at the default limits. `eigen`, and
+`distance('spectral')` without `vectors_prefix`, are refused before the
+first step, not after it: with n the id space, m = min(active nodes,
+max(2k + 1, 20)) basis vectors and e = 4 bytes (`f32`) or 8 (`f64`), a
+solve holds at its peak n·33 bytes of operator (n·49 for the normalised
+operators), ⌈n / 4096⌉·4096·m·e of basis, (4m² + m)·8 of projected
+matrices, k·n·e of eigenvectors and n·8 for counting components; at 10M
+nodes, k = 20, `f32` and the normalised Laplacian that is 3.0 GB. For a graph that is only just over, `store_merged :=
 false` also helps. A `refresh` of any of these graphs fits the default
 `warren.max_build_memory` (before 0.3.0, weighted multi-relation builds
 of 100M edges needed 6–10 GB).
@@ -250,37 +256,37 @@ memory limits. The choice is per graph, kept by `compact`, and shown by
 
 ## Measured performance
 
-At the DESIGN.md §12 scale (10M nodes, 100M edges), from the M7 soak on a
-shared 4-vCPU Xeon (half the 8 cores §12 assumes; another agent's builds
-ran alongside, so times vary by up to 2× between runs), release build,
-`warren.threads = 4`, default memory limits; full numbers and settings in
-DESIGN.md §12 and `bench/results/soak/`:
+At the DESIGN.md §12 scale (10M nodes, 100M edges), from the M7 soak's
+full-scale re-run (10f68ab) on an idle 4-vCPU Xeon (half the 8 cores §12
+assumes), release build, `warren.threads = 4`, default memory limits; full
+numbers, settings and the first soak's figures in DESIGN.md §12 and
+`bench/results/soak/`:
 
 | What (target) | One relation, unweighted | Five weighted relations, merged CSR | Five weighted relations, `store_merged := false` |
 |---|---|---|---|
-| BFS depth 6 (≥ 20× a recursive CTE) | **10.5–11×** (0.69–0.76 s vs 7.6 s) | 21.9 s, reloading; 0.73 s at an 8GB cap | 0.80–0.85 s |
-| `reachable_set`, full component (> 50M edges/s) | **11–12M/s**; since the pull below, projected 27–34M/s | 3M/s reloading; 11.5M/s at 8GB | **7.5–7.7M/s** |
-| `components()` (< 10 s) | 4.5–5.4 s | **30.9 s** reloading; 5.8 s at 8GB | borderline: 9.3–10.4 s |
-| `pagerank`, 20 iterations (< 30 s on 8 threads) | 15.2–16.7 s | **≥ 15 min** reloading; 15.1 s at 8GB | **≥ 15 min** reloading; 31.6 s at 8GB |
-| `eigen`, k = 20, normalised Laplacian (< 10 min) | **65 min, not converged** in the default 4,100 steps | 0.83 s a step (with its load) | 2.6 s a step |
-| `refresh()` (< 8 min, < 4 GB) | 146–167 s, 2.0 GB | 347 s, **9.0 GB** | 221–234 s, **5.5 GB** |
-| `diff` (< 30 s) | 13.5–22.3 s | not in the committed run; killed for memory (12.8 GB) in an uncommitted one | **47.7–55.2 s** |
-| Cold load (< 15 s) | 2.2–2.9 s | **23 s** | 6.2 s |
+| BFS depth 6 (≥ 20× a recursive CTE) | **11.0×** (0.67 s vs 7.32 s) | **23.4 s**, the load; 0.71 s at an 8GB cap | 0.71 s |
+| `reachable_set`, full component (> 50M edges/s) | **26M/s** (3.86 s) | **3.8M/s**, the load; 25M/s at 8GB | **16M/s** |
+| `components()` (< 10 s) | 6.2 s | **29.2 s**, the load; 5.8 s at 8GB | borderline: **10.1 s** |
+| `pagerank`, 20 iterations (< 30 s on 8 threads) | 15.6 s | **40.1 s**, one load; 17.4 s at 8GB | **35.6 s**, one load from cold; 32.7 s at 8GB |
+| `eigen`, k = 20, normalised Laplacian (< 10 min) | **misses**: 0.59 s a step, ~14,500 steps on this random graph (~2 h) | **refused (53400)** at the default limits; 0.77 s a step at 8GB | not measured |
+| `refresh()` (< 8 min, < 4 GB) | 153 s, 1.55 GB | 260 s, 3.26 GB | 228 s, 3.26 GB |
+| `diff` (< 30 s) | 17.8 s | **refused (53400)**: two 6.0 GB versions exceed the two limits | **58.4 s** |
+| Cold load (< 15 s) | 1.9–2.2 s | **23 s** | 7–13 s |
 
-Bold misses a target; the reload and `diff` rows were measured before the
-statement pin. Why, in short: a graph over the cache cap (or over it with a
-library run's scratch) reloaded on every call, and now reloads once per
-statement (see [Sizing](#sizing)); weighted multi-relation builds are
-bounded by no limit, and `diff` was not before the pin; `eigen`'s step
-count grows with N on a random graph's clustered spectrum, beyond the
-default `max_iter` (DESIGN.md §6.5), at ~1 s a step;
-and BFS and `reachable_set` are timed through SQL, row emission included.
-BFS to depth 6 is about 85% row emission (the traversal itself takes
-0.11 s), so a faster kernel cannot close its gap. `reachable_set` was about
-two thirds traversal, and now pulls levels from the reverse CSR
-(direction-optimising BFS): 1.24 s instead of 5.96 s for the traversal at
-this scale, and 0.21 s instead of 0.49 s through SQL at 1M nodes and 10M
-edges (DESIGN.md §9.3). It is not yet re-measured at full scale.
+Bold misses a target. Why, in short: a graph over the cache cap loads once
+per statement, so single calls on it pay its 23 s load, while a library
+run such as `pagerank` loads it once (see [Sizing](#sizing)); calls that
+need more than `warren.max_cache_memory` and `warren.max_compute_memory`
+together (two 6.0 GB versions, or `eigen` beside one) are refused with
+53400; `eigen`'s step count grows with N on a random graph's clustered
+spectrum, beyond the default `max_iter` (DESIGN.md §6.5), while on a
+graph with community structure it is projected at ~400 steps, 3–4 min at
+this scale; and BFS and `reachable_set` are timed through SQL, row
+emission included. BFS to depth 6 is about 85% row emission (the
+traversal itself takes 0.11 s), so a faster kernel cannot close its gap.
+`reachable_set` pulls levels from the reverse CSR (direction-optimising
+BFS): its traversal takes 1.24 s instead of 5.96 s at this scale, and
+through SQL 3.86 s instead of 8.3–9.2 s (DESIGN.md §9.3).
 
 Smaller-scale kernel numbers (100K nodes, 1M edges unless stated):
 

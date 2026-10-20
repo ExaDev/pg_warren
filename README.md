@@ -43,6 +43,7 @@ the server headers (`postgresql-server-dev-NN`), `clang`/`libclang-dev`, and
 cargo-pgrx at exactly the version the extension uses:
 
 ```sh
+git checkout v0.3.0   # the latest release; main is the version in development
 cargo install cargo-pgrx --version 0.19.3 --locked
 cargo pgrx init --pg16 "$(command -v pg_config)"
 cd crates/pg_warren
@@ -95,7 +96,7 @@ superuser, or leave the graphs out with `--exclude-table-data='warren.*'`
 and, after the restore, create them again with `warren.create_graph` and
 `warren.refresh`.
 
-**Upgrading** (from 0.1.0 or 0.2.0): install the new build, then run
+**Upgrading** from an earlier release: install the new build, then run
 `ALTER EXTENSION pg_warren UPDATE;` in every database that has the extension,
 *before* calling any `warren.*` function. The new library is loaded at once,
 but the catalog changes only with the update, so calls in between can fail.
@@ -190,15 +191,39 @@ Every SQL example in the README and `docs/` runs in CI, in
   DESIGN.md §13.
 - **0.2.0**: vectors, semiring compute, `gather`, the algorithm library,
   `eigen` and `distance`, milestones M4–M6.
-- **0.3.0** (in development, M7): hardening. Shipped so far: a size bound
-  on the backend-local cache (`warren.max_cache_memory`, least-recently-used
-  eviction) and these docs.
+- **0.3.0**: hardening, milestone M7. Memory is bounded by default (the
+  cache, the whole build, and each call, with 53400 refusals before work
+  that cannot fit), pg_warren installs without a superuser, dumps restore,
+  and a graph of several relations may leave its merged CSR unstored
+  (`store_merged := false`). Upgrading needs `ALTER EXTENSION pg_warren
+  UPDATE`, and changes some behaviour (see the changelog).
+
+  A graph of 10M nodes and 100M edges builds and runs within the default
+  limits (each 4 GB) with one relation, or with five weighted relations and
+  `store_merged := false` (DESIGN.md §12; measured on 4 vCPUs). A backend's
+  peak is bounded by the cache and compute limits together, not by 4 GB:
+  on the five-relation graph `pagerank` peaks at 4.5 GB and `diff` at
+  7.2 GB. The caveats: the five-relation graph beside `pagerank`'s scratch
+  is 30 MB over the cache cap (the excess is charged to compute memory) and
+  its all-relations reads are slower; with its merged CSR it is 6.0 GB, so
+  each statement reloads it, and `diff`, `distance` and `eigen` are refused
+  unless the limits are raised. Several §12 targets are missed on 4 vCPUs:
+  BFS through SQL is 11× a recursive CTE rather than 20×, `reachable_set`
+  26M rather than 50M edges/s, `pagerank` on five relations 36–40 s rather
+  than 30 s, its `diff` 58 s rather than 30 s, and `components` without the
+  merged CSR is borderline at 10.1 s; `eigen` does not converge within
+  10 minutes on a uniform random graph of that size
+  ([docs/limits.md](docs/limits.md)).
+
+- **0.4.0** (in development): locality ordering of dense ids first (DESIGN.md
+  §14 item 22), then the planned library's first groups (§6.7).
 
 See [CHANGELOG.md](CHANGELOG.md). This is pre-1.0 software: the SQL surface
 may still change between minor versions, with an upgrade script each time.
 
 Not there yet: a shared-memory cache across backends, incremental
-maintenance, contraction (community-level graphs), and text ids
+maintenance, contraction (community-level graphs), sparse matrix algebra,
+locality ordering of dense ids (next, DESIGN.md §14 item 22), and text ids
 ([docs/limits.md](docs/limits.md)).
 
 ## Positioning vs prior art
@@ -227,7 +252,9 @@ pg_warren's contribution is different:
 
 pg_warren takes no code from either project. Ideas adopted from them are
 credited in [NOTICE](NOTICE) and in comments where they are used; the reading
-is recorded in [docs/prior-art-notes.md](docs/prior-art-notes.md).
+is recorded in [docs/prior-art-notes.md](docs/prior-art-notes.md). Nor does
+it bind SuiteSparse:GraphBLAS: its kernels are native, and GraphBLAS is read
+for its algorithms and vocabulary, not imported (DESIGN.md §6.10).
 
 ## Building and contributing
 

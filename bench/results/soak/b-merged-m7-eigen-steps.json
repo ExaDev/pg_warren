@@ -1,0 +1,150 @@
+{
+ "provenance": {
+  "argv": [
+   "/tmp/claude-0/-home-user-pg-warren/d0e27763-6651-5ebc-9e14-ccc3a1ae882e/scratchpad/eigen_steps.py",
+   "b-merged",
+   "8GB",
+   "results/soak/b-merged-m7-eigen-steps.json"
+  ],
+  "harness": {
+   "revision": "2ddd16001473f2d834414afd9a79f52c951e6ee7",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "10f68ab",
+   "profile": "release",
+   "library": "/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "8dfb7ef488f96b5e5f4ae70309024df9f4cd3ca6584f4e4c4b164e0ad25afb51"
+  },
+  "script": "#!/usr/bin/env python3\n\"\"\"Supplement to bench/soak.py: eigen's in-database per-step cost on a case's\ngraph with warren.max_cache_memory raised (default compute memory), at two\nmax_iter values so the difference is the cost of the steps alone.\nUsage: eigen_steps.py CASE CAP OUT\"\"\"\nimport json\nimport sys\nfrom pathlib import Path\n\nsys.path.insert(0, \"/home/user/wt/m7-soak/bench\")\nimport soak  # noqa: E402\n\ncase_name, cap, out = sys.argv[1], sys.argv[2], Path(sys.argv[3])\ncase = soak.CASES[case_name]\nif soak.os.environ.get(\"SCALE\"):\n    case = case.scaled(int(soak.os.environ[\"SCALE\"]))\nlibrary = soak.installed_library(\"/usr/bin/pg_config\")\nfound = soak.provenance([sys.argv[0], *sys.argv[1:]], \"10f68ab\", \"release\", library)\nfound[\"script\"] = Path(__file__).read_text()\nresult = {\"provenance\": found, \"case\": case.name, \"nodes\": case.nodes, \"edges\": case.edges,\n          \"max_cache_memory\": cap, \"threads\": 4, \"statement_timeout\": \"20min\",\n          \"hardware\": soak.hardware(), \"started_at\": soak._now(), \"stages\": {}}\nwith soak.Cluster(\"/usr/bin/pg_config\", \"runner\", parent=Path(\"/var/tmp\"), settings=soak.SETTINGS) as cluster:\n    admin = cluster.database()\n    admin.execute(\"CREATE DATABASE soak\")\n    try:\n        with soak.Session(cluster, \"soak\") as s:\n            s.run(\"CREATE EXTENSION pg_warren\")\n            s.run(\"CREATE UNLOGGED TABLE soak_removed ()\")\n            s.run(soak.create_graph_sql(case, soak.SEED))\n            result[\"stages\"][\"refresh\"] = s.measure(f\"SELECT warren.refresh('{soak.GRAPH}')\")\n        with soak.Session(cluster, \"soak\") as s:\n            s.run(\"SET warren.threads = 4\")\n            s.run(\"SET statement_timeout = '20min'\")\n            s.run(f\"SET warren.max_cache_memory = '{cap}'\")\n            result[\"stages\"][\"prewarm\"] = s.measure(f\"SELECT warren.prewarm('{soak.GRAPH}')\")\n            result[\"settings\"] = s.run(soak.SETTINGS_SQL)[\"rows\"]\n            for steps in (100, 200):\n                result[\"stages\"][f\"eigen {steps}\"] = s.measure(\n                    f\"SELECT count(*), max(residual) FROM warren.eigen('{soak.GRAPH}', 20, 'normalized_laplacian', \"\n                    f\"'smallest', tol := {soak.EIGEN_TOL}, max_iter := {steps})\")\n    finally:\n        admin.execute(\"DROP DATABASE IF EXISTS soak\")\nstages = result[\"stages\"]\nif all(\"errors\" not in stages[f\"eigen {n}\"] for n in (100, 200)):\n    t100, t200 = stages[\"eigen 100\"][\"median_seconds\"], stages[\"eigen 200\"][\"median_seconds\"]\n    result[\"measured\"] = {\"eigen_100_seconds\": t100, \"eigen_200_seconds\": t200,\n                          \"eigen_seconds_per_step_200\": t200 / 200,\n                          \"eigen_seconds_per_step_marginal\": (t200 - t100) / 100}\nresult[\"finished_at\"], result[\"load_average_after\"] = soak._now(), soak.os.getloadavg()\nout.write_text(json.dumps(result, indent=1) + \"\\n\")\nprint(json.dumps(result.get(\"measured\")), flush=True)\n"
+ },
+ "case": "b-merged",
+ "nodes": 10000000,
+ "edges": 100000000,
+ "max_cache_memory": "8GB",
+ "threads": 4,
+ "statement_timeout": "20min",
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v140",
+  "load_average": [
+   0.36083984375,
+   1.22412109375,
+   1.3642578125
+  ]
+ },
+ "started_at": "2026-10-20T21:00:02+00:00",
+ "stages": {
+  "refresh": {
+   "sql": "SELECT warren.refresh('soak')",
+   "seconds": [
+    247.2333
+   ],
+   "median_seconds": 247.2333,
+   "rows": [
+    "1"
+   ],
+   "first_rows": [
+    "1"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 10772480,
+   "peak_rss_anon": 3261607936,
+   "vm_hwm": 4436807680,
+   "rss_anon_after": 38141952
+  },
+  "prewarm": {
+   "sql": "SELECT warren.prewarm('soak')",
+   "seconds": [
+    26.3429
+   ],
+   "median_seconds": 26.3429,
+   "rows": [
+    "1"
+   ],
+   "first_rows": [
+    "1"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 3198976,
+   "peak_rss_anon": 7293640704,
+   "vm_hwm": 8401657856,
+   "rss_anon_after": 6013632512
+  },
+  "eigen 100": {
+   "sql": "SELECT count(*), max(residual) FROM warren.eigen('soak', 20, 'normalized_laplacian', 'smallest', tol := 1e-06, max_iter := 100)",
+   "seconds": [
+    72.0022
+   ],
+   "median_seconds": 72.0022,
+   "rows": [
+    "20|0.019310266040891724"
+   ],
+   "first_rows": [
+    "20|0.019310266040891724"
+   ],
+   "notices": [],
+   "warnings": [
+    "WARNING:  eigen did not converge in 100 steps; the largest residual is 1.9310266040891724e-2 (raise max_iter or tol)"
+   ],
+   "rss_anon_before": 6013661184,
+   "peak_rss_anon": 9026023424,
+   "vm_hwm": 10135736320,
+   "rss_anon_after": 6015565824
+  },
+  "eigen 200": {
+   "sql": "SELECT count(*), max(residual) FROM warren.eigen('soak', 20, 'normalized_laplacian', 'smallest', tol := 1e-06, max_iter := 200)",
+   "seconds": [
+    154.0688
+   ],
+   "median_seconds": 154.0688,
+   "rows": [
+    "20|0.005925259566007402"
+   ],
+   "first_rows": [
+    "20|0.005925259566007402"
+   ],
+   "notices": [],
+   "warnings": [
+    "WARNING:  eigen did not converge in 200 steps; the largest residual is 5.925259566007402e-3 (raise max_iter or tol)"
+   ],
+   "rss_anon_before": 6015565824,
+   "peak_rss_anon": 9018056704,
+   "vm_hwm": 10127810560,
+   "rss_anon_after": 6017601536
+  }
+ },
+ "settings": [
+  "fsync=off",
+  "full_page_writes=off",
+  "jit=on",
+  "maintenance_work_mem=1GB",
+  "max_parallel_workers_per_gather=2",
+  "max_wal_size=1GB",
+  "shared_buffers=1GB",
+  "statement_timeout=20min",
+  "synchronous_commit=off",
+  "wal_level=minimal",
+  "warren.max_build_memory=4GB",
+  "warren.max_cache_memory=8GB",
+  "warren.max_compute_memory=4GB",
+  "warren.threads=4",
+  "work_mem=64MB"
+ ],
+ "measured": {
+  "eigen_100_seconds": 72.0022,
+  "eigen_200_seconds": 154.0688,
+  "eigen_seconds_per_step_200": 0.770344,
+  "eigen_seconds_per_step_marginal": 0.8206660000000001
+ },
+ "finished_at": "2026-10-20T21:08:26+00:00",
+ "load_average_after": [
+  3.26708984375,
+  2.48388671875,
+  1.81494140625
+ ]
+}

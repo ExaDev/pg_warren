@@ -71,6 +71,9 @@ impl SqlError for SpectralSqlError {
             }
             Self::IdTypeMismatch(..) => PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
             Self::Spectral(SpectralError::Compute(error)) => compute_sqlstate(error),
+            Self::Spectral(SpectralError::WorkingSet { .. }) => {
+                PgSqlErrorCode::ERRCODE_CONFIGURATION_LIMIT_EXCEEDED
+            }
             Self::Spectral(SpectralError::NotFinite) => {
                 PgSqlErrorCode::ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE
             }

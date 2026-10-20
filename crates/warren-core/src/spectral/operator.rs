@@ -54,7 +54,7 @@ impl Operator {
     }
 
     /// Whether the operator scales by `D^-1/2`.
-    fn normalized(self) -> bool {
+    pub(super) fn normalized(self) -> bool {
         matches!(self, Self::NormalizedLaplacian | Self::RandomWalk)
     }
 }

@@ -31,6 +31,7 @@
 //! Every vector is a seeded function of the graph, and every reduction is
 //! order-deterministic, so the result is the same for any thread count.
 
+use std::mem::size_of;
 use std::str::FromStr;
 
 use nalgebra::DMatrix;
@@ -38,13 +39,11 @@ use nalgebra::DMatrix;
 use super::basis::{Basis, Orthogonalized, Stored};
 use super::operator::LinearOperator;
 use super::ritz::Ritz;
+use super::working_set::WorkingSet;
 use super::{dense, GraphMatrix, Resources, SpectralError};
-use crate::compute::{AnyVector, ComputeError, Vector};
+use crate::compute::{AnyVector, ComputeError, ComputeMemory, MemoryCharge, Vector};
 use crate::graph::GraphCsr;
 use crate::interrupts::Interrupts;
-
-/// The smallest basis, unless the dimension is smaller.
-const MIN_BASIS: usize = 20;
 
 /// The relative rounding of Ritz values from `f32` and `f64` vectors.
 const F32_TIE: f64 = 1e-6;
@@ -104,6 +103,14 @@ impl Precision {
         match self {
             Self::F32 => "f32",
             Self::F64 => "f64",
+        }
+    }
+
+    /// The bytes of one element.
+    pub(super) fn element_bytes(self) -> u64 {
+        match self {
+            Self::F32 => size_of::<f32>() as u64,
+            Self::F64 => size_of::<f64>() as u64,
         }
     }
 }
@@ -183,6 +190,9 @@ pub struct Eigen {
 }
 
 /// The `options.k` eigenpairs of `matrix` over `graph` at the `which` end.
+/// Once the operator is prepared, and before the first step, the whole
+/// working set is checked against the compute memory, so a solve that
+/// cannot fit is refused (`SpectralError::WorkingSet`) without running.
 pub fn eigen<I: Interrupts>(
     resources: &mut Resources<'_, I>,
     graph: &GraphCsr,
@@ -190,14 +200,52 @@ pub fn eigen<I: Interrupts>(
     options: &EigenOptions,
 ) -> Result<Eigen, SpectralError> {
     let mut operator = LinearOperator::new(resources, graph, matrix)?;
+    let size = admit(resources, &operator, matrix, options)?;
+    match options.precision {
+        Precision::F32 => {
+            Lanczos::<f32>::new(resources, &mut operator, options, size)?.run(resources)
+        }
+        Precision::F64 => {
+            Lanczos::<f64>::new(resources, &mut operator, options, size)?.run(resources)
+        }
+    }
+}
+
+/// Refuses what [`eigen`] would refuse before its first step, without
+/// solving: for a caller about to run several solves in turn (each of
+/// which must fit once the one before has released its memory), so that
+/// a later one is not refused after an earlier one has run.
+pub fn admit_eigen<I: Interrupts>(
+    resources: &mut Resources<'_, I>,
+    graph: &GraphCsr,
+    matrix: &GraphMatrix<'_>,
+    options: &EigenOptions,
+) -> Result<(), SpectralError> {
+    let operator = LinearOperator::new(resources, graph, matrix)?;
+    admit(resources, &operator, matrix, options).map(drop)
+}
+
+/// Checks the eigenpair count against the dimension and the working set
+/// against the compute memory; returns the basis size.
+fn admit<I>(
+    resources: &Resources<'_, I>,
+    operator: &LinearOperator<'_>,
+    matrix: &GraphMatrix<'_>,
+    options: &EigenOptions,
+) -> Result<usize, SpectralError> {
     let dimension = operator.dimension();
     if options.k == 0 || options.k as u64 > dimension {
         return Err(SpectralError::EigenpairCount { k: options.k, dimension });
     }
-    match options.precision {
-        Precision::F32 => Lanczos::<f32>::new(resources, &mut operator, options)?.run(resources),
-        Precision::F64 => Lanczos::<f64>::new(resources, &mut operator, options)?.run(resources),
-    }
+    let working_set = WorkingSet {
+        id_space: operator.id_space(),
+        dimension,
+        operator: matrix.operator,
+        k: options.k,
+        precision: options.precision,
+    };
+    working_set.admit(resources.memory)?;
+    Ok(working_set.basis_size())
 }
 
 /// One Lanczos iteration in progress.
@@ -210,6 +258,7 @@ struct Lanczos<'o, 'g, E> {
     basis: Basis<E>,
     /// `QᵀMQ`, `size × size`; the leading `basis.len()` square is in use.
     h: DMatrix<f64>,
+    _h_charge: MemoryCharge,
     /// The coupling `β` of the newest basis vector to the one before it,
     /// if the newest came from the plain three-term recurrence.
     previous: Option<f64>,
@@ -235,11 +284,12 @@ where
         resources: &mut Resources<'_, I>,
         operator: &'o mut LinearOperator<'g>,
         options: &EigenOptions,
+        size: usize,
     ) -> Result<Self, SpectralError> {
         let dimension = operator.dimension() as usize;
-        let size = dimension.min((2 * options.k + 1).max(MIN_BASIS));
         let max_iter = options.max_iter.unwrap_or(STEPS_PER_BASIS_VECTOR * size).max(options.k);
         let basis = Basis::new(resources, operator.id_space() as usize, size)?;
+        let h_charge = resources.memory.charge_elements::<f64>(size * size)?;
         Ok(Self {
             operator,
             options: *options,
@@ -247,6 +297,7 @@ where
             max_iter,
             basis,
             h: DMatrix::zeros(size, size),
+            _h_charge: h_charge,
             previous: None,
             streams: 0,
             iterations: 0,
@@ -261,6 +312,12 @@ where
             Precision::F32 => F32_TIE,
             Precision::F64 => F64_TIE,
         }
+    }
+
+    /// The Rayleigh–Ritz pairs of the basis.
+    fn ritz(&self, memory: &ComputeMemory) -> Result<Ritz, SpectralError> {
+        let len = self.basis.len();
+        Ritz::of(memory, &self.h.view((0, 0), (len, len)), self.options.which, self.tie())
     }
 
     fn size(&self) -> usize {
@@ -287,15 +344,14 @@ where
                 // invariant subspace holding every active node.
                 return self.finish(resources, Outcome::Converged);
             }
-            let ritz = Ritz::of(
-                self.h.view((0, 0), (len, len)).into_owned(),
-                self.options.which,
-                self.tie(),
-            )?;
+            let ritz = self.ritz(resources.memory)?;
             match self.outcome(&ritz, beta.unwrap_or(0.0)) {
                 Outcome::Continue(converged) => {
                     self.restart(resources, &ritz, converged)?;
                     if !self.extend(resources, beta)? {
+                        // `finish` decomposes again: release this one first,
+                        // so the peak stays within `WorkingSet::bytes`.
+                        drop(ritz);
                         return self.finish(resources, Outcome::Converged);
                     }
                     // The residual couples to every kept Ritz vector.
@@ -410,9 +466,7 @@ where
         resources: &mut Resources<'_, I>,
         outcome: Outcome,
     ) -> Result<Eigen, SpectralError> {
-        let len = self.basis.len();
-        let ritz =
-            Ritz::of(self.h.view((0, 0), (len, len)).into_owned(), self.options.which, self.tie())?;
+        let ritz = self.ritz(resources.memory)?;
         self.finish_with(resources, ritz, outcome)
     }
 

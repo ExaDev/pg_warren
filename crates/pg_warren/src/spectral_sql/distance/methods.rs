@@ -10,7 +10,7 @@ use warren_core::spectral::{
     ComparedRows, EdgeSetChange, EigenOptions, Resources,
 };
 
-use super::super::eigen::eigenpairs;
+use super::super::eigen::{admit, eigenpairs};
 use super::super::matrix::OperatorArguments;
 use super::super::SpectralSqlError;
 use super::pair::Pair;
@@ -68,6 +68,11 @@ pub(super) fn spectral<E: IdDatum>(
     operator: &OperatorArguments,
     eigenvalues: &Eigenvalues<'_>,
 ) -> Result<Value, SpectralSqlError> {
+    // The first solve checks its own working set before its first step;
+    // the second's is checked before either runs.
+    if let Eigenvalues::Solved(options) = eigenvalues {
+        admit(&pair.after, operator, options)?;
+    }
     let (before, before_converged) = values(&mut pair.before, operator, eigenvalues)?;
     let (after, after_converged) = values(&mut pair.after, operator, eigenvalues)?;
     let distance = spectral_distance(&before, &after);

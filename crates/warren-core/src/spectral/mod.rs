@@ -19,6 +19,7 @@ mod ritz;
 #[cfg(test)]
 #[cfg(not(miri))]
 mod tests;
+mod working_set;
 
 pub use distance::{
     align, align_graph, align_ids, degree_distance, edit_distance, embedding_distance,
@@ -27,7 +28,7 @@ pub use distance::{
     SubspaceDistance,
 };
 pub use error::SpectralError;
-pub use lanczos::{eigen, Eigen, EigenOptions, Eigenpair, Precision, Which};
+pub use lanczos::{admit_eigen, eigen, Eigen, EigenOptions, Eigenpair, Precision, Which};
 pub use operator::{GraphMatrix, Operator};
 pub use rayleigh::rayleigh_quotients;
 pub use resources::Resources;
