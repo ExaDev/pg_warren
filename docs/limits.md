@@ -34,9 +34,15 @@ Other built-in bounds:
   graph-sized buffer is reserved fallibly.
 - A `refresh` streams each relation's CSRs to `warren.segments` as it builds
   them, so it holds the edge list (20 bytes per weighted edge, 12 unweighted,
-  8 with one relation), the id map (24 bytes per `bigint` node) and about
-  one relation's forward and reverse CSRs at a time; with the merged CSR
-  stored, its build peaks at about 28 bytes per weighted edge.
+  8 with one relation), the id map (24 bytes per `bigint` node), the
+  relation dictionary, and a group of relations' forward CSRs with one
+  reverse CSR: as many relations at once as fit half of what remains of the
+  budget, so a small graph builds in one pass and a large one in up to
+  about eight. With the merged CSR stored, its build peaks at about 28 bytes
+  per weighted edge. A relation column with a distinct name per row is
+  refused while it is read (the dictionary is charged as it grows, and the
+  offsets checked as relations are added).
+- A `refresh` reports the most build memory it held at `DEBUG1`.
 
 Every long call checks for interrupts (traversals every 65,536 units of work,
 compute kernels from the main thread every millisecond), so
@@ -166,13 +172,18 @@ memory (shared buffers excluded).
 | Graph (10M nodes, 100M edges) | Stored | Cached | `refresh` peak | Cold load | Fits the 4 GiB cap with `pagerank`'s scratch? |
 |---|---|---|---|---|---|
 | one relation, unweighted | 1.12 GB | 1.20 GB | ~1.6 GB (2.0 GB before 0.3.0) | 2.2–2.9 s | yes: 1.20 + 0.88 GB |
-| five relations, weighted, merged CSR (default) | 5.92 GB | 6.00 GB | ~3.2 GB (9.0 GB before) | 23 s | no: the graph alone is over the cap |
-| five relations, weighted, `store_merged := false` | 3.36 GB | 3.44 GB | ~3.0 GB (5.5 GB before) | 6.2 s | no: 3.44 + 0.88 = 4.32 GB, 30 MB over (charged to compute memory) |
+| five relations, weighted, merged CSR (default) | 5.92 GB | 6.00 GB | ~3.3 GB (9.0 GB before) | 23 s | no: the graph alone is over the cap |
+| five relations, weighted, `store_merged := false` | 3.36 GB | 3.44 GB | ~3.3 GB (5.5 GB before) | 6.2 s | no: 3.44 + 0.88 = 4.32 GB, 30 MB over (charged to compute memory) |
 
-The `refresh` peaks were measured through SQL at 1M nodes and 10M edges
-and scaled (DESIGN.md §5.4), within 4 GiB in every case; the earlier
-figures were measured by the soak before the build was charged and
-streamed.
+The `refresh` peaks are what the build charges at full scale (1.56,
+3.24 and 3.24 GB, run in `warren-core`) plus what a backend was measured
+to hold past that charge through SQL at 10M and 30M edges (about 18 MB,
+not growing with the edges) and the edge query's own execution memory,
+which `work_mem` bounds (DESIGN.md §5.4). All are within 4 GiB; the
+earlier figures were measured by the soak before the build was charged
+and streamed, and the soak's full-scale re-run is due before 0.3.0.
+`warren.max_build_memory` is the build's alone: what the backend's cache
+holds (`warren.max_cache_memory`) comes on top of it during a `refresh`.
 
 Not measured, and estimated the same way (the estimates matched the
 measured cached bytes to 0.1%): one weighted relation ~2.8 GB; five
