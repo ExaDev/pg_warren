@@ -58,22 +58,41 @@ compute kernels from the main thread every millisecond), so
   using an evicted version keeps its copy until it ends.
 - **A statement keeps what it reads.** Every version and persisted vector
   a top-level statement reads or writes stays cached until the statement
-  ends, even past the cap, so a statement that makes many calls loads
-  each version once. A library function such as `pagerank` is one
-  statement, however many calls it makes inside. When the statement ends,
-  normally or with an error, what it held is released and the cap holds
-  again, also between the statements of a transaction block. (Several
-  statements sent as one query string, as `psql -c 'a; b'` does, count as
-  one.) A version larger than the cap is held for the statement that
-  reads it, with a `NOTICE` once per statement, and reloaded by the next
-  one.
-- **What a statement holds past the cap is charged to
-  `warren.max_compute_memory`.** Each call in the statement has that much
-  less compute memory, and a version load that would take it past
+  ends, or its transaction does, whichever comes first, even past the cap,
+  so a statement that makes many calls loads each version once. A library
+  function such as `pagerank` is one statement, however many calls it
+  makes inside. What counts as a statement:
+  - one client message: with the extended protocol each `Execute` (a
+    cursor or portal fetched over several is held only during each);
+    several statements sent as one query string, as `psql -c 'a; b'`
+    does, count as one;
+  - a `CALL` or `DO` block is one statement, but a `COMMIT` inside it ends
+    what it held, so a procedure that loops with `COMMIT` holds only what
+    its current transaction read.
+
+  When the statement ends, normally or with an error, what it held is
+  released and the cap holds again, also between the statements of a
+  transaction block. A version larger than the cap is held for the
+  statement that reads it, with a `NOTICE` once per statement, and
+  reloaded by the next one.
+- **What a statement holds gives way under pressure.** A version or vector
+  the statement read that no call is using (`pagerank`'s version between
+  its calls, a graph a loop has moved past) is evicted, least recently
+  used first, when a load or a call's compute memory needs the room. So a
+  statement that reads more graphs, one after another, than the two
+  settings hold together still works; it reloads what it reads again.
+- **What the cache holds past the cap comes out of
+  `warren.max_compute_memory`.** That is transient vectors, the versions
+  and vectors calls are using, and versions evicted while a call still
+  holds them (an open cursor or a suspended portal streaming `bfs` or
+  `reachable_set`, which keep theirs until they close). Each call has that
+  much less compute memory (reading a vector the cache already holds
+  costs nothing more), and a version load that would take it past
   `warren.max_compute_memory` is refused with 53400 before anything is
-  loaded; the message names both settings and the bytes needed. So
-  `warren.max_cache_memory` plus `warren.max_compute_memory` bounds what
-  the cache and a call hold together.
+  loaded; the message names both settings and the bytes needed. That
+  happens only for what is in use: a version larger than the two
+  together, the two versions of a `diff` or `distance` that do not fit
+  them, or loads beside versions that open cursors hold.
 - **Transient vectors are never evicted**, since they cannot be reloaded.
   They count against the cap, and a transient write that would take the
   transient vectors alone past it is refused with 53400 before anything
@@ -95,10 +114,11 @@ compute kernels from the main thread every millisecond), so
 - `warren.prewarm(name)` loads the current version ahead of first use, for
   pooled connections; `warren.evict(name)` returns how many versions and vectors it freed.
 - `warren.max_compute_memory` bounds what one call reads and allocates,
-  and what its statement holds past the cap; `warren.max_cache_memory`
+  and what the cache holds past its cap; `warren.max_cache_memory`
   bounds what is held between statements. A backend's peak is therefore
   bounded by the sum of the two (a traversal's visited set and frontier
-  aside), plus, while a version loads,
+  aside, and calls running at once in one statement, each of which gets
+  its own budget against the same cache), plus, while a version loads,
   one CSR's raw segments (at most ~1.3 GB, the merged weighted CSR of 100M
   edges; measured: a 1.2 GB version loads at a 1.69 GB peak, a 6.0 GB one at
   7.3 GB). `refresh` (below) is bounded by neither. `diff`, `distance` and

@@ -2,16 +2,20 @@
 //! `warren.max_cache_memory`, the most heap memory this backend's cache
 //! holds between statements (cached versions, cached persisted vectors and
 //! transient vectors), and `warren.max_compute_memory`, what one call may
-//! hold. Within a statement the cache may hold more than its cap, since
-//! what the statement has read is pinned until it ends (`statement`); the
-//! bytes past the cap are charged to each call's compute budget, and a load
-//! that would take them past `warren.max_compute_memory` is refused, so a
-//! backend's peak is bounded by the sum of the two.
+//! hold. Within a statement the cache may hold more than its cap: what the
+//! statement has read is pinned until it ends (`statement`). What the cache
+//! cannot evict (transient vectors, pinned entries a call is using, and
+//! evicted versions a call still holds) is charged past the cap to each
+//! call's compute budget, and a load that would take it past
+//! `warren.max_compute_memory` is refused; pinned entries no call is using
+//! give way, least recently used first, to a load or a call's budget that
+//! needs the room. So the cache and a call together stay within the two
+//! limits, a traversal's visited set and calls running at once aside.
 //!
-//! Reloadable entries (versions and persisted vectors) that no statement
-//! holds are evicted least recently used first; transient vectors cannot
-//! be reloaded, so they are never evicted, and keeping one that would take
-//! transient vectors alone past the cap is refused.
+//! Unpinned reloadable entries (versions and persisted vectors) are
+//! evicted to fit the cap, least recently used first; transient vectors
+//! cannot be reloaded, so they are never evicted, and keeping one that
+//! would take transient vectors alone past the cap is refused.
 
 use pgrx::{GucContext, GucFlags, GucRegistry, GucSetting};
 use warren_core::compute::ComputeMemory;

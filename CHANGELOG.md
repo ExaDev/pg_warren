@@ -37,16 +37,24 @@
   transient write that would take them past it fails with 53400.
 - What a top-level statement reads stays cached until it ends: every
   version and persisted vector it reads or writes is pinned, then released
-  when the statement ends, normally or with an error, and the cache
-  trimmed to the cap. A library function (`pagerank`, …) is one statement,
-  so it loads its version once even when the version and its transient
-  scratch together exceed the cap. Before, such a run reloaded the
-  version on every call: at 10M nodes and 100M edges, more than 15
-  minutes instead of 32 s. What a statement holds past the cap is charged
-  to each call's `warren.max_compute_memory`, and a load that would take
-  it past that too fails with 53400 before loading (the message names
-  both settings and the bytes), so a backend's peak is about the two
-  settings together (DESIGN.md §5.5, §14 item 20).
+  when the statement ends, normally or with an error, or when its
+  transaction does (so a `CALL` that commits holds only what each of its
+  transactions read), and the cache trimmed to the cap. A statement is one
+  client message: each extended-protocol `Execute`, or one query string of
+  several statements. A library function (`pagerank`, …) is one
+  statement, so it loads its version once even when the version and its
+  transient scratch together exceed the cap. Before, such a run reloaded
+  the version on every call: at 10M nodes and 100M edges, more than 15
+  minutes instead of 32 s. What the cache holds past the cap and cannot
+  evict (transient vectors, what calls are using, and versions open
+  cursors still hold) is charged to each call's
+  `warren.max_compute_memory`, and a load that would take it past that
+  too fails with 53400 before loading (the message names both settings
+  and the bytes), so a backend's peak is about the two settings together
+  (DESIGN.md §5.5, §14 item 20). What a statement read but no call is
+  using gives way to such a load, so a statement reading more graphs in
+  sequence than both settings hold still works. Reading a vector the cache
+  already holds is no longer charged to the call.
 - `diff`, `distance` and `vector_norm_diff` read their two versions
   through the cache, under the same rule, and refuse two that do not fit
   together before loading either. Before, `diff` loaded both outside every
@@ -64,7 +72,8 @@
   (`pagerank` keeps about eleven full-length `f64` vectors, ~88 bytes per
   node) above it, is now held only for the statement that reads it and
   reloaded by the next (a version alone over the cap says so with a
-  `NOTICE` once per statement), and a statement that would hold more than
+  `NOTICE` once per statement), and a load that would make what calls are
+  using (and transient vectors, and versions open cursors hold) exceed
   `warren.max_cache_memory` and `warren.max_compute_memory` together fails
   with 53400. Raise `warren.max_cache_memory` for such graphs.
 - Behaviour change: `vector_map` expressions that take the executor path
