@@ -17,9 +17,13 @@
   source queries, `vector_from_query` and `gather` do, so an expression
   that writes through a function it calls (a PL/pgSQL `w(x)` that inserts)
   now fails with 25006 instead of writing, as does `nextval` on a
-  non-temporary sequence. The library functions, which
-  call `vector_map`, inherit this. An integrity guard, not a sandbox
-  (DESIGN.md §7).
+  non-temporary sequence. The library functions, which call `vector_map`,
+  inherit this. An integrity guard, not a sandbox (DESIGN.md §7).
+- Fix: `vector_norm_diff` refuses (22023, `dense id … names different
+  nodes in the two versions`) two versions whose shared dense ids name
+  different nodes, such as sibling staged versions that added different
+  nodes, as `diff` and `distance` already did. It used to align their
+  vectors row by row and return a meaningless value.
 
 ## 0.2.0 — vectors, compute and spectral analysis
 

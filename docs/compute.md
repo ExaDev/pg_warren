@@ -76,7 +76,9 @@ Rules:
 - Every function takes `version := …` (default: current); names are looked
   up among the vectors of that version, and results are bound to it.
   `vector_norm_diff(graph, a, b, norm, a_version, b_version)` compares
-  vectors of two versions, aligned by dense id.
+  vectors of two versions, aligned by dense id. Like `distance`, it refuses
+  (22023) versions whose shared dense ids name different nodes: across a
+  `compact`, or two sibling staged versions that added different nodes.
 
 ## Semiring products: `spmv` and `spmm`
 

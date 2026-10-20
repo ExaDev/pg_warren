@@ -87,7 +87,10 @@ Inside a version every node has a **dense id**, `0 … id_space − 1`.
   **tombstone** (`live = false`); if it comes back, it gets the same dense id.
   Dense ids are never reused.
 - So vectors from two versions line up row by row, which is what
-  `vector_norm_diff` and `distance` rely on.
+  `vector_norm_diff` and `distance` rely on. Two staged versions built
+  from the same current version can give different new nodes the same
+  dense id; `diff`, `distance` and `vector_norm_diff` refuse to compare
+  such siblings (22023).
 
 ```sql
 DELETE FROM follows WHERE dst = 5;  DELETE FROM people WHERE id = 5;
