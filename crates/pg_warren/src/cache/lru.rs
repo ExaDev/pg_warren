@@ -52,15 +52,24 @@ pub(crate) fn evictions<K>(held: Vec<Held<K>>, pinned: u64, limit: u64) -> Evict
 }
 
 /// Whether transient vectors holding `in_use` bytes may keep one of
-/// `added` bytes in place of one of `replaced` bytes (0 if new) within
-/// `limit`.
+/// `added` bytes in place of one of `replaced` bytes (0 if new): if that
+/// stays within `limit`, or (when they are already over it, after the cap
+/// was lowered) if it holds no more than it replaces.
 pub(crate) fn admits(in_use: u64, replaced: u64, added: u64, limit: u64) -> bool {
-    in_use.saturating_sub(replaced).saturating_add(added) <= limit
+    added <= replaced || after(in_use, replaced, added) <= limit
+}
+
+/// What transient vectors holding `in_use` bytes hold after one of `added`
+/// bytes replaces one of `replaced` bytes.
+pub(crate) fn after(in_use: u64, replaced: u64, added: u64) -> u64 {
+    in_use.saturating_sub(replaced).saturating_add(added)
 }
 
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
+
+    use proptest::prelude::*;
 
     use super::*;
 
@@ -125,5 +134,45 @@ mod tests {
         assert!(!admits(60, 0, 41, 100));
         assert!(admits(60, 30, 70, 100), "the vector it replaces is not counted");
         assert!(!admits(0, 0, 101, 100));
+        assert!(admits(150, 30, 30, 100), "over a lowered cap, no larger is allowed");
+        assert!(admits(150, 30, 20, 100));
+        assert!(!admits(150, 30, 31, 100));
+    }
+
+    proptest! {
+        #[test]
+        fn evictions_keep_the_most_recent_that_fit(
+            sizes in prop::collection::vec(0u64..50, 0..12),
+            pinned in 0u64..120,
+            limit in 0u64..200,
+        ) {
+            let start = Instant::now();
+            let entries: Vec<Held<usize>> = sizes
+                .iter()
+                .enumerate()
+                .map(|(key, &bytes)| Held {
+                    key,
+                    bytes,
+                    last_used: start + Duration::from_secs(key as u64),
+                })
+                .collect();
+            let total = entries.iter().map(|entry| entry.bytes).sum::<u64>() + pinned;
+            let evicted = evictions(entries.clone(), pinned, limit);
+            let unfit: Vec<usize> = evicted.unfit.iter().map(|entry| entry.key).collect();
+            if total <= limit {
+                prop_assert!(unfit.is_empty() && evicted.least_recent.is_empty());
+            }
+            let gone = |key: &usize| unfit.contains(key) || evicted.least_recent.contains(key);
+            let kept: u64 =
+                entries.iter().filter(|entry| !gone(&entry.key)).map(|entry| entry.bytes).sum();
+            if pinned <= limit {
+                prop_assert!(kept + pinned <= limit);
+            }
+            let room = limit.saturating_sub(pinned);
+            let fitting: Vec<usize> =
+                entries.iter().filter(|entry| entry.bytes <= room).map(|entry| entry.key).collect();
+            prop_assert_eq!(&evicted.least_recent[..], &fitting[..evicted.least_recent.len()]);
+            prop_assert!(entries.iter().all(|entry| unfit.contains(&entry.key) == (entry.bytes > room)));
+        }
     }
 }

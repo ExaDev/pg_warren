@@ -5,6 +5,9 @@
 
 use std::sync::Arc;
 
+use pgrx::pg_sys;
+
+use super::bound::make_room;
 use super::versions::{VersionCache, CACHE};
 use super::{load, trim, CacheError, LoadedVersion};
 use crate::access::{as_catalog_owner, require_reader};
@@ -64,6 +67,7 @@ pub(crate) fn cached<E: IdDatum + Send + Sync>(
         return Ok(loaded);
     }
     prune_dropped()?;
+    make_room(stored_bytes(version)?);
     // Load outside any borrow of the cache: loading runs SPI, which may
     // raise an ERROR that unwinds through this frame.
     let loaded = load::<E>(&mut SpiSegmentStore, version)?;
@@ -81,7 +85,11 @@ pub(crate) fn cached<E: IdDatum + Send + Sync>(
 /// Drops this backend's cached versions, and transient vectors (of every
 /// role), of versions that no longer exist as of the statement's snapshot:
 /// dropped with their graphs, by `drop_version` or by retention, here or in
-/// another backend, or rolled back.
+/// another backend, or rolled back. Transient vectors cannot be reloaded,
+/// so they are dropped only for deletions that have committed: not in a
+/// transaction that has a transaction id, which any transaction that
+/// deletes a version has, and whose deletions might still roll back.
+/// Cached versions are dropped regardless, since they reload.
 pub(super) fn prune_dropped() -> Result<(), CacheError> {
     let mut cached = CACHE.with_borrow(VersionCache::versions);
     cached.extend(transient_versions());
@@ -89,7 +97,10 @@ pub(super) fn prune_dropped() -> Result<(), CacheError> {
     cached.dedup();
     let existing = existing_versions(&cached)?;
     CACHE.with_borrow_mut(|cache| cache.retain(&existing));
-    retain_transients(&existing);
+    // SAFETY: reads this backend's top-level transaction id, if assigned.
+    if unsafe { pg_sys::GetTopTransactionIdIfAny() } == pg_sys::TransactionId::INVALID {
+        retain_transients(&existing);
+    }
     Ok(())
 }
 
@@ -97,6 +108,18 @@ pub(super) fn prune_dropped() -> Result<(), CacheError> {
 /// many there were.
 pub(crate) fn evict_graph(graph_id: i32) -> usize {
     CACHE.with_borrow_mut(|cache| cache.evict_graph(graph_id))
+}
+
+/// The bytes of `version`'s stored segments (`warren.versions.bytes`): about
+/// what loading it adds to the cache.
+pub(super) fn stored_bytes(version: VersionId) -> Result<u64, CacheError> {
+    as_catalog_owner(|| {
+        let bytes = read_one::<i64>(
+            "SELECT bytes FROM warren.versions WHERE version_id = $1",
+            &[version.into()],
+        )?;
+        Ok(bytes.and_then(|bytes| u64::try_from(bytes).ok()).unwrap_or(0))
+    })
 }
 
 /// Which of `versions` still exist.

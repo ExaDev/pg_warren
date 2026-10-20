@@ -1291,6 +1291,7 @@ dependencies = [
  "libc",
  "pgrx",
  "pgrx-tests",
+ "proptest",
  "serde_json",
  "thiserror",
  "warren-core",
