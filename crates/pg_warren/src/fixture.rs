@@ -25,6 +25,12 @@ pub(crate) fn ring(name: &str, nodes: i64, retain_versions: i32) -> Result<(), E
     ))
 }
 
+/// Bytes allocated in every Postgres memory context of the backend.
+pub(crate) fn allocated() -> usize {
+    // SAFETY: TopMemoryContext is valid for the life of the backend.
+    unsafe { pg_sys::MemoryContextMemAllocated(pg_sys::TopMemoryContext, true) }
+}
+
 /// Refreshes graph `name` and returns the new version.
 pub(crate) fn refresh(name: &str, promote: bool) -> Result<i64, Error> {
     Spi::get_one::<i64>(&format!("SELECT warren.refresh('{name}', promote := {promote})"))?
