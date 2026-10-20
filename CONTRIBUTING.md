@@ -173,7 +173,10 @@ format. To benchmark a new function, add a workload with `requires` to
   grants). `test/upgrade.py` (in CI, on every major) builds and installs
   each release from its commit in `sql/released.commits` (so the clone
   needs the full history; a tag `vX.Y.Z`, where present, must name the same
-  commit), writes some state with that release's own library
+  commit; it builds with the cargo-pgrx of the pgrx the release's
+  `Cargo.lock` pins, installed under the builds if it is not the one on
+  `PATH`, and the toolchain its `rust-toolchain.toml` pins), checks the
+  library a backend then loads is that release's, writes some state with that release's own library
   and functions (several versions, a staged one, a vector, a weighted
   multi-relation graph and its results), puts the version in development
   back, runs `ALTER EXTENSION pg_warren UPDATE`, fails on any catalog
@@ -206,7 +209,7 @@ format. To benchmark a new function, add a workload with `requires` to
   backfills). The rules and the audit are in DESIGN.md §7.
 
 ```sh
-test/upgrade.py --pg-config "$(command -v pg_config)"   # builds each release from its tag, then checks its path
+test/upgrade.py --pg-config "$(command -v pg_config)"   # builds each release from its recorded commit, then checks its path
 test/upgrade.py --no-install --trusted   # the same, installed and updated by a non-superuser
 test/dump.py --pg-config "$(command -v pg_config)"   # pg_dump and restore of graphs (plain, custom, trusted)
 ```
