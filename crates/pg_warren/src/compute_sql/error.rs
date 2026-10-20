@@ -4,6 +4,7 @@
 use pgrx::PgSqlErrorCode;
 use thiserror::Error;
 use warren_core::compute::{ArithmeticError, ComputeError};
+use warren_core::version::VersionError;
 
 use crate::access::{self, AccessError, SqlError};
 use crate::cache::{CacheError, LoadError};
@@ -121,6 +122,9 @@ pub(crate) enum ComputeSqlError {
     /// The kernel failed.
     #[error("{0}")]
     Compute(#[from] ComputeError),
+    /// Two versions do not share an id space.
+    #[error(transparent)]
+    Version(#[from] VersionError),
     /// An SPI call failed.
     #[error(transparent)]
     Spi(#[from] pgrx::spi::Error),
@@ -146,7 +150,7 @@ impl SqlError for ComputeSqlError {
             }
             Self::AmbiguousMessages { .. } => PgSqlErrorCode::ERRCODE_AMBIGUOUS_FUNCTION,
             Self::ReservedName(_) => PgSqlErrorCode::ERRCODE_RESERVED_NAME,
-            Self::EmptyName | Self::InvalidArgument(_) => {
+            Self::EmptyName | Self::InvalidArgument(_) | Self::Version(_) => {
                 PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE
             }
             Self::Access(error) => error.sqlstate(),

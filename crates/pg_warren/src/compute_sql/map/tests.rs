@@ -129,6 +129,27 @@ mod tests {
     }
 
     #[pg_test]
+    fn the_executor_evaluates_read_only() -> Result<(), Error> {
+        appendix_vectors()?;
+        Spi::run(
+            "CREATE TABLE public.sink (x float8);
+             CREATE FUNCTION public.w(x float8) RETURNS float8 VOLATILE LANGUAGE plpgsql AS
+                 $f$ BEGIN INSERT INTO public.sink VALUES (x); RETURN x; END $f$",
+        )?;
+        // explain_map analyses the expression but never evaluates it.
+        assert_eq!(path("t", "public.w(deg)")?.as_deref(), Some("executor"));
+        let refused = failure("warren.vector_map('t', 'ww', 'public.w(deg)')")?.unwrap_or_default();
+        assert!(
+            refused.starts_with("25006: cannot execute INSERT in a read-only transaction"),
+            "{refused}"
+        );
+        assert_eq!(Spi::get_one::<i64>("SELECT count(*) FROM public.sink")?, Some(0));
+        // The transaction is writable again afterwards.
+        Spi::run("INSERT INTO public.sink VALUES (1)")?;
+        Ok(())
+    }
+
+    #[pg_test]
     fn the_synthetic_row_holds_only_the_vectors_the_expression_names() -> Result<(), Error> {
         small("t")?;
         // More vectors than a row may have columns (1664).

@@ -3,6 +3,7 @@
 
 use pgrx::prelude::*;
 use warren_core::compute::{norm_diff, reduce_live, Norm, Reduction};
+use warren_core::version;
 
 use super::settings::{compute_memory, workers};
 use super::vectors::Vectors;
@@ -39,8 +40,10 @@ fn vector_reduce(
 /// `warren.vector_norm_diff`: `norm(a − b)` (`l1`, `l2` or `linf`) for
 /// vector `a` at `a_version` and vector `b` at `b_version` (each the
 /// current version if NULL), aligned by dense id: a row past the end of
-/// the shorter vector counts as zero (DESIGN.md §7). Versions on either
-/// side of a compaction are not comparable.
+/// the shorter vector counts as zero (DESIGN.md §7). Versions are
+/// comparable only where their shared dense ids name the same nodes: not
+/// on either side of a compaction, nor sibling staged versions whose new
+/// nodes diverge (DESIGN.md §8).
 #[pg_extern(schema = "warren", stable, parallel_restricted)]
 fn vector_norm_diff(
     graph: Option<&str>,
@@ -68,8 +71,10 @@ fn vector_norm_diff(
         }
         let memory = compute_memory();
         with_id_type!(a_side.graph.id_type, E => {
-            let a = Vectors::<E>::open_within(a_side, &memory)?.get(a)?;
-            let b = Vectors::<E>::open_within(b_side, &memory)?.get(b)?;
+            let mut a_vectors = Vectors::<E>::open_within(a_side, &memory)?;
+            let mut b_vectors = Vectors::<E>::open_within(b_side, &memory)?;
+            version::shared_dense_ids(&a_vectors.loaded.id_map, &b_vectors.loaded.id_map)?;
+            let (a, b) = (a_vectors.get(a)?, b_vectors.get(b)?);
             Ok(norm_diff(&*workers()?, &mut PostgresInterrupts, &a, &b, norm)?)
         })
     })
@@ -125,6 +130,31 @@ mod tests {
             "SELECT warren.vector_norm_diff('t', 'old', 'new', 'linf', {first})"
         ))?;
         assert_eq!(linf, Some(4.0));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn norm_diff_refuses_sibling_staged_versions() -> Result<(), Error> {
+        // Two staged builds from one current version give the new nodes 9
+        // and 10 the same dense id, 6. Like diff and distance, norm_diff
+        // refuses to align them.
+        small("t")?;
+        Spi::run("INSERT INTO t_nodes VALUES (9)")?;
+        let candidate = refresh("t", false)?;
+        Spi::run("DELETE FROM t_nodes WHERE id = 9; INSERT INTO t_nodes VALUES (10)")?;
+        let sibling = refresh("t", false)?;
+        for version in [candidate, sibling] {
+            Spi::run(&format!(
+                "SELECT warren.vector_dense_id('t', 'd', 'f64', version := {version})"
+            ))?;
+        }
+        let refused = failure(&format!(
+            "warren.vector_norm_diff('t', 'd', 'd', 'l2', {candidate}, {sibling})"
+        ))?;
+        assert_eq!(
+            refused.as_deref(),
+            Some("22023: dense id 6 names different nodes in the two versions")
+        );
         Ok(())
     }
 }
