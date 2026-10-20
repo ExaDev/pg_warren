@@ -6,7 +6,7 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Instant;
 
 use warren_core::graph::ExternalId;
@@ -33,16 +33,28 @@ struct Entry {
 #[derive(Default)]
 pub(crate) struct VersionCache {
     entries: HashMap<VersionId, Entry>,
+    /// Versions evicted while a call still held them, by graph: a lookup
+    /// in that call (a second vector of the same version) shares the copy
+    /// it holds instead of loading another beside it. Not counted against
+    /// the cap; gone once no call holds them.
+    held_by_calls: HashMap<VersionId, (i32, Weak<dyn Any + Send + Sync>)>,
 }
 
 impl VersionCache {
-    /// Version `version`, if it is cached with external id type `E`; the
-    /// lookup marks it used.
+    /// Version `version`, if it is cached with external id type `E` (the
+    /// lookup marks it used) or was evicted while a call still holds it.
     pub(crate) fn get<E: ExternalId + Send + Sync + 'static>(
         &mut self,
         version: VersionId,
     ) -> Option<Arc<LoadedVersion<E>>> {
-        let entry = self.entries.get_mut(&version)?;
+        let Some(entry) = self.entries.get_mut(&version) else {
+            let (_, held) = self.held_by_calls.get(&version)?;
+            let held = held.upgrade();
+            if held.is_none() {
+                self.held_by_calls.remove(&version);
+            }
+            return held?.downcast().ok();
+        };
         let loaded = Arc::clone(&entry.version).downcast().ok()?;
         entry.last_used = Instant::now();
         Some(loaded)
@@ -61,6 +73,7 @@ impl VersionCache {
         let shared: Arc<dyn Any + Send + Sync> = loaded.clone();
         let entry = Entry { graph_id, version: shared, bytes, last_used: Instant::now() };
         self.entries.insert(version, entry);
+        self.held_by_calls.remove(&version);
         loaded
     }
 
@@ -84,9 +97,13 @@ impl VersionCache {
         held
     }
 
-    /// Drops version `version`, if cached. A caller holding it keeps it.
+    /// Drops version `version`, if cached. A caller holding it keeps it,
+    /// and a later lookup finds that copy while it is held.
     pub(crate) fn remove(&mut self, version: VersionId) {
-        self.entries.remove(&version);
+        self.held_by_calls.retain(|_, (_, held)| held.strong_count() > 0);
+        if let Some(entry) = self.entries.remove(&version) {
+            self.held_by_calls.insert(version, (entry.graph_id, Arc::downgrade(&entry.version)));
+        }
     }
 
     /// The cached version ids, ascending.
@@ -99,12 +116,14 @@ impl VersionCache {
     /// Drops every cached version not in `existing`.
     pub(crate) fn retain(&mut self, existing: &[VersionId]) {
         self.entries.retain(|version, _| existing.contains(version));
+        self.held_by_calls.retain(|version, _| existing.contains(version));
     }
 
     /// Drops every cached version of graph `graph_id`; returns how many.
     pub(crate) fn evict_graph(&mut self, graph_id: i32) -> usize {
         let before = self.entries.len();
         self.entries.retain(|_, entry| entry.graph_id != graph_id);
+        self.held_by_calls.retain(|_, (graph, _)| *graph != graph_id);
         before - self.entries.len()
     }
 }
@@ -163,6 +182,40 @@ mod tests {
         assert!(held[0].last_used > held[1].last_used, "the lookup marked version 1 used");
         cache.remove(1);
         assert_eq!(cache.versions(), [2]);
+    }
+
+    /// A call that reads a version twice (`vector_norm_diff` of two
+    /// vectors of one version) must share the copy it holds even when the
+    /// cap evicted it after the first load, not load a second copy.
+    #[test]
+    fn an_evicted_version_a_call_still_holds_is_found_again_without_a_reload() {
+        let mut store = store();
+        let mut cache = VersionCache::default();
+        let held = cache.insert(10, 1, load::<i64>(&mut store, 1, true).unwrap());
+        cache.remove(1);
+        assert_eq!(cache.bytes(), 0, "the cache no longer counts it");
+        let again = cache.get::<i64>(1).expect("the held copy");
+        assert!(Arc::ptr_eq(&held, &again));
+        assert!(cache.versions().is_empty(), "found again, but not cached again");
+        drop((held, again));
+        assert!(cache.get::<i64>(1).is_none(), "gone once no call holds it");
+    }
+
+    #[test]
+    fn evicting_a_graph_or_pruning_forgets_its_held_versions_too() {
+        let mut store = store();
+        let mut cache = VersionCache::default();
+        let one = cache.insert(10, 1, load::<i64>(&mut store, 1, true).unwrap());
+        let two = cache.insert(10, 2, load::<i64>(&mut store, 2, true).unwrap());
+        cache.remove(1);
+        cache.remove(2);
+        cache.evict_graph(10);
+        assert!(cache.get::<i64>(1).is_none());
+        cache.insert(10, 2, load::<i64>(&mut store, 2, true).unwrap());
+        cache.remove(2);
+        cache.retain(&[]);
+        assert!(cache.get::<i64>(2).is_none());
+        drop((one, two));
     }
 
     #[test]
