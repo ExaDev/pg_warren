@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use super::LoadError;
 use crate::access::{AccessError, SqlError};
-use crate::catalog::{CatalogError, VersionId};
+use crate::catalog::CatalogError;
 
 /// Why a version could not be opened for reading.
 #[derive(Debug, Error)]
@@ -13,18 +13,6 @@ pub(crate) enum CacheError {
     /// The graph has never been promoted and no version was asked for.
     #[error("graph \"{0}\" has no current version; refresh it, or pass a version")]
     NoCurrentVersion(String),
-    /// `graphs.current_version` names a version that is not one of the
-    /// graph's, as a restore can write (DESIGN.md §5.1).
-    #[error(
-        "the current version {version} of graph \"{graph}\" is not one of its versions; \
-         promote one of them"
-    )]
-    StrayCurrentVersion {
-        /// The graph.
-        graph: String,
-        /// The version its row names.
-        version: VersionId,
-    },
     /// The graph or version does not exist.
     #[error(transparent)]
     Catalog(#[from] CatalogError),
@@ -62,9 +50,7 @@ pub(crate) enum CacheError {
 impl SqlError for CacheError {
     fn sqlstate(&self) -> PgSqlErrorCode {
         match self {
-            Self::NoCurrentVersion(_) | Self::StrayCurrentVersion { .. } => {
-                PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE
-            }
+            Self::NoCurrentVersion(_) => PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
             Self::Catalog(error) => error.sqlstate(),
             Self::Access(error) => error.sqlstate(),
             Self::Load(error) => error.sqlstate(),

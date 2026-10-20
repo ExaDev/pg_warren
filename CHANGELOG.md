@@ -20,9 +20,12 @@
   or read graphs and wrote vectors. Upgrade note: run
   `ALTER EXTENSION pg_warren UPDATE` (the update drops the two keys and
   adds the triggers).
-- A call that reads a graph's current version refuses (55000) when the
-  stored current version is not one of the graph's versions, as a restore
-  or a direct write can leave it, instead of reading it.
+- Query functions, `refresh` and `compact` refuse (55000) a graph whose
+  stored current version is not one of its versions, as a restore or a
+  direct write can leave it; `promote` one of its versions to repair it.
+  Before, they read or built on that version, even another graph's.
+- `promote` of a graph that another session drops while the promote waits
+  fails with "graph does not exist" (42704), not an internal error.
 - `create_graph` raises a `NOTICE` when the graph's `search_path` contains
   a schema that roles other than its owner can create objects in. Those
   roles could plant functions or operators that `refresh` would run as
