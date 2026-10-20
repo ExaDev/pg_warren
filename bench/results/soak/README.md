@@ -25,6 +25,27 @@ is a miss either way), left out stages that failed other than by a cancel,
 and took the settings snapshot before the query sessions' `SET`s (so it
 shows `warren.threads=2`, the default, where the queries ran with 4).
 
+## The statement pin at a tenth of the scale (PR #16 review)
+
+Two runs of case `b-unmerged` at `--scale 10` (1M nodes, 10M edges), with
+the first pass's cap put just under the version and `pagerank`'s scratch,
+as the full-scale run was (3.44 GB + 0.88 GB against 4 GiB):
+`--cache-memory-kb 418945` is 429.0 MB, against 344.1 MB cached and 88 MB
+of scratch (432.1 MB). Each records its provenance (command, harness
+revision c0a1b81, clean, extension revision, library sha256). Both ran on
+the same shared 4-vCPU Xeon as the files above, PostgreSQL 16.15, release
+builds, one after the other under `/tmp/pgrx-test.lock`.
+
+| File | pg_warren build | `pagerank` from cold, 429.0 MB cap | `pagerank` at a 1GB cap |
+|---|---|---|---|
+| `b-unmerged-scale10-pin.json` | c0a1b81 (the pin, after the review fixes) | **1 load**, 6.14 s (warm, 0 loads: 5.90 s) | 5.77 s cold, 6.08 s warm |
+| `b-unmerged-scale10-before-pin.json` | 71e7272 (PR #15's merge, before the pin), `--skip second-version` | **156 loads**, 60.7 s (warm, 155 loads: 61.1 s) | 6.0 s cold, 6.1 s warm |
+
+"Loads" are the `warren.segments` rows a `pagerank` statement read,
+divided by those of the pass's first (cold) `prewarm` (88). The
+`pagerank from cold` stage evicts the graph first. The pinned build's
+`diff` between two versions took 3.6 s.
+
 ## Build memory at a tenth of the scale
 
 `a-build-peak-scale10.json`, `b-merged-build-peak-scale10.json` and

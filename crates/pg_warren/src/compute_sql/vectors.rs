@@ -16,8 +16,8 @@ use warren_core::graph::Tombstones;
 use super::ComputeSqlError;
 use crate::access::require_creator_or_owner;
 use crate::cache::{
-    admit_transient, cached, cached_pair, cached_vector, compute_memory, keep_vector, trim,
-    LoadedVersion, Resolved,
+    admit_transient, cached, cached_pair, cached_vector, cached_vector_hit, compute_memory,
+    keep_vector, trim, LoadedVersion, Resolved,
 };
 use crate::catalog::{GraphDefinition, VersionId};
 use crate::segment::CHUNK_SIZE;
@@ -93,9 +93,10 @@ pub(crate) struct Vectors<E> {
     held: HashMap<String, Read>,
 }
 
-/// A vector a call has read, and its charge to the call's budget.
+/// A vector a call has read, and its charge to the call's budget, if it
+/// was read into the cache.
 struct Read {
-    _charge: MemoryCharge,
+    _charge: Option<MemoryCharge>,
     vector: Arc<AnyVector>,
 }
 
@@ -171,26 +172,31 @@ impl<E: IdDatum> Vectors<E> {
     }
 
     /// Vector `name`, if bound: the session's transient vector of that
-    /// name, else the persisted one. Its bytes are charged to the call's
-    /// budget before it is first read; the call then holds it, so reading
-    /// it again returns the same vector even if the cache has evicted it.
+    /// name, else the persisted one. A persisted vector read into the
+    /// cache is charged to the call's budget before it is read; one the
+    /// cache already holds, like a transient vector, is memory the cache
+    /// counts (DESIGN.md §5.5, §6.2), so it is not charged again. The call
+    /// then holds it, so reading it again returns the same vector even if
+    /// the cache has evicted it.
     pub(super) fn find(&mut self, name: &str) -> Result<Option<Arc<AnyVector>>, ComputeSqlError> {
         if let Some(read) = self.held.get(name) {
             return Ok(Some(Arc::clone(&read.vector)));
         }
         let graph_id = self.graph.graph_id;
         let (charge, vector) = match transient(graph_id, self.version, name) {
-            Some(vector) => {
-                let bytes = vector_bytes(vector.dtype(), vector.width(), vector.id_space());
-                (self.memory.charge(bytes)?, vector)
-            }
+            Some(vector) => (None, vector),
             None => {
                 let Some(record) = self.record(name).cloned() else {
                     return Ok(None);
                 };
-                let bytes = vector_bytes(record.dtype, record.width, record.length);
-                let charge = self.memory.charge(bytes)?;
-                (charge, cached_vector(cache_memory(), graph_id, &record)?)
+                match cached_vector_hit(record.vector) {
+                    Some(vector) => (None, vector),
+                    None => {
+                        let bytes = vector_bytes(record.dtype, record.width, record.length);
+                        let charge = self.memory.charge(bytes)?;
+                        (Some(charge), cached_vector(cache_memory(), graph_id, &record)?)
+                    }
+                }
             }
         };
         let read = Read { _charge: charge, vector: Arc::clone(&vector) };

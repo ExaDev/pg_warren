@@ -61,22 +61,43 @@ compute kernels from the main thread every millisecond), so
   using an evicted version keeps its copy until it ends.
 - **A statement keeps what it reads.** Every version and persisted vector
   a top-level statement reads or writes stays cached until the statement
-  ends, even past the cap, so a statement that makes many calls loads
-  each version once. A library function such as `pagerank` is one
-  statement, however many calls it makes inside. When the statement ends,
-  normally or with an error, what it held is released and the cap holds
-  again, also between the statements of a transaction block. (Several
-  statements sent as one query string, as `psql -c 'a; b'` does, count as
-  one.) A version larger than the cap is held for the statement that
-  reads it, with a `NOTICE` once per statement, and reloaded by the next
-  one.
-- **What a statement holds past the cap is charged to
-  `warren.max_compute_memory`.** Each call in the statement has that much
-  less compute memory, and a version load that would take it past
+  ends, or its transaction does, whichever comes first, even past the cap,
+  so a statement that makes many calls loads each version once. A library
+  function such as `pagerank` is one statement, however many calls it
+  makes inside. What counts as a statement:
+  - one client message: with the extended protocol each `Execute` (a
+    cursor or portal fetched over several is held only during each);
+    several statements sent as one query string, as `psql -c 'a; b'`
+    does, count as one;
+  - a `CALL` or `DO` block is one statement, but a `COMMIT` inside it ends
+    what it held, so a procedure that loops with `COMMIT` holds only what
+    its current transaction read.
+
+  When the statement ends, normally or with an error, what it held is
+  released and the cap holds again, also between the statements of a
+  transaction block. A version larger than the cap is held for the
+  statement that reads it, with a `NOTICE` once per statement, and
+  reloaded by the next one.
+- **What a statement holds gives way under pressure.** A version or vector
+  the statement read that no call is using (`pagerank`'s version between
+  its calls, a graph a loop has moved past) is evicted, least recently
+  used first, when a load needs the room, and whenever a call starts while
+  the cache is over its cap. So a statement that reads more graphs, one
+  after another, than the two settings hold together still works; it
+  reloads what it reads again. A statement that alternates between graphs
+  that do not fit the cap together reloads them call by call.
+- **What the cache holds past the cap comes out of
+  `warren.max_compute_memory`.** That is transient vectors, the versions
+  and vectors calls are using, and versions evicted while a call still
+  holds them (an open cursor or a suspended portal streaming `bfs` or
+  `reachable_set`, which keep theirs until they close). Each call has that
+  much less compute memory (reading a vector the cache already holds
+  costs nothing more), and a version load that would take it past
   `warren.max_compute_memory` is refused with 53400 before anything is
-  loaded; the message names both settings and the bytes needed. So
-  `warren.max_cache_memory` plus `warren.max_compute_memory` bounds what
-  the cache and a call hold together.
+  loaded; the message names both settings and the bytes needed. That
+  happens only for what is in use: a version larger than the two
+  together, the two versions of a `diff` or `distance` that do not fit
+  them, or loads beside versions that open cursors hold.
 - **Transient vectors are never evicted**, since they cannot be reloaded.
   They count against the cap, and a transient write that would take the
   transient vectors alone past it is refused with 53400 before anything
@@ -98,10 +119,11 @@ compute kernels from the main thread every millisecond), so
 - `warren.prewarm(name)` loads the current version ahead of first use, for
   pooled connections; `warren.evict(name)` returns how many versions and vectors it freed.
 - `warren.max_compute_memory` bounds what one call reads and allocates,
-  and what its statement holds past the cap; `warren.max_cache_memory`
+  and what the cache holds past its cap; `warren.max_cache_memory`
   bounds what is held between statements. A backend's peak is therefore
   bounded by the sum of the two (a traversal's visited set and frontier
-  aside), plus, while a version loads,
+  aside, and calls running at once in one statement, each of which gets
+  its own budget against the same cache), plus, while a version loads,
   one CSR's raw segments (at most ~1.3 GB, the merged weighted CSR of 100M
   edges; measured: a 1.2 GB version loads at a 1.69 GB peak, a 6.0 GB one at
   7.3 GB). `refresh` (below) is bounded by neither. `diff`, `distance` and
@@ -151,6 +173,7 @@ The `refresh` peaks were measured through SQL at 1M nodes and 10M edges
 and scaled (DESIGN.md §5.4), within 4 GiB in every case; the earlier
 figures were measured by the soak before the build was charged and
 streamed.
+
 Not measured, and estimated the same way (the estimates matched the
 measured cached bytes to 0.1%): one weighted relation ~2.8 GB; five
 unweighted relations ~2.8 GB, or ~1.84 GB with `store_merged := false`.
@@ -166,8 +189,11 @@ settings together fails with 53400 before loading. Before this, the soak
 measured the cliff it replaces: the version was reloaded on every call,
 and since `pagerank` makes 8 calls per iteration, a default-cap run on the
 five-relation weighted graph reloaded it about 170 times, more than 15
-minutes (where it was stopped) instead of 32 s at an 8GB cap. The new
-behaviour has not been re-measured at this scale. Raising
+minutes (where it was stopped) instead of 32 s at an 8GB cap. Measured at
+a tenth of the scale with the cap as far under the graph and scratch
+(`bench/results/soak/`): `pagerank` now loads the version once, 6.1 s
+against 5.8 s at a raised cap, where the build before took 60.7 s over
+156 loads. Raising
 `warren.max_cache_memory` to hold the graph and the scratch (`SET
 warren.max_cache_memory = '8GB'`: `pagerank` took 15.1 s with the merged
 CSR and 31.6 s without) still saves the reload between statements, and

@@ -58,6 +58,12 @@ impl VectorCache {
         held
     }
 
+    /// Whether vector `id` is cached and shared beyond the cache's own
+    /// reference.
+    pub(crate) fn in_use(&self, id: VectorId) -> bool {
+        self.entries.get(&id).is_some_and(|entry| Arc::strong_count(&entry.vector) > 1)
+    }
+
     /// Drops vector `id`, if cached.
     pub(crate) fn remove(&mut self, id: VectorId) {
         self.entries.remove(&id);
@@ -108,6 +114,17 @@ pub(crate) fn load(
     let vector = Arc::new(read_vector(store, memory, record)?);
     remember(graph_id, record.vector, Arc::clone(&vector));
     Ok(vector)
+}
+
+/// Vector `id`, if cached; the lookup marks it used.
+pub(crate) fn lookup(id: VectorId) -> Option<Arc<AnyVector>> {
+    CACHE.with_borrow_mut(|cache| cache.get(id))
+}
+
+/// Whether a call holds cached vector `id`: it is shared beyond the cache's
+/// own reference.
+pub(crate) fn in_use(id: VectorId) -> bool {
+    CACHE.with_borrow(|cache| cache.in_use(id))
 }
 
 /// Caches `vector` as `id`, of graph `graph_id`: a vector just written.

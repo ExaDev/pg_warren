@@ -203,7 +203,7 @@ def test_a_lost_cold_load_probe_misses_the_memory_target():
 
 
 class Options:
-    eigen, cte, skip = True, True, []
+    eigen, cte, skip, cache_memory_kb = True, True, [], None
 
 
 def test_the_planned_stages_follow_the_case_and_the_options():
@@ -308,3 +308,54 @@ def test_the_settings_are_recorded_after_each_pass_sets_them_and_loads_the_libra
     # pg_settings lists warren.* only once a call has loaded the library.
     assert snapshot > next(i for i, sql in enumerate(log) if "warren." in sql and not sql.startswith("SET "))
     assert result["settings"] == {"raised": ["x=1"]}
+
+
+def test_a_call_counts_the_segment_rows_it_reads_in_its_own_statement():
+    sql = soak.with_segment_reads("warren.pagerank('soak', 'pr', tol := 0, max_iter := 20)")
+    assert ";" not in sql, "one statement: the counts are this transaction's"
+    # Read before, then the call, then read after: each step needs the one before.
+    before, run, after = (sql.index(part) for part in ("AS MATERIALIZED (SELECT", "warren.pagerank", "FROM run"))
+    assert before < run < after
+    assert soak.pagerank_sql("soak") == sql
+    assert "warren.prewarm('soak')" in soak.prewarm_sql("soak")
+
+
+def test_the_first_pass_runs_at_the_given_cap_and_counts_pagerank_against_it():
+    log = []
+    options = Options()
+    options.threads, options.statement_timeout, options.cache_memory_kb = 4, None, 418945
+    options.eigen = False
+    runner = soak.Soak(None, options, provenance={})
+    runner.session = lambda: FakeSession(log)
+    runner._queries({"stages": {}, "cached_bytes": GIB}, "default", cap=runner.first_cap())
+    assert "SET warren.max_cache_memory = '418945kB'" in log
+    assert any("warren.pagerank" in sql and "pg_stat_get_xact" in sql for sql in log)
+    # Then once more from a cold cache, which must load the version once.
+    evict = log.index("SELECT warren.evict('soak')")
+    assert evict < max(i for i, sql in enumerate(log) if "warren.pagerank" in sql)
+
+
+def test_the_first_cap_defaults_to_the_4gb_default():
+    options = Options()
+    options.cache_memory_kb = None
+    assert soak.Soak(None, options, provenance={}).first_cap() is None
+    assert soak.cap_bytes(None) == 4 * GIB
+    assert soak.cap_bytes(418945) == 418945 * 1024
+
+
+def test_the_summary_reports_how_many_times_pagerank_loaded_the_version():
+    # One load is what the pass's first (cold) prewarm reads.
+    result = {"stages": {"default: prewarm": {"median_seconds": 1.0, "rows": ["617|101"]},
+                         "default: pagerank": {"median_seconds": 3.0, "rows": ["1234|20"]},
+                         "default: pagerank from cold": {"median_seconds": 4.0, "rows": ["617|20"]}},
+              "hardware": {"cpus": 4}, "planned_stages": [],
+              "cache_memory_bytes": 418945 * 1024}
+    measured = soak.summary(result)
+    assert measured["load_segment_reads"] == 617
+    assert (measured["pagerank_segment_reads"], measured["pagerank_loads"]) == (1234, 2.0)
+    assert measured["pagerank_seconds"] == 3.0
+    assert (measured["pagerank_cold_seconds"], measured["pagerank_cold_loads"]) == (4.0, 1.0)
+
+
+def test_the_cold_load_probe_lifts_the_compute_limit_so_a_version_over_both_still_loads():
+    assert any("warren.max_compute_memory" in setting for setting in soak.COLD_LOAD_PROBE_SETTINGS)
