@@ -143,3 +143,26 @@ def test_a_refresh_over_4gb_misses_even_when_fast():
 @pytest.mark.parametrize("value, text", [(512, "512 B"), (3 * GIB, "3.22 GB"), (1_500_000, "1.50 MB")])
 def test_sizes_are_written_in_decimal_units(value, text):
     assert soak.size(value) == text
+
+
+def test_a_capped_eigen_is_reported_per_step_not_against_the_target():
+    result = {"hardware": {"cpus": 4}, "eigen_max_iter": 100,
+              "stages": {"default: eigen": {"median_seconds": 50.0}}}
+    measured = soak.summary(result)
+    assert measured["eigen_seconds_per_step"] == 0.5 and "eigen_seconds" not in measured
+
+
+def test_a_stopped_stage_is_a_lower_bound_and_a_miss():
+    stopped = {"median_seconds": 900.0, "errors": ["ERROR:  canceling statement due to statement timeout"]}
+    result = {"hardware": {"cpus": 4}, "stages": {"default: pagerank": stopped}}
+    measured = soak.summary(result)
+    assert measured["pagerank_seconds"] == 900.0 and measured["pagerank_seconds_stopped"]
+    pagerank = next(v for v in soak.verdicts(measured) if v["workload"] == "pagerank, 20 iterations")
+    assert pagerank == {"workload": "pagerank, 20 iterations", "target": "< 30 s (8 threads)",
+                        "measured": "≥ 900.0 s (stopped)", "met": False}
+
+
+def test_a_failed_stage_that_was_not_stopped_is_left_out():
+    failed = {"median_seconds": 1.0, "errors": ["ERROR:  out of memory"]}
+    measured = soak.summary({"hardware": {"cpus": 4}, "stages": {"default: pagerank": failed}})
+    assert "pagerank_seconds" not in measured

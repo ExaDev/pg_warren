@@ -223,10 +223,27 @@ TARGETS = (
 )
 
 
+STOPPED = "canceling statement"  # a cancel or statement_timeout: the time is a lower bound
+
+
 def verdicts(measured):
-    """Each §12 target the measurements cover, met or not."""
-    return [{"workload": name, "target": target, "measured": show(measured), "met": bool(met(measured))}
-            for name, target, keys, met, show in TARGETS if all(k in measured for k in keys)]
+    """Each §12 target the measurements cover, met or not; a stage stopped
+    before it finished is a miss, its time a lower bound."""
+    found = []
+    for name, target, keys, met, show in TARGETS:
+        if not all(k in measured for k in keys):
+            continue
+        stopped = [k for k in keys if measured.get(f"{k}_stopped")]
+        if stopped:
+            found.append({"workload": name, "target": target, "met": False,
+                          "measured": f"≥ {_seconds(measured[stopped[0]])} (stopped)"})
+        else:
+            found.append({"workload": name, "target": target, "measured": show(measured), "met": bool(met(measured))})
+    return found
+
+
+class BackendLost(RuntimeError):
+    """The backend (or psql) went away mid-statement, e.g. killed for memory."""
 
 
 class Session:
@@ -260,11 +277,14 @@ class Session:
         started = time.perf_counter()
         self.process.stdin.write(f"{sql.rstrip().rstrip(';')};\n\\echo {self.MARK}\n\\warn {self.MARK}\n")
         self.process.stdin.flush()
-        rows = []
+        rows, marked = [], False
         for line in self.process.stdout:
             if line.rstrip("\n") == self.MARK:
+                marked = True
                 break
             rows.append(line.rstrip("\n"))
+        if not marked:
+            raise BackendLost(f"psql ended during: {sql[:200]}")
         seconds = time.perf_counter() - started
         lines = []
         while (line := self.stderr.get()) != self.MARK:
@@ -357,9 +377,13 @@ class Soak:
         admin.execute("CREATE DATABASE soak")
         result = {"case": case.name, "nodes": case.nodes, "edges": case.edges, "weighted": case.weighted,
                   "relations": case.relations, "store_merged": case.store_merged, "threads": self.options.threads,
-                  "hardware": hardware(), "started_at": _now(), "stages": {}, "skipped": {}}
+                  "eigen_max_iter": self.options.eigen_max_iter,
+                  "statement_timeout": self.options.statement_timeout, "skip": self.options.skip, "hardware": hardware(), "started_at": _now(), "stages": {}, "skipped": {}}
         try:
             self._run(case, result)
+        except BackendLost as error:
+            result["aborted"] = str(error)
+            print(f"  ABORTED: {error}", flush=True)
         finally:
             admin.execute("DROP DATABASE IF EXISTS soak")
             result["finished_at"], result["free_disk_after"] = _now(), free_disk(self.options.parent)
@@ -406,9 +430,12 @@ class Soak:
                                                                     DEFAULT_CAP)
         if not fits:
             self._queries(result, "raised", cap=self.options.raised_cache_memory)
-        if self.options.eigen_steps and case.name == "a":
+        if self.options.eigen and self.options.eigen_steps and case.name == "a":
             self._eigen_steps(case, result)
-        self._second_version(case, result, v1)
+        if "second-version" in self.options.skip:
+            result["skipped"]["second_version"] = "--skip second-version"
+        else:
+            self._second_version(case, result, v1)
 
     def _generated_refresh(self, case, result):
         """The same build from the generator query, which the `b` cases
@@ -443,6 +470,8 @@ class Soak:
         reloads = cap is None and (result["cached_bytes"] or 0) > DEFAULT_CAP
         with self.session() as s:
             s.run(f"SET warren.threads = {self.options.threads}")
+            if self.options.statement_timeout:
+                s.run(f"SET statement_timeout = '{self.options.statement_timeout}'")
             if cap:
                 s.run(f"SET warren.max_cache_memory = '{cap}'")
 
@@ -459,9 +488,10 @@ class Soak:
             stage("components", f"SELECT count(*) FROM (SELECT component_id FROM warren.components('{GRAPH}', "
                                 "NULL::bigint) GROUP BY 1) c")
             stage("pagerank", f"SELECT warren.pagerank('{GRAPH}', 'pr', tol := 0, max_iter := 20)")
-            if label == "default":
+            if label == "default" and self.options.eigen:
+                limit = f", max_iter := {self.options.eigen_max_iter}" if self.options.eigen_max_iter else ""
                 stage("eigen", f"SELECT count(*), max(residual) FROM warren.eigen('{GRAPH}', 20, "
-                               "'normalized_laplacian', 'smallest', tol := 1e-6)")
+                               f"'normalized_laplacian', 'smallest', tol := 1e-6{limit})")
 
     def _eigen_steps(self, case, result):
         """warren-core's Lanczos on the same edges (as an undirected graph),
@@ -525,8 +555,14 @@ def summary(result):
             "cold_load_seconds": ("default: prewarm", "median_seconds")}
     for key, (name, field) in pick.items():
         stage = stages.get(name)
-        if stage is not None and "errors" not in stage:
+        if stage is None:
+            continue
+        if "errors" not in stage:
             measured[key] = stage[field]
+        elif key.endswith("_seconds") and any(STOPPED in error for error in stage["errors"]):
+            measured[key], measured[f"{key}_stopped"] = stage[field], True
+    if result.get("eigen_max_iter") and "eigen_seconds" in measured:
+        measured["eigen_seconds_per_step"] = measured.pop("eigen_seconds") / result["eigen_max_iter"]
     reachable = stages.get("default: reachable_set")
     stats = stages.get("default: reachable_set stats", {}).get("stats")
     if reachable and stats and "errors" not in reachable:
@@ -554,8 +590,14 @@ def main(argv):
     options.add_argument("--threads", type=int, default=os.cpu_count())
     options.add_argument("--raised-cache-memory", default="8GB",
                          help="warren.max_cache_memory for the second pass of a case that does not fit")
+    options.add_argument("--statement-timeout", help="statement_timeout of the read workloads, e.g. 15min")
+    options.add_argument("--skip", action="append", default=[], choices=["second-version"],
+                         help="leave out a part of each case")
+    options.add_argument("--label", default="", help="suffix for the result file name")
     options.add_argument("--disk-floor", type=int, default=4 * GIB, help="bytes of disk to keep free")
     options.add_argument("--no-cte", dest="cte", action="store_false", help="skip the recursive CTE baseline")
+    options.add_argument("--no-eigen", dest="eigen", action="store_false", help="skip eigen (and its steps)")
+    options.add_argument("--eigen-max-iter", type=int, help="cap eigen's operator applications (per-step cost)")
     options.add_argument("--no-eigen-steps", dest="eigen_steps", action="store_false",
                          help="skip warren-core's Lanczos on the same edges")
     args = options.parse_args(argv)
@@ -571,7 +613,7 @@ def main(argv):
                   flush=True)
             result = soak.run(case)
             suffix = f"-scale{args.scale}" if args.scale > 1 else ""
-            out = args.results / f"{name}{suffix}.json"
+            out = args.results / f"{name}{suffix}{args.label}.json"
             out.write_text(json.dumps(result, indent=1) + "\n")
             for verdict in result["verdicts"]:
                 print(f"  {'met ' if verdict['met'] else 'MISS'} {verdict['workload']}: {verdict['measured']} "
