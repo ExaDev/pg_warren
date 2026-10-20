@@ -45,3 +45,12 @@ builds, one after the other under `/tmp/pgrx-test.lock`.
 divided by those of the pass's first (cold) `prewarm` (88). The
 `pagerank from cold` stage evicts the graph first. The pinned build's
 `diff` between two versions took 3.6 s.
+
+## Build memory at a tenth of the scale
+
+`a-build-peak-scale10.json`, `b-merged-build-peak-scale10.json` and
+`b-unmerged-build-peak-scale10.json`: the three cases at 1M nodes and 10M
+edges (`--scale 10 --no-eigen --no-cte --skip second-version`), after the
+build was charged to `warren.max_build_memory` and streamed (DESIGN.md
+§5.4). Their `refresh` peaks back §5.4's and §12's build-memory figures;
+their other rows are not used. Each records its provenance.

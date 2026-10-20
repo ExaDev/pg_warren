@@ -4,7 +4,7 @@
 use std::cmp::Ordering;
 use std::fmt::Debug;
 
-use super::{memory, DenseId, GraphError, Tombstones};
+use super::{memory, BuildBuffer, BuildCharge, BuildMemory, DenseId, GraphError, Tombstones};
 
 /// An external id type: the type of a graph's node ids in its user tables
 /// (`id_type`). Dense ids follow this type's order, which must match the
@@ -85,15 +85,33 @@ impl<E: ExternalId> IdMap<E> {
     /// appended at the high-water mark in external-id order; nodes that have
     /// disappeared are tombstoned. Dense ids are never reused, so a node that
     /// reappears after being tombstoned gets its old dense id back.
-    pub fn rebuild(&self, mut externals: Vec<E>) -> Result<Self, GraphError> {
+    pub fn rebuild(&self, externals: Vec<E>) -> Result<Self, GraphError> {
+        let externals = BuildBuffer::from_vec(&BuildMemory::unlimited(), externals);
+        Ok(self.rebuild_within(externals)?.0)
+    }
+
+    /// [`Self::rebuild`], charging every buffer to the memory `externals`
+    /// is charged to; returns the charge for the id map it holds. The
+    /// externals are sorted in place, the new ids among them counted, and
+    /// every buffer reserved exactly; they are freed before the inverse map
+    /// is built.
+    pub fn rebuild_within(
+        &self,
+        mut externals: BuildBuffer<E>,
+    ) -> Result<(Self, BuildCharge), GraphError> {
+        let memory = externals.memory().clone();
         externals.sort_unstable();
         externals.dedup();
-        let mut by_external = memory::with_capacity(self.by_external.len() + externals.len())?;
-        let mut fresh = memory::with_capacity(externals.len())?;
+        let fresh_count = self.fresh(&externals);
+        let mut by_external =
+            BuildBuffer::with_capacity(&memory, self.by_external.len() + fresh_count)?;
+        let mut fresh = BuildBuffer::with_capacity(&memory, fresh_count)?;
+        let words = Tombstones::bytes_for(self.id_space() + fresh_count as u64);
+        let tombstones_charge = memory.charge(words)?;
         let mut tombstones = self.tombstones.try_clone()?;
         let mut next_dense = self.id_space();
         let mut previous = self.by_external.iter().peekable();
-        let mut current = externals.into_iter().peekable();
+        let mut current = externals.iter().copied().peekable();
         loop {
             let order = match (previous.peek(), current.peek()) {
                 (None, None) => break,
@@ -105,30 +123,48 @@ impl<E: ExternalId> IdMap<E> {
                 Ordering::Less => {
                     if let Some(&(old, dense)) = previous.next() {
                         tombstones.insert(dense);
-                        by_external.push((old, dense));
+                        by_external.push((old, dense))?;
                     }
                 }
                 Ordering::Equal => {
                     if let Some(&(old, dense)) = previous.next() {
                         tombstones.remove(dense);
-                        by_external.push((old, dense));
+                        by_external.push((old, dense))?;
                     }
                     current.next();
                 }
                 Ordering::Greater => {
                     if let Some(new) = current.next() {
-                        by_external.push((new, next_dense));
-                        fresh.push(new);
+                        by_external.push((new, next_dense))?;
+                        fresh.push(new)?;
                         next_dense += 1;
                     }
                 }
             }
         }
-        let mut by_dense = memory::with_capacity(self.by_dense.len() + fresh.len())?;
-        by_dense.extend_from_slice(&self.by_dense);
-        by_dense.extend(fresh);
+        drop(externals);
+        let mut by_dense = BuildBuffer::with_capacity(&memory, self.by_dense.len() + fresh.len())?;
+        by_dense.extend(self.by_dense.iter().copied());
+        by_dense.extend(fresh.iter().copied());
+        drop(fresh);
         tombstones.grow_to(next_dense)?;
-        Ok(Self { by_external, by_dense, tombstones })
+        let (by_external, mut charge) = by_external.into_parts();
+        let (by_dense, by_dense_charge) = by_dense.into_parts();
+        charge.absorb(by_dense_charge);
+        charge.absorb(tombstones_charge);
+        Ok((Self { by_external, by_dense, tombstones }, charge))
+    }
+
+    /// How many of the sorted, distinct `externals` this map does not hold.
+    fn fresh(&self, externals: &[E]) -> usize {
+        let mut known = self.by_external.iter().map(|(external, _)| external).peekable();
+        externals
+            .iter()
+            .filter(|external| {
+                while known.next_if(|known| known < external).is_some() {}
+                known.peek() != Some(external)
+            })
+            .count()
     }
 
     /// An id map from its (external id, dense id) pairs and tombstones,
@@ -231,6 +267,28 @@ mod tests {
         let pair = std::mem::size_of::<(i64, DenseId)>() as u64;
         assert_eq!(id_map.bytes(), 3 * pair + 3 * 8 + id_map.tombstones().bytes());
         assert_eq!(IdMap::<i64>::new().bytes(), 0);
+    }
+
+    /// A rebuild reserves exactly what the result holds: with a stable
+    /// node set, its peak is the externals and the result, not a second
+    /// copy of the base and a fresh-id buffer for every external.
+    #[test]
+    fn a_rebuild_charges_no_more_than_its_externals_and_its_result() {
+        let nodes = 10_000i64;
+        let base = first_build((0..nodes).collect());
+        for externals in [(0..nodes).collect::<Vec<_>>(), (nodes / 2..nodes * 3 / 2).collect()] {
+            let memory = BuildMemory::unlimited();
+            let externals = BuildBuffer::from_vec(&memory, externals);
+            let held = externals.bytes();
+            let (rebuilt, charge) = base.rebuild_within(externals).unwrap();
+            assert_eq!(charge.bytes(), rebuilt.bytes());
+            assert!(
+                memory.peak() <= held + rebuilt.bytes(),
+                "{} > {held} + {}",
+                memory.peak(),
+                rebuilt.bytes()
+            );
+        }
     }
 
     #[test]

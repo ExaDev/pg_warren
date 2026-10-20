@@ -1,7 +1,20 @@
 //! Encoding of a CSR as its `offsets`, `targets` and `weights` segments.
 
-use super::{decode, elements, encode, read_header, Element, SegmentKind};
-use crate::graph::{AnyCsr, Csr, GraphError, Target, TargetWidth};
+use super::{
+    decode, elements, encode, encode_chunked, read_header, ChunkSink, Element, SegmentKind,
+};
+use crate::graph::{AnyCsr, BuildMemory, Csr, GraphError, Target, TargetWidth};
+
+/// One of a CSR's three segments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CsrPart {
+    /// `offsets`.
+    Offsets,
+    /// `targets`.
+    Targets,
+    /// `weights`.
+    Weights,
+}
 
 /// The encoded segments of one CSR.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +50,22 @@ impl AnyCsr {
         }
     }
 
+    /// Encodes one of its segments in chunks of `chunk_size` bytes, through
+    /// a chunk buffer charged to `memory`, and returns its length, or `None`
+    /// (passing nothing) for the weights of an unweighted CSR.
+    pub fn encode_part<X: From<GraphError>>(
+        &self,
+        part: CsrPart,
+        chunk_size: usize,
+        memory: &BuildMemory,
+        each: &mut ChunkSink<'_, X>,
+    ) -> Result<Option<u64>, X> {
+        match self {
+            Self::U32(csr) => encode_csr_part(csr, part, chunk_size, memory, each),
+            Self::U64(csr) => encode_csr_part(csr, part, chunk_size, memory, each),
+        }
+    }
+
     /// Decodes a CSR over `id_space` from its segments, validating every
     /// CSR invariant (see [`Csr::from_parts`]). The targets must have the
     /// width the id space implies ([`TargetWidth::for_id_space`]).
@@ -69,4 +98,31 @@ fn encode_csr<T: Target + Element>(csr: &Csr<T>) -> Result<CsrSegments, GraphErr
         targets: encode(SegmentKind::Targets, csr.targets())?,
         weights: csr.weights().map(|weights| encode(SegmentKind::Weights, weights)).transpose()?,
     })
+}
+
+fn encode_csr_part<T: Target + Element, X: From<GraphError>>(
+    csr: &Csr<T>,
+    part: CsrPart,
+    chunk_size: usize,
+    memory: &BuildMemory,
+    each: &mut ChunkSink<'_, X>,
+) -> Result<Option<u64>, X> {
+    fn all<E: Element, X: From<GraphError>>(
+        kind: SegmentKind,
+        elements: &[E],
+        chunk_size: usize,
+        memory: &BuildMemory,
+        each: &mut ChunkSink<'_, X>,
+    ) -> Result<Option<u64>, X> {
+        let count = elements.len() as u64;
+        encode_chunked(kind, count, elements, chunk_size, memory, each).map(Some)
+    }
+    match part {
+        CsrPart::Offsets => all(SegmentKind::Offsets, csr.offsets(), chunk_size, memory, each),
+        CsrPart::Targets => all(SegmentKind::Targets, csr.targets(), chunk_size, memory, each),
+        CsrPart::Weights => match csr.weights() {
+            Some(weights) => all(SegmentKind::Weights, weights, chunk_size, memory, each),
+            None => Ok(None),
+        },
+    }
 }

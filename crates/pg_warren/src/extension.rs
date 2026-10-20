@@ -21,7 +21,7 @@ mod warren {}
 pub(crate) fn graph_sqlstate(error: &GraphError) -> PgSqlErrorCode {
     match error {
         GraphError::OutOfMemory { .. } => PgSqlErrorCode::ERRCODE_OUT_OF_MEMORY,
-        GraphError::OffsetsOverBudget { .. } => {
+        GraphError::OffsetsOverBudget { .. } | GraphError::BuildMemoryLimit { .. } => {
             PgSqlErrorCode::ERRCODE_CONFIGURATION_LIMIT_EXCEEDED
         }
         GraphError::TooManyRelations

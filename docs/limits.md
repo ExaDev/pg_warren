@@ -12,7 +12,7 @@ All are ordinary GUCs, settable per session or per transaction
 | `warren.threads` | half the cores, at least 1 | 1–1024 | threads a compute kernel runs on (`spmv`, `spmm`, `vector_map`, reductions, `gather`, `eigen`, `distance`, `triangles`) | — |
 | `warren.max_compute_memory` | `4GB` | `64kB` up | memory one call holds: every vector it reads (once, cached or not), every vector and work buffer it allocates, and what its statement holds in the cache past `warren.max_cache_memory` | `configuration_limit_exceeded` (53400), before allocating or loading |
 | `warren.max_cache_memory` | `4GB` | `64kB` up | what this backend's cache holds *between* statements: cached versions, cached persisted vectors, and every role's transient vectors | versions and persisted vectors no running statement has read are evicted, least recently used first; a transient write that would go over is refused with 53400 |
-| `warren.max_build_memory` | `4GB` | `1MB` up | the CSR offsets a `refresh` builds (8 bytes × (id_space + 1) per relation's CSR, and the merged CSR's if stored, per direction) | 53400, before anything is allocated or written |
+| `warren.max_build_memory` | `4GB` | `1MB` up | everything a `refresh` holds at once: the node ids, the id map, the edge list, the CSRs it is building and its sort and write buffers; and, separately, the CSR offsets of the whole version (8 bytes × (id_space + 1) per relation's CSR, and the merged CSR's if stored, per direction) | `configuration_limit_exceeded` (53400): before the edge query runs if the id map or the offsets do not fit, before the version is written if the build's estimate does not, else when the edge list grows past it |
 | `warren.max_walk_paths` | `10000000` | 1 up | the largest `max_results` for a `walk` that returns a row per walk (`mode := 'paths'`, or `'ends'` without `distinct_ends`) | `program_limit_exceeded` (54000) |
 
 On the `kg` graph of [change-detection.md](change-detection.md):
@@ -32,8 +32,17 @@ Other built-in bounds:
 - A walk step's hop range is at most 1,024.
 - Allocator failure is `out_of_memory` (53200), never a crash: every
   graph-sized buffer is reserved fallibly.
-- `warren.max_build_memory` does not bound the edge list or the targets;
-  those are bounded only by fallible allocation.
+- A `refresh` streams each relation's CSRs to `warren.segments` as it builds
+  them, so it holds the edge list (20 bytes per weighted edge, 12 unweighted,
+  8 with one relation), the id map (24 bytes per `bigint` node), the
+  relation dictionary, and a group of relations' forward CSRs with one
+  reverse CSR: as many relations at once as fit half of what remains of the
+  budget, so a small graph builds in one pass and a large one in up to
+  about eight. With the merged CSR stored, its build peaks at about 28 bytes
+  per weighted edge. A relation column with a distinct name per row is
+  refused while it is read (the dictionary is charged as it grows, and the
+  offsets checked as relations are added).
+- A `refresh` reports the most build memory it held at `DEBUG1`.
 
 Every long call checks for interrupts (traversals every 65,536 units of work,
 compute kernels from the main thread every millisecond), so
@@ -162,9 +171,19 @@ memory (shared buffers excluded).
 
 | Graph (10M nodes, 100M edges) | Stored | Cached | `refresh` peak | Cold load | Fits the 4 GiB cap with `pagerank`'s scratch? |
 |---|---|---|---|---|---|
-| one relation, unweighted | 1.12 GB | 1.20 GB | 2.0 GB | 2.2–2.9 s | yes: 1.20 + 0.88 GB |
-| five relations, weighted, merged CSR (default) | 5.92 GB | 6.00 GB | 9.0 GB | 23 s | no: the graph alone is over the cap |
-| five relations, weighted, `store_merged := false` | 3.36 GB | 3.44 GB | 5.5 GB | 6.2 s | no: 3.44 + 0.88 = 4.32 GB, 30 MB over (charged to compute memory) |
+| one relation, unweighted | 1.12 GB | 1.20 GB | ~1.6 GB (2.0 GB before 0.3.0) | 2.2–2.9 s | yes: 1.20 + 0.88 GB |
+| five relations, weighted, merged CSR (default) | 5.92 GB | 6.00 GB | ~3.3 GB (9.0 GB before) | 23 s | no: the graph alone is over the cap |
+| five relations, weighted, `store_merged := false` | 3.36 GB | 3.44 GB | ~3.3 GB (5.5 GB before) | 6.2 s | no: 3.44 + 0.88 = 4.32 GB, 30 MB over (charged to compute memory) |
+
+The `refresh` peaks are what the build charges at full scale (1.56,
+3.24 and 3.24 GB, run in `warren-core`) plus what a backend was measured
+to hold past that charge through SQL at 10M and 30M edges (about 18 MB,
+not growing with the edges) and the edge query's own execution memory,
+which `work_mem` bounds (DESIGN.md §5.4). All are within 4 GiB; the
+earlier figures were measured by the soak before the build was charged
+and streamed, and the soak's full-scale re-run is due before 0.3.0.
+`warren.max_build_memory` is the build's alone: what the backend's cache
+holds (`warren.max_cache_memory`) comes on top of it during a `refresh`.
 
 Not measured, and estimated the same way (the estimates matched the
 measured cached bytes to 0.1%): one weighted relation ~2.8 GB; five
@@ -191,9 +210,9 @@ warren.max_cache_memory = '8GB'`: `pagerank` took 15.1 s with the merged
 CSR and 31.6 s without) still saves the reload between statements, and
 single calls on a graph over the cap still pay one load each (`bfs` 21.9 s
 instead of 0.73 s). For a graph that is only just over, `store_merged :=
-false` also helps. Weighted multi-relation builds of 100M edges also
-exceed 4 GB of build memory either way: give the `refresh` backend
-6–10 GB.
+false` also helps. A `refresh` of any of these graphs fits the default
+`warren.max_build_memory` (before 0.3.0, weighted multi-relation builds
+of 100M edges needed 6–10 GB).
 
 ### The merged CSR (`store_merged`)
 

@@ -17,6 +17,7 @@ mod transpose;
 use std::ops::Range;
 
 pub use any::{AnyCsr, Neighbours};
+pub use build::{BuildPlan, BuildSummary, BuiltCsr, CsrDirection, CsrScope, CsrSink};
 pub use graph_csr::{CsrLayout, GraphCsr, RelationCsr};
 pub use rows::{AllRelations, CsrRows, RowNeighbours};
 pub use target::{Target, TargetWidth};

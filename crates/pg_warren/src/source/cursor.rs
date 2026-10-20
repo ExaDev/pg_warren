@@ -7,8 +7,8 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 
 use pgrx::prelude::*;
-use pgrx::spi::{SpiClient, SpiCursor, SpiHeapTupleData};
-use pgrx::{PgList, PgTupleDesc};
+use pgrx::spi::{SpiClient, SpiCursor, SpiHeapTupleData, SpiTupleTable};
+use pgrx::{PgList, PgMemoryContexts, PgTupleDesc};
 
 use super::{ColumnType, SourceError};
 
@@ -186,4 +186,57 @@ pub(crate) fn for_each_row<E: From<pgrx::spi::Error>>(
         // refers to any more.
         unsafe { pg_sys::SPI_freetuptable(pg_sys::SPI_tuptable) };
     }
+}
+
+/// [`for_each_row`], passing each row as its batch's tuple table positioned
+/// at it, so that [`text_in_place`] can read a text column without the copy
+/// pgrx's typed getters make into a memory context that lives until SPI
+/// finishes (one allocation per row, held for the whole read). Each batch
+/// runs in a memory context reset after it, which holds whatever reading a
+/// row detoasts.
+pub(crate) fn for_each_tuple<E: From<pgrx::spi::Error>>(
+    cursor: &mut SpiCursor<'_>,
+    mut each: impl FnMut(&SpiTupleTable<'_>) -> Result<(), E>,
+) -> Result<(), E> {
+    let mut rows = PgMemoryContexts::new("warren rows");
+    loop {
+        check_for_interrupts!();
+        let mut batch = cursor.fetch(BATCH_ROWS)?;
+        if batch.is_empty() {
+            return Ok(());
+        }
+        // SAFETY: `rows` is a context this function owns; what is allocated
+        // in it while the batch is read is used only by `each`, which
+        // copies what it keeps, before the reset below.
+        let read = unsafe {
+            rows.switch_to(|_| {
+                while batch.next().is_some() {
+                    each(&batch)?;
+                }
+                Ok::<_, E>(())
+            })
+        };
+        // SAFETY: nothing allocated in `rows` is used after the batch.
+        unsafe { rows.reset() };
+        read?;
+        // SAFETY: SPI_tuptable is the batch just consumed, which nothing
+        // refers to any more.
+        unsafe { pg_sys::SPI_freetuptable(pg_sys::SPI_tuptable) };
+    }
+}
+
+/// The `text` in column `ordinal` of the row `table` is at, read in place
+/// from the tuple (or, if stored out of line or compressed, detoasted into
+/// the current memory context), without a copy.
+pub(crate) fn text_in_place<'t>(
+    table: &'t SpiTupleTable<'_>,
+    ordinal: usize,
+) -> Result<Option<&'t str>, pgrx::spi::Error> {
+    let Some(datum) = table.get_datum_by_ordinal(ordinal)? else {
+        return Ok(None);
+    };
+    // SAFETY: `datum` is the non-NULL `text` (the caller checked the
+    // column's type) of the tuple `table` is at, which lives until the tuple
+    // table is freed, so for as long as `table` is borrowed.
+    Ok(unsafe { <&str as FromDatum>::from_polymorphic_datum(datum, false, pg_sys::TEXTOID) })
 }

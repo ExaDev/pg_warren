@@ -30,6 +30,11 @@ impl Tombstones {
         self.id_space
     }
 
+    /// The heap bytes a bitmap over `id_space` dense ids holds.
+    pub fn bytes_for(id_space: u64) -> u64 {
+        (word_count(id_space) as u64).saturating_mul(8)
+    }
+
     /// The heap bytes the bitmap holds.
     pub fn bytes(&self) -> u64 {
         memory::held(&self.words)

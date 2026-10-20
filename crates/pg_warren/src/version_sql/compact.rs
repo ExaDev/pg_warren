@@ -94,7 +94,7 @@ pub(crate) fn compact_version<E: ExternalId>(
         &compaction.graph,
         chunk_size,
     )?;
-    catalog.record_bytes(version, bytes)?;
+    catalog.record_contents(version, &stats, bytes)?;
     let rows = compaction.renumbering.old_dense_ids();
     let moved = move_vectors(*vectors, graph.graph_id, source, version, rows, chunk_size)?;
     // With its vectors moved, retention may delete the source on promotion.

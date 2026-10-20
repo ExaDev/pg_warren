@@ -2,9 +2,12 @@
 //! relation, plus the merged all-relations CSR unless the graph merges the
 //! relations' rows on the fly (DESIGN.md §5.3, §5.4 step 4).
 
+use super::build::{stores_merged, BuildPlan, BuiltCsr, CsrDirection, CsrScope, CsrSink};
 use super::TargetWidth;
-use super::{build, transpose::transpose, AllRelations, AnyCsr, Csr, CsrRows, Target};
-use crate::graph::{EdgeList, GraphError, RelationIndex, RelationSelection};
+use super::{transpose::transpose, AllRelations, AnyCsr, CsrRows};
+#[cfg(test)]
+use super::{Csr, Target};
+use crate::graph::{BuildMemory, EdgeList, GraphError, RelationIndex, RelationSelection};
 
 /// The forward CSR of a relation, and its reverse if the graph builds one.
 #[derive(Debug, Clone, PartialEq)]
@@ -47,17 +50,6 @@ impl RelationCsr {
     /// The heap bytes its CSRs hold.
     pub fn bytes(&self) -> u64 {
         self.csrs().map(AnyCsr::bytes).sum()
-    }
-}
-
-/// Whether a build of `relation_count` relations stores the merged CSR:
-/// always without relations (its empty CSR carries the id space and the
-/// reverse CSR's presence), never with one, else as `layout` says.
-fn stores_merged(relation_count: usize, layout: CsrLayout) -> bool {
-    match relation_count {
-        0 => true,
-        1 => false,
-        _ => layout.store_merged,
     }
 }
 
@@ -144,20 +136,22 @@ impl GraphCsr {
             .saturating_mul(8)
     }
 
-    /// [`Self::build`], refused with [`GraphError::OffsetsOverBudget`] before
-    /// anything is allocated if [`Self::offsets_bytes`] exceeds `budget`.
-    pub fn build_within(
-        edges: EdgeList,
+    /// Refuses with [`GraphError::OffsetsOverBudget`] a version whose
+    /// [`Self::offsets_bytes`] exceed `budget`: a build streams its CSRs and
+    /// holds at most a group of relations' offsets at once, but a version
+    /// whose offsets alone exceed the build budget is refused before
+    /// anything is built (DESIGN.md §14 item 17).
+    pub fn check_offsets(
         relation_count: usize,
         id_space: u64,
         layout: CsrLayout,
         budget: u64,
-    ) -> Result<Self, GraphError> {
+    ) -> Result<(), GraphError> {
         let required = Self::offsets_bytes(relation_count, id_space, layout);
-        if required > budget {
-            return Err(GraphError::OffsetsOverBudget { required, budget });
+        match required <= budget {
+            true => Ok(()),
+            false => Err(GraphError::OffsetsOverBudget { required, budget }),
         }
-        Self::build_as(edges, relation_count, id_space, layout)
     }
 
     /// [`Self::build_as`], storing the merged CSR.
@@ -173,23 +167,26 @@ impl GraphCsr {
 
     /// Builds the CSRs of `edges`, whose relations index a dictionary of
     /// `relation_count` relations and whose dense ids lie in `id_space`,
-    /// as `layout` says. Targets are `u32` when `id_space < 2³²`, else
-    /// `u64` ([`TargetWidth`]). No memory budget applies beyond fallible
-    /// allocation; the adapter uses [`Self::build_within`].
+    /// as `layout` says, holding them all. Targets are `u32` when
+    /// `id_space < 2³²`, else `u64` ([`TargetWidth`]). No memory budget
+    /// applies beyond fallible allocation; a refresh streams its CSRs
+    /// through a [`BuildPlan`] instead.
     pub fn build_as(
         edges: EdgeList,
         relation_count: usize,
         id_space: u64,
         layout: CsrLayout,
     ) -> Result<Self, GraphError> {
-        match TargetWidth::for_id_space(id_space) {
-            TargetWidth::U32 => Self::build_with::<u32>(edges, relation_count, id_space, layout),
-            TargetWidth::U64 => Self::build_with::<u64>(edges, relation_count, id_space, layout),
-        }
+        let plan =
+            BuildPlan::new(&edges, relation_count, id_space, layout, &BuildMemory::unlimited(), 0)?;
+        let mut built = Built::default();
+        let summary = plan.build(edges, &mut built)?;
+        built.into_graph(summary.deduplicated_edges)
     }
 
-    /// [`Self::build`] at target width `T`, which must cover the id space.
-    /// Tests use it to reach the `u64` path without a 2³² id space.
+    /// [`Self::build_as`] at target width `T`, which must cover the id
+    /// space. Tests use it to reach the `u64` path without a 2³² id space.
+    #[cfg(test)]
     pub(crate) fn build_with<T: Target>(
         edges: EdgeList,
         relation_count: usize,
@@ -199,20 +196,11 @@ impl GraphCsr {
     where
         AnyCsr: From<Csr<T>>,
     {
-        let store_merged = stores_merged(relation_count, layout);
-        let forward = build::forward::<T>(edges, relation_count, id_space, store_merged)?;
-        let with_reverse = |csr: Csr<T>| -> Result<RelationCsr, GraphError> {
-            let reverse = match layout.build_reverse {
-                true => Some(transpose(&csr)?.into()),
-                false => None,
-            };
-            Ok(RelationCsr { forward: csr.into(), reverse })
-        };
-        let relations =
-            forward.relations.into_iter().map(with_reverse).collect::<Result<Vec<_>, _>>()?;
-        let merged = forward.merged.map(with_reverse).transpose()?;
-        let layout = Layout::new(relations, merged)?;
-        Ok(Self { layout, deduplicated_edges: forward.deduplicated_edges })
+        let plan =
+            BuildPlan::new(&edges, relation_count, id_space, layout, &BuildMemory::unlimited(), 0)?;
+        let mut built = Built::default();
+        let summary = plan.build_with::<T, _>(edges, &mut built)?;
+        built.into_graph(summary.deduplicated_edges)
     }
 
     /// Assembles decoded CSRs into a graph, checking what the per-segment
@@ -341,6 +329,44 @@ impl GraphCsr {
     /// The number of parallel edges folded by deduplication.
     pub fn deduplicated_edges(&self) -> u64 {
         self.deduplicated_edges
+    }
+}
+
+/// A sink that keeps every CSR of a build, to assemble the graph.
+#[derive(Default)]
+struct Built {
+    relations: Vec<RelationCsr>,
+    merged: Option<RelationCsr>,
+}
+
+impl CsrSink for Built {
+    type Error = GraphError;
+
+    fn csr(&mut self, built: BuiltCsr) -> Result<(), GraphError> {
+        let BuiltCsr { scope, direction, csr, .. } = built;
+        let relation = match (scope, direction) {
+            (CsrScope::Relation(_), CsrDirection::Forward) => {
+                self.relations.push(RelationCsr { forward: csr, reverse: None });
+                return Ok(());
+            }
+            (CsrScope::Merged, CsrDirection::Forward) => {
+                self.merged = Some(RelationCsr { forward: csr, reverse: None });
+                return Ok(());
+            }
+            (CsrScope::Relation(_), CsrDirection::Reverse) => self.relations.last_mut(),
+            (CsrScope::Merged, CsrDirection::Reverse) => self.merged.as_mut(),
+        };
+        if let Some(relation) = relation {
+            relation.reverse = Some(csr);
+        }
+        Ok(())
+    }
+}
+
+impl Built {
+    fn into_graph(self, deduplicated_edges: u64) -> Result<GraphCsr, GraphError> {
+        let layout = Layout::new(self.relations, self.merged)?;
+        Ok(GraphCsr { layout, deduplicated_edges })
     }
 }
 
@@ -645,17 +671,53 @@ mod tests {
     }
 
     #[test]
-    fn a_build_over_its_offsets_budget_is_rejected_before_allocating() {
+    fn a_version_over_its_offsets_budget_is_refused() {
         let layout = CsrLayout { build_reverse: true, store_merged: true };
         let required = GraphCsr::offsets_bytes(1000, 1 << 40, layout);
         assert_eq!(
-            GraphCsr::build_within(EdgeList::new(false), 1000, 1 << 40, layout, 1 << 30),
+            GraphCsr::check_offsets(1000, 1 << 40, layout, 1 << 30),
             Err(GraphError::OffsetsOverBudget { required, budget: 1 << 30 })
         );
         let budget = GraphCsr::offsets_bytes(2, 3, layout);
-        assert!(GraphCsr::build_within(EdgeList::new(false), 2, 3, layout, budget).is_ok());
+        assert_eq!(GraphCsr::check_offsets(2, 3, layout, budget), Ok(()));
         // Without the merged CSR the same budget leaves room for a third relation.
-        assert!(GraphCsr::build_within(EdgeList::new(false), 3, 3, unmerged(true), budget).is_ok());
+        assert_eq!(GraphCsr::check_offsets(3, 3, unmerged(true), budget), Ok(()));
+    }
+
+    #[test]
+    fn a_plan_needs_at_most_every_offsets_array() {
+        let memory = BuildMemory::unlimited();
+        for layout in [unmerged(true), CsrLayout { build_reverse: true, store_merged: true }] {
+            for relations in [0, 1, 3] {
+                let plan = BuildPlan::new(&EdgeList::new(false), relations, 50, layout, &memory, 0)
+                    .unwrap();
+                let offsets = GraphCsr::offsets_bytes(relations, 50, layout);
+                // At least one relation's forward and reverse CSRs, at most
+                // every relation's.
+                assert!(plan.bytes_needed() >= 2 * 51 * 8, "{relations}: {}", plan.bytes_needed());
+                // Besides the offsets, a header of a few hundred bytes for
+                // each relation's rows.
+                let headers = 256 * relations.max(1) as u64;
+                let needed = plan.bytes_needed();
+                assert!(needed <= offsets + headers, "{relations}: {needed}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_build_past_its_memory_charges_refuses_at_the_reservation() {
+        let memory = BuildMemory::new(100);
+        let edges = EdgeList::within(3, false, &memory);
+        let plan = BuildPlan::new(&edges, 1, 3, unmerged(false), &memory, 0).unwrap();
+        // One relation's offsets and targets, and the header of its rows.
+        assert!(plan.bytes_needed() > 32, "{}", plan.bytes_needed());
+        let small = BuildMemory::new(plan.bytes_needed() - 1);
+        let edges = EdgeList::within(3, false, &small);
+        let refused = plan.build(edges, &mut Built::default());
+        assert!(matches!(refused, Err(GraphError::BuildMemoryLimit { .. })), "{refused:?}");
+        let enough = BuildMemory::new(plan.bytes_needed());
+        let edges = EdgeList::within(3, false, &enough);
+        assert!(plan.build(edges, &mut Built::default()).is_ok());
     }
 
     #[derive(Debug, Clone)]
@@ -696,8 +758,11 @@ mod tests {
             let mut edges = EdgeList::new(scenario.weighted);
             let mut per_relation = vec![Naive::new(); scenario.relation_count];
             let mut merged = Naive::new();
+            // Weights whose sums depend on their order, so the build must
+            // sum parallel edges in input order and relations in index order.
+            const WEIGHTS: [f64; 8] = [0.1, 0.2, 0.3, 1e16, -1e16, 1.0 / 3.0, 2.5, 7.0];
             for &(r, source, target, weight) in &scenario.edges {
-                let weight = if scenario.weighted { f64::from(weight) } else { 1.0 };
+                let weight = if scenario.weighted { WEIGHTS[usize::from(weight)] } else { 1.0 };
                 edges.push(indexes[r], source, target, weight).unwrap();
                 let entry = per_relation[r].entry((source, target)).or_insert(0.0);
                 *entry = if scenario.weighted { *entry + weight } else { 1.0 };

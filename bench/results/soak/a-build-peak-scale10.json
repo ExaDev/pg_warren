@@ -1,0 +1,533 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/soak.py",
+   "a",
+   "b-merged",
+   "b-unmerged",
+   "--scale",
+   "10",
+   "--pg-config",
+   "/usr/bin/pg_config",
+   "--runas",
+   "runner",
+   "--parent",
+   "/var/tmp",
+   "--no-eigen",
+   "--no-cte",
+   "--skip",
+   "second-version",
+   "--label",
+   "scale10",
+   "--results",
+   "/tmp/claude-0/-home-user-pg-warren/d0e27763-6651-5ebc-9e14-ccc3a1ae882e/scratchpad/soak10",
+   "--extension-revision",
+   "6f09166be5f877bea50dff4caa8b78ad1faf3bfb",
+   "--extension-profile",
+   "release"
+  ],
+  "harness": {
+   "revision": "6f09166be5f877bea50dff4caa8b78ad1faf3bfb",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "6f09166be5f877bea50dff4caa8b78ad1faf3bfb",
+   "profile": "release",
+   "library": "/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "2ace857fdce03b303890a73a6651344132832c3a81c5cbbb464947d4f0e3e3a0"
+  }
+ },
+ "case": "a",
+ "nodes": 1000000,
+ "edges": 10000000,
+ "weighted": false,
+ "relations": 1,
+ "store_merged": true,
+ "threads": 4,
+ "eigen_max_iter": null,
+ "statement_timeout": null,
+ "skip": [
+  "second-version"
+ ],
+ "planned_stages": [
+  "cold_load_probe",
+  "default: bfs depth 6",
+  "default: components",
+  "default: pagerank",
+  "default: prewarm",
+  "default: reachable_set",
+  "refresh"
+ ],
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16874930176,
+  "kernel": "6.18.44-fc-v139",
+  "load_average": [
+   1.34765625,
+   2.6728515625,
+   2.94921875
+  ]
+ },
+ "started_at": "2026-10-20T11:19:30+00:00",
+ "stages": {
+  "table 0: create": {
+   "sql": "CREATE UNLOGGED TABLE soak_removed ()",
+   "seconds": [
+    0.0006
+   ],
+   "median_seconds": 0.0006,
+   "rows": [],
+   "first_rows": [
+    null
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 5230592,
+   "peak_rss_anon": 5230592,
+   "vm_hwm": 33447936,
+   "rss_anon_after": 5230592
+  },
+  "table 1: create": {
+   "sql": "CREATE UNLOGGED TABLE soak_edges (src int4 NOT NULL, dst int4 NOT NULL) WITH (autovacuum_enabled = false)",
+   "seconds": [
+    0.0005
+   ],
+   "median_seconds": 0.0005,
+   "rows": [],
+   "first_rows": [
+    null
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 5230592,
+   "peak_rss_anon": 5230592,
+   "vm_hwm": 33452032,
+   "rss_anon_after": 5230592
+  },
+  "table 2: insert": {
+   "sql": "INSERT INTO soak_edges SELECT 1 + floor(random() * 1000000)::int4 AS src, 1 + floor(random() * 1000000)::int4 AS dst FROM (SELECT setseed(0.25) OFFSET 0) seeded CROSS JOIN generate_series(1, 10000000)",
+   "seconds": [
+    3.5547
+   ],
+   "median_seconds": 3.5547,
+   "rows": [],
+   "first_rows": [
+    null
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 5230592,
+   "peak_rss_anon": 78364672,
+   "vm_hwm": 519004160,
+   "rss_anon_after": 11476992
+  },
+  "table 3: analyze": {
+   "sql": "ANALYZE soak_edges",
+   "seconds": [
+    0.179
+   ],
+   "median_seconds": 0.179,
+   "rows": [],
+   "first_rows": [
+    null
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 11476992,
+   "peak_rss_anon": 14069760,
+   "vm_hwm": 455421952,
+   "rss_anon_after": 14069760
+  },
+  "create_graph": {
+   "sql": "SELECT warren.create_graph('soak', 'SELECT id FROM generate_series(1::bigint, 1000000) id', $q$SELECT src::bigint, dst::bigint FROM soak_edges$q$, weighted := false, has_relations := false, store_merged := true)",
+   "seconds": [
+    0.0191
+   ],
+   "median_seconds": 0.0191,
+   "rows": [
+    ""
+   ],
+   "first_rows": [
+    ""
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 3203072,
+   "peak_rss_anon": 9678848,
+   "vm_hwm": 75956224,
+   "rss_anon_after": 9678848
+  },
+  "refresh": {
+   "sql": "SELECT warren.refresh('soak')",
+   "seconds": [
+    8.1937
+   ],
+   "median_seconds": 8.1937,
+   "rows": [
+    "1"
+   ],
+   "first_rows": [
+    "1"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 9678848,
+   "peak_rss_anon": 171667456,
+   "vm_hwm": 684666880,
+   "rss_anon_after": 34660352
+  },
+  "refresh from the generator": {
+   "sql": "SELECT warren.refresh('soak_generated')",
+   "seconds": [
+    8.8382
+   ],
+   "median_seconds": 8.8382,
+   "rows": [
+    "2"
+   ],
+   "first_rows": [
+    "2"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 9805824,
+   "peak_rss_anon": 247087104,
+   "vm_hwm": 330944512,
+   "rss_anon_after": 41783296
+  },
+  "cold_load_probe": {
+   "sql": "SELECT warren.prewarm('soak')",
+   "seconds": [
+    0.2056
+   ],
+   "median_seconds": 0.2056,
+   "rows": [
+    "1"
+   ],
+   "first_rows": [
+    "1"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (120124668 bytes) cannot be kept within warren.max_cache_memory (65536 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3207168,
+   "peak_rss_anon": 172617728,
+   "vm_hwm": 320172032,
+   "rss_anon_after": 4104192
+  },
+  "default: prewarm": {
+   "sql": "SELECT warren.prewarm('soak')",
+   "seconds": [
+    0.1989
+   ],
+   "median_seconds": 0.1989,
+   "rows": [
+    "1"
+   ],
+   "first_rows": [
+    "1"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 3207168,
+   "peak_rss_anon": 172613632,
+   "vm_hwm": 320155648,
+   "rss_anon_after": 132612096
+  },
+  "default: bfs depth 6": {
+   "sql": "SELECT bench_seconds($soak$SELECT count(*) FROM warren.bfs('soak', ARRAY[1::bigint], 6)$soak$)",
+   "seconds": [
+    0.081,
+    0.0666,
+    0.0673
+   ],
+   "median_seconds": 0.0673,
+   "rows": [
+    "0.066574"
+   ],
+   "first_rows": [
+    "0.079999",
+    "0.066103",
+    "0.066574"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 132653056,
+   "peak_rss_anon": 156647424,
+   "vm_hwm": 305934336,
+   "rss_anon_after": 132431872,
+   "server_seconds": [
+    0.079999,
+    0.066103,
+    0.066574
+   ],
+   "server_median_seconds": 0.066574
+  },
+  "default: bfs depth 6 count": {
+   "sql": "SELECT count(*) FROM warren.bfs('soak', ARRAY[1::bigint], 6)",
+   "seconds": [
+    0.0657
+   ],
+   "median_seconds": 0.0657,
+   "rows": [
+    "243820"
+   ],
+   "first_rows": [
+    "243820"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 132431872,
+   "peak_rss_anon": 156651520,
+   "vm_hwm": 305889280,
+   "rss_anon_after": 132431872
+  },
+  "default: neighbours": {
+   "sql": "SELECT bench_seconds($soak$SELECT count(*) FROM warren.neighbours('soak', 1::bigint)$soak$)",
+   "seconds": [
+    0.0009,
+    0.0004,
+    0.0004,
+    0.0004,
+    0.0003,
+    0.0003,
+    0.0003,
+    0.0003,
+    0.0003,
+    0.0003,
+    0.0003,
+    0.0003,
+    0.0002,
+    0.0003,
+    0.0002,
+    0.0003,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002
+   ],
+   "median_seconds": 0.0003,
+   "rows": [
+    "0.000138"
+   ],
+   "first_rows": [
+    "0.000543",
+    "0.000217",
+    "0.000199",
+    "0.000179",
+    "0.000166",
+    "0.000161",
+    "0.000153",
+    "0.000147",
+    "0.00014",
+    "0.000137",
+    "0.000146",
+    "0.000146",
+    "0.000138",
+    "0.000156",
+    "0.000137",
+    "0.000146",
+    "0.000134",
+    "0.000129",
+    "0.000131",
+    "0.000138"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 132431872,
+   "peak_rss_anon": 132440064,
+   "vm_hwm": 281960448,
+   "rss_anon_after": 132440064,
+   "server_seconds": [
+    0.000543,
+    0.000217,
+    0.000199,
+    0.000179,
+    0.000166,
+    0.000161,
+    0.000153,
+    0.000147,
+    0.00014,
+    0.000137,
+    0.000146,
+    0.000146,
+    0.000138,
+    0.000156,
+    0.000137,
+    0.000146,
+    0.000134,
+    0.000129,
+    0.000131,
+    0.000138
+   ],
+   "server_median_seconds": 0.000146
+  },
+  "default: reachable_set": {
+   "sql": "SELECT count(*) FROM warren.reachable_set('soak', ARRAY[1::bigint])",
+   "seconds": [
+    0.5006
+   ],
+   "median_seconds": 0.5006,
+   "rows": [
+    "999966"
+   ],
+   "first_rows": [
+    "999966"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 132440064,
+   "peak_rss_anon": 208732160,
+   "vm_hwm": 358187008,
+   "rss_anon_after": 157605888
+  },
+  "default: reachable_set stats": {
+   "stats": [
+    "{\"graph\": \"soak\", \"version\": 1, \"function\": \"reachable_set\", \"truncated\": false, \"nodes_visited\": 999966, \"edges_traversed\": 9999603}"
+   ]
+  },
+  "default: components": {
+   "sql": "SELECT count(*) FROM (SELECT component_id FROM warren.components('soak', NULL::bigint) GROUP BY 1) c",
+   "seconds": [
+    0.321
+   ],
+   "median_seconds": 0.321,
+   "rows": [
+    "1"
+   ],
+   "first_rows": [
+    "1"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 157605888,
+   "peak_rss_anon": 197107712,
+   "vm_hwm": 353992704,
+   "rss_anon_after": 132444160
+  },
+  "default: pagerank": {
+   "sql": "SELECT warren.pagerank('soak', 'pr', tol := 0, max_iter := 20)",
+   "seconds": [
+    1.1451
+   ],
+   "median_seconds": 1.1451,
+   "rows": [
+    "20"
+   ],
+   "first_rows": [
+    "20"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 132444160,
+   "peak_rss_anon": 273575936,
+   "vm_hwm": 442363904,
+   "rss_anon_after": 201707520
+  }
+ },
+ "skipped": {
+  "second_version": "--skip second-version"
+ },
+ "pg_warren": "0.3.0",
+ "postgres": "16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
+ "edge_table_bytes": 362586112,
+ "version_1": {
+  "seq": 1,
+  "bytes": 112124668,
+  "label": null,
+  "staged": false,
+  "current": true,
+  "vectors": 0,
+  "version": 1,
+  "built_at": "2026-10-20T11:19:34.0061+00:00",
+  "id_space": 1000000,
+  "built_lsn": "0/1C8C000",
+  "staleness": "00:00:17.156452",
+  "edge_count": 9999942,
+  "node_count": 1000000,
+  "target_width": 4,
+  "dropped_edges": 0,
+  "compacted_from": null,
+  "deduplicated_edges": 58
+ },
+ "cached_bytes": 120124668,
+ "settings": {
+  "default": [
+   "fsync=off",
+   "full_page_writes=off",
+   "jit=on",
+   "maintenance_work_mem=1GB",
+   "max_parallel_workers_per_gather=2",
+   "max_wal_size=1GB",
+   "shared_buffers=1GB",
+   "statement_timeout=0",
+   "synchronous_commit=off",
+   "wal_level=minimal",
+   "warren.max_build_memory=4GB",
+   "warren.max_cache_memory=4GB",
+   "warren.max_compute_memory=4GB",
+   "warren.threads=4",
+   "work_mem=64MB"
+  ]
+ },
+ "finished_at": "2026-10-20T11:19:53+00:00",
+ "free_disk_after": 13848428544,
+ "load_average_after": [
+  1.2275390625,
+  2.537109375,
+  2.89599609375
+ ],
+ "measured": {
+  "cores": 4,
+  "bfs_seconds": 0.066574,
+  "components_seconds": 0.321,
+  "pagerank_seconds": 1.1451,
+  "refresh_seconds": 8.1937,
+  "refresh_peak_bytes": 684666880,
+  "cold_load_seconds": 0.1989,
+  "reachable_edges_per_second": 19975235.71713943,
+  "cached_bytes": 120124668,
+  "id_space": 1000000,
+  "max_cache_memory": 4294967296
+ },
+ "verdicts": [
+  {
+   "workload": "reachable_set, full component",
+   "target": "> 50M edges/s",
+   "measured": "20M edges/s",
+   "met": false
+  },
+  {
+   "workload": "components()",
+   "target": "< 10 s",
+   "measured": "0.3 s",
+   "met": true
+  },
+  {
+   "workload": "pagerank, 20 iterations",
+   "target": "< 30 s (8 threads)",
+   "measured": "1.1 s",
+   "met": true
+  },
+  {
+   "workload": "refresh() incl. reverse CSR",
+   "target": "< 8 min, < 4 GiB RAM",
+   "measured": "8.2 s, peak 684.67 MB",
+   "met": true
+  },
+  {
+   "workload": "cold load into backend",
+   "target": "< 15 s",
+   "measured": "0.2 s",
+   "met": true
+  },
+  {
+   "workload": "memory: graph + pagerank scratch within max_cache_memory",
+   "target": "fits 4 GiB",
+   "measured": "120.12 MB + 88.00 MB scratch",
+   "met": true
+  }
+ ]
+}

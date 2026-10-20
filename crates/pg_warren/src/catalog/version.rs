@@ -41,10 +41,23 @@ impl VersionStats {
         dropped_edges: u64,
         deduplicated_edges: u64,
     ) -> Self {
+        let edge_count = graph.relations().iter().map(|r| r.forward().edge_count()).sum();
+        Self::new(id_map, edge_count, dropped_edges, deduplicated_edges)
+    }
+
+    /// The statistics of a version with this id map, `edge_count` edges
+    /// over its relations, and the given dropped and deduplicated edge
+    /// counts.
+    pub(crate) fn new<E: ExternalId>(
+        id_map: &IdMap<E>,
+        edge_count: u64,
+        dropped_edges: u64,
+        deduplicated_edges: u64,
+    ) -> Self {
         Self {
             node_count: id_map.node_count(),
             id_space: id_map.id_space(),
-            edge_count: graph.relations().iter().map(|r| r.forward().edge_count()).sum(),
+            edge_count,
             dropped_edges,
             deduplicated_edges,
             // Every CSR of a version has the width its id space implies.
@@ -115,14 +128,32 @@ pub(crate) fn insert_version(
     version.ok_or(CatalogError::Spi(pgrx::spi::Error::InvalidPosition))
 }
 
-/// Records the total size of a version's segments.
-pub(crate) fn record_bytes(version: VersionId, bytes: u64) -> Result<(), CatalogError> {
+/// Records a version's statistics and the total size of its segments,
+/// once they are written: a build streams its segments under the version
+/// before it knows its edge counts.
+pub(crate) fn record_contents(
+    version: VersionId,
+    stats: &VersionStats,
+    bytes: u64,
+) -> Result<(), CatalogError> {
     as_catalog_owner(|| {
         Spi::connect_mut(|client| {
             client.update(
-                "UPDATE warren.versions SET bytes = $2 WHERE version_id = $1",
+                "UPDATE warren.versions
+                 SET node_count = $2, id_space = $3, edge_count = $4, dropped_edges = $5,
+                     deduplicated_edges = $6, target_width = $7, bytes = $8
+                 WHERE version_id = $1",
                 None,
-                &[version.into(), bigint(bytes, "bytes")?.into()],
+                &[
+                    version.into(),
+                    bigint(stats.node_count, "node_count")?.into(),
+                    bigint(stats.id_space, "id_space")?.into(),
+                    bigint(stats.edge_count, "edge_count")?.into(),
+                    bigint(stats.dropped_edges, "dropped_edges")?.into(),
+                    bigint(stats.deduplicated_edges, "deduplicated_edges")?.into(),
+                    stats.target_width.into(),
+                    bigint(bytes, "bytes")?.into(),
+                ],
             )?;
             Ok(())
         })

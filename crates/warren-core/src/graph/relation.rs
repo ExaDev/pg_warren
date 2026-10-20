@@ -4,10 +4,10 @@
 use std::collections::HashMap;
 use std::mem::size_of;
 
-use super::GraphError;
+use super::{BuildCharge, BuildMemory, GraphError};
 
 /// The position of a relation in its relation dictionary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RelationIndex(u32);
 
 impl RelationIndex {
@@ -47,10 +47,28 @@ impl RelationDictionary {
 
     /// The index of `name`, appending it if it is new.
     pub fn intern(&mut self, name: &str) -> Result<RelationIndex, GraphError> {
+        self.intern_within(name, &mut BuildCharge::none(&BuildMemory::unlimited()))
+    }
+
+    /// [`Self::intern`], charging a new name to `charge`: its two copies
+    /// before they are made, and the tables' growth, which is reserved
+    /// fallibly first. A build's dictionary grows with the distinct
+    /// relation names its edge rows hold, which a mistaken relation column
+    /// can make as many as the rows (DESIGN.md §5.4).
+    pub fn intern_within(
+        &mut self,
+        name: &str,
+        charge: &mut BuildCharge,
+    ) -> Result<RelationIndex, GraphError> {
         if let Some(&index) = self.indexes.get(name) {
             return Ok(index);
         }
         let index = RelationIndex::at(self.names.len())?;
+        let tables = self.table_bytes();
+        let out_of_memory = GraphError::OutOfMemory { elements: self.names.len() + 1 };
+        self.names.try_reserve(1).map_err(|_| out_of_memory.clone())?;
+        self.indexes.try_reserve(1).map_err(|_| out_of_memory)?;
+        charge.grow((2 * name.len() as u64).saturating_add(self.table_bytes() - tables))?;
         self.names.push(name.to_owned());
         self.indexes.insert(name.to_owned(), index);
         Ok(index)
@@ -85,10 +103,21 @@ impl RelationDictionary {
     /// in order and as index keys) and the two tables.
     pub fn bytes(&self) -> u64 {
         let names: u64 = self.names.iter().map(|name| name.capacity() as u64).sum();
-        let entry = size_of::<(String, RelationIndex)>() as u64;
-        2 * names
-            + (self.names.capacity() * size_of::<String>()) as u64
-            + self.indexes.capacity() as u64 * entry
+        2 * names + self.table_bytes()
+    }
+
+    /// The bytes of the two tables, without the names: the ordered names'
+    /// slots, and the index's buckets (its capacity is 7/8 of them, a
+    /// power of two) with a control byte each.
+    fn table_bytes(&self) -> u64 {
+        let capacity = self.indexes.capacity();
+        let buckets = match capacity {
+            0 => 0,
+            1..8 => (capacity + 1).next_power_of_two(),
+            _ => (capacity * 8 / 7).next_power_of_two(),
+        };
+        let entry = size_of::<(String, RelationIndex)>() + 1;
+        (self.names.capacity() * size_of::<String>() + buckets * entry) as u64
     }
 }
 
@@ -120,6 +149,26 @@ mod tests {
         let c = next.intern("c").unwrap();
         assert_eq!(next.get("a"), previous.get("a"));
         assert_eq!(c.index(), 2);
+    }
+
+    #[test]
+    fn interning_charges_each_new_name_and_the_tables_growth() {
+        let memory = BuildMemory::new(10_000);
+        let mut charge = BuildCharge::none(&memory);
+        let mut relations = RelationDictionary::new();
+        relations.intern_within("cites", &mut charge).unwrap();
+        relations.intern_within("cites", &mut charge).unwrap();
+        relations.intern_within("authored", &mut charge).unwrap();
+        assert_eq!(charge.bytes(), relations.bytes());
+        let mut tight = BuildCharge::none(&BuildMemory::new(charge.bytes()));
+        let mut copy = RelationDictionary::new();
+        copy.intern_within("cites", &mut tight).unwrap();
+        assert!(matches!(
+            copy.intern_within(&"x".repeat(5_000), &mut tight),
+            Err(GraphError::BuildMemoryLimit { .. })
+        ));
+        assert_eq!(copy.len(), 1, "a refused name is not added");
+        assert_eq!(relations.encoded_bytes(), relations.encode().unwrap().len() as u64);
     }
 
     #[test]
