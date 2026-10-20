@@ -15,9 +15,17 @@ End-to-end benchmark harness and fixture generators (DESIGN.md §12,
   are recorded as skipped, so a new warren function slots in as one more
   matrix entry. Writes `results/<pg_warren version>/<graph>.json`.
 - `eigen.py` — the ARPACK baseline for `warren.eigen`: SciPy `eigsh` and
-  warren-core's Lanczos (`examples/eigen_convergence.rs`) on the same
-  `random` fixture, operator applications and seconds side by side, written to
-  `results/eigen/`.
+  warren-core's Lanczos (`examples/eigen_convergence.rs`) on the same graph
+  (`--graph random`, G(n, m), or `--graph sbm`, equal communities; both of
+  average degree 20), operator applications and seconds side by side, with
+  the eigenvalue gaps of the wanted end (`gaps`: λ_{k+1} − λ_k from a k + 4
+  solve, the mean spacing, the spectrum's width) and the load average of
+  every timing, written to `results/eigen/<graph>.json`. `--step-cost`
+  instead splits one Lanczos step into its SpMV and the rest
+  (`examples/eigen_step_cost.rs`), per precision and thread count
+  (`results/eigen/<graph>-step-cost.json`). DESIGN.md §6.5 and §14 item 21
+  read these files; the READMEs in `results/eigen/scaling/` and
+  `results/eigen/step-cost/` say which build and machine each came from.
 - `soak.py` — the 100M-edge soak (DESIGN.md §12, §13 M7): 10M nodes and 100M
   edges generated inside a scratch cluster, built and queried at the default
   limits, with each backend's peak memory from `/proc`; verdicts against the

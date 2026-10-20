@@ -50,8 +50,10 @@ const MIN_BASIS: usize = 20;
 const F32_TIE: f64 = 1e-6;
 const F64_TIE: f64 = 1e-12;
 
-/// The default `max_iter`, per basis vector.
-const STEPS_PER_BASIS_VECTOR: usize = 100;
+/// The default `max_iter`, per basis vector: enough for the crowded
+/// low end of a random graph's normalised Laplacian at 10⁷ nodes (about
+/// 13,000 steps for k = 20, DESIGN.md §6.5).
+const STEPS_PER_BASIS_VECTOR: usize = 1000;
 
 /// A new direction shorter than this, relative to the vector it came from,
 /// means the basis spans an invariant subspace.
@@ -128,7 +130,7 @@ pub struct EigenOptions {
     /// `tol · max|θ|`, the largest Ritz value standing in for `‖M‖`.
     pub tol: f64,
     /// The most Lanczos steps (operator applications), raised to `k`;
-    /// `None`: 100 times the basis size.
+    /// `None`: 1,000 times the basis size.
     pub max_iter: Option<usize>,
     /// The element type of the Lanczos vectors and the eigenvectors.
     pub precision: Precision,
@@ -137,13 +139,14 @@ pub struct EigenOptions {
 }
 
 impl EigenOptions {
-    /// The `k` largest eigenpairs to `tol = 1e-8` with `f32` vectors and
-    /// seed 0.
+    /// The `k` largest eigenpairs to `tol = 1e-6` (about the rounding of
+    /// `f32` vectors, below which their explicit residual does not fall)
+    /// with `f32` vectors and seed 0.
     pub fn new(k: usize) -> Self {
         Self {
             k,
             which: Which::Largest,
-            tol: 1e-8,
+            tol: 1e-6,
             max_iter: None,
             precision: Precision::F32,
             seed: 0,

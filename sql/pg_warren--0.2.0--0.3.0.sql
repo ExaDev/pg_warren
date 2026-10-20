@@ -84,3 +84,54 @@ CREATE FUNCTION warren."create_graph"(
 STRICT
 LANGUAGE c
 AS 'MODULE_PATHNAME', 'create_graph_wrapper';
+
+-- eigen and distance: tol defaults to 1e-6, about the rounding of the f32
+-- vectors they use by default, below which their explicit residual does
+-- not fall (DESIGN.md §6.5, §14 item 21). CREATE OR REPLACE keeps each
+-- function's grants and comment.
+CREATE OR REPLACE FUNCTION warren."eigen"(
+	"graph" TEXT, /* Option < & str > */
+	"k" INT, /* Option < i32 > */
+	"matrix" TEXT DEFAULT 'adjacency', /* Option < & str > */
+	"which" TEXT DEFAULT 'largest', /* Option < & str > */
+	"rels" TEXT[] DEFAULT NULL, /* :: std :: option :: Option < Vec < Option < String > > > */
+	"weighted" bool DEFAULT NULL, /* Option < bool > */
+	"symmetrize" bool DEFAULT true, /* Option < bool > */
+	"tol" double precision DEFAULT 1e-6, /* Option < f64 > */
+	"max_iter" INT DEFAULT NULL, /* Option < i32 > */
+	"vectors_prefix" TEXT DEFAULT NULL, /* Option < & str > */
+	"version" bigint DEFAULT NULL, /* Option < i64 > */
+	"dtype" TEXT DEFAULT 'f32', /* Option < & str > */
+	"persist" bool DEFAULT true /* Option < bool > */
+) RETURNS TABLE (
+	"i" INT,  /* i32 */
+	"eigenvalue" double precision,  /* f64 */
+	"residual" double precision  /* f64 */
+)
+VOLATILE PARALLEL UNSAFE 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'eigen_wrapper';
+
+CREATE OR REPLACE FUNCTION warren."distance"(
+	"graph" TEXT, /* Option < & str > */
+	"v1" bigint, /* Option < i64 > */
+	"v2" bigint, /* Option < i64 > */
+	"method" TEXT, /* Option < & str > */
+	"vectors_prefix" TEXT DEFAULT NULL, /* Option < & str > */
+	"k" INT DEFAULT NULL, /* Option < i32 > */
+	"x" TEXT DEFAULT NULL, /* Option < & str > */
+	"y" TEXT DEFAULT NULL, /* Option < & str > */
+	"compared_rows" TEXT DEFAULT 'shared', /* Option < & str > */
+	"matrix" TEXT DEFAULT NULL, /* Option < & str > */
+	"which" TEXT DEFAULT 'largest', /* Option < & str > */
+	"rels" TEXT[] DEFAULT NULL, /* :: std :: option :: Option < Vec < Option < String > > > */
+	"weighted" bool DEFAULT NULL, /* Option < bool > */
+	"symmetrize" bool DEFAULT true, /* Option < bool > */
+	"tol" double precision DEFAULT 1e-6, /* Option < f64 > */
+	"max_iter" INT DEFAULT NULL, /* Option < i32 > */
+	"dtype" TEXT DEFAULT 'f32', /* Option < & str > */
+	"graph2" TEXT DEFAULT NULL /* Option < & str > */
+) RETURNS jsonb /* JsonB */
+STABLE PARALLEL RESTRICTED 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'distance_wrapper';

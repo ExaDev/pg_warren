@@ -1,0 +1,87 @@
+{
+ "graph": "random-1000000-10000000-seed1",
+ "k": 20,
+ "tol": 1e-06,
+ "precision": "f32,f64",
+ "max_iter": null,
+ "git": "a359b5a",
+ "machine": {
+  "cpus": 4,
+  "cpu": "Intel(R) Xeon(R) Processor",
+  "memory_gib": 15.7
+ },
+ "cases": [
+  {
+   "operator": "normalized_laplacian",
+   "which": "smallest",
+   "warren": {
+    "f32_threads_1": {
+     "steps": 200,
+     "step_seconds": 0.18116384293999996,
+     "spmv_seconds": 0.085270975055,
+     "rest_seconds": 0.09589286788499995,
+     "nnz": 20000000,
+     "load_average": [
+      2.896484375,
+      2.14404296875
+     ]
+    },
+    "f32_threads_2": {
+     "steps": 200,
+     "step_seconds": 0.09604660677000001,
+     "spmv_seconds": 0.045696296195,
+     "rest_seconds": 0.050350310575000015,
+     "nnz": 20000000,
+     "load_average": [
+      2.14404296875,
+      2.7705078125
+     ]
+    },
+    "f32_threads_4": {
+     "steps": 200,
+     "step_seconds": 0.05873995184999999,
+     "spmv_seconds": 0.03383502771,
+     "rest_seconds": 0.024904924139999993,
+     "nnz": 20000000,
+     "load_average": [
+      2.7705078125,
+      4.00146484375
+     ]
+    },
+    "f64_threads_1": {
+     "steps": 200,
+     "step_seconds": 0.17055067299500004,
+     "spmv_seconds": 0.08965617736,
+     "rest_seconds": 0.08089449563500004,
+     "nnz": 20000000,
+     "load_average": [
+      4.00146484375,
+      2.2177734375
+     ]
+    },
+    "f64_threads_2": {
+     "steps": 200,
+     "step_seconds": 0.102721281645,
+     "spmv_seconds": 0.048857921395000004,
+     "rest_seconds": 0.05386336024999999,
+     "nnz": 20000000,
+     "load_average": [
+      2.2177734375,
+      2.189453125
+     ]
+    },
+    "f64_threads_4": {
+     "steps": 200,
+     "step_seconds": 0.068243006485,
+     "spmv_seconds": 0.038386246405,
+     "rest_seconds": 0.029856760079999996,
+     "nnz": 20000000,
+     "load_average": [
+      2.189453125,
+      3.0595703125
+     ]
+    }
+   }
+  }
+ ]
+}

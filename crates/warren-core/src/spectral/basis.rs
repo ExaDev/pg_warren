@@ -150,13 +150,10 @@ impl<E: Stored> Basis<E> {
         beta: f64,
     ) -> Result<f64, ComputeError> {
         let partials = self.blocks(resources, w, |block, w| {
-            let (previous, newest) = (&block[(j - 1) * BLOCK..], &block[j * BLOCK..]);
-            let mut alpha = 0.0;
-            for ((w, p), q) in w.iter_mut().zip(previous).zip(newest) {
+            for (w, p) in w.iter_mut().zip(&block[(j - 1) * BLOCK..]) {
                 *w -= beta * p.to_f64();
-                alpha += q.to_f64() * *w;
             }
-            alpha
+            dot(w, &block[j * BLOCK..])
         })?;
         Ok(partials.into_iter().fold(0.0, |a, b| a + b))
     }
@@ -198,17 +195,27 @@ impl<E: Stored> Basis<E> {
         resources.run(|cancellation| {
             values.par_chunks_mut(width).try_for_each(|block| {
                 checked(cancellation)?;
-                // One row at a time, so the scratch is one row of the basis
-                // (at most `capacity` values), not a block of it.
-                let mut row = vec![0.0; len];
-                for r in 0..BLOCK {
-                    for (j, old) in row.iter_mut().enumerate() {
-                        *old = block[j * BLOCK + r].to_f64();
+                // A few rows at a time, so the scratch (`kept` sums per row)
+                // stays in cache while every old vector's segment is added
+                // to it, each row's sums in basis order.
+                let mut sums = vec![0.0; kept * ROTATED_ROWS];
+                for start in (0..BLOCK).step_by(ROTATED_ROWS) {
+                    let rows = ROTATED_ROWS.min(BLOCK - start);
+                    sums.fill(0.0);
+                    for j in 0..len {
+                        let old = &block[j * BLOCK + start..j * BLOCK + start + rows];
+                        for (l, sum) in sums.chunks_exact_mut(ROTATED_ROWS).enumerate() {
+                            let c = combinations[(j, l)];
+                            for (sum, q) in sum.iter_mut().zip(old) {
+                                *sum += c * q.to_f64();
+                            }
+                        }
                     }
-                    for l in 0..kept {
-                        let value =
-                            (0..len).fold(0.0, |sum, j| sum + combinations[(j, l)] * row[j]);
-                        block[l * BLOCK + r] = E::from_f64(value);
+                    for (l, sum) in sums.chunks_exact(ROTATED_ROWS).enumerate() {
+                        let new = &mut block[l * BLOCK + start..l * BLOCK + start + rows];
+                        for (stored, &sum) in new.iter_mut().zip(sum) {
+                            *stored = E::from_f64(sum);
+                        }
                     }
                 }
                 Ok(())
@@ -250,10 +257,7 @@ impl<E: Stored> Basis<E> {
                     *w -= c * q.to_f64();
                 }
             }
-            let dot = |j: usize| {
-                w.iter().zip(&block[j * BLOCK..]).fold(0.0, |sum, (w, q)| sum + q.to_f64() * w)
-            };
-            (0..len).map(dot).collect::<Vec<f64>>()
+            (0..len).map(|j| dot(w, &block[j * BLOCK..])).collect::<Vec<f64>>()
         })?;
         let mut coefficients = vec![0.0; len];
         for partial in &partials {
@@ -275,7 +279,7 @@ impl<E: Stored> Basis<E> {
                     *w -= c * q.to_f64();
                 }
             }
-            w.iter().map(|w| w * w).sum::<f64>()
+            dot(w, w)
         })?;
         Ok(partials.into_iter().fold(0.0, |a, b| a + b).sqrt())
     }
@@ -289,9 +293,132 @@ fn checked(cancellation: &Cancellation) -> Result<(), ComputeError> {
     }
 }
 
+/// The rows [`Basis::rotate`] combines at a time.
+const ROTATED_ROWS: usize = if cfg!(test) { 3 } else { 256 };
+
+/// The independent partial sums of [`dot`]: enough to hide the latency
+/// of a floating-point add, so the sum is bound by memory, not by one
+/// chain of adds.
+const LANES: usize = 8;
+
+/// `Σ a_i·b_i` over the common length, in `f64`: term `i` is added to
+/// partial sum `i mod LANES`, and the partial sums are added in order, so
+/// the result depends only on the inputs, never on the thread count.
+fn dot<A: Element, B: Element>(a: &[A], b: &[B]) -> f64 {
+    let len = a.len().min(b.len());
+    let (a, b) = (&a[..len], &b[..len]);
+    let mut lanes = [0.0f64; LANES];
+    let (a_chunks, b_chunks) = (a.chunks_exact(LANES), b.chunks_exact(LANES));
+    let (a_tail, b_tail) = (a_chunks.remainder(), b_chunks.remainder());
+    for (a, b) in a_chunks.zip(b_chunks) {
+        for ((lane, a), b) in lanes.iter_mut().zip(a).zip(b) {
+            *lane += a.to_f64() * b.to_f64();
+        }
+    }
+    for ((lane, a), b) in lanes.iter_mut().zip(a_tail).zip(b_tail) {
+        *lane += a.to_f64() * b.to_f64();
+    }
+    lanes.iter().fold(0.0, |sum, lane| sum + lane)
+}
+
 /// `sum += part`, elementwise.
 fn add(sum: &mut [f64], part: &[f64]) {
     for (sum, part) in sum.iter_mut().zip(part) {
         *sum += part;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+    #[cfg(not(miri))]
+    use crate::compute::{ComputeMemory, Workers};
+    #[cfg(not(miri))]
+    use crate::interrupts::Uninterrupted;
+
+    #[test]
+    fn a_dot_product_sums_every_term_including_the_tail() {
+        for len in [0, 1, 7, 8, 9, 31] {
+            let w: Vec<f64> = (0..len).map(|i| f64::from(i as u32) + 1.0).collect();
+            let q: Vec<f32> = (0..len).map(|i| if i % 2 == 0 { 2.0 } else { -1.0 }).collect();
+            let exact: f64 = w.iter().zip(&q).map(|(w, q)| w * f64::from(*q)).sum();
+            assert_eq!(dot(&w, &q), exact, "len {len}");
+        }
+    }
+
+    /// Rotates a basis of `vectors` (rows × len) by `combinations` (len ×
+    /// kept) and checks every new value against each row's combination
+    /// summed in basis order, then rounded to `f32`: the bits, not a bound.
+    #[cfg(not(miri))]
+    fn rotation_is_exact(vectors: &[Vec<f64>], combinations: &DMatrix<f64>) {
+        let workers = Workers::new(2).unwrap();
+        let memory = ComputeMemory::new(1 << 22);
+        let mut resources =
+            Resources { workers: &workers, memory: &memory, interrupts: &mut Uninterrupted };
+        let (rows, len, kept) = (vectors[0].len(), vectors.len(), combinations.ncols());
+        let mut basis = Basis::<f32>::new(&mut resources, rows, len).unwrap();
+        for v in vectors {
+            basis.push(&mut resources, v, 1.0).unwrap();
+        }
+        let stored: Vec<Vec<f64>> = (0..len)
+            .map(|j| {
+                let mut out = vec![0.0; rows];
+                basis.column(&mut resources, j, &mut out).unwrap();
+                out
+            })
+            .collect();
+        basis.rotate(&mut resources, combinations).unwrap();
+        assert_eq!(basis.len(), kept);
+        for l in 0..kept {
+            let mut got = vec![0.0; rows];
+            basis.column(&mut resources, l, &mut got).unwrap();
+            let want: Vec<f64> = (0..rows)
+                .map(|r| {
+                    let sum = (0..len).fold(0.0, |s, j| s + combinations[(j, l)] * stored[j][r]);
+                    f64::from(sum as f32)
+                })
+                .collect();
+            assert_eq!(got, want, "vector {l}");
+        }
+    }
+
+    // Not under Miri: it runs on the compute pool, whose work stealing goes
+    // through crossbeam-epoch, which Miri's Stacked Borrows model rejects (a
+    // known report against crossbeam-epoch 0.9, see compute::workers).
+    #[cfg(not(miri))]
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(48))]
+
+        #[test]
+        fn a_rotation_is_each_row_s_combination_summed_in_basis_order(
+            (rows, len, kept) in (1usize..40, 1usize..7).prop_flat_map(|(r, l)| (Just(r), Just(l), 1..=l)),
+            seed in any::<u64>(),
+        ) {
+            let value = |i: u64| crate::spectral::random::uniform(seed, 0, i);
+            let vectors: Vec<Vec<f64>> =
+                (0..len).map(|j| (0..rows).map(|r| value((j * rows + r) as u64)).collect()).collect();
+            let combinations =
+                DMatrix::from_fn(len, kept, |j, l| value(10_000 + (j * kept + l) as u64));
+            rotation_is_exact(&vectors, &combinations);
+        }
+    }
+
+    #[test]
+    fn a_dot_product_reads_only_the_common_length() {
+        assert_eq!(dot(&[1.0, 2.0], &[3.0f64, 4.0, 100.0]), 11.0);
+    }
+
+    proptest! {
+        #[test]
+        fn a_dot_product_is_the_sum_up_to_rounding(
+            terms in prop::collection::vec((-1e3f64..1e3, -1e3f64..1e3), 0..200),
+        ) {
+            let (w, q): (Vec<f64>, Vec<f64>) = terms.into_iter().unzip();
+            let sum: f64 = w.iter().zip(&q).map(|(a, b)| a * b).sum();
+            let bound: f64 = w.iter().zip(&q).map(|(a, b)| (a * b).abs()).sum::<f64>() * 1e-12;
+            prop_assert!((dot(&w, &q) - sum).abs() <= bound);
+        }
     }
 }

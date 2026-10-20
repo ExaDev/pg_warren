@@ -75,8 +75,12 @@ fn the_smallest_laplacian_eigenpairs_of_a_path() {
     // eigenvectors cos(πj(i + ½)/n).
     let n = 60;
     let graph = reference::graph(n, 1, &path(n), false, true);
-    let options =
-        EigenOptions { which: Which::Smallest, precision: Precision::F64, ..EigenOptions::new(4) };
+    let options = EigenOptions {
+        which: Which::Smallest,
+        precision: Precision::F64,
+        tol: 1e-8,
+        ..EigenOptions::new(4)
+    };
     let eigen = solve(&graph, Operator::Laplacian, &options);
     assert!(eigen.converged);
     assert_eq!(eigen.pairs.len(), 4);
@@ -223,6 +227,9 @@ proptest! {
             which: if smallest { Which::Smallest } else { Which::Largest },
             precision: if f64_vectors { Precision::F64 } else { Precision::F32 },
             seed,
+            // The checks' f64 accuracy of 1e-7 needs a tighter tolerance than
+            // the default.
+            tol: 1e-8,
             ..EigenOptions::new(k)
         };
         let eigen = solve(&graph, operator, &options);
@@ -416,4 +423,23 @@ fn a_loose_tolerance_does_not_reorder_distinct_magnitudes() {
     let options = EigenOptions { tol: 0.1, precision: Precision::F64, ..EigenOptions::new(1) };
     let value = solve(&graph, Operator::Adjacency, &options).pairs[0].value;
     assert!((value + 2.0).abs() < 1e-9, "{value}");
+}
+
+#[test]
+fn the_default_step_limit_is_a_thousand_steps_per_basis_vector() {
+    // 100 per basis vector stopped a 1M-node random graph's normalised
+    // Laplacian short of the ~4,300 steps it needs (DESIGN.md §6.5).
+    let edges = random_graph(60, 120, 4);
+    let graph = reference::graph(60, 2, &edges, true, true);
+    let options = EigenOptions { which: Which::Smallest, tol: 0.0, ..EigenOptions::new(2) };
+    let eigen = solve(&graph, Operator::NormalizedLaplacian, &options);
+    assert!(!eigen.converged);
+    assert_eq!(eigen.iterations, 1000 * 20);
+}
+
+#[test]
+fn the_default_tolerance_is_near_the_rounding_of_f32_vectors() {
+    // Their explicit residual floors near 1e-7·‖M‖, so a tighter default
+    // would buy steps, not accuracy (DESIGN.md §6.5).
+    assert_eq!(EigenOptions::new(3).tol, 1e-6);
 }
