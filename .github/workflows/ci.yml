@@ -196,6 +196,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # test/tests/test_releases.py resolves the commits in
+          # sql/released.commits, which needs the full history.
+          fetch-depth: 0
       - name: Install pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: ./.github/actions/setup-postgres
