@@ -4,7 +4,9 @@
 //! `S` is the adjacency matrix of the selected relations (weights summed
 //! over relations, or 1 when unweighted), symmetrised as `(A + Aᵀ)/2` from
 //! the forward and reverse CSRs, or taken as is when the caller says it is
-//! already symmetric (checked). `D` is the diagonal of its row sums, the
+//! already symmetric (checked). When every selected relation's reverse CSR
+//! equals its forward CSR (an undirected graph's do), `A = Aᵀ` exactly and
+//! symmetrising multiplies once. `D` is the diagonal of its row sums, the
 //! weighted degrees; a self-loop counts once.
 //!
 //! The operators act on the **active** nodes: nodes with at least one edge
@@ -102,7 +104,9 @@ pub(super) struct LinearOperator<'g> {
     graph: &'g GraphCsr,
     operator: Operator,
     forward: Product<'g>,
-    symmetrize: bool,
+    /// Whether an application adds the transposed product, `(A + Aᵀ)/2`:
+    /// when symmetrising, unless `A = Aᵀ` exactly.
+    transpose: bool,
     /// Whether each node has an edge.
     active: Vec<bool>,
     dimension: u64,
@@ -139,7 +143,7 @@ impl<'g> LinearOperator<'g> {
             graph,
             operator: matrix.operator,
             forward,
-            symmetrize: matrix.symmetrize,
+            transpose: matrix.symmetrize && !reverses_are_forward(graph, matrix.relations),
             active,
             dimension: 0,
             degrees,
@@ -147,7 +151,7 @@ impl<'g> LinearOperator<'g> {
             buffers,
             _charges: [active_charge, degrees_charge, scale_charge],
         };
-        if !operator.symmetrize {
+        if !matrix.symmetrize {
             operator.check_symmetric(resources)?;
         }
         operator.measure_degrees(resources)?;
@@ -195,7 +199,7 @@ impl<'g> LinearOperator<'g> {
             dense::update(resources, values_mut(&mut buffers.scaled), |i, _| scale[i] * input[i])?;
         }
         let source = if operator.normalized() { Source::Scaled } else { Source::Input };
-        buffers.multiply(resources, self.graph, forward, self.symmetrize, source)?;
+        buffers.multiply(resources, self.graph, forward, self.transpose, source)?;
         let input = values(&buffers.input);
         let output = values_mut(&mut buffers.output);
         match operator {
@@ -287,15 +291,15 @@ impl<'g> LinearOperator<'g> {
         &mut self,
         resources: &mut Resources<'_, I>,
     ) -> Result<(), SpectralError> {
-        let (graph, symmetrize, buffers) = (self.graph, self.symmetrize, &mut self.buffers);
+        let (graph, transpose, buffers) = (self.graph, self.transpose, &mut self.buffers);
         values_mut(&mut buffers.input).fill(1.0);
         let unweighted = Product { weighted: Some(false), ..self.forward };
-        buffers.multiply(resources, graph, unweighted, symmetrize, Source::Input)?;
+        buffers.multiply(resources, graph, unweighted, transpose, Source::Input)?;
         for (active, &edges) in self.active.iter_mut().zip(values(&buffers.output)) {
             *active = edges > 0.0;
         }
         self.dimension = self.active.iter().filter(|&&active| active).count() as u64;
-        buffers.multiply(resources, graph, self.forward, symmetrize, Source::Input)?;
+        buffers.multiply(resources, graph, self.forward, transpose, Source::Input)?;
         self.degrees.copy_from_slice(values(&buffers.output));
         if self.operator.normalized() {
             for (node, (&active, &degree)) in (0..).zip(self.active.iter().zip(&self.degrees)) {
@@ -344,6 +348,18 @@ impl<'g> LinearOperator<'g> {
     }
 }
 
+/// Whether every CSR `relations` selects has a reverse CSR equal to its
+/// forward one, as an undirected graph's are: then `A = Aᵀ` exactly, and the
+/// transposed product would read the same arrays in the same order, so
+/// `(A·x + Aᵀ·x)/2` is `A·x` to the bit. Without reverse CSRs this is not
+/// known without a transpose, so it answers false. An unknown relation
+/// also answers false (the product reports it).
+fn reverses_are_forward(graph: &GraphCsr, relations: RelationSelection<'_>) -> bool {
+    graph.selected(relations).is_ok_and(|selected| {
+        selected.iter().all(|csrs| csrs.reverse().is_some_and(|reverse| reverse == csrs.forward()))
+    })
+}
+
 /// Which buffer an SpMV multiplies.
 #[derive(Debug, Clone, Copy)]
 enum Source {
@@ -379,13 +395,13 @@ impl Buffers {
         })
     }
 
-    /// `output = S · source` for `product`: `(A + Aᵀ)/2` when symmetrising.
+    /// `output = S · source` for `product`: `(A + Aᵀ)/2` with `transpose`.
     fn multiply<I: Interrupts>(
         &mut self,
         resources: &mut Resources<'_, I>,
         graph: &GraphCsr,
         product: Product<'_>,
-        symmetrize: bool,
+        transpose: bool,
         source: Source,
     ) -> Result<(), SpectralError> {
         let x = match source {
@@ -394,7 +410,7 @@ impl Buffers {
         };
         let Resources { workers, memory, interrupts } = &mut *resources;
         spmv(workers, memory, *interrupts, graph, &product, x, &mut self.output)?;
-        if symmetrize {
+        if transpose {
             let transpose = Product { transpose: true, ..product };
             spmv(workers, memory, *interrupts, graph, &transpose, x, &mut self.scratch)?;
             let scratch = values(&self.scratch);
