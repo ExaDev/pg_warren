@@ -7,7 +7,8 @@
 //! node and an SpMV-like weighted row sum. The parallel-relation layout
 //! lives only here, as the comparison baseline.
 //!
-//! `relation_layout/merged` (M7): the same edges over 1 to 5 relations,
+//! `relation_layout/merged` (M7): the same edges over 1 to 5 and 10
+//! relations (past the 8 rows a merge on the fly holds inline),
 //! all-relations work with the merged CSR stored against the relations'
 //! rows merged on the fly, through the real kernels: BFS out and both,
 //! weighted SpMV pulled over the forward and reverse CSRs and a `sum`
@@ -340,7 +341,7 @@ fn bench_merged(c: &mut Criterion) {
     let mut never = Uninterrupted;
     let mut group = c.benchmark_group("relation_layout/merged");
     group.sample_size(10);
-    for relation_count in 1..=RELATIONS {
+    for relation_count in (1..=RELATIONS).chain([10]) {
         let Ok(edges) = random_edges(relation_count) else { continue };
         for (name, store_merged) in LAYOUTS {
             let layout = CsrLayout { build_reverse: true, store_merged };

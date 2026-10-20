@@ -12,7 +12,7 @@
   reads then merge the relations' rows on the fly, with identical results,
   in 44% fewer CSR bytes for five weighted relations and a faster build,
   but 2–3× slower all-relations traversal and 5–8× slower all-relations
-  `spmv`. `warren.info` reports `store_merged`. Schema change:
+  `spmv` at 2–5 relations (more with more relations: 6× and 11× at 10). `warren.info` reports `store_merged`. Schema change:
   new column `warren.graphs.store_merged` (existing graphs are backfilled
   `true`); run `ALTER EXTENSION pg_warren UPDATE` before using 0.3.0.
 - Upgrade note: the cache was unbounded before. A graph version larger

@@ -133,7 +133,8 @@ without `rels`, `spmv`/`spmm`/`vector_degree` without `rels`, `components`,
 merge the relations' rows as they go, with the same results (up to NaN
 payloads), in about 44% less memory for five weighted relations and a
 faster `refresh`, but more slowly, and more so with more relations: at 2–5
-relations BFS 2–3× and SpMV 5–8× slower (DESIGN.md §5.3). Reads with `rels`
+relations BFS 2–3× and SpMV 5–8× slower, at 10 relations 6× and 11×
+(DESIGN.md §5.3). Reads with `rels`
 are unaffected. Keep the default unless the merged CSR would not fit your
 memory limits. The choice is per graph, kept by `compact`, and shown by
 `warren.info(name) -> 'store_merged'`; it cannot be changed after
