@@ -13,14 +13,14 @@ mod name;
 mod spi;
 
 pub(crate) use chunk::{
-    read_optional_segment, read_segment, write_segment, SegmentStore, CHUNK_SIZE,
+    read_optional_segment, read_segment, write_segment, EachChunk, SegmentStore, CHUNK_SIZE,
 };
 pub(crate) use error::SegmentError;
 pub(crate) use layout::write_version;
 pub(crate) use name::{
     csr_segment, CsrPart, CsrScope, Direction, ID_MAP, RELATION_DICTIONARY, TOMBSTONES,
 };
-pub(crate) use spi::SpiSegmentStore;
+pub(crate) use spi::{each_chunk, SpiSegmentStore};
 
 #[cfg(test)]
 pub(crate) use chunk::tests::MemorySegmentStore;

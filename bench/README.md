@@ -18,6 +18,14 @@ End-to-end benchmark harness and fixture generators (DESIGN.md §12,
   warren-core's Lanczos (`examples/eigen_convergence.rs`) on the same
   `random` fixture, operator applications and seconds side by side, written to
   `results/eigen/`.
+- `soak.py` — the 100M-edge soak (DESIGN.md §12, §13 M7): 10M nodes and 100M
+  edges generated inside a scratch cluster, built and queried at the default
+  limits, with each backend's peak memory from `/proc`; verdicts against the
+  §12 targets in `results/soak/<case>.json`. Run it against a Postgres tree
+  with a release build installed (`--pg-config`), passing the revision and
+  profile it was built from (`--extension-revision`, `--extension-profile`;
+  recorded with the results), on a machine with ~15 GB of RAM and ~20 GB of
+  free disk; `--scale 1000` is a quick check.
 - `results/` — committed results, one directory per pg_warren version
   (record them on a quiet machine; say which in the commit).
 - `requirements.txt` — pinned Python dependencies of `bench/` and `test/`.

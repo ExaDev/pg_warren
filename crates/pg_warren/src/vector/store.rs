@@ -5,6 +5,7 @@ use warren_core::compute::Dtype;
 
 use super::VectorError;
 use crate::catalog::VersionId;
+use crate::segment::EachChunk;
 
 /// `vectors.vector_id`.
 pub(crate) type VectorId = i64;
@@ -62,9 +63,6 @@ impl<'a> Binding<'a> {
     }
 }
 
-/// Receives a vector's chunks as (chunk number, bytes).
-pub(crate) type ChunkVisitor<'a> = dyn FnMut(i32, &[u8]) -> Result<(), VectorError> + 'a;
-
 /// Stores the next chunk of a vector.
 pub(crate) type ChunkSink<'a> = dyn FnMut(&[u8]) -> Result<(), VectorError> + 'a;
 
@@ -102,7 +100,7 @@ pub(crate) trait VectorStore {
     fn read_chunks(
         &mut self,
         vector: VectorId,
-        each: &mut ChunkVisitor<'_>,
+        each: &mut EachChunk<'_, VectorError>,
     ) -> Result<(), VectorError>;
 
     /// Deletes vector `vector` (its chunks with it); returns whether it
@@ -195,7 +193,7 @@ pub(crate) mod tests {
         fn read_chunks(
             &mut self,
             vector: VectorId,
-            each: &mut ChunkVisitor<'_>,
+            each: &mut EachChunk<'_, VectorError>,
         ) -> Result<(), VectorError> {
             for ((_, chunk_no), data) in self.chunks.range((vector, 0)..=(vector, i32::MAX)) {
                 each(*chunk_no, data)?;

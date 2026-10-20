@@ -7,10 +7,11 @@ use pgrx::spi::SpiHeapTupleData;
 use pgrx::PgOid;
 use warren_core::compute::Dtype;
 
-use super::{Binding, ChunkSource, ChunkVisitor, VectorError, VectorId, VectorRecord, VectorStore};
+use super::{Binding, ChunkSource, VectorError, VectorId, VectorRecord, VectorStore};
 use crate::access::as_catalog_owner;
 use crate::catalog::VersionId;
 use crate::read_only::read_one;
+use crate::segment::{each_chunk, EachChunk};
 
 /// `warren.vectors` and `warren.vector_chunks`.
 pub(crate) struct SpiVectorStore;
@@ -135,27 +136,15 @@ impl VectorStore for SpiVectorStore {
     fn read_chunks(
         &mut self,
         vector: VectorId,
-        each: &mut ChunkVisitor<'_>,
+        each: &mut EachChunk<'_, VectorError>,
     ) -> Result<(), VectorError> {
         as_catalog_owner(|| {
-            Spi::connect(|client| {
-                let mut cursor = client.try_open_cursor(
-                    "SELECT chunk_no, data FROM warren.vector_chunks
-                     WHERE vector_id = $1 ORDER BY chunk_no",
-                    &[vector.into()],
-                )?;
-                loop {
-                    let chunk = cursor.fetch(1)?;
-                    let Some(row) = chunk.into_iter().next() else {
-                        return Ok(());
-                    };
-                    let chunk_no = row.get::<i32>(1)?.unwrap_or_default();
-                    each(chunk_no, row.get::<&[u8]>(2)?.unwrap_or_default())?;
-                    // SAFETY: SPI_tuptable is the chunk just consumed, which
-                    // nothing refers to any more.
-                    unsafe { pg_sys::SPI_freetuptable(pg_sys::SPI_tuptable) };
-                }
-            })
+            each_chunk(
+                "SELECT chunk_no, data FROM warren.vector_chunks
+                 WHERE vector_id = $1 ORDER BY chunk_no",
+                &[vector.into()],
+                each,
+            )
         })
     }
 
