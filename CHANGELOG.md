@@ -2,6 +2,23 @@
 
 ## 0.3.0 — in development (until M7)
 
+- `warren.max_build_memory` now bounds everything a `refresh` holds at
+  once, not only the CSR offsets: the node ids, the id map, the edge list,
+  the CSRs being built and the sort and write buffers. Behaviour change:
+  a build over it fails with 53400 (`build memory limit exceeded`), up
+  front where it can (before the edge query runs, or before the version
+  is written), else when the edge list grows past it; before, such a
+  build ran and could take the backend well past the setting. The offsets
+  check is unchanged. In exchange a `refresh` holds far less: it streams
+  each relation's CSRs to `warren.segments` and frees them, and encodes
+  segments a chunk at a time. At 10M nodes and 100M edges the peak is
+  ~1.6 GB for one unweighted relation (was 2.0 GB measured), ~3.0 GB for
+  five weighted relations without the merged CSR (5.5 GB) and ~3.2 GB
+  with it (9.0 GB), all within the default `4GB`. Versions built are
+  byte-identical to before.
+- Fix: reading the edge query of a graph with relations held Postgres
+  memory for every row's relation name until the `refresh` ended (about
+  1.7 GB at 100M edges); names are now read in place.
 - pg_warren is a trusted extension: a role with `CREATE` on the database
   can run `CREATE EXTENSION pg_warren` without being a superuser
   (DESIGN.md §7). Catalog statements now run as the owner of the

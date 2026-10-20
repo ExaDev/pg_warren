@@ -24,3 +24,12 @@ alone (`a.json`'s 65-minute solve did not converge, residual 1.0·10⁻⁴; it
 is a miss either way), left out stages that failed other than by a cancel,
 and took the settings snapshot before the query sessions' `SET`s (so it
 shows `warren.threads=2`, the default, where the queries ran with 4).
+
+## Build memory at a tenth of the scale
+
+`a-build-peak-scale10.json`, `b-merged-build-peak-scale10.json` and
+`b-unmerged-build-peak-scale10.json`: the three cases at 1M nodes and 10M
+edges (`--scale 10 --no-eigen --no-cte --skip second-version`), after the
+build was charged to `warren.max_build_memory` and streamed (DESIGN.md
+§5.4). Their `refresh` peaks back §5.4's and §12's build-memory figures;
+their other rows are not used. Each records its provenance.
