@@ -144,8 +144,9 @@ pub(crate) fn keep_vector(graph_id: i32, id: VectorId, vector: Arc<AnyVector>) {
     trim();
 }
 
-/// Drops this backend's cached versions, and transient vectors (of every
-/// role), of versions that no longer exist as of the statement's snapshot:
+/// Drops this backend's cached versions (and those evicted that a call
+/// still holds), and transient vectors (of every role), of versions that
+/// no longer exist as of the statement's snapshot:
 /// dropped with their graphs, by `drop_version` or by retention, here or in
 /// another backend, or rolled back. Transient vectors cannot be reloaded,
 /// so they are dropped only for deletions that have committed: not in a
@@ -153,7 +154,7 @@ pub(crate) fn keep_vector(graph_id: i32, id: VectorId, vector: Arc<AnyVector>) {
 /// deletes a version has, and whose deletions might still roll back.
 /// Cached versions are dropped regardless, since they reload.
 pub(super) fn prune_dropped() -> Result<(), CacheError> {
-    let mut cached = CACHE.with_borrow(VersionCache::versions);
+    let mut cached = CACHE.with_borrow(VersionCache::known_versions);
     cached.extend(transient_versions());
     cached.sort_unstable();
     cached.dedup();
@@ -211,7 +212,35 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{failure, set_current_unchecked, stray_current_failure, two_graphs};
+    use std::sync::Arc;
+
+    use super::{cached, resolve};
+    use crate::fixture::{
+        failure, refresh, ring, set_current_unchecked, stray_current_failure, two_graphs,
+    };
+
+    /// Graph `name`'s current version, through the cache.
+    fn open(name: &str) -> Result<Arc<super::LoadedVersion<i64>>, Error> {
+        let resolved = resolve(name, None, "read").map_err(|_| Error::InvalidPosition)?;
+        cached::<i64>(&resolved).map_err(|_| Error::InvalidPosition)
+    }
+
+    /// A version a call holds, evicted by the cap, is shared by later
+    /// lookups even after another graph's load prunes the cache.
+    #[pg_test]
+    fn a_held_version_is_shared_across_another_graphs_load() -> Result<(), Error> {
+        for name in ["held_a", "held_b"] {
+            ring(name, 20_000, 1)?;
+            refresh(name, true)?;
+        }
+        Spi::run("SET LOCAL warren.max_cache_memory = '64kB'")?;
+        let a = open("held_a")?;
+        assert!(Arc::ptr_eq(&a, &open("held_a")?), "shared while held");
+        let b = open("held_b")?;
+        assert!(Arc::ptr_eq(&a, &open("held_a")?), "still shared after b's load");
+        drop(b);
+        Ok(())
+    }
 
     /// A restore writes `graphs.current_version` without the triggers'
     /// check (DESIGN.md §5.1), so a call must not read whatever version it

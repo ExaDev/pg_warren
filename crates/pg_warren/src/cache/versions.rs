@@ -36,7 +36,8 @@ pub(crate) struct VersionCache {
     /// Versions evicted while a call still held them, by graph: a lookup
     /// while one is held (after `warren.evict`, or in a later statement
     /// than the scan holding it) caches that copy again instead of loading
-    /// another beside it. Gone once no call holds them.
+    /// another beside it. Gone once no call holds them, or once their
+    /// versions are dropped or their graph evicted.
     held_by_calls: HashMap<VersionId, (i32, Weak<dyn Any + Send + Sync>)>,
 }
 
@@ -119,9 +120,12 @@ impl VersionCache {
         }
     }
 
-    /// The cached version ids, ascending.
-    pub(crate) fn versions(&self) -> Vec<VersionId> {
-        let mut versions: Vec<_> = self.entries.keys().copied().collect();
+    /// The version ids a prune must check, ascending: those cached, and
+    /// those evicted that a call still holds.
+    pub(crate) fn known_versions(&self) -> Vec<VersionId> {
+        let held = self.held_by_calls.iter().filter(|(_, (_, held))| held.strong_count() > 0);
+        let mut versions: Vec<_> =
+            self.entries.keys().chain(held.map(|(version, _)| version)).copied().collect();
         versions.sort_unstable();
         versions
     }
@@ -161,6 +165,11 @@ mod tests {
     use crate::cache::load;
     use crate::segment::{write_version, MemorySegmentStore};
     use warren_core::graph::{EdgeIntake, GraphCsr, IdMap, RelationDictionary};
+
+    /// The cached (not merely held) version ids, ascending.
+    fn cached(cache: &VersionCache) -> Vec<VersionId> {
+        cache.held().iter().map(|entry| entry.key).collect()
+    }
 
     /// A store holding versions 1 and 2 (ids 1, 2, 3; edge 1 → 2) and 3
     /// (uuid ids).
@@ -207,7 +216,7 @@ mod tests {
         assert!(held[0].bytes > 0);
         assert!(held[0].last_used > held[1].last_used, "the lookup marked version 1 used");
         cache.remove(1);
-        assert_eq!(cache.versions(), [2]);
+        assert_eq!(cached(&cache), [2]);
     }
 
     /// A lookup of a version evicted while a call still holds it (after
@@ -223,7 +232,7 @@ mod tests {
         assert!(cache.holds(1));
         let again = cache.get::<i64>(1).expect("the held copy");
         assert!(Arc::ptr_eq(&held, &again));
-        assert_eq!(cache.versions(), [1], "cached again");
+        assert_eq!(cached(&cache), [1], "cached again");
         assert_eq!(cache.bytes(), held.bytes(), "and counted again");
         cache.remove(1);
         drop((held, again));
@@ -239,7 +248,7 @@ mod tests {
         cache.insert(10, 2, load::<i64>(&mut store, 2, true).unwrap());
         cache.insert(11, 3, load::<[u8; 16]>(&mut store, 3, true).unwrap());
         cache.evict_graph_except(10, |version| version == 2);
-        assert_eq!(cache.versions(), [2, 3]);
+        assert_eq!(cached(&cache), [2, 3]);
     }
 
     #[test]
@@ -250,13 +259,35 @@ mod tests {
         let two = cache.insert(10, 2, load::<i64>(&mut store, 2, true).unwrap());
         cache.remove(1);
         cache.remove(2);
+        assert!(cache.get::<i64>(1).is_some(), "held before the eviction");
         cache.evict_graph(10);
         assert!(cache.get::<i64>(1).is_none());
-        cache.insert(10, 2, load::<i64>(&mut store, 2, true).unwrap());
+        assert!(cache.get::<i64>(2).is_none());
+        let reloaded = cache.insert(10, 2, load::<i64>(&mut store, 2, true).unwrap());
         cache.remove(2);
+        assert!(cache.get::<i64>(2).is_some(), "held before the prune");
         cache.retain(&[]);
         assert!(cache.get::<i64>(2).is_none());
-        drop((one, two));
+        drop((one, two, reloaded));
+    }
+
+    /// A prune at another version's cache miss must not forget a version a
+    /// call still holds while that version exists.
+    #[test]
+    fn a_prune_checks_held_versions_and_keeps_those_that_exist() {
+        let mut store = store();
+        let mut cache = VersionCache::default();
+        let held = cache.insert(10, 1, load::<i64>(&mut store, 1, true).unwrap());
+        cache.remove(1);
+        cache.insert(10, 2, load::<i64>(&mut store, 2, true).unwrap());
+        assert_eq!(cache.known_versions(), [1, 2]);
+        cache.retain(&cache.known_versions());
+        let again = cache.get::<i64>(1).expect("the held copy, after the prune");
+        assert!(Arc::ptr_eq(&held, &again));
+        assert_eq!(cached(&cache), [1, 2], "found again, so cached again");
+        cache.remove(1);
+        drop((held, again));
+        assert_eq!(cache.known_versions(), [2], "no longer held");
     }
 
     #[test]
@@ -273,9 +304,9 @@ mod tests {
         let mut cache = VersionCache::default();
         cache.insert(10, 1, load::<i64>(&mut store, 1, true).unwrap());
         cache.insert(10, 2, load::<i64>(&mut store, 2, true).unwrap());
-        assert_eq!(cache.versions(), [1, 2]);
+        assert_eq!(cached(&cache), [1, 2]);
         cache.retain(&[2, 5]);
-        assert_eq!(cache.versions(), [2]);
+        assert_eq!(cached(&cache), [2]);
     }
 
     #[test]
@@ -286,7 +317,7 @@ mod tests {
         cache.insert(10, 2, load::<i64>(&mut store, 2, true).unwrap());
         cache.insert(11, 3, load::<[u8; 16]>(&mut store, 3, true).unwrap());
         assert_eq!(cache.evict_graph(10), 2);
-        assert_eq!(cache.versions(), [3]);
+        assert_eq!(cached(&cache), [3]);
         assert_eq!(held.id_map.node_count(), 3, "a scan holding a version keeps it");
     }
 }
