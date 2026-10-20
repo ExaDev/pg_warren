@@ -20,7 +20,7 @@ pub(crate) use layout::write_version;
 pub(crate) use name::{
     csr_segment, CsrPart, CsrScope, Direction, ID_MAP, RELATION_DICTIONARY, TOMBSTONES,
 };
-pub(crate) use spi::SpiSegmentStore;
+pub(crate) use spi::{each_chunk, SpiSegmentStore};
 
 #[cfg(test)]
 pub(crate) use chunk::tests::MemorySegmentStore;

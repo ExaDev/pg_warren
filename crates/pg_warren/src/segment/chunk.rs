@@ -2,8 +2,13 @@
 //! rows of at most [`CHUNK_SIZE`] bytes, numbered from 0, and read back by
 //! concatenating the chunks in order (DESIGN.md §5.1).
 
+use warren_core::graph::GraphError;
+
 use super::SegmentError;
 use crate::catalog::VersionId;
+
+/// Receives the chunks of a segment as (chunk number, bytes), one at a time.
+pub(crate) type ChunkVisitor<'a> = dyn FnMut(i32, &[u8]) -> Result<(), SegmentError> + 'a;
 
 /// The port to the chunks of each segment of each version.
 pub(crate) trait SegmentStore {
@@ -16,12 +21,21 @@ pub(crate) trait SegmentStore {
         data: &[u8],
     ) -> Result<(), SegmentError>;
 
-    /// The chunks of a segment as (chunk number, bytes), in chunk order.
+    /// The total bytes of a segment's chunks, or `None` if it has none.
+    fn segment_bytes(
+        &mut self,
+        version: VersionId,
+        segment: &str,
+    ) -> Result<Option<u64>, SegmentError>;
+
+    /// Passes each chunk of a segment to `each` as (chunk number, bytes),
+    /// in chunk order.
     fn read_chunks(
         &mut self,
         version: VersionId,
         segment: &str,
-    ) -> Result<Vec<(i32, Vec<u8>)>, SegmentError>;
+        each: &mut ChunkVisitor<'_>,
+    ) -> Result<(), SegmentError>;
 }
 
 /// The chunk size of production builds: 8 MiB (DESIGN.md §5.1, §14 item 3).
@@ -70,12 +84,13 @@ pub(crate) fn read_segment(
     version: VersionId,
     segment: &str,
 ) -> Result<Vec<u8>, SegmentError> {
-    let chunks = store.read_chunks(version, segment)?;
-    if chunks.is_empty() {
+    let Some(length) = store.segment_bytes(version, segment)? else {
         return Err(SegmentError::SegmentMissing { version, segment: segment.to_owned() });
-    }
+    };
     let mut bytes = Vec::new();
-    for (expected, (chunk_no, data)) in (0..).zip(chunks) {
+    reserve(&mut bytes, usize::try_from(length).unwrap_or(usize::MAX))?;
+    let mut expected = 0;
+    store.read_chunks(version, segment, &mut |chunk_no, data| {
         if chunk_no != expected {
             return Err(SegmentError::ChunkMissing {
                 version,
@@ -83,9 +98,19 @@ pub(crate) fn read_segment(
                 chunk_no: expected,
             });
         }
-        bytes.extend_from_slice(&data);
-    }
+        expected += 1;
+        reserve(&mut bytes, data.len())?;
+        bytes.extend_from_slice(data);
+        Ok(())
+    })?;
     Ok(bytes)
+}
+
+/// Makes room for `more` bytes in `bytes`, exactly, or fails with
+/// `OutOfMemory` (53200) rather than aborting the backend.
+fn reserve(bytes: &mut Vec<u8>, more: usize) -> Result<(), SegmentError> {
+    bytes.try_reserve_exact(more).map_err(|_| GraphError::OutOfMemory { elements: more })?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -112,17 +137,28 @@ pub(crate) mod tests {
             Ok(())
         }
 
+        fn segment_bytes(
+            &mut self,
+            version: VersionId,
+            segment: &str,
+        ) -> Result<Option<u64>, SegmentError> {
+            let mut chunks =
+                self.chunks.iter().filter(|((v, s, _), _)| *v == version && s == segment);
+            Ok(chunks.next().map(|(_, first)| {
+                chunks.fold(first.len() as u64, |total, (_, data)| total + data.len() as u64)
+            }))
+        }
+
         fn read_chunks(
             &mut self,
             version: VersionId,
             segment: &str,
-        ) -> Result<Vec<(i32, Vec<u8>)>, SegmentError> {
-            Ok(self
-                .chunks
+            each: &mut ChunkVisitor<'_>,
+        ) -> Result<(), SegmentError> {
+            self.chunks
                 .iter()
                 .filter(|((v, s, _), _)| *v == version && s == segment)
-                .map(|((_, _, chunk_no), data)| (*chunk_no, data.clone()))
-                .collect())
+                .try_for_each(|((_, _, chunk_no), data)| each(*chunk_no, data))
         }
     }
 
@@ -158,6 +194,16 @@ pub(crate) mod tests {
         write_segment(&mut store, 3, "offsets:0", &bytes, 100).unwrap();
         write_segment(&mut store, 4, "offsets:0", &[9], 100).unwrap();
         assert_eq!(read_segment(&mut store, 3, "offsets:0").unwrap(), bytes);
+    }
+
+    #[test]
+    fn reading_a_segment_reserves_exactly_its_bytes() {
+        let mut store = MemorySegmentStore::default();
+        let bytes: Vec<u8> = (0..3037).map(|i| (i % 251) as u8).collect();
+        write_segment(&mut store, 3, "targets:0", &bytes, 1000).unwrap();
+        let read = read_segment(&mut store, 3, "targets:0").unwrap();
+        assert_eq!(read, bytes);
+        assert_eq!(read.capacity(), read.len());
     }
 
     #[test]
