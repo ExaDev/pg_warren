@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use super::versions::{VersionCache, CACHE};
 use super::{load, trim, CacheError, LoadedVersion};
-use crate::access::{as_extension_owner, require_reader};
+use crate::access::{as_catalog_owner, require_reader};
 use crate::catalog::{require_version, GraphDefinition, VersionId};
 use crate::read_only::read_one;
 use crate::segment::SpiSegmentStore;
@@ -104,7 +104,7 @@ fn existing_versions(versions: &[VersionId]) -> Result<Vec<VersionId>, CacheErro
     if versions.is_empty() {
         return Ok(Vec::new());
     }
-    as_extension_owner(|| {
+    as_catalog_owner(|| {
         Ok::<_, CacheError>(
             read_one::<Vec<VersionId>>(
                 "SELECT coalesce(array_agg(version_id), '{}') FROM warren.versions

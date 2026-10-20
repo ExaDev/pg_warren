@@ -3,7 +3,7 @@
 //! segment store port and its SPI adapter, chunking, and segment names.
 //!
 //! `build` writes segments through it and `cache` reads them; it depends
-//! only on `access` (for the switch to the extension owner) and on
+//! only on `access` (for the switch to the catalog owner) and on
 //! `catalog` for the version id type.
 
 mod chunk;

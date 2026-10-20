@@ -1077,7 +1077,7 @@ ALTER TABLE warren.vector_chunks ALTER COLUMN data SET STORAGE EXTERNAL;
 ALTER TABLE warren.versions
     ADD FOREIGN KEY (label_vector) REFERENCES warren.vectors;
 
--- Only warren.* functions touch these, as the extension owner (§7).
+-- Only warren.* functions touch these, as the catalog owner (§7).
 REVOKE ALL ON ALL TABLES IN SCHEMA warren FROM PUBLIC;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA warren FROM PUBLIC;
 GRANT USAGE ON SCHEMA warren TO PUBLIC;

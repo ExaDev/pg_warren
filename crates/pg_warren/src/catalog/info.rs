@@ -5,7 +5,7 @@ use pgrx::prelude::*;
 use pgrx::JsonB;
 
 use super::{CatalogError, GraphDefinition};
-use crate::access::{as_extension_owner, entry, require_reader};
+use crate::access::{as_catalog_owner, entry, require_reader};
 use crate::read_only::read_one;
 
 /// `warren.info`: graph `name`'s definition, current version, staleness
@@ -19,7 +19,7 @@ fn info(name: &str) -> JsonB {
 fn describe(name: &str) -> Result<JsonB, CatalogError> {
     let graph = GraphDefinition::find(name)?;
     require_reader(graph.owner, &graph.readers, &graph.name, "read")?;
-    let info = as_extension_owner(|| {
+    let info = as_catalog_owner(|| {
         Ok::<_, CatalogError>(read_one::<JsonB>(
             "SELECT jsonb_build_object(
                  'name', g.name, 'owner', g.owner::text, 'readers', to_jsonb(g.readers::text[]),

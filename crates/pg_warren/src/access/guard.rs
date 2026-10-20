@@ -1,11 +1,11 @@
 //! The entry-point guard every `warren.*` SQL function runs under
 //! (DESIGN.md §7).
 //!
-//! Elevated statements run as the extension owner, and the access checks
+//! Elevated statements run as the catalog owner, and the access checks
 //! run as the caller; both must resolve names — operators and functions as
 //! well as relations — only in trusted schemas, or a caller could put its
 //! own `=` or `pg_has_role` ahead of `pg_catalog` and have it run with the
-//! extension owner's privileges or answer the check. So [`entry`] pins
+//! catalog owner's privileges or answer the check. So [`entry`] pins
 //! `search_path` to `pg_catalog, pg_temp` for the whole function body, the
 //! way `fmgr` applies `SECURITY DEFINER ... SET search_path`: a new GUC nest
 //! level, `set_config_option(..., GUC_ACTION_SAVE)`, and `AtEOXact_GUC` on

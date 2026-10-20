@@ -7,7 +7,7 @@ use pgrx::spi::OwnedPreparedStatement;
 use pgrx::PgOid;
 
 use super::CatalogError;
-use crate::access::as_extension_owner;
+use crate::access::as_catalog_owner;
 use crate::source::IdType;
 
 /// The query [`GraphDefinition::find`] runs, planned once per backend.
@@ -76,7 +76,7 @@ impl GraphDefinition {
     /// `current_version` is read afresh on every call, through a saved
     /// plan, so a promotion is seen by the next statement (DESIGN.md §5.5).
     pub(crate) fn find(name: &str) -> Result<Self, CatalogError> {
-        as_extension_owner(|| {
+        as_catalog_owner(|| {
             Spi::connect(|client| {
                 let row = FIND_PLAN.with(|plan| {
                     if plan.get().is_none() {
@@ -120,7 +120,7 @@ impl GraphDefinition {
     pub(crate) fn lock(&mut self) -> Result<(), CatalogError> {
         // A row lock is a write (it assigns a transaction id): only the
         // functions that build or drop versions take it.
-        self.current_version = as_extension_owner(|| {
+        self.current_version = as_catalog_owner(|| {
             Spi::connect_mut(|client| {
                 Ok::<_, CatalogError>(
                     client
@@ -140,7 +140,7 @@ impl GraphDefinition {
 
     /// Deletes the graph, and with it every version, segment and vector.
     pub(crate) fn drop_graph(&self) -> Result<(), CatalogError> {
-        as_extension_owner(|| {
+        as_catalog_owner(|| {
             Spi::connect_mut(|client| {
                 client.update(
                     "DELETE FROM warren.graphs WHERE graph_id = $1",
@@ -155,7 +155,7 @@ impl GraphDefinition {
     /// Adds `role` to the readers (if `add`) or removes it, pruning reader
     /// roles that no longer exist.
     pub(crate) fn set_reader(&self, role: pg_sys::Oid, add: bool) -> Result<(), CatalogError> {
-        as_extension_owner(|| {
+        as_catalog_owner(|| {
             Spi::connect_mut(|client| {
                 client.update(
                     "UPDATE warren.graphs SET readers = ARRAY(
@@ -177,7 +177,7 @@ impl NewGraph<'_> {
     /// Records a new graph definition.
     pub(crate) fn create(&self) -> Result<(), CatalogError> {
         let graph = self;
-        as_extension_owner(|| {
+        as_catalog_owner(|| {
             Spi::connect_mut(|client| {
                 let exists = client
                     .select(

@@ -165,6 +165,10 @@ jobs:
         # major (the catalog, and what pgrx generates, differ by major). The
         # harness is standard-library Python.
         run: python3 test/upgrade.py --pg-config "$PG_CONFIG"
+      - name: Upgrade path from every release, installed and updated by a non-superuser
+        # A trusted install (DESIGN.md §7): the database owner, not a
+        # superuser, runs CREATE and ALTER EXTENSION.
+        run: python3 test/upgrade.py --no-install --trusted --pg-config "$PG_CONFIG"
       - name: Schema drift against sql/pg_warren--<version>.sql
         if: matrix.pg == '16'
         run: PG=pg16 sql/schema-drift.sh
@@ -210,6 +214,11 @@ jobs:
         run: cargo pgrx init --pg16 "$PG_CONFIG"
       - name: SQL harness (test/run.py)
         run: python test/run.py --pg-config "$PG_CONFIG"
+      - name: SQL harness with a trusted install (test/run.py --trusted)
+        # DESIGN.md §7: each test database's pg_warren is installed by a
+        # non-superuser that owns the database, as on hosted Postgres, so the
+        # catalog's owner (the bootstrap superuser) and the extension's differ.
+        run: python test/run.py --no-install --trusted --pg-config "$PG_CONFIG"
       - name: Benchmark matrix smoke run
         run: bench/run.sh smoke --no-install --pg-config "$PG_CONFIG" --results bench/tmp
 
@@ -248,4 +257,9 @@ jobs:
             exit 1
           fi
           docker exec pgw psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 \
+            -c 'CREATE EXTENSION pg_warren' -c 'SELECT warren.version()'
+          # A trusted install: a non-superuser that owns its database.
+          docker exec pgw psql -U postgres -v ON_ERROR_STOP=1 \
+            -c 'CREATE ROLE app LOGIN' -c 'CREATE DATABASE app OWNER app'
+          docker exec pgw psql -U app -d app -v ON_ERROR_STOP=1 \
             -c 'CREATE EXTENSION pg_warren' -c 'SELECT warren.version()'

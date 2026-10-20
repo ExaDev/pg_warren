@@ -44,7 +44,7 @@ pub(crate) enum VectorError {
     /// out.
     #[error(transparent)]
     Compute(#[from] ComputeError),
-    /// The switch to the extension owner failed.
+    /// The switch to the catalog owner failed.
     #[error(transparent)]
     Access(#[from] AccessError),
     /// An SPI call failed.
