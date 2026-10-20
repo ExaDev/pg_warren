@@ -56,6 +56,30 @@ pg_warren takes no code from either project. Ideas adopted from them are
 credited in [NOTICE](NOTICE) and in comments where they are used; the reading
 is recorded in [docs/prior-art-notes.md](docs/prior-art-notes.md).
 
+## Install
+
+Build and install the extension into your PostgreSQL (15–18) with
+`cargo pgrx install` (see [CONTRIBUTING.md](CONTRIBUTING.md)), or use the
+image built from `docker/Dockerfile`. Then, in each database:
+
+```sql
+CREATE EXTENSION pg_warren;
+```
+
+pg_warren is a *trusted* extension, so this does not need a superuser: any
+role with `CREATE` on the database can run it, as on hosted Postgres. That
+role becomes the extension's owner. It may update the extension
+(`ALTER EXTENSION pg_warren UPDATE`) or drop it, which drops every graph in
+the database. It gets no direct access to the `warren.*` tables, which belong
+to the bootstrap superuser. Every role, the installer included, reaches
+graphs only through the `warren.*` functions and their access checks
+(DESIGN.md §7).
+
+Because only that superuser can read the catalog, a non-superuser's
+`pg_dump` of the database fails while pg_warren is installed. Dump as a
+superuser, or leave the graphs out with `--exclude-table-data='warren.*'`
+and create them again after the restore.
+
 ## Building and contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).

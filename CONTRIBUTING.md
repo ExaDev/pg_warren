@@ -136,6 +136,9 @@ pytest
 # --runas (default postgres) via sudo.
 test/run.py --pg-config "$(command -v pg_config)"
 test/run.py --no-install test/sql/staged_build_rollback.sql   # one test, current install
+# The same suite with a trusted install: each database's pg_warren is created
+# by a non-superuser that owns the database (DESIGN.md §7). CI runs both.
+test/run.py --no-install --trusted
 
 # A fixture on its own (Appendix A scales by default; see --help per kind)
 bench/generate.py sbm --communities 4 --community-size 50 --out /tmp/sbm
@@ -184,9 +187,16 @@ format. To benchmark a new function, add a workload with `requires` to
   script (`sql/schema-drift.sh --update`) and add the header-only upgrade
   script `sql/pg_warren--X.Y.Z--<next>.sql`. In the other order the tagged
   commit fails `schema-drift.sh` (its version would already be released).
+- pg_warren is a **trusted** extension, so a non-superuser's `CREATE` or
+  `ALTER EXTENSION` runs every install and upgrade script as the bootstrap
+  superuser. Scripts create objects only in schema `warren`, schema-qualify
+  names, and use only exact-match `pg_catalog` operators and functions in
+  anything evaluated while the script runs (defaults, constraints,
+  backfills). The rules and the audit are in DESIGN.md §7.
 
 ```sh
 test/upgrade.py --pg-config "$(command -v pg_config)"   # installs, then checks every release's path
+test/upgrade.py --no-install --trusted   # the same, installed and updated by a non-superuser
 ```
 
 ## Docker

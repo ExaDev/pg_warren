@@ -2,6 +2,14 @@
 
 ## 0.3.0 — in development (until M7)
 
+- pg_warren is a trusted extension: a role with `CREATE` on the database
+  can run `CREATE EXTENSION pg_warren` without being a superuser
+  (DESIGN.md §7). Catalog statements now run as the owner of the
+  `warren.*` tables (the installing superuser, or for a trusted install
+  the bootstrap superuser), not as `pg_extension.extowner`. The installer
+  gets no privilege on those tables. A non-superuser's `pg_dump` fails
+  while pg_warren is installed: dump as a superuser, or pass
+  `--exclude-table-data='warren.*'`. No schema change.
 - `warren.max_cache_memory` (default `4GB`): a size-bound on what a
   backend's cache holds between calls. Cached graph versions and vectors
   are evicted least recently used first and reloaded when next used;
