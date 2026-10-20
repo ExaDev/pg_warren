@@ -22,6 +22,26 @@ pub(crate) enum CacheError {
     /// The version could not be loaded.
     #[error(transparent)]
     Load(#[from] LoadError),
+    /// Keeping a transient vector would take transient vectors past
+    /// `warren.max_cache_memory`.
+    #[error(
+        "cache memory limit exceeded: a transient vector of {requested} bytes would bring \
+         transient vectors to {after} bytes, over warren.max_cache_memory ({limit} bytes); \
+         {in_use} are in use, {own} of them this role's; persist it, drop transient vectors or \
+         raise warren.max_cache_memory"
+    )]
+    TransientOverLimit {
+        /// The vector's bytes.
+        requested: u64,
+        /// The bytes transient vectors would hold with it.
+        after: u64,
+        /// The bytes transient vectors hold, of every role.
+        in_use: u64,
+        /// The bytes the current role's transient vectors hold.
+        own: u64,
+        /// The cap, in bytes.
+        limit: u64,
+    },
     /// An SPI call failed.
     #[error(transparent)]
     Spi(#[from] pgrx::spi::Error),
@@ -34,6 +54,7 @@ impl SqlError for CacheError {
             Self::Catalog(error) => error.sqlstate(),
             Self::Access(error) => error.sqlstate(),
             Self::Load(error) => error.sqlstate(),
+            Self::TransientOverLimit { .. } => PgSqlErrorCode::ERRCODE_CONFIGURATION_LIMIT_EXCEEDED,
             Self::Spi(_) => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
         }
     }

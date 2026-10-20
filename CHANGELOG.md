@@ -2,6 +2,17 @@
 
 ## 0.3.0 — in development (until M7)
 
+- `warren.max_cache_memory` (default `4GB`): a size-bound on what a
+  backend's cache holds between calls. Cached graph versions and vectors
+  are evicted least recently used first and reloaded when next used;
+  transient vectors count against it but are never evicted, and a
+  transient write that would take them past it fails with 53400.
+- Upgrade note: the cache was unbounded before. A graph version larger
+  than 4GB, or a version plus the library's transient scratch vectors
+  (`pagerank` keeps about eleven full-length `f64` vectors, ~88 bytes per
+  node) above it, is now reloaded on every call, with a `NOTICE` once per
+  statement. Raise `warren.max_cache_memory` for such graphs.
+
 ## 0.2.0 — vectors, compute and spectral analysis
 
 Milestones M4–M6 of DESIGN.md §13.

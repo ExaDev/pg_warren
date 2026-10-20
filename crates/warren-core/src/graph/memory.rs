@@ -19,6 +19,11 @@ pub(crate) fn filled<T: Clone>(len: usize, value: T) -> Result<Vec<T>, GraphErro
     Ok(buffer)
 }
 
+/// The heap bytes `buffer` holds: its capacity, not its length.
+pub(crate) fn held<T>(buffer: &Vec<T>) -> u64 {
+    (buffer.capacity() as u64).saturating_mul(std::mem::size_of::<T>() as u64)
+}
+
 /// Makes room for at least one more element, growing geometrically.
 pub(crate) fn reserve_one<T>(buffer: &mut Vec<T>) -> Result<(), GraphError> {
     if buffer.len() < buffer.capacity() {

@@ -2,6 +2,7 @@
 //! across versions of a graph (DESIGN.md §5.3, `rel_dict`).
 
 use std::collections::HashMap;
+use std::mem::size_of;
 
 use super::GraphError;
 
@@ -79,6 +80,16 @@ impl RelationDictionary {
     pub fn is_empty(&self) -> bool {
         self.names.is_empty()
     }
+
+    /// The heap bytes it holds, approximately: the names (stored twice,
+    /// in order and as index keys) and the two tables.
+    pub fn bytes(&self) -> u64 {
+        let names: u64 = self.names.iter().map(|name| name.capacity() as u64).sum();
+        let entry = size_of::<(String, RelationIndex)>() as u64;
+        2 * names
+            + (self.names.capacity() * size_of::<String>()) as u64
+            + self.indexes.capacity() as u64 * entry
+    }
 }
 
 #[cfg(test)]
@@ -109,5 +120,14 @@ mod tests {
         let c = next.intern("c").unwrap();
         assert_eq!(next.get("a"), previous.get("a"));
         assert_eq!(c.index(), 2);
+    }
+
+    #[test]
+    fn a_dictionary_holds_at_least_its_names_twice() {
+        let mut relations = RelationDictionary::new();
+        assert_eq!(relations.bytes(), 0);
+        relations.intern("cites").unwrap();
+        relations.intern("authored").unwrap();
+        assert!(relations.bytes() >= 2 * ("cites".len() + "authored".len()) as u64);
     }
 }

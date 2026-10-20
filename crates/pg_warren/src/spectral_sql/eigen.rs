@@ -3,14 +3,15 @@
 //! `<vectors_prefix>_1..k` bound to the version.
 
 use pgrx::prelude::*;
-use warren_core::spectral::{self, Eigen, EigenOptions, Resources};
+use warren_core::compute::Dtype;
+use warren_core::spectral::{self, Eigen, EigenOptions, Precision, Resources};
 
 use super::caveats::caveats;
 use super::matrix::{solver_options, OperatorArguments};
 use super::SpectralSqlError;
 use crate::access::entry;
 use crate::cache::resolve;
-use crate::compute_sql::{drop_named, workers, Vectors};
+use crate::compute_sql::{drop_named, vector_bytes, workers, Vectors};
 use crate::interrupts::PostgresInterrupts;
 use crate::source::{with_id_type, IdDatum};
 
@@ -19,9 +20,11 @@ type Row = (i32, f64, f64);
 
 /// Solves `operator` on `vectors`' version and stores the eigenvectors as
 /// `<prefix>_1..k` if a prefix is given (transient unless `persist`),
-/// dropping `<prefix>_<i>` for `i > k` left by an earlier, larger solve.
-/// Whether the caller may write (and drop) those vectors is checked before
-/// solving.
+/// dropping `<prefix>_<i>` for `i > k` left by an earlier, larger solve
+/// first. Whether the caller may write (and drop) those vectors, and
+/// whether transient eigenvectors fit `warren.max_cache_memory` (with the
+/// transient ones they replace or drop released), is checked before
+/// solving, so a refusal writes none.
 fn solve<E: IdDatum>(
     mut vectors: Vectors<E>,
     operator: &OperatorArguments,
@@ -48,9 +51,19 @@ fn solve<E: IdDatum>(
     for name in &stale {
         vectors.check_writable(name, false)?;
     }
+    if !persist {
+        let dtype = match options.precision {
+            Precision::F32 => Dtype::F32,
+            Precision::F64 => Dtype::F64,
+        };
+        vectors.admit_transients(&names, &stale, vector_bytes(dtype, 1, vectors.id_space()))?;
+    }
     let eigen = eigenpairs(&vectors, operator, options)?;
     for warning in caveats(&eigen) {
         pgrx::warning!("{warning}");
+    }
+    for name in &stale {
+        drop_named(&vectors.graph, vectors.version, name)?;
     }
     let mut rows = Vec::with_capacity(eigen.pairs.len());
     let mut names = names.into_iter();
@@ -59,9 +72,6 @@ fn solve<E: IdDatum>(
             vectors.save(&name, pair.vector, persist)?;
         }
         rows.push((i, pair.value, pair.residual));
-    }
-    for name in &stale {
-        drop_named(&vectors.graph, vectors.version, name)?;
     }
     Ok(rows)
 }
@@ -232,6 +242,61 @@ mod tests {
         let found = failure("warren.eigen('p', 1, vectors_prefix := 'lap')")?.unwrap_or_default();
         Spi::run("RESET ROLE")?;
         assert!(found.starts_with("42501: "), "{found}");
+        Ok(())
+    }
+
+    /// Graph `q`: the undirected path 1 – 2 – … – 2000, whose `f32`
+    /// eigenvectors take 8,000 bytes each.
+    fn long_path() -> Result<(), Error> {
+        Spi::run(
+            "CREATE TABLE q_nodes (id bigint); CREATE TABLE q_edges (src bigint, dst bigint);
+             INSERT INTO q_nodes SELECT generate_series(1, 2000);
+             INSERT INTO q_edges SELECT g, g + 1 FROM generate_series(1, 1999) g;
+             SELECT warren.create_graph('q', 'SELECT id FROM q_nodes',
+                                        'SELECT src, dst FROM q_edges', directed := false);
+             SELECT warren.refresh('q')",
+        )
+    }
+
+    /// A transient solve of `k` eigenvectors of `q` named `e_<i>`.
+    fn transient_eigen(k: i32, dtype: &str) -> String {
+        format!(
+            "warren.eigen('q', {k}, tol := 1e-2, max_iter := 300, vectors_prefix := 'e',
+                          dtype := '{dtype}', persist := false)"
+        )
+    }
+
+    #[pg_test]
+    fn transient_eigenvectors_over_the_cache_cap_are_refused_before_any_is_written(
+    ) -> Result<(), Error> {
+        long_path()?;
+        Spi::run("SET LOCAL warren.max_cache_memory = '64kB'")?;
+        for name in ["w", "x", "y"] {
+            Spi::run(&format!("SELECT warren.vector_const('q', '{name}', 1, persist := false)"))?;
+        }
+        // 48,000 bytes held, and 3 × 8,000 more would pass 65,536.
+        let refused = failure(&transient_eigen(3, "f32"))?.unwrap_or_default();
+        assert!(refused.starts_with("53400: cache memory limit exceeded"), "{refused}");
+        for name in ["e_1", "e_2", "e_3"] {
+            let left = failure(&format!("warren.vector_values('q', '{name}', NULL::bigint)"))?;
+            assert!(left.unwrap_or_default().starts_with("42704"), "{name} was written");
+        }
+        Ok(())
+    }
+
+    #[pg_test]
+    fn the_eigenvectors_a_solve_replaces_or_drops_make_room() -> Result<(), Error> {
+        long_path()?;
+        Spi::run("SET LOCAL warren.max_cache_memory = '64kB'")?;
+        Spi::run(&format!("SELECT * FROM {}", transient_eigen(2, "f32")))?;
+        for name in ["w", "x", "y"] {
+            Spi::run(&format!("SELECT warren.vector_const('q', '{name}', 1, persist := false)"))?;
+        }
+        // 64,000 bytes held; e_1 in f64 (16,000) fits only because it
+        // replaces e_1 and drops e_2 (8,000 each).
+        assert_eq!(failure(&transient_eigen(1, "f64"))?, None);
+        let gone = failure("warren.vector_values('q', 'e_2', NULL::bigint)")?;
+        assert!(gone.unwrap_or_default().starts_with("42704"));
         Ok(())
     }
 

@@ -30,6 +30,11 @@ impl Tombstones {
         self.id_space
     }
 
+    /// The heap bytes the bitmap holds.
+    pub fn bytes(&self) -> u64 {
+        memory::held(&self.words)
+    }
+
     /// The number of tombstoned dense ids.
     pub fn count(&self) -> u64 {
         self.words.iter().map(|word| u64::from(word.count_ones())).sum()
@@ -107,6 +112,12 @@ fn bit(id: DenseId) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bitmap_holds_one_word_per_64_ids() {
+        assert_eq!(Tombstones::new(65).unwrap().bytes(), 16);
+        assert_eq!(Tombstones::new(0).unwrap().bytes(), 0);
+    }
 
     #[test]
     fn a_new_bitmap_has_no_tombstones() {

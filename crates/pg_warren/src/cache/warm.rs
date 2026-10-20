@@ -4,7 +4,7 @@
 
 use pgrx::prelude::*;
 
-use super::open::{cached, evict_graph, resolve};
+use super::open::{cached, evict_graph, prune_dropped, resolve};
 use super::CacheError;
 use crate::access::entry;
 use crate::catalog::{GraphDefinition, VersionId};
@@ -26,8 +26,10 @@ fn prewarm_version(name: &str, version: Option<VersionId>) -> Result<VersionId, 
 }
 
 /// `warren.evict`: frees this backend's cached versions, cached vectors
-/// and transient vectors of graph `name` and returns how many there were. It changes nothing but
-/// this backend's memory, so it needs no privilege on the graph.
+/// and transient vectors of graph `name` and returns how many there were.
+/// It first frees, uncounted, what this backend holds of versions (of any
+/// graph) that no longer exist. It changes nothing but this backend's
+/// memory, so it needs no privilege on the graph.
 #[pg_extern(schema = "warren", volatile, parallel_restricted)]
 fn evict(name: &str) -> i64 {
     entry(|_| evict_versions(name))
@@ -35,6 +37,7 @@ fn evict(name: &str) -> i64 {
 
 fn evict_versions(name: &str) -> Result<i64, CacheError> {
     let graph = GraphDefinition::find(name)?;
+    prune_dropped()?;
     let freed = evict_graph(graph.graph_id)
         + evict_vectors(graph.graph_id)
         + evict_transients(graph.graph_id);
