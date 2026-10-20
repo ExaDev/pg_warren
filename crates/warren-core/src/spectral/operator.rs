@@ -351,7 +351,8 @@ impl<'g> LinearOperator<'g> {
 /// Whether every CSR `relations` selects has a reverse CSR equal to its
 /// forward one, as an undirected graph's are: then `A = Aᵀ` exactly, and the
 /// transposed product would read the same arrays in the same order, so
-/// `(A·x + Aᵀ·x)/2` is `A·x` to the bit. Without reverse CSRs this is not
+/// `(A·x + Aᵀ·x)/2` is `A·x` to the bit (where `A·x + A·x` is finite: the two
+/// products overflow to infinity above `f64::MAX / 2`, the one product does not). Without reverse CSRs this is not
 /// known without a transpose, so it answers false. An unknown relation
 /// also answers false (the product reports it).
 fn reverses_are_forward(graph: &GraphCsr, relations: RelationSelection<'_>) -> bool {

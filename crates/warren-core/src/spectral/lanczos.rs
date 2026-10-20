@@ -52,7 +52,7 @@ const F64_TIE: f64 = 1e-12;
 
 /// The default `max_iter`, per basis vector: enough for the crowded
 /// low end of a random graph's normalised Laplacian at 10⁷ nodes (about
-/// 13,000 steps for k = 20, DESIGN.md §6.5).
+/// 14,500 steps for k = 20, DESIGN.md §12).
 const STEPS_PER_BASIS_VECTOR: usize = 1000;
 
 /// A new direction shorter than this, relative to the vector it came from,

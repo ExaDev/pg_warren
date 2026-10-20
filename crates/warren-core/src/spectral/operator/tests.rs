@@ -258,10 +258,12 @@ proptest! {
         (n, edges, x, _) in scenarios(),
         store_merged in any::<bool>(),
     ) {
+        // Each self-loop kept once, as an undirected build stores it.
         let undirected: Edges = edges
             .iter()
-            .flat_map(|&(r, s, t, w)| [(r, s, t, w), (r, t, s, w)])
-            .filter(|&(_, s, t, _)| s != t)
+            .flat_map(|&(r, s, t, w)| {
+                if s == t { vec![(r, s, t, w)] } else { vec![(r, s, t, w), (r, t, s, w)] }
+            })
             .collect();
         let layout = crate::graph::CsrLayout { build_reverse: true, store_merged };
         let graph = reference::graph_as(n, 2, &undirected, true, layout);
