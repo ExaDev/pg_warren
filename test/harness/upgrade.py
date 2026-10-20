@@ -298,6 +298,13 @@ def after_update(upgraded):
     return problems
 
 
+def library_problem(database, expected, when):
+    """None if the pg_warren library a new backend of `database` loads is
+    version `expected`, else what is wrong."""
+    found = database.query("SELECT warren.version()")[0][0]
+    return None if found == expected else f"{when} the library loaded is {found}, not {expected}"
+
+
 def check(cluster, current, installer, releases, installed):
     """Checks every released version's upgrade path, installed and updated
     by `installer`; returns the failures. For each release, its own build
@@ -322,6 +329,10 @@ def check(cluster, current, installer, releases, installed):
         installed.restore_control()
         install_released_scripts(releases.extension_directory)
         upgraded.execute(installer.as_installer(f"CREATE EXTENSION pg_warren VERSION '{version}'"))
+        problem = library_problem(upgraded, version, f"after installing release {version}")
+        if problem:
+            failures.append(problem)
+            continue
         # In a trusted install the release's own library needs the catalog
         # granted while it seeds; the catalog comparison below checks that
         # revoking it left the privileges as a fresh install has them.
@@ -332,6 +343,10 @@ def check(cluster, current, installer, releases, installed):
         if grants:
             upgraded.execute(installer.seeding_grants_sql(False))
         installed.restore()
+        problem = library_problem(upgraded, current, f"after restoring {current} over release {version}")
+        if problem:
+            failures.append(problem)
+            continue
         upgraded.execute(installer.as_installer("ALTER EXTENSION pg_warren UPDATE"))
         diff = differences(expected, describe(upgraded))
         if diff:

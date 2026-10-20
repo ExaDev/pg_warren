@@ -8,8 +8,12 @@ state written "under a release" is written by that release's library as
 well as its SQL. Then the version in development is put back, byte for
 byte, before `ALTER EXTENSION pg_warren UPDATE`.
 
-Builds are kept under one directory, one target directory per (release,
-Postgres major), which CI caches. Callers hold the machine-wide install
+A release builds with the cargo-pgrx of the pgrx its Cargo.lock pins
+(cargo-pgrx refuses to build a pgrx of another version), under the Rust
+toolchain its rust-toolchain.toml pins. Builds are kept under one
+directory: each release's source, one target directory per (release,
+Postgres major), and each cargo-pgrx version that is not the development
+one, with its own PGRX_HOME per major; CI caches it. Callers hold the machine-wide install
 lock (`extension.shared_lock`): installs overwrite the one shared
 `pg_warren.so`."""
 
@@ -110,6 +114,56 @@ class Installed:
                 raise RuntimeError(f"{path} was not restored")
 
 
+def pgrx_version_of(lock):
+    """The version of package `pgrx` in the text of a Cargo.lock."""
+    for package in lock.split("[[package]]"):
+        if re.search(r'^name = "pgrx"$', package, re.M):
+            return re.search(r'^version = "(.+)"$', package, re.M).group(1)
+    raise ReleaseError("the lock file has no pgrx package")
+
+
+def release_pgrx_version(version):
+    """The pgrx version release `version` builds with."""
+    shown = git("show", f"{release_commit(version)}:Cargo.lock")
+    if shown.returncode != 0:
+        raise ReleaseError(f"release {version} has no Cargo.lock")
+    return pgrx_version_of(shown.stdout.decode())
+
+
+def development_cargo_pgrx():
+    """The version of the `cargo pgrx` on PATH."""
+    found = subprocess.run(["cargo", "pgrx", "--version"], capture_output=True, text=True, check=True)
+    return found.stdout.split()[-1]
+
+
+def cargo_pgrx(pgrx, builds, development):
+    """The command that runs cargo-pgrx `pgrx`: the development one if it
+    is that version, else one installed under `builds`."""
+    if pgrx == development:
+        return ["cargo", "pgrx"]
+    return [str(Path(builds) / f"cargo-pgrx-{pgrx}" / "bin" / "cargo-pgrx"), "pgrx"]
+
+
+def extract(commit, tree):
+    """`git archive` of `commit` at `tree`, unless already there: extracted
+    beside it and renamed into place, so an interrupted extraction leaves no
+    tree that looks complete."""
+    tree = Path(tree)
+    if tree.exists():
+        return
+    partial = Path(tempfile.mkdtemp(prefix=f".{tree.name}.", dir=tree.parent))
+    try:
+        with tempfile.TemporaryFile() as archive:
+            subprocess.run(["git", "archive", "--format=tar", commit], cwd=REPOSITORY,
+                           stdout=archive, check=True)
+            archive.seek(0)
+            with tarfile.open(fileobj=archive) as tar:
+                tar.extractall(partial, filter="tar")
+        partial.rename(tree)
+    finally:
+        shutil.rmtree(partial, ignore_errors=True)
+
+
 class Releases:
     """Builds and installs released versions for one `pg_config`."""
 
@@ -119,25 +173,46 @@ class Releases:
         self.extension_directory = Path(config(pg_config, "--sharedir")) / "extension"
         self.builds = Path(builds)
         self.builds.mkdir(parents=True, exist_ok=True)
+        self.development = development_cargo_pgrx()
 
     def source(self, version):
         """The release's source tree (`git archive` of its recorded commit,
-        extracted once and kept with the builds)."""
+        extracted once and kept with the builds), with its Rust toolchain
+        installed."""
         commit = release_commit(version)
         tree = self.builds / f"src-{version}-{commit[:12]}"
-        if not (tree / "Cargo.toml").exists():
-            with tempfile.TemporaryFile() as archive:
-                subprocess.run(["git", "archive", "--format=tar", commit], cwd=REPOSITORY,
-                               stdout=archive, check=True)
-                archive.seek(0)
-                with tarfile.open(fileobj=archive) as tar:
-                    tar.extractall(tree, filter="tar")
+        extract(commit, tree)
+        # The toolchain the release pins (a no-op when it is installed).
+        subprocess.run(["rustup", "toolchain", "install"], cwd=tree, check=True)
         return tree
+
+    def cargo_pgrx(self, pgrx, tree):
+        """The cargo-pgrx command for pgrx `pgrx`, installed if need be (under
+        the release's toolchain), and the environment it runs in: the
+        development PGRX_HOME, or for another version its own, initialised
+        for this major's pg_config (a cargo-pgrx reads only its own
+        version's config)."""
+        command = cargo_pgrx(pgrx, self.builds, self.development)
+        if command == ["cargo", "pgrx"]:
+            return command, dict(os.environ)
+        root = self.builds / f"cargo-pgrx-{pgrx}"
+        if not Path(command[0]).exists():
+            subprocess.run(["cargo", "install", "cargo-pgrx", "--version", pgrx, "--locked",
+                            "--root", str(root)], cwd=tree, check=True)
+        home = self.builds / f"pgrx-home-{pgrx}-pg{self.major}"
+        environment = dict(os.environ, PGRX_HOME=str(home))
+        if not (home / "config.toml").exists():
+            home.mkdir(parents=True, exist_ok=True)
+            subprocess.run([*command, "init", f"--pg{self.major}={self.pg_config}"],
+                           cwd=tree, env=environment, check=True)
+        return command, environment
 
     def install(self, version):
         """Builds release `version` (its own target directory per major)
-        and installs it, library, control file and scripts."""
+        with its own cargo-pgrx and toolchain, and installs it: library,
+        control file and scripts."""
         tree = self.source(version)
-        environment = dict(os.environ, CARGO_TARGET_DIR=str(self.builds / f"target-{version}-pg{self.major}"))
-        subprocess.run(["cargo", "pgrx", "install", "--pg-config", self.pg_config],
+        command, environment = self.cargo_pgrx(release_pgrx_version(version), tree)
+        environment["CARGO_TARGET_DIR"] = str(self.builds / f"target-{version}-pg{self.major}")
+        subprocess.run([*command, "install", "--pg-config", self.pg_config],
                        cwd=tree / "crates" / "pg_warren", env=environment, check=True)

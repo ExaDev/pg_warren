@@ -135,7 +135,11 @@ payloads), in about 44% less memory for five weighted relations and a
 faster `refresh`, but more slowly, and more so with more relations: at 2–5
 relations BFS 2–3× and SpMV 5–8× slower, at 10 relations 6× and 11×
 (DESIGN.md §5.3). Reads with `rels`
-are unaffected. Keep the default unless the merged CSR would not fit your
+are unaffected. Without the merged CSR, a product over all relations
+(`spmv`, `spmm`, and so `eigen` and `distance`) also needs a row scratch on
+each worker thread, charged to `warren.max_compute_memory`: 16 bytes per
+entry of the longest row, at most 16 B × the relation count × the largest
+degree in one relation. Keep the default unless the merged CSR would not fit your
 memory limits. The choice is per graph, kept by `compact`, and shown by
 `warren.info(name) -> 'store_merged'`; it cannot be changed after
 `create_graph`.
@@ -164,7 +168,11 @@ bulk spectrum). Scaled linearly, a 10M-node, 100M-edge `eigen` with k = 20
 projects to 8–9 minutes on 4 threads; this is a projection, not a
 measurement. A weighted graph of 100M edges with several relations exceeds
 the 4 GB build budget the design aims for, because the merged CSR is stored
-in addition to the per-relation ones; `store_merged := false` leaves it out.
+in addition to the per-relation ones. `store_merged := false` leaves it
+out, but the build has not been measured that way: the estimate is the
+~2.9 GB of one weighted relation (DESIGN.md §5.4) plus ~0.8 GB of offsets
+for five relations, ~3.7 GB, close to the budget. The M7 100M-edge soak
+measures it.
 
 ## Known limitations
 

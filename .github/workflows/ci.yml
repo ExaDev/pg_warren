@@ -163,17 +163,20 @@ jobs:
       - name: cargo pgrx test pg${{ matrix.pg }}
         working-directory: crates/pg_warren
         run: cargo pgrx test pg${{ matrix.pg }}
-      - name: Cache the release builds (one target directory per release and major)
+      - name: Cache the release builds (source, target directory per release and major, release cargo-pgrx)
         uses: actions/cache@v4
         with:
           path: ~/.cache/pg_warren-releases
-          key: releases-pg${{ matrix.pg }}-${{ hashFiles('sql/released.sha256') }}-rust-${{ hashFiles('rust-toolchain.toml') }}
+          # sql/released.commits fixes each release's source, and so the pgrx
+          # (and cargo-pgrx) its Cargo.lock pins and the toolchain it pins.
+          key: releases-pg${{ matrix.pg }}-${{ hashFiles('sql/released.sha256', 'sql/released.commits') }}-pgrx-${{ env.PGRX_VERSION }}-rust-${{ hashFiles('rust-toolchain.toml') }}
       - name: Upgrade path from every release (test/upgrade.py)
         # ALTER EXTENSION UPDATE from each released version must give the
         # catalog of a fresh install of the version in development, on every
         # major (the catalog, and what pgrx generates, differ by major). Each
-        # release's state is written by that release's own build, from its
-        # tag. The harness is standard-library Python.
+        # release's state is written by that release's own build, from the
+        # commit sql/released.commits records for it. The harness is
+        # standard-library Python.
         run: python3 test/upgrade.py --pg-config "$PG_CONFIG" --release-builds ~/.cache/pg_warren-releases
       - name: Upgrade path from every release, installed and updated by a non-superuser
         # A trusted install (DESIGN.md §7): the database owner, not a
@@ -196,6 +199,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # test/tests/test_releases.py resolves the commits in
+          # sql/released.commits, which needs the full history.
+          fetch-depth: 0
       - name: Install pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: ./.github/actions/setup-postgres
