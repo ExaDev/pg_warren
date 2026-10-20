@@ -1,6 +1,7 @@
 //! `warren.max_build_memory` (DESIGN.md §5.4, §14 item 17): the memory a
-//! build's CSR offsets may take. Offsets grow as relations × id space, so a
-//! build over the budget is refused before anything is allocated.
+//! build may hold at once, every graph-sized buffer charged to it, and the
+//! most the CSR offsets of the version it builds may take (they grow as
+//! relations × id space).
 
 use pgrx::{GucContext, GucFlags, GucRegistry, GucSetting};
 
@@ -15,9 +16,9 @@ static MAX_BUILD_MEMORY: GucSetting<i32> = GucSetting::<i32>::new(DEFAULT_KB);
 pub(crate) fn define_max_build_memory() {
     GucRegistry::define_int_guc(
         c"warren.max_build_memory",
-        c"Memory a graph build's CSR offsets may take.",
-        c"Offsets grow as relations times id space; a build whose offsets would \
-           exceed this is refused before allocating.",
+        c"Memory a graph build may hold at once.",
+        c"Every buffer a refresh holds is charged to it, and the version's CSR offsets \
+           (relations times id space) must fit it; a build over it is refused.",
         &MAX_BUILD_MEMORY,
         1024,
         i32::MAX,
