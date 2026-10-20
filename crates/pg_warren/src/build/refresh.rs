@@ -30,6 +30,7 @@ fn refresh_graph(name: &str, promote: bool, label: Option<&str>) -> Result<Versi
     let mut graph = GraphDefinition::find(name)?;
     require_owner(graph.owner, &graph.name, "refresh")?;
     graph.lock()?;
+    graph.require_sound_current_version()?;
     if let Some(base) = graph.current_version {
         require_current_id_space(&graph, base)?;
     }
@@ -89,6 +90,25 @@ mod tests {
              FROM warren.versions v WHERE version_id = $1",
             &[version.into()],
         )
+    }
+
+    /// DESIGN.md §5.1: a refresh must not build on a current version that
+    /// is not one of the graph's (another graph's id map, or none); promote
+    /// is the remedy.
+    #[pg_test]
+    fn refresh_refuses_a_stray_current_version_until_one_is_promoted() -> Result<(), Error> {
+        use crate::fixture::{failure, set_current_unchecked, stray_current_failure, two_graphs};
+        let (own, other) = two_graphs("rstray")?;
+        for stray in [other, -1] {
+            set_current_unchecked("rstray_a", stray)?;
+            assert_eq!(
+                failure("warren.refresh('rstray_a')")?,
+                Some(stray_current_failure("rstray_a", stray))
+            );
+        }
+        Spi::run(&format!("SELECT warren.promote('rstray_a', {own})"))?;
+        assert_eq!(failure("warren.refresh('rstray_a')")?, None);
+        Ok(())
     }
 
     #[pg_test]

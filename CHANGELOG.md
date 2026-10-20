@@ -2,6 +2,34 @@
 
 ## 0.3.0 — in development (until M7)
 
+- pg_warren is a trusted extension: a role with `CREATE` on the database
+  can run `CREATE EXTENSION pg_warren` without being a superuser
+  (DESIGN.md §7). Catalog statements now run as the owner of the
+  `warren.*` tables (the installing superuser, or for a trusted install
+  the bootstrap superuser), not as `pg_extension.extowner`. The installer
+  gets no privilege on those tables. A non-superuser's `pg_dump` fails
+  while pg_warren is installed: dump as a superuser, or pass
+  `--exclude-table-data='warren.*'`, then create the graphs again with
+  `create_graph` and `refresh`.
+- Dumps restore. `graphs.current_version` and `versions.label_vector` are
+  no longer foreign keys. Together with `versions.graph_id` and
+  `vectors.version_id` they made cycles that pg_dump cannot order, so a
+  dump of a database with a promoted graph failed to restore. Triggers now
+  check that a graph's current version is one of its own versions, and
+  that it is not deleted while current. Restoring needs the roles that own
+  or read graphs and wrote vectors. Upgrade note: run
+  `ALTER EXTENSION pg_warren UPDATE` (the update drops the two keys and
+  adds the triggers).
+- Query functions, `refresh` and `compact` refuse (55000) a graph whose
+  stored current version is not one of its versions, as a restore or a
+  direct write can leave it; `promote` one of its versions to repair it.
+  Before, they read or built on that version, even another graph's.
+- `promote` of a graph that another session drops while the promote waits
+  fails with "graph does not exist" (42704), not an internal error.
+- `create_graph` raises a `NOTICE` when the graph's `search_path` contains
+  a schema that roles other than its owner can create objects in. Those
+  roles could plant functions or operators that `refresh` would run as
+  the graph's owner.
 - `warren.max_cache_memory` (default `4GB`): a size-bound on what a
   backend's cache holds between calls. Cached graph versions and vectors
   are evicted least recently used first and reloaded when next used;

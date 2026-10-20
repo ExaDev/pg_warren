@@ -39,7 +39,7 @@ pub(crate) enum SegmentError {
     /// A segment could not be encoded or decoded.
     #[error(transparent)]
     Graph(#[from] GraphError),
-    /// The switch to the extension owner failed.
+    /// The switch to the catalog owner failed.
     #[error(transparent)]
     Access(#[from] AccessError),
     /// An SPI call failed.

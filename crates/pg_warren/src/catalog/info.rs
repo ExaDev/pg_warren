@@ -5,7 +5,7 @@ use pgrx::prelude::*;
 use pgrx::JsonB;
 
 use super::{CatalogError, GraphDefinition};
-use crate::access::{as_extension_owner, entry, require_reader};
+use crate::access::{as_catalog_owner, entry, require_reader};
 use crate::read_only::read_one;
 
 /// `warren.info`: graph `name`'s definition, current version, staleness
@@ -19,7 +19,7 @@ fn info(name: &str) -> JsonB {
 fn describe(name: &str) -> Result<JsonB, CatalogError> {
     let graph = GraphDefinition::find(name)?;
     require_reader(graph.owner, &graph.readers, &graph.name, "read")?;
-    let info = as_extension_owner(|| {
+    let info = as_catalog_owner(|| {
         Ok::<_, CatalogError>(read_one::<JsonB>(
             "SELECT jsonb_build_object(
                  'name', g.name, 'owner', g.owner::text, 'readers', to_jsonb(g.readers::text[]),
@@ -27,7 +27,8 @@ fn describe(name: &str) -> Result<JsonB, CatalogError> {
                  'has_relations', g.has_relations, 'build_reverse', g.build_reverse,
                  'retain_versions', g.retain_versions, 'current_version', g.current_version,
                  'staleness', (SELECT (now() - c.built_at)::text FROM warren.versions c
-                               WHERE c.version_id = g.current_version),
+                               WHERE c.version_id = g.current_version
+                                 AND c.graph_id = g.graph_id),
                  'bytes', (SELECT coalesce(sum(v.bytes), 0) FROM warren.versions v
                            WHERE v.graph_id = g.graph_id),
                  'versions', coalesce((
@@ -60,6 +61,21 @@ mod tests {
     use pgrx::spi::Error;
 
     use crate::fixture::{refresh, ring};
+
+    /// A restored row can name another graph's version as current
+    /// (DESIGN.md §5.1): info reports the value but no staleness for it.
+    #[pg_test]
+    fn info_reports_a_stray_current_version_without_its_staleness() -> Result<(), Error> {
+        use crate::fixture::{set_current_unchecked, two_graphs};
+        let (_, other) = two_graphs("istray")?;
+        set_current_unchecked("istray_a", other)?;
+        let reported = Spi::get_one::<String>(
+            "SELECT format('%s|%s', i ->> 'current_version', i ->> 'staleness')
+             FROM warren.info('istray_a') i",
+        )?;
+        assert_eq!(reported, Some(format!("{other}|")));
+        Ok(())
+    }
 
     fn info(path: &str) -> Result<Option<String>, Error> {
         Spi::get_one::<String>(&format!("SELECT (warren.info('i') #> '{path}')::text"))

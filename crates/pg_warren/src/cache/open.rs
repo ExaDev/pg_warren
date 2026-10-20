@@ -10,7 +10,7 @@ use pgrx::pg_sys;
 use super::bound::make_room;
 use super::versions::{VersionCache, CACHE};
 use super::{load, trim, CacheError, LoadedVersion};
-use crate::access::{as_extension_owner, require_reader};
+use crate::access::{as_catalog_owner, require_reader};
 use crate::catalog::{require_version, GraphDefinition, VersionId};
 use crate::read_only::read_one;
 use crate::segment::SpiSegmentStore;
@@ -25,8 +25,8 @@ pub(crate) struct Resolved {
     pub(crate) version: VersionId,
 }
 
-/// Graph `name` and the version a call reads: `version` if given (which
-/// must be a version of the graph), else its current version. The caller
+/// Graph `name` and the version a call reads: `version` if given, else its
+/// current version; either must be a version of the graph. The caller
 /// must be a member of the owner role or of a reader role; `action` names
 /// what it does, for the error.
 pub(crate) fn resolve(
@@ -42,6 +42,7 @@ pub(crate) fn resolve(
             version
         }
         None => {
+            graph.require_sound_current_version()?;
             graph.current_version.ok_or_else(|| CacheError::NoCurrentVersion(graph.name.clone()))?
         }
     };
@@ -113,7 +114,7 @@ pub(crate) fn evict_graph(graph_id: i32) -> usize {
 /// The bytes of `version`'s stored segments (`warren.versions.bytes`): about
 /// what loading it adds to the cache.
 pub(super) fn stored_bytes(version: VersionId) -> Result<u64, CacheError> {
-    as_extension_owner(|| {
+    as_catalog_owner(|| {
         let bytes = read_one::<i64>(
             "SELECT bytes FROM warren.versions WHERE version_id = $1",
             &[version.into()],
@@ -127,7 +128,7 @@ fn existing_versions(versions: &[VersionId]) -> Result<Vec<VersionId>, CacheErro
     if versions.is_empty() {
         return Ok(Vec::new());
     }
-    as_extension_owner(|| {
+    as_catalog_owner(|| {
         Ok::<_, CacheError>(
             read_one::<Vec<VersionId>>(
                 "SELECT coalesce(array_agg(version_id), '{}') FROM warren.versions
@@ -137,4 +138,30 @@ fn existing_versions(versions: &[VersionId]) -> Result<Vec<VersionId>, CacheErro
             .unwrap_or_default(),
         )
     })
+}
+
+#[cfg(any(test, feature = "pg_test"))]
+#[pgrx::pg_schema]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
+mod tests {
+    use pgrx::prelude::*;
+    use pgrx::spi::Error;
+
+    use crate::fixture::{failure, set_current_unchecked, stray_current_failure, two_graphs};
+
+    /// A restore writes `graphs.current_version` without the triggers'
+    /// check (DESIGN.md §5.1), so a call must not read whatever version it
+    /// names: another graph's version, or none.
+    #[pg_test]
+    fn a_current_version_that_is_not_one_of_the_graphs_is_an_error() -> Result<(), Error> {
+        let (_, other) = two_graphs("stray")?;
+        for stray in [other, -1] {
+            set_current_unchecked("stray_a", stray)?;
+            assert_eq!(
+                failure("warren.degree('stray_a', 1::bigint)")?,
+                Some(stray_current_failure("stray_a", stray))
+            );
+        }
+        Ok(())
+    }
 }

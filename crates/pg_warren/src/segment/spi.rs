@@ -1,10 +1,10 @@
 //! The SPI adapter of the segment store: `warren.segments`, read and
-//! written as the extension owner (DESIGN.md §5.1, §7).
+//! written as the catalog owner (DESIGN.md §5.1, §7).
 
 use pgrx::prelude::*;
 
 use super::{SegmentError, SegmentStore};
-use crate::access::as_extension_owner;
+use crate::access::as_catalog_owner;
 use crate::catalog::VersionId;
 
 /// `warren.segments`.
@@ -18,7 +18,7 @@ impl SegmentStore for SpiSegmentStore {
         chunk_no: i32,
         data: &[u8],
     ) -> Result<(), SegmentError> {
-        as_extension_owner(|| {
+        as_catalog_owner(|| {
             Spi::connect_mut(|client| {
                 client.update(
                     "INSERT INTO warren.segments (version_id, segment, chunk_no, data)
@@ -36,7 +36,7 @@ impl SegmentStore for SpiSegmentStore {
         version: VersionId,
         segment: &str,
     ) -> Result<Vec<(i32, Vec<u8>)>, SegmentError> {
-        as_extension_owner(|| {
+        as_catalog_owner(|| {
             Spi::connect(|client| {
                 client
                     .select(

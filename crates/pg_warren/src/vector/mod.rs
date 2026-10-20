@@ -9,7 +9,7 @@
 //! immutable vector and a cached entry never goes stale. Deleting a
 //! version, or its graph, deletes its vectors.
 //!
-//! Depends on `access` (statements run as the extension owner), `catalog`
+//! Depends on `access` (statements run as the catalog owner), `catalog`
 //! (version ids) and `segment` (the chunk size); `cache` and `compute_sql`
 //! use it.
 

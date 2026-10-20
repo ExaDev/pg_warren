@@ -62,6 +62,18 @@ pub(crate) enum CatalogError {
     /// A source query does not fit the graph.
     #[error(transparent)]
     Source(#[from] SourceError),
+    /// `graphs.current_version` names a version that is not one of the
+    /// graph's, as a restored or edited row can (DESIGN.md §5.1).
+    #[error(
+        "graph \"{graph}\" records current version {version}, which is not one of its versions \
+         (a restored or edited catalog row); promote one of its versions"
+    )]
+    StrayCurrentVersion {
+        /// The graph.
+        graph: String,
+        /// The version its row names.
+        version: i64,
+    },
     /// An SPI call failed.
     #[error(transparent)]
     Spi(#[from] pgrx::spi::Error),
@@ -74,7 +86,7 @@ impl SqlError for CatalogError {
                 PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT
             }
             Self::DropCurrent { .. } => PgSqlErrorCode::ERRCODE_OBJECT_IN_USE,
-            Self::SupersededIdSpace { .. } => {
+            Self::SupersededIdSpace { .. } | Self::StrayCurrentVersion { .. } => {
                 PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE
             }
             Self::GraphExists(_) => PgSqlErrorCode::ERRCODE_DUPLICATE_OBJECT,
