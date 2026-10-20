@@ -583,6 +583,10 @@ class Soak:
             stage("components", f"SELECT count(*) FROM (SELECT component_id FROM warren.components('{GRAPH}', "
                                 "NULL::bigint) GROUP BY 1) c")
             stage("pagerank", pagerank_sql(GRAPH))
+            # From a cold cache: one statement, so it loads the version once
+            # even when the version and its scratch exceed the cap (§5.5).
+            s.run(f"SELECT warren.evict('{GRAPH}')")
+            stage("pagerank from cold", pagerank_sql(GRAPH))
             if label == "default" and self.options.eigen:
                 limit = f", max_iter := {self.options.eigen_max_iter}" if self.options.eigen_max_iter else ""
                 stage("eigen", f"SELECT count(*), max(residual) FROM warren.eigen('{GRAPH}', 20, "
@@ -686,12 +690,16 @@ def summary(result):
                 measured[key], measured[f"{key}_stopped"] = stages[name][field], True
         elif why is not None:
             measured[f"{key}_failed"] = why
-    pagerank, _ = outcome(result, "default: pagerank")
-    if pagerank is not None and "|" in pagerank["rows"][0]:
+    for name, prefix in (("default: pagerank", "pagerank"), ("default: pagerank from cold", "pagerank_cold")):
+        pagerank, _ = outcome(result, name)
+        if pagerank is None or "|" not in pagerank["rows"][0]:
+            continue
         reads = int(pagerank["rows"][0].split("|")[0])
-        measured["pagerank_segment_reads"] = reads
+        measured[f"{prefix}_segment_reads"] = reads
+        if prefix == "pagerank_cold":
+            measured["pagerank_cold_seconds"] = pagerank["median_seconds"]
         if result.get("version_1_segment_rows"):
-            measured["pagerank_loads"] = reads / result["version_1_segment_rows"]
+            measured[f"{prefix}_loads"] = reads / result["version_1_segment_rows"]
     eigen, _ = outcome(result, "default: eigen")
     if eigen is not None:
         measured["eigen_residual"] = float(eigen["rows"][0].split("|")[1])

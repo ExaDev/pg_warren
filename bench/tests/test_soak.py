@@ -329,6 +329,9 @@ def test_the_first_pass_runs_at_the_given_cap_and_counts_pagerank_against_it():
     runner._queries({"stages": {}, "cached_bytes": GIB}, "default", cap=runner.first_cap())
     assert "SET warren.max_cache_memory = '418945kB'" in log
     assert any("warren.pagerank" in sql and "pg_stat_get_xact" in sql for sql in log)
+    # Then once more from a cold cache, which must load the version once.
+    evict = log.index("SELECT warren.evict('soak')")
+    assert evict < max(i for i, sql in enumerate(log) if "warren.pagerank" in sql)
 
 
 def test_the_first_cap_defaults_to_the_4gb_default():
@@ -340,12 +343,14 @@ def test_the_first_cap_defaults_to_the_4gb_default():
 
 
 def test_the_summary_reports_how_many_times_pagerank_loaded_the_version():
-    result = {"stages": {"default: pagerank": {"median_seconds": 3.0, "rows": ["1234|20"]}},
+    result = {"stages": {"default: pagerank": {"median_seconds": 3.0, "rows": ["1234|20"]},
+                         "default: pagerank from cold": {"median_seconds": 4.0, "rows": ["617|20"]}},
               "hardware": {"cpus": 4}, "version_1_segment_rows": 617, "planned_stages": [],
               "cache_memory_bytes": 418945 * 1024}
     measured = soak.summary(result)
     assert (measured["pagerank_segment_reads"], measured["pagerank_loads"]) == (1234, 2.0)
     assert measured["pagerank_seconds"] == 3.0
+    assert (measured["pagerank_cold_seconds"], measured["pagerank_cold_loads"]) == (4.0, 1.0)
 
 
 def test_the_cold_load_probe_lifts_the_compute_limit_so_a_version_over_both_still_loads():
