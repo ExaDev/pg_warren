@@ -150,13 +150,10 @@ impl<E: Stored> Basis<E> {
         beta: f64,
     ) -> Result<f64, ComputeError> {
         let partials = self.blocks(resources, w, |block, w| {
-            let (previous, newest) = (&block[(j - 1) * BLOCK..], &block[j * BLOCK..]);
-            let mut alpha = 0.0;
-            for ((w, p), q) in w.iter_mut().zip(previous).zip(newest) {
+            for (w, p) in w.iter_mut().zip(&block[(j - 1) * BLOCK..]) {
                 *w -= beta * p.to_f64();
-                alpha += q.to_f64() * *w;
             }
-            alpha
+            dot(w, &block[j * BLOCK..])
         })?;
         Ok(partials.into_iter().fold(0.0, |a, b| a + b))
     }
@@ -250,10 +247,7 @@ impl<E: Stored> Basis<E> {
                     *w -= c * q.to_f64();
                 }
             }
-            let dot = |j: usize| {
-                w.iter().zip(&block[j * BLOCK..]).fold(0.0, |sum, (w, q)| sum + q.to_f64() * w)
-            };
-            (0..len).map(dot).collect::<Vec<f64>>()
+            (0..len).map(|j| dot(w, &block[j * BLOCK..])).collect::<Vec<f64>>()
         })?;
         let mut coefficients = vec![0.0; len];
         for partial in &partials {
@@ -275,7 +269,7 @@ impl<E: Stored> Basis<E> {
                     *w -= c * q.to_f64();
                 }
             }
-            w.iter().map(|w| w * w).sum::<f64>()
+            dot(w, w)
         })?;
         Ok(partials.into_iter().fold(0.0, |a, b| a + b).sqrt())
     }
@@ -289,9 +283,68 @@ fn checked(cancellation: &Cancellation) -> Result<(), ComputeError> {
     }
 }
 
+/// The independent partial sums of [`dot`]: enough to hide the latency
+/// of a floating-point add, so the sum is bound by memory, not by one
+/// chain of adds.
+const LANES: usize = 8;
+
+/// `Σ a_i·b_i` over the common length, in `f64`: term `i` is added to
+/// partial sum `i mod LANES`, and the partial sums are added in order, so
+/// the result depends only on the inputs, never on the thread count.
+fn dot<A: Element, B: Element>(a: &[A], b: &[B]) -> f64 {
+    let len = a.len().min(b.len());
+    let (a, b) = (&a[..len], &b[..len]);
+    let mut lanes = [0.0f64; LANES];
+    let (a_chunks, b_chunks) = (a.chunks_exact(LANES), b.chunks_exact(LANES));
+    let (a_tail, b_tail) = (a_chunks.remainder(), b_chunks.remainder());
+    for (a, b) in a_chunks.zip(b_chunks) {
+        for ((lane, a), b) in lanes.iter_mut().zip(a).zip(b) {
+            *lane += a.to_f64() * b.to_f64();
+        }
+    }
+    for ((lane, a), b) in lanes.iter_mut().zip(a_tail).zip(b_tail) {
+        *lane += a.to_f64() * b.to_f64();
+    }
+    lanes.iter().fold(0.0, |sum, lane| sum + lane)
+}
+
 /// `sum += part`, elementwise.
 fn add(sum: &mut [f64], part: &[f64]) {
     for (sum, part) in sum.iter_mut().zip(part) {
         *sum += part;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    #[test]
+    fn a_dot_product_sums_every_term_including_the_tail() {
+        for len in [0, 1, 7, 8, 9, 31] {
+            let w: Vec<f64> = (0..len).map(|i| f64::from(i as u32) + 1.0).collect();
+            let q: Vec<f32> = (0..len).map(|i| if i % 2 == 0 { 2.0 } else { -1.0 }).collect();
+            let exact: f64 = w.iter().zip(&q).map(|(w, q)| w * f64::from(*q)).sum();
+            assert_eq!(dot(&w, &q), exact, "len {len}");
+        }
+    }
+
+    #[test]
+    fn a_dot_product_reads_only_the_common_length() {
+        assert_eq!(dot(&[1.0, 2.0], &[3.0f64, 4.0, 100.0]), 11.0);
+    }
+
+    proptest! {
+        #[test]
+        fn a_dot_product_is_the_sum_up_to_rounding(
+            terms in prop::collection::vec((-1e3f64..1e3, -1e3f64..1e3), 0..200),
+        ) {
+            let (w, q): (Vec<f64>, Vec<f64>) = terms.into_iter().unzip();
+            let sum: f64 = w.iter().zip(&q).map(|(a, b)| a * b).sum();
+            let bound: f64 = w.iter().zip(&q).map(|(a, b)| (a * b).abs()).sum::<f64>() * 1e-12;
+            prop_assert!((dot(&w, &q) - sum).abs() <= bound);
+        }
     }
 }
