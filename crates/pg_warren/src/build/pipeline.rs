@@ -34,15 +34,24 @@ pub(crate) struct RefreshRequest<'a> {
     pub(crate) memory_budget: u64,
 }
 
-/// Builds a new version of `graph` from its sources and returns its id.
-/// Dense ids continue from the graph's current version, if it has one.
+/// A version a refresh built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Built {
+    /// The new version.
+    pub(crate) version: VersionId,
+    /// The most build memory it held at once.
+    pub(crate) memory_peak: u64,
+}
+
+/// Builds a new version of `graph` from its sources. Dense ids continue
+/// from the graph's current version, if it has one.
 pub(crate) fn build<E: ExternalId>(
     graph: &GraphDefinition,
     request: &RefreshRequest<'_>,
     source: &mut impl SourceReader<E>,
     segments: &mut impl SegmentStore,
     catalog: &mut impl Catalog,
-) -> Result<VersionId, BuildError> {
+) -> Result<Built, BuildError> {
     let memory = BuildMemory::new(request.memory_budget);
     let base = match graph.current_version {
         Some(version) => load_identity(segments, version, &memory)?,
@@ -91,7 +100,7 @@ pub(crate) fn build<E: ExternalId>(
     if request.promote {
         catalog.promote(graph, version)?;
     }
-    Ok(version)
+    Ok(Built { version, memory_peak: memory.peak() })
 }
 
 /// Reads the edge rows into an edge list charged to `memory`, interning new
@@ -276,6 +285,7 @@ mod tests {
             source: &MemorySource,
         ) -> Result<VersionId, BuildError> {
             build(graph, request, &mut source.clone(), &mut self.store, &mut self.catalog)
+                .map(|built| built.version)
         }
 
         fn segment(&mut self, version: VersionId, name: &str) -> Vec<u8> {

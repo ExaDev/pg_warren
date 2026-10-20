@@ -34,7 +34,7 @@ fn refresh_graph(name: &str, promote: bool, label: Option<&str>) -> Result<Versi
     if let Some(base) = graph.current_version {
         require_current_id_space(&graph, base)?;
     }
-    with_pinned_snapshot(|| {
+    let built = with_pinned_snapshot(|| {
         let request = RefreshRequest {
             promote,
             label,
@@ -48,7 +48,9 @@ fn refresh_graph(name: &str, promote: bool, label: Option<&str>) -> Result<Versi
             &mut SpiSegmentStore,
             &mut SpiCatalog::at_current_wal_lsn()?,
         ))
-    })
+    })?;
+    debug1!("refresh of {} held at most {} bytes of build memory", graph.name, built.memory_peak);
+    Ok(built.version)
 }
 
 #[cfg(any(test, feature = "pg_test"))]

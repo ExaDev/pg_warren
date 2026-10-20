@@ -45,16 +45,23 @@ pub(crate) struct SegmentWriter<'s, S> {
     version: VersionId,
     chunk_size: usize,
     memory: BuildMemory,
-    /// The build memory for the chunk the store is given, which it may copy
-    /// (Postgres builds a `bytea` of it, and may compress it).
+    /// The build memory for the copies the store makes of the chunk it is
+    /// given ([`STORED_COPIES`]).
     _stored_chunk: BuildCharge,
     bytes: u64,
 }
 
+/// Copies of the chunk being stored that Postgres holds at once while it
+/// inserts it: the `bytea` parameter, the heap tuple, and TOAST's
+/// compression buffer and slices. Measured (DESIGN.md §5.4): with 8 MiB
+/// chunks a refresh's memory past its charge fell by 11 MB when chunks
+/// were 1 MiB, against two copies charged.
+const STORED_COPIES: u64 = 4;
+
 /// The build memory a [`SegmentWriter`] holds besides the CSRs it is given:
-/// the chunk it encodes into and what the store may make of a chunk.
+/// the chunk it encodes into and what the store makes of a chunk.
 pub(crate) fn writer_memory(chunk_size: usize) -> u64 {
-    3 * (chunk_size as u64 + 8)
+    (1 + STORED_COPIES) * (chunk_size as u64 + 8)
 }
 
 impl<'s, S: SegmentStore> SegmentWriter<'s, S> {
@@ -66,7 +73,7 @@ impl<'s, S: SegmentStore> SegmentWriter<'s, S> {
         chunk_size: usize,
         memory: &BuildMemory,
     ) -> Result<Self, SegmentError> {
-        let _stored_chunk = memory.charge(2 * chunk_size as u64)?;
+        let _stored_chunk = memory.charge(STORED_COPIES * chunk_size as u64)?;
         Ok(Self { segments, version, chunk_size, memory: memory.clone(), _stored_chunk, bytes: 0 })
     }
 
