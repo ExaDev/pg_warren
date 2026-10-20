@@ -87,7 +87,13 @@ pub(crate) struct Vectors<E> {
     /// The call's compute memory budget.
     pub(crate) memory: ComputeMemory,
     records: Vec<VectorRecord>,
-    held: HashMap<String, MemoryCharge>,
+    held: HashMap<String, Read>,
+}
+
+/// A vector a call has read, and its charge to the call's budget.
+struct Read {
+    _charge: MemoryCharge,
+    vector: Arc<AnyVector>,
 }
 
 impl<E: IdDatum> Vectors<E> {
@@ -144,30 +150,33 @@ impl<E: IdDatum> Vectors<E> {
         })
     }
 
-    /// Charges `name`'s bytes to the call's budget, once per call.
-    fn charge(&mut self, name: &str, bytes: u64) -> Result<(), ComputeSqlError> {
-        if !self.held.contains_key(name) {
-            let charge = self.memory.charge(bytes)?;
-            self.held.insert(name.to_owned(), charge);
-        }
-        Ok(())
-    }
-
     /// Vector `name`, if bound: the session's transient vector of that
     /// name, else the persisted one. Its bytes are charged to the call's
-    /// budget (once per call) before it is read.
+    /// budget before it is first read; the call then holds it, so reading
+    /// it again returns the same vector even if the cache has evicted it.
     pub(super) fn find(&mut self, name: &str) -> Result<Option<Arc<AnyVector>>, ComputeSqlError> {
-        let graph_id = self.graph.graph_id;
-        if let Some(vector) = transient(graph_id, self.version, name) {
-            self.charge(name, vector_bytes(vector.dtype(), vector.width(), vector.id_space()))?;
-            return Ok(Some(vector));
+        if let Some(read) = self.held.get(name) {
+            return Ok(Some(Arc::clone(&read.vector)));
         }
-        let Some(record) = self.record(name).cloned() else {
-            return Ok(None);
+        let graph_id = self.graph.graph_id;
+        let (charge, vector) = match transient(graph_id, self.version, name) {
+            Some(vector) => {
+                let bytes = vector_bytes(vector.dtype(), vector.width(), vector.id_space());
+                (self.memory.charge(bytes)?, vector)
+            }
+            None => {
+                let Some(record) = self.record(name).cloned() else {
+                    return Ok(None);
+                };
+                let bytes = vector_bytes(record.dtype, record.width, record.length);
+                let charge = self.memory.charge(bytes)?;
+                let vector = load(&mut SpiVectorStore, cache_memory(), graph_id, &record)?;
+                trim();
+                (charge, vector)
+            }
         };
-        self.charge(name, vector_bytes(record.dtype, record.width, record.length))?;
-        let vector = load(&mut SpiVectorStore, cache_memory(), graph_id, &record)?;
-        trim();
+        let read = Read { _charge: charge, vector: Arc::clone(&vector) };
+        self.held.insert(name.to_owned(), read);
         Ok(Some(vector))
     }
 
@@ -269,5 +278,37 @@ impl<E: IdDatum> Vectors<E> {
         self.records.retain(|bound| bound.name != name);
         self.records.push(record);
         Ok(Some(id))
+    }
+}
+
+#[cfg(any(test, feature = "pg_test"))]
+#[pgrx::pg_schema]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
+mod tests {
+    use std::sync::Arc;
+
+    use pgrx::prelude::*;
+    use pgrx::spi::Error;
+
+    use super::Vectors;
+    use crate::cache::resolve;
+    use crate::fixture::{refresh, ring};
+
+    #[pg_test]
+    fn a_vector_read_twice_in_one_call_is_loaded_once() -> Result<(), Error> {
+        ring("a", 2000, 1)?;
+        refresh("a", true)?;
+        Spi::run("SELECT warren.vector_const('a', 'p', 1)")?;
+        for name in ["w", "x", "y", "z"] {
+            Spi::run(&format!("SELECT warren.vector_const('a', '{name}', 1, persist := false)"))?;
+        }
+        // p (16,000 bytes) cannot be kept beside the transient vectors.
+        Spi::run("SET LOCAL warren.max_cache_memory = '64kB'")?;
+        let resolved = resolve("a", None, "read").map_err(|_| Error::InvalidPosition)?;
+        let mut vectors = Vectors::<i64>::open(resolved).map_err(|_| Error::InvalidPosition)?;
+        let first = vectors.get("p").map_err(|_| Error::InvalidPosition)?;
+        let second = vectors.get("p").map_err(|_| Error::InvalidPosition)?;
+        assert!(Arc::ptr_eq(&first, &second), "p was loaded again");
+        Ok(())
     }
 }
