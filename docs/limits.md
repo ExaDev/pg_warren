@@ -86,12 +86,25 @@ compute kernels from the main thread every millisecond), so
   reloaded by the next one.
 - **What a statement holds gives way under pressure.** A version or vector
   the statement read that no call is using (`pagerank`'s version between
-  its calls, a graph a loop has moved past) is evicted, least recently
-  used first, when a load needs the room, and whenever a call starts while
-  the cache is over its cap. So a statement that reads more graphs, one
+  its calls, a graph a loop has moved past) stays while there is room, its
+  bytes past the cap charged to each call's `warren.max_compute_memory`.
+  It is evicted, least recently used first, only when a load needs the
+  room or a call's allocation would otherwise exceed
+  `warren.max_compute_memory`. So a statement that reads more graphs, one
   after another, than the two settings hold together still works; it
   reloads what it reads again. A statement that alternates between graphs
-  that do not fit the cap together reloads them call by call.
+  that do not fit the cap together keeps them loaded while the two
+  settings hold them, and reloads them only when a call needs the room.
+  Allocations that kernels make on worker threads (`warren.threads`)
+  cannot evict anything, since only the backend's main thread may touch
+  the cache. Kernels make room first for the buffers they allocate whole
+  there (`triangles`' adjacency, `gather`'s sorted messages and inbox),
+  but two kinds grow as they go and cannot: `gather`'s result, and the
+  row scratch of a product over several relations (`spmv`,
+  `spmm`, and `eigen` and `distance` through them). Those can
+  fail with 53400 where evicting the statement's idle versions would
+  have made room. Raise `warren.max_compute_memory` or
+  `warren.max_cache_memory` if that happens.
 - **What the cache holds past the cap comes out of
   `warren.max_compute_memory`.** That is transient vectors, the versions
   and vectors calls are using, and versions evicted while a call still

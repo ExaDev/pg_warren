@@ -32,7 +32,7 @@ use gathered::Part;
 use neighbourhood::{Neighbourhood, Sources};
 use outbox::Outbox;
 
-use super::{ComputeError, ComputeMemory, Mask, Workers};
+use super::{ComputeError, ComputeMemory, Mask, Message, Workers};
 use crate::graph::{DenseId, Direction, GraphCsr, RelationSelection};
 use crate::interrupts::{Cancelled, Interrupts};
 
@@ -60,6 +60,15 @@ impl Gather<'_> {
     }
 }
 
+/// About the bytes, at most, that a gather of `messages` over `id_space`
+/// nodes from `sources` charges on the pool for buffers whose sizes are
+/// known before it fans out: the outbox, and the inbox if it pushes. The
+/// parts each task builds grow with what it receives, so they are not.
+fn sized_ahead<M: Message>(sources: &Sources<'_>, messages: &Messages<M>, id_space: u64) -> u64 {
+    let inbox = Neighbourhood::bytes(sources, messages, id_space);
+    Outbox::bytes(messages, id_space).saturating_add(inbox)
+}
+
 /// Fans `messages` out over `graph` and combines them at each receiver.
 ///
 /// In-neighbours are pulled over the reverse CSRs, or, without them,
@@ -82,6 +91,10 @@ pub fn gather<M: Combine, I: Interrupts>(
     }
     let selects = |receiver| mask.is_none_or(|mask: Mask<'_>| mask.selects(receiver));
     let sources = Sources::new(graph, gather.direction, gather.relations)?;
+    // Charges on the pool reclaim no held memory (`memory`), so room for
+    // what is sized before the fan-out is reclaimed here, on the caller's
+    // thread.
+    memory.reclaim_for(sized_ahead(&sources, messages, id_space));
     workers.run(interrupts, |cancellation| {
         let outbox = Outbox::new(memory, cancellation, messages, id_space)?;
         let neighbourhood =

@@ -7,9 +7,11 @@
 //! from the senders that have messages (push).
 
 use std::iter::{Copied, Peekable};
+use std::mem::size_of;
 use std::slice::Iter;
 
 use super::outbox::{check, running_ends, Outbox};
+use super::Messages;
 use crate::compute::{ComputeError, ComputeMemory, MemoryCharge, Message};
 use crate::graph::{
     AnyCsr, CsrRows, DenseId, Direction, GraphCsr, Neighbours, RelationSelection, RowNeighbours,
@@ -71,6 +73,27 @@ pub(super) struct Neighbourhood<'g> {
 }
 
 impl<'g> Neighbourhood<'g> {
+    /// At most the bytes [`Self::new`] charges for the inbox, if `sources`
+    /// push: its offsets, and a sender for each pushed edge of a sender
+    /// with messages (those senders' degrees, summed with repeats, or
+    /// every edge pushed, whichever is fewer).
+    pub(super) fn bytes<M: Message>(
+        sources: &Sources<'_>,
+        messages: &Messages<M>,
+        id_space: u64,
+    ) -> u64 {
+        if sources.push.is_empty() {
+            return 0;
+        }
+        let edges = sources.push.iter().map(|csr| csr.edge_count()).fold(0, u64::saturating_add);
+        let sent = messages.senders().iter().map(|&sender| {
+            sources.push.iter().map(|csr| csr.degree(sender)).fold(0, u64::saturating_add)
+        });
+        let pairs = sent.fold(0, u64::saturating_add).min(edges);
+        let offsets = id_space.saturating_add(1).saturating_mul(size_of::<u64>() as u64);
+        offsets.saturating_add(pairs.saturating_mul(size_of::<DenseId>() as u64))
+    }
+
     /// The neighbourhood `sources` read, scattering the inbox for the
     /// receivers `selects` selects if there are rows to push.
     pub(super) fn new<M: Message>(

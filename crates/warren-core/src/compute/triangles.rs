@@ -12,6 +12,7 @@
 //! its cancellation flag every 65,536 row entries it visits.
 
 use std::cmp::Ordering;
+use std::mem::size_of;
 
 use rayon::prelude::*;
 
@@ -51,6 +52,9 @@ pub fn triangles<I: Interrupts>(
     let id_space = graph.all_relations().forward().id_space();
     let mut counts = Vector::filled(memory, id_space, 1, 0i64)?;
     let values = counts.values_mut();
+    // The adjacency is charged on the pool, which reclaims no held memory
+    // (`memory`), so room for it is reclaimed here, on the caller's thread.
+    memory.reclaim_for(Symmetric::bytes(&forward, id_space));
     workers.run(interrupts, |cancellation| {
         let adjacency = Symmetric::new(memory, cancellation, &forward, id_space)?;
         adjacency.count(cancellation, values)
@@ -69,6 +73,15 @@ struct Symmetric {
 }
 
 impl Symmetric {
+    /// At most the bytes [`Self::new`] charges over `forward`: the offsets,
+    /// and both directions of every stored edge (self-loops, which it
+    /// drops, included).
+    fn bytes(forward: &[CsrRows<'_>], id_space: u64) -> u64 {
+        let edges = forward.iter().map(CsrRows::stored_edges).fold(0, u64::saturating_add);
+        let offsets = id_space.saturating_add(1).saturating_mul(size_of::<u64>() as u64);
+        offsets.saturating_add(edges.saturating_mul(2 * size_of::<DenseId>() as u64))
+    }
+
     fn new(
         memory: &ComputeMemory,
         cancellation: &Cancellation,
@@ -261,6 +274,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::compute::memory::Exact;
     use crate::compute::reference::{self, Edges};
     use crate::compute::{ComputeError, ComputeMemory, Workers};
     use crate::graph::{CsrLayout, EdgeList, GraphCsr, RelationSelection};
@@ -341,6 +355,18 @@ mod tests {
             triangles(workers(), &memory, &mut Uninterrupted, &graph, RelationSelection::All);
         assert!(matches!(result, Err(ComputeError::MemoryLimit { .. })));
         assert_eq!(memory.in_use(), 0);
+    }
+
+    #[test]
+    fn held_memory_is_reclaimed_before_the_symmetric_adjacency_is_built() {
+        // 0 → 1 → 2 → 0, 2 → 3: the adjacency is charged on the pool.
+        let edges = vec![(0, 0, 1, 1.0), (0, 1, 2, 1.0), (0, 2, 0, 1.0), (0, 2, 3, 1.0)];
+        let graph = reference::graph(4, 1, &edges, false, false);
+        let held = 1 << 20;
+        let memory = ComputeMemory::reclaiming(held, held, held, Box::new(Exact));
+        let counted =
+            triangles(workers(), &memory, &mut Uninterrupted, &graph, RelationSelection::All);
+        assert_eq!(counted.map(|counts| counts.values().to_vec()), Ok(vec![1, 1, 1, 0]));
     }
 
     type Scenario = (u64, usize, Edges, Option<Vec<usize>>, (bool, bool));
