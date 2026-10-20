@@ -1,13 +1,30 @@
 //! The compute memory budget: every vector, message buffer and work buffer
 //! is charged to it, and a charge past its limit is an error rather than an
 //! out-of-memory abort (DESIGN.md §6.9, `warren.max_compute_memory`).
+//!
+//! A budget may count memory held elsewhere (by a cache, say), and part of
+//! that may be reclaimable: a [`Reclaim`] hook frees it when a charge would
+//! otherwise fail. The hook runs only on the thread that made the budget,
+//! since what it frees may be reachable only from there (a Postgres
+//! backend's main thread, §6.9); a charge on another thread is refused as
+//! if there were no hook, so a caller about to fan work out reclaims ahead
+//! with [`ComputeMemory::reclaim_for`].
 
+use std::fmt::Debug;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::thread::{self, ThreadId};
 
 use super::message::{growth, reserve};
 use super::ComputeError;
+
+/// Frees memory a budget counts as held, when a charge needs the room.
+pub trait Reclaim: Debug + Send + Sync {
+    /// Frees at least `bytes` of the held memory if it can, and returns the
+    /// bytes it freed (which may be fewer, or more).
+    fn reclaim(&self, bytes: u64) -> u64;
+}
 
 /// A budget of compute memory in bytes. Clones share the budget.
 #[derive(Debug, Clone)]
@@ -17,19 +34,49 @@ pub struct ComputeMemory(Arc<Budget>);
 struct Budget {
     limit: u64,
     in_use: AtomicU64,
+    /// The held bytes the hook may still give back.
+    reclaimable: AtomicU64,
+    /// The hook, and the thread it may run on.
+    reclaim: Option<(ThreadId, Box<dyn Reclaim>)>,
 }
 
 impl ComputeMemory {
     /// A budget of `limit` bytes, none in use.
     pub fn new(limit: u64) -> Self {
-        Self(Arc::new(Budget { limit, in_use: AtomicU64::new(0) }))
+        Self::with_held(limit, 0)
     }
 
     /// A budget of `limit` bytes of which `held` are in use from the start
     /// and for as long as the budget lives: memory held elsewhere (by a
     /// cache, say) that the budget's charges must fit beside.
     pub fn with_held(limit: u64, held: u64) -> Self {
-        Self(Arc::new(Budget { limit, in_use: AtomicU64::new(held) }))
+        Self::budget(limit, held, 0, None)
+    }
+
+    /// A budget of `limit` bytes of which `held` are held elsewhere, as
+    /// [`Self::with_held`], and up to `reclaimable` of those (at most
+    /// `held`) can be freed by `reclaim`. A charge that would not fit
+    /// calls it, on the calling thread only, for the bytes it is short,
+    /// releases what it freed (no more than is still reclaimable) and is
+    /// tried again; it is not called if freeing all the reclaimable bytes
+    /// would still leave the charge short.
+    pub fn reclaiming(limit: u64, held: u64, reclaimable: u64, reclaim: Box<dyn Reclaim>) -> Self {
+        let owner = thread::current().id();
+        Self::budget(limit, held, reclaimable.min(held), Some((owner, reclaim)))
+    }
+
+    fn budget(
+        limit: u64,
+        held: u64,
+        reclaimable: u64,
+        reclaim: Option<(ThreadId, Box<dyn Reclaim>)>,
+    ) -> Self {
+        Self(Arc::new(Budget {
+            limit,
+            in_use: AtomicU64::new(held),
+            reclaimable: AtomicU64::new(reclaimable),
+            reclaim,
+        }))
     }
 
     /// The budget's limit in bytes.
@@ -48,8 +95,45 @@ impl ComputeMemory {
         Ok(MemoryCharge { memory: self.clone(), bytes })
     }
 
-    /// Adds `bytes` to the bytes in use, if that stays within the limit.
+    /// Reclaims held memory, as a failing charge would, until `bytes` more
+    /// would fit: for charges that will be made on other threads, where
+    /// nothing is reclaimed. Does nothing off the budget's thread, or if
+    /// they fit already.
+    pub fn reclaim_for(&self, bytes: u64) {
+        self.reclaim(self.in_use().saturating_add(bytes).saturating_sub(self.0.limit));
+    }
+
+    /// Adds `bytes` to the bytes in use, if that stays within the limit,
+    /// reclaiming held memory if it would not.
     fn reserve(&self, bytes: u64) -> Result<(), ComputeError> {
+        match self.try_reserve(bytes) {
+            Err(ComputeError::MemoryLimit { in_use, .. }) => {
+                let short = in_use.saturating_add(bytes).saturating_sub(self.0.limit);
+                self.reclaim(short);
+                self.try_reserve(bytes)
+            }
+            result => result,
+        }
+    }
+
+    /// Calls the hook for `short` bytes, on the budget's thread and if the
+    /// reclaimable bytes cover them, and releases what it freed.
+    fn reclaim(&self, short: u64) {
+        let budget = &self.0;
+        let Some((owner, reclaim)) = &budget.reclaim else {
+            return;
+        };
+        let reclaimable = budget.reclaimable.load(Ordering::Relaxed);
+        if short == 0 || short > reclaimable || thread::current().id() != *owner {
+            return;
+        }
+        let released = reclaim.reclaim(short).min(reclaimable);
+        budget.reclaimable.fetch_sub(released, Ordering::Relaxed);
+        self.release(released);
+    }
+
+    /// Adds `bytes` to the bytes in use, if that stays within the limit.
+    fn try_reserve(&self, bytes: u64) -> Result<(), ComputeError> {
         let budget = &self.0;
         let mut in_use = budget.in_use.load(Ordering::Relaxed);
         loop {
@@ -205,6 +289,9 @@ impl Drop for MemoryCharge {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+    use std::thread;
+
     use super::*;
 
     #[test]
@@ -240,6 +327,101 @@ mod tests {
         assert_eq!(memory.in_use(), 30, "the held bytes are never released");
         let over = ComputeMemory::with_held(100, 130);
         assert!(over.charge(0).is_err(), "nothing fits once they exceed the limit");
+    }
+
+    /// A reclaim hook that frees `frees` bytes per call and records each
+    /// call's request.
+    #[derive(Debug, Clone)]
+    struct Spare {
+        frees: u64,
+        requests: Arc<Mutex<Vec<u64>>>,
+    }
+
+    impl Spare {
+        fn new(frees: u64) -> Self {
+            Self { frees, requests: Arc::default() }
+        }
+
+        fn requests(&self) -> Vec<u64> {
+            self.requests.lock().unwrap().clone()
+        }
+    }
+
+    impl Reclaim for Spare {
+        fn reclaim(&self, bytes: u64) -> u64 {
+            self.requests.lock().unwrap().push(bytes);
+            self.frees
+        }
+    }
+
+    #[test]
+    fn a_charge_that_fails_reclaims_held_bytes_then_succeeds() {
+        let spare = Spare::new(25);
+        let memory = ComputeMemory::reclaiming(100, 50, 40, Box::new(spare.clone()));
+        let _fits = memory.charge(30).unwrap();
+        assert!(spare.requests().is_empty(), "nothing is reclaimed while charges fit");
+        let charge = memory.charge(40).unwrap();
+        assert_eq!(spare.requests(), [20], "asked for what the charge was short");
+        assert_eq!(memory.in_use(), 50 - 25 + 30 + 40);
+        drop(charge);
+        assert_eq!(memory.in_use(), 25 + 30, "reclaimed held bytes stay released");
+    }
+
+    #[test]
+    fn no_more_is_released_than_was_reclaimable() {
+        let spare = Spare::new(1000);
+        let memory = ComputeMemory::reclaiming(100, 80, 30, Box::new(spare.clone()));
+        let _charge = memory.charge(40).unwrap();
+        assert_eq!(memory.in_use(), 80 - 30 + 40);
+        assert_eq!(
+            memory.charge(11).unwrap_err(),
+            ComputeError::MemoryLimit { requested: 11, in_use: 90, limit: 100 }
+        );
+        assert_eq!(spare.requests(), [20], "nothing is left to reclaim");
+    }
+
+    #[test]
+    fn a_charge_that_reclaiming_could_not_fit_reclaims_nothing() {
+        let spare = Spare::new(30);
+        let memory = ComputeMemory::reclaiming(100, 50, 30, Box::new(spare.clone()));
+        assert!(matches!(memory.charge(81), Err(ComputeError::MemoryLimit { .. })));
+        assert!(spare.requests().is_empty(), "freeing all 30 would leave it 1 short");
+        assert_eq!(memory.in_use(), 50);
+    }
+
+    #[test]
+    fn a_hook_that_frees_too_little_leaves_the_charge_refused() {
+        let spare = Spare::new(5);
+        let memory = ComputeMemory::reclaiming(100, 50, 30, Box::new(spare.clone()));
+        assert!(matches!(memory.charge(60), Err(ComputeError::MemoryLimit { .. })));
+        assert_eq!((spare.requests(), memory.in_use()), (vec![10], 45));
+    }
+
+    #[test]
+    fn only_the_thread_that_made_the_budget_reclaims() {
+        let spare = Spare::new(30);
+        let memory = ComputeMemory::reclaiming(100, 50, 30, Box::new(spare.clone()));
+        let worker = memory.clone();
+        let refused =
+            thread::spawn(move || worker.charge(60).map(|charge| charge.bytes())).join().unwrap();
+        assert!(matches!(refused, Err(ComputeError::MemoryLimit { .. })));
+        assert!(spare.requests().is_empty(), "off its thread the hook is never called");
+        assert_eq!(memory.charge(60).unwrap().bytes(), 60);
+        assert_eq!(spare.requests(), [10]);
+    }
+
+    #[test]
+    fn room_is_reclaimed_ahead_for_charges_off_the_thread() {
+        let spare = Spare::new(30);
+        let memory = ComputeMemory::reclaiming(100, 50, 30, Box::new(spare.clone()));
+        memory.reclaim_for(10);
+        assert!(spare.requests().is_empty(), "10 more already fits");
+        memory.reclaim_for(70);
+        assert_eq!((spare.requests(), memory.in_use()), (vec![20], 20));
+        let worker = memory.clone();
+        let charged =
+            thread::spawn(move || worker.charge(70).map(|charge| charge.bytes())).join().unwrap();
+        assert_eq!(charged, Ok(70));
     }
 
     #[test]

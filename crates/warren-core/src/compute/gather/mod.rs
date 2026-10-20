@@ -82,6 +82,10 @@ pub fn gather<M: Combine, I: Interrupts>(
     }
     let selects = |receiver| mask.is_none_or(|mask: Mask<'_>| mask.selects(receiver));
     let sources = Sources::new(graph, gather.direction, gather.relations)?;
+    // Charges on the pool reclaim no held memory (`memory`), so room for
+    // the outbox, whose size is known before the fan-out, is reclaimed
+    // here, on the caller's thread.
+    memory.reclaim_for(Outbox::bytes(messages, id_space));
     workers.run(interrupts, |cancellation| {
         let outbox = Outbox::new(memory, cancellation, messages, id_space)?;
         let neighbourhood =

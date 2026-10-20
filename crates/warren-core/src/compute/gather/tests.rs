@@ -284,6 +284,35 @@ fn a_gather_past_the_budget_is_an_error_and_charges_nothing() {
     }
 }
 
+/// A reclaim hook that frees all of what it holds whatever it is asked.
+#[derive(Debug)]
+struct FreesAll(u64);
+
+impl crate::compute::Reclaim for FreesAll {
+    fn reclaim(&self, _bytes: u64) -> u64 {
+        self.0
+    }
+}
+
+#[test]
+fn held_memory_is_reclaimed_before_the_fan_out() {
+    for reverse in [true, false] {
+        let graph = example(reverse);
+        let sizing = memory();
+        let bytes = messages::<f64>(&sizing, &SENT).bytes();
+        // No room past the messages and 1 MiB held: the outbox and the
+        // result are charged on the pool, where nothing is reclaimed.
+        let held = 1 << 20;
+        let budget = ComputeMemory::reclaiming(bytes + held, held, held, Box::new(FreesAll(held)));
+        let messages = messages::<f64>(&budget, &SENT);
+        let gather = Gather { direction: Direction::Both, ..Gather::new(Combiner::Collect) };
+        let gathered =
+            super::gather(workers(), &budget, &mut Uninterrupted, &graph, &gather, &messages)
+                .unwrap();
+        assert_eq!(budget.in_use(), messages.bytes() + gathered.bytes());
+    }
+}
+
 #[test]
 fn an_interrupt_cancels_the_gather() {
     struct Stop;

@@ -37,7 +37,7 @@ pub use map::{
     Value,
 };
 pub use mask::Mask;
-pub use memory::{ComputeMemory, MemoryCharge};
+pub use memory::{ComputeMemory, MemoryCharge, Reclaim};
 pub use message::{Bytes, Message, MessageBuffer, MessageKind, PackedBytes};
 pub use product::{spmm, spmv, Product};
 pub use ranking::top_k;
