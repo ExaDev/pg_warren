@@ -2,6 +2,12 @@
 //! frontier, the next frontier and a visited set, expanded one level at a
 //! time (DESIGN.md §9.2, §9.3). BFS runs it for one step; a walk segment
 //! will run it per step, with that step's adjacency and node filter.
+//!
+//! A level is pushed (each frontier node's row scanned for unvisited
+//! nodes) or, when the search was given the edges read backwards and the
+//! frontier is wide, pulled (each unvisited node's reverse row scanned
+//! until it meets the frontier): Beamer's direction-optimising BFS
+//! (DESIGN.md §10).
 
 use std::ops::ControlFlow;
 
@@ -9,6 +15,10 @@ use super::scratch::Visited;
 use super::stats::Progress;
 use super::{Adjacency, NodeSet, TraversalError, Visit};
 use crate::graph::{memory, DenseId};
+
+/// A frontier is wide enough to pull once it holds more than
+/// `1/PULL_FRACTION` of the id space (Beamer's β).
+const PULL_FRACTION: u64 = 20;
 
 /// What to do with a node the search is about to admit.
 pub(crate) enum Admission {
@@ -20,12 +30,14 @@ pub(crate) enum Admission {
     Stop,
 }
 
-/// What a search follows: an adjacency, and the node filter that admits
-/// the nodes it reaches.
+/// What a search follows: an adjacency, the node filter that admits the
+/// nodes it reaches, and, if levels may be pulled, the same edges read
+/// backwards.
 #[derive(Clone, Copy)]
 pub(crate) struct Edges<'a, 'g> {
     adjacency: &'a Adjacency<'g>,
     filter: Option<&'a NodeSet>,
+    reverse: Option<&'a Adjacency<'g>>,
 }
 
 impl<'a, 'g> Edges<'a, 'g> {
@@ -43,7 +55,22 @@ impl<'a, 'g> Edges<'a, 'g> {
                 });
             }
         }
-        Ok(Self { adjacency, filter })
+        Ok(Self { adjacency, filter, reverse: None })
+    }
+
+    /// The id space of the graph searched.
+    pub(crate) fn id_space(&self) -> u64 {
+        self.adjacency.id_space()
+    }
+
+    /// These edges, letting wide levels be pulled through `reverse` (the
+    /// adjacency read in the opposite direction), if given. A pulled level
+    /// admits its nodes in ascending dense id order, each via the first
+    /// frontier node its reverse rows name, so only searches that promise
+    /// neither the order within a depth nor which predecessor they report
+    /// pass one.
+    pub(crate) fn pulling(self, reverse: Option<&'a Adjacency<'g>>) -> Self {
+        Self { reverse, ..self }
     }
 }
 
@@ -111,8 +138,36 @@ impl LevelSearch {
         Ok(ControlFlow::Continue(()))
     }
 
-    /// Expands the current frontier by one level.
+    /// Expands the current frontier by one level: pulled if `edges` allow
+    /// it and the frontier is wide, pushed otherwise.
     pub(crate) fn expand(
+        &mut self,
+        edges: Edges<'_, '_>,
+        progress: &mut Progress<'_>,
+        admit: &mut impl FnMut(Visit) -> Result<Admission, TraversalError>,
+    ) -> Result<ControlFlow<()>, TraversalError> {
+        match edges.reverse {
+            Some(reverse) if self.wide(edges.adjacency.id_space()) => {
+                self.pull(edges, reverse, progress, admit)
+            }
+            _ => self.push(edges, progress, admit),
+        }
+    }
+
+    /// Whether the frontier is wide enough to pull: more than
+    /// `1/PULL_FRACTION` of the id space, and more nodes than are left
+    /// unvisited. This is Beamer's switch with node counts standing in
+    /// for edge counts, so it assumes no great skew in degree between the
+    /// frontier and the unvisited nodes.
+    fn wide(&self, id_space: u64) -> bool {
+        let frontier = self.frontier.len() as u64;
+        let unvisited = id_space - self.visited.len();
+        frontier * PULL_FRACTION > id_space && frontier > unvisited
+    }
+
+    /// Pushes the current frontier one level: scans each frontier node's
+    /// row for unvisited nodes, admitting them in the order reached.
+    fn push(
         &mut self,
         edges: Edges<'_, '_>,
         progress: &mut Progress<'_>,
@@ -133,6 +188,47 @@ impl LevelSearch {
             }
         }
         self.frontier = frontier;
+        self.advance();
+        self.depth = depth;
+        Ok(ControlFlow::Continue(()))
+    }
+
+    /// Pulls the next level: scans each unvisited node's row of `reverse`
+    /// until it names a frontier node, admitting the nodes found in
+    /// ascending dense id order.
+    fn pull(
+        &mut self,
+        edges: Edges<'_, '_>,
+        reverse: &Adjacency<'_>,
+        progress: &mut Progress<'_>,
+        admit: &mut impl FnMut(Visit) -> Result<Admission, TraversalError>,
+    ) -> Result<ControlFlow<()>, TraversalError> {
+        let depth = self.depth + 1;
+        let id_space = edges.adjacency.id_space();
+        let frontier = NodeSet::from_dense_ids(id_space, self.frontier.iter().copied())?;
+        self.visited.densify()?;
+        for word in 0..frontier.word_count() {
+            let mut unvisited = !self.visited.word(word);
+            while unvisited != 0 {
+                let node =
+                    word as u64 * u64::from(u64::BITS) + u64::from(unvisited.trailing_zeros());
+                unvisited &= unvisited - 1;
+                if node >= id_space || edges.filter.is_some_and(|f| !f.contains(node)) {
+                    continue;
+                }
+                for via in reverse.row_entries(node) {
+                    progress.edge_traversed()?;
+                    if !frontier.contains(via) {
+                        continue;
+                    }
+                    let visit = Visit { node, depth, via: Some(via) };
+                    if self.offer(visit, progress, admit)?.is_break() {
+                        return Ok(ControlFlow::Break(()));
+                    }
+                    break;
+                }
+            }
+        }
         self.advance();
         self.depth = depth;
         Ok(ControlFlow::Continue(()))
