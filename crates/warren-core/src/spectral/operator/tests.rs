@@ -137,6 +137,48 @@ fn without_symmetrize_the_matrix_must_be_symmetric() {
     }
 }
 
+/// Whether the operator over `graph` adds the transposed product.
+fn transposes(graph: &GraphCsr, relations: RelationSelection<'_>) -> bool {
+    let memory = ComputeMemory::new(1 << 24);
+    let mut resources =
+        Resources { workers: workers(), memory: &memory, interrupts: &mut Uninterrupted };
+    let matrix = GraphMatrix { relations, ..GraphMatrix::new(Operator::NormalizedLaplacian) };
+    LinearOperator::new(&mut resources, graph, &matrix).unwrap().transpose
+}
+
+#[test]
+fn symmetrising_a_graph_whose_reverse_csrs_equal_its_forward_ones_multiplies_once() {
+    // Each undirected relation's reverse CSR is its forward CSR, so A = Aᵀ
+    // exactly and (A + Aᵀ)/2 is A: the transposed product would read the
+    // same arrays in the same order and add nothing.
+    let undirected: Edges = example_edges()
+        .into_iter()
+        .flat_map(|(r, s, t, w)| [(r, s, t, w), (r, t, s, w)])
+        .filter(|&(_, s, t, _)| s != t)
+        .collect();
+    for store_merged in [true, false] {
+        let layout = crate::graph::CsrLayout { build_reverse: true, store_merged };
+        let graph = reference::graph_as(5, 2, &undirected, true, layout);
+        assert!(!transposes(&graph, RelationSelection::All), "store_merged {store_merged}");
+    }
+    // Without reverse CSRs the check would cost a transpose: multiply twice.
+    let unreversed = reference::graph(5, 2, &undirected, true, false);
+    assert!(transposes(&unreversed, RelationSelection::All));
+    let directed = reference::graph(5, 2, &example_edges(), true, true);
+    assert!(transposes(&directed, RelationSelection::All));
+    // Only the selected relations count: relation 1 alone of a graph whose
+    // relation 0 is directed.
+    let mixed: Edges = example_edges()
+        .into_iter()
+        .filter(|&(r, ..)| r == 0)
+        .chain(undirected.iter().copied().filter(|&(r, ..)| r == 1))
+        .collect();
+    let graph = reference::graph(5, 2, &mixed, true, true);
+    assert!(transposes(&graph, RelationSelection::All));
+    let one = [reference::relations(2)[1]];
+    assert!(!transposes(&graph, RelationSelection::Only(&one)));
+}
+
 #[test]
 fn normalised_operators_need_positive_degrees() {
     let edges = vec![(0, 0, 1, 1.0), (0, 1, 2, -3.0)];
@@ -187,5 +229,50 @@ proptest! {
             let want = dense(n, &edges, None, true, true, operator, &x);
             prop_assert!(close(&got, &want), "{:?}: {:?} != {:?}", operator, got, want);
         }
+    }
+}
+
+/// `(A·x + Aᵀ·x)/2` with two plain SpMVs, as the operator computed it
+/// before it learned to skip the transposed product.
+fn two_products(graph: &GraphCsr, x: &[f64]) -> Vec<f64> {
+    let memory = ComputeMemory::new(1 << 24);
+    let input: AnyVector =
+        Vector::from_values(&memory, x.len() as u64, 1, x.to_vec()).unwrap().into();
+    let mut forward: AnyVector = Vector::filled(&memory, x.len() as u64, 1, 0.0f64).unwrap().into();
+    let mut transposed: AnyVector =
+        Vector::filled(&memory, x.len() as u64, 1, 0.0f64).unwrap().into();
+    let product = Product::new(Semiring::PlusTimes);
+    let run = |product: &Product<'_>, y: &mut AnyVector| {
+        spmv(workers(), &memory, &mut Uninterrupted, graph, product, &input, y).unwrap();
+    };
+    run(&product, &mut forward);
+    run(&Product { transpose: true, ..product }, &mut transposed);
+    values(&forward).iter().zip(values(&transposed)).map(|(a, b)| (a + b) / 2.0).collect()
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    #[test]
+    fn an_undirected_graph_s_one_product_is_the_two_products_to_the_bit(
+        (n, edges, x, _) in scenarios(),
+        store_merged in any::<bool>(),
+    ) {
+        // Each self-loop kept once, as an undirected build stores it.
+        let undirected: Edges = edges
+            .iter()
+            .flat_map(|&(r, s, t, w)| {
+                if s == t { vec![(r, s, t, w)] } else { vec![(r, s, t, w), (r, t, s, w)] }
+            })
+            .collect();
+        let layout = crate::graph::CsrLayout { build_reverse: true, store_merged };
+        let graph = reference::graph_as(n, 2, &undirected, true, layout);
+        prop_assert!(!transposes(&graph, RelationSelection::All));
+        let got = apply(&graph, &GraphMatrix::new(Operator::Adjacency), &x).unwrap();
+        let want = two_products(&graph, &x);
+        prop_assert_eq!(got.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                        want.iter().map(|v| v.to_bits()).collect::<Vec<_>>());
+        let dense = dense(n, &undirected, None, true, true, Operator::Adjacency, &x);
+        prop_assert!(close(&got, &dense), "{:?} != {:?}", got, dense);
     }
 }

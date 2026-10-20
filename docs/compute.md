@@ -328,7 +328,7 @@ own may still use it, but there is no reason to.
 
 ```
 warren.eigen(graph, k, matrix := 'adjacency', which := 'largest', rels := NULL,
-             weighted := NULL, symmetrize := true, tol := 1e-8, max_iter := NULL,
+             weighted := NULL, symmetrize := true, tol := 1e-6, max_iter := NULL,
              vectors_prefix := NULL, version := NULL, dtype := 'f32', persist := true)
   RETURNS TABLE (i int, eigenvalue float8, residual float8)
 ```
@@ -345,6 +345,11 @@ Top-k eigenpairs by Lanczos with full reorthogonalisation and thick restart.
   (10⁻⁶ relative for `f32`, 10⁻¹² for `f64`; never `tol`) are ties, and a
   run of ties lists its positive eigenvalues first, so `λ` comes before `−λ`
   whichever rounding made larger.
+- A pair has converged when its residual estimate is at most `tol` times
+  the largest Ritz value (about ‖M‖). The default `tol` of 10⁻⁶ is about the
+  rounding of `f32` vectors; pass a smaller one with `dtype := 'f64'`.
+  `max_iter` counts operator applications; it defaults to 1,000 per basis
+  vector (41,000 for k = 20).
 - **Not converging is a warning, not an error.** If `max_iter` runs out,
   `eigen` returns the pairs it has, with a `WARNING` naming the steps taken
   and the largest residual; each row's `residual` says which pairs are
@@ -376,7 +381,7 @@ SELECT * FROM warren.eigen('roads', 2, 'laplacian', 'smallest', vectors_prefix :
 ```
 warren.distance(graph, v1, v2, method, vectors_prefix := NULL, k := NULL, x := NULL, y := NULL,
                 compared_rows := 'shared', matrix := NULL, which := 'largest', rels := NULL,
-                weighted := NULL, symmetrize := true, tol := 1e-8, max_iter := NULL, dtype := 'f32',
+                weighted := NULL, symmetrize := true, tol := 1e-6, max_iter := NULL, dtype := 'f32',
                 graph2 := NULL)
   RETURNS jsonb   -- {"method", "from", "to", ["graph2"], …the method's scalars}
 ```

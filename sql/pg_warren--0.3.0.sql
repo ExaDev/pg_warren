@@ -731,7 +731,7 @@ CREATE  FUNCTION warren."distance"(
 	"rels" TEXT[] DEFAULT NULL, /* :: std :: option :: Option < Vec < Option < String > > > */
 	"weighted" bool DEFAULT NULL, /* Option < bool > */
 	"symmetrize" bool DEFAULT true, /* Option < bool > */
-	"tol" double precision DEFAULT 1e-8, /* Option < f64 > */
+	"tol" double precision DEFAULT 1e-6, /* Option < f64 > */
 	"max_iter" INT DEFAULT NULL, /* Option < i32 > */
 	"dtype" TEXT DEFAULT 'f32', /* Option < & str > */
 	"graph2" TEXT DEFAULT NULL /* Option < & str > */
@@ -962,7 +962,7 @@ CREATE  FUNCTION warren."eigen"(
 	"rels" TEXT[] DEFAULT NULL, /* :: std :: option :: Option < Vec < Option < String > > > */
 	"weighted" bool DEFAULT NULL, /* Option < bool > */
 	"symmetrize" bool DEFAULT true, /* Option < bool > */
-	"tol" double precision DEFAULT 1e-8, /* Option < f64 > */
+	"tol" double precision DEFAULT 1e-6, /* Option < f64 > */
 	"max_iter" INT DEFAULT NULL, /* Option < i32 > */
 	"vectors_prefix" TEXT DEFAULT NULL, /* Option < & str > */
 	"version" bigint DEFAULT NULL, /* Option < i64 > */
