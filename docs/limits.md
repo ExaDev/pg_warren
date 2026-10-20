@@ -11,6 +11,7 @@ All are ordinary GUCs, settable per session or per transaction
 |---|---|---|---|---|
 | `warren.threads` | half the cores, at least 1 | 1–1024 | threads a compute kernel runs on (`spmv`, `spmm`, `vector_map`, reductions, `gather`, `eigen`, `triangles`) | — |
 | `warren.max_compute_memory` | `4GB` | `64kB` up | memory one call holds: every vector it reads (once, cached or not), every vector and work buffer it allocates | `configuration_limit_exceeded` (53400), before allocating |
+| `warren.max_cache_memory` | `4GB` | `64kB` up | what this backend's cache holds *between* calls: cached versions, cached persisted vectors, and every role's transient vectors | versions and persisted vectors are evicted, least recently used first; a transient write that would go over is refused with 53400 |
 | `warren.max_build_memory` | `4GB` | `1MB` up | the CSR offsets a `refresh` builds (8 bytes × (id_space + 1) per relation's CSR, merged CSR included, per direction) | 53400, before anything is allocated or written |
 | `warren.max_walk_paths` | `10000000` | 1 up | the largest `max_results` for a `walk` that returns a row per walk (`mode := 'paths'`, or `'ends'` without `distinct_ends`) | `program_limit_exceeded` (54000) |
 
@@ -48,16 +49,38 @@ compute kernels from the main thread every millisecond), so
 - Loading a graph's current version drops that backend's other cached
   versions of the graph, so after promotions a backend holds one copy per
   graph. Calls with an explicit `version :=` load that version too.
-- **The cache is not size-bounded yet.** Versions stay cached until the
-  connection ends, `warren.evict(name)` frees them (with the graph's cached
-  vectors and this role's transient vectors, which are then gone), or the
-  version is dropped. A size-bounded cache
-  (`warren.max_cache_memory`) is planned; a shared-memory cache across
+- **The cache is bounded by `warren.max_cache_memory`** (default `4GB`,
+  per backend). When it is over the cap, cached versions and persisted
+  vectors are evicted, least recently used first. A version larger than the
+  cap is loaded for the call that needs it and then dropped (with a
+  `NOTICE`), without flushing everything else. Before a load, room is made
+  for the version first, so a load does not take the cache past the cap.
+  Evicted entries are simply reloaded on next use (about a second per GB), so
+  a cap below your working set makes every call reload. A call or streaming
+  function that is using an evicted version keeps its copy until it ends.
+- **Transient vectors are never evicted**, since they cannot be reloaded.
+  They count against the cap, and a transient write that would take the
+  transient vectors alone past it is refused with 53400 before anything
+  changes. A write no larger than the vector it replaces is always allowed,
+  so after lowering the cap you can still rewrite or shrink what you hold.
+  Roles sharing a backend share its cap. Transient vectors of a version
+  dropped elsewhere are freed once the drop has committed.
+- The library's scratch is transient (`pagerank` holds about eleven
+  full-length `f64` vectors, ~88 bytes per node), so the version and the
+  scratch must fit the cap together; otherwise the version reloads on every
+  superstep, or, if the scratch alone does not fit, the call fails with
+  53400. Raise `warren.max_cache_memory` for large graphs.
+- `warren.evict(name)` frees a graph's cached versions and vectors, and this
+  role's transient vectors of it (which are then gone), at once. Lowering the
+  cap takes effect at the next lookup or load. A shared-memory cache across
   backends is a later release.
 - `warren.prewarm(name)` loads the current version ahead of first use, for
   pooled connections; `warren.evict(name)` returns how many versions and vectors it freed.
-- `warren.max_compute_memory` bounds one call. Cached versions, cached
-  vectors and transient vectors held *between* calls are not charged to it.
+- `warren.max_compute_memory` bounds what one call reads and allocates;
+  `warren.max_cache_memory` bounds what is held between calls. A backend's
+  peak is therefore about the sum of the two, plus, while a version loads,
+  one segment's raw bytes (at most the largest targets or weights array:
+  0.8 GB for 100M weighted edges).
 - Storage of a version, per direction: offsets 8 bytes × (id_space + 1) for
   each relation, plus the merged CSR's when there is more than one relation;
   targets 4 bytes per edge (8 above 2³² nodes); weights 8 bytes per edge.
@@ -67,6 +90,35 @@ compute kernels from the main thread every millisecond), so
 
 Cold loads, the cost of a per-backend cache, have not been benchmarked yet;
 DESIGN.md §5.5 estimates a few hundred MB/s from TOAST.
+
+```sql
+SET warren.max_cache_memory = '64kB';
+SELECT warren.vector_from_query('kg', 'wide', 'SELECT id, array_fill(1.0::float8, ARRAY[2000]) FROM entities',
+                                persist := false);
+-- ERROR (53400): a transient vector this large does not fit the cap
+SELECT warren.evict('kg');                                         -- frees kg's cached versions and vectors
+SELECT count(*) FROM warren.bfs('kg', ARRAY[1::bigint], 2);        -- reloads; still works under the cap
+RESET warren.max_cache_memory;
+```
+
+### Sizing
+
+How large a graph fits the default 4 GB limits, from DESIGN.md §12's
+estimates for 10M nodes and 100M edges (u32 targets, reverse CSR included, a
+`bigint` id map; decimal GB, while `4GB` in a setting is 4 GiB ≈ 4.29 GB):
+
+| Graph (10M nodes, 100M edges) | Cached version |
+|---|---|
+| one relation, unweighted | ~1.2 GB |
+| one relation, weighted | ~2.8 GB |
+| five relations, unweighted | ~2.8 GB |
+| five relations, weighted | ~6.0 GB: over the default cap (the merged CSR alone is ~2.6 GB) |
+
+Add the library's transient scratch (~0.9 GB for `pagerank` at 10M nodes)
+when sizing `warren.max_cache_memory`. The goal (DESIGN.md §12) is that such
+a graph and a library run fit one backend at default settings; the
+five-relation weighted case misses it until the merged CSR is optional.
+These are estimates; the 100M-edge soak that measures them is M7 work.
 
 ## Measured performance
 
@@ -137,7 +189,7 @@ only when the graph is already symmetric.
 warren.vector_reduce(…)`, so the call runs once.
 
 **No shared cache.** Each backend loads its own copy of every version it
-reads ([memory model](#memory-model)). The cache has no size bound yet.
+reads ([memory model](#memory-model)), within `warren.max_cache_memory`.
 
 **Not yet supported:** `text` node ids; incremental maintenance (every
 `refresh` is a full rebuild); contraction, `project`, `lift` and Louvain

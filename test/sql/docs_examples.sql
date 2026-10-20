@@ -384,6 +384,14 @@ SELECT assert.equal((warren.distance('kg', :base, :shadow, 'edit', graph2 := 'kg
 SET warren.max_compute_memory = '64kB';
 SELECT assert.raises($$SELECT warren.vector_from_query('kg', 'wide', 'SELECT id, array_fill(1.0::float8, ARRAY[2000]) FROM entities')$$, 'over the compute budget', '53400');
 RESET warren.max_compute_memory;
+-- limits.md "Memory model": the cache cap
+SET warren.max_cache_memory = '64kB';
+SELECT assert.raises($$SELECT warren.vector_from_query('kg', 'wide', 'SELECT id, array_fill(1.0::float8, ARRAY[2000]) FROM entities',
+                                persist := false)$$, 'a transient vector over the cache cap', '53400');
+SELECT warren.evict('kg');                                         -- frees kg's cached versions and vectors
+SELECT count(*) FROM warren.bfs('kg', ARRAY[1::bigint], 2);        -- reloads; still works under the cap
+SELECT assert.equal((SELECT count(*) FROM warren.bfs('kg', ARRAY[1::bigint], 2)), 5::bigint, 'works under the cap');
+RESET warren.max_cache_memory;
 SELECT assert.raises($$SELECT * FROM warren.walk('roads', ARRAY[1], ARRAY[warren.s(NULL, 'out', NULL::int[], 1, 3)],
                                                  mode := 'paths', max_results := 20000000)$$,
                      'max_results above warren.max_walk_paths', '54000');

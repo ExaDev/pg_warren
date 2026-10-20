@@ -54,7 +54,8 @@ Rules:
   (transactional, survives the session, costs WAL; 8 bytes × `id_space` per
   `f64` column) and its function returns its id. A **transient** vector
   (`persist := false`) lives only in this backend, for this role, returns
-  NULL, costs no WAL, is not transactional, does not pin its version, and is
+  NULL, costs no WAL, is not transactional, does not pin its version, counts
+  against `warren.max_cache_memory` (it is never evicted), and is
   freed at session end or by `evict` or `drop_vector` (`if_exists := true`
   makes a missing name a no-op). Keep loop scratch transient and persist
   results.

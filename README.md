@@ -155,15 +155,16 @@ Every SQL example in the README and `docs/` runs in CI, in
   DESIGN.md §13.
 - **0.2.0**: vectors, semiring compute, `gather`, the algorithm library,
   `eigen` and `distance`, milestones M4–M6.
-- **0.3.0** (in development, M7): hardening. The size bound on the
-  backend-local cache is planned for it, not shipped.
+- **0.3.0** (in development, M7): hardening. Shipped so far: a size bound
+  on the backend-local cache (`warren.max_cache_memory`, least-recently-used
+  eviction) and these docs.
 
 See [CHANGELOG.md](CHANGELOG.md). This is pre-1.0 software: the SQL surface
 may still change between minor versions, with an upgrade script each time.
 
-Not there yet: a size bound on the backend-local cache (planned for 0.3.0),
-a shared-memory cache across backends, incremental maintenance, contraction
-(community-level graphs), and text ids ([docs/limits.md](docs/limits.md)).
+Not there yet: a shared-memory cache across backends, incremental
+maintenance, contraction (community-level graphs), and text ids
+([docs/limits.md](docs/limits.md)).
 
 ## Positioning vs prior art
 
