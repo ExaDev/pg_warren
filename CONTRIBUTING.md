@@ -164,11 +164,16 @@ format. To benchmark a new function, add a workload with `requires` to
 - **Every schema change after a release updates the upgrade script in the
   same commit**: `sql/pg_warren--<released>--<version>.sql`, hand-written
   (new or changed functions, tables and columns with a backfill, storage,
-  grants). `test/upgrade.py` (in CI, on every major) installs each
-  release, writes some state with it (several versions, a staged one, a
-  vector), runs `ALTER EXTENSION pg_warren UPDATE`, fails on any catalog
-  difference from a fresh install, and checks the backfills and a
-  retention pass on the upgraded catalog. `crates/pg_warren/sql` links to `sql/`, so
+  grants). `test/upgrade.py` (in CI, on every major) builds and installs
+  each release from its git tag `vX.Y.Z` (so the tags must be fetched:
+  `git fetch --tags`), writes some state with that release's own library
+  and functions (several versions, a staged one, a vector, a weighted
+  multi-relation graph and its results), puts the version in development
+  back, runs `ALTER EXTENSION pg_warren UPDATE`, fails on any catalog
+  difference from a fresh install, and checks the backfills, that the
+  release's state reads as it did, and a retention pass on the upgraded
+  catalog. `--release-builds DIR` keeps the release builds (one target
+  directory per release and major; CI caches it). `crates/pg_warren/sql` links to `sql/`, so
   `cargo pgrx install` installs the upgrade scripts.
 - Users upgrade by installing the new build and then running
   `ALTER EXTENSION pg_warren UPDATE;` in every database that has the
@@ -186,7 +191,7 @@ format. To benchmark a new function, add a workload with `requires` to
   commit fails `schema-drift.sh` (its version would already be released).
 
 ```sh
-test/upgrade.py --pg-config "$(command -v pg_config)"   # installs, then checks every release's path
+test/upgrade.py --pg-config "$(command -v pg_config)"   # builds each release from its tag, then checks its path
 ```
 
 ## Docker

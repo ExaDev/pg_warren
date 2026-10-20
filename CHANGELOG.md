@@ -14,8 +14,7 @@
   but 2–3× slower all-relations traversal and 5–8× slower all-relations
   `spmv`. `warren.info` reports `store_merged`. Schema change:
   new column `warren.graphs.store_merged` (existing graphs are backfilled
-  `true`; until the update, graphs read as storing their merged CSR);
-  run `ALTER EXTENSION pg_warren UPDATE`.
+  `true`); run `ALTER EXTENSION pg_warren UPDATE` before using 0.3.0.
 - Upgrade note: the cache was unbounded before. A graph version larger
   than 4GB, or a version plus the library's transient scratch vectors
   (`pagerank` keeps about eleven full-length `f64` vectors, ~88 bytes per

@@ -70,7 +70,7 @@ pub(crate) fn cached<E: IdDatum + Send + Sync>(
     make_room(stored_bytes(version)?);
     // Load outside any borrow of the cache: loading runs SPI, which may
     // raise an ERROR that unwinds through this frame.
-    let loaded = load::<E>(&mut SpiSegmentStore, version)?;
+    let loaded = load::<E>(&mut SpiSegmentStore, version, resolved.graph.store_merged)?;
     let current = resolved.graph.current_version == Some(version);
     let loaded = CACHE.with_borrow_mut(|cache| {
         if current {

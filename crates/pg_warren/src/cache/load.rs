@@ -81,11 +81,12 @@ pub(crate) fn load_identity<E: ExternalId>(
 /// Loads every segment of `version`, validating each as it is decoded and
 /// then that they agree: the CSRs cover the id map's id space with the
 /// target width it implies, there is one CSR per relation, a merged CSR
-/// without relations (with several, if one was stored), and reverse CSRs
-/// for all or none.
+/// without relations, or with several if the graph stores it
+/// (`store_merged`), and reverse CSRs for all or none.
 pub(crate) fn load<E: ExternalId>(
     segments: &mut impl SegmentStore,
     version: VersionId,
+    store_merged: bool,
 ) -> Result<LoadedVersion<E>, LoadError> {
     let (id_map, relations) = load_identity(segments, version)?;
     let id_space = id_map.id_space();
@@ -93,12 +94,13 @@ pub(crate) fn load<E: ExternalId>(
     for index in 0..relations.len() {
         csrs.push(relation_csr(segments, version, id_space, CsrScope::Relation(index))?);
     }
-    // With several relations the merged CSR is stored only if the graph
-    // stores it (`store_merged`): its forward offsets say whether it is.
-    let merged = match relations.len() {
-        1 => None,
-        0 => Some(relation_csr(segments, version, id_space, CsrScope::Merged)?),
-        _ => optional_relation_csr(segments, version, id_space, CsrScope::Merged)?,
+    // With several relations the merged CSR is stored if the graph stores
+    // it (`store_merged`, fixed at `create_graph` and kept by `compact`, so
+    // it is every version's layout): then a missing merged segment is an
+    // error, not a version that merges on the fly.
+    let merged = match (relations.len(), store_merged) {
+        (1, _) | (2.., false) => None,
+        (0, _) | (2.., true) => Some(relation_csr(segments, version, id_space, CsrScope::Merged)?),
     };
     let graph = GraphCsr::from_parts(id_space, csrs, merged, 0)?;
     let loaded = LoadedVersion { id_map, relations, graph };
@@ -198,7 +200,8 @@ mod tests {
     }
 
     fn loads_as_written(version: &Built) {
-        let loaded = load::<i64>(&mut stored(version), 7).unwrap();
+        let store_merged = version.graph.merged().is_some() || version.relations.len() < 2;
+        let loaded = load::<i64>(&mut stored(version), 7, store_merged).unwrap();
         assert_eq!(loaded.id_map, version.id_map);
         assert_eq!(loaded.relations, version.relations);
         assert_eq!(loaded.graph, version.graph);
@@ -223,9 +226,9 @@ mod tests {
             loads_as_written(&version);
             // What the cache holds, and so counts against its cap, is the
             // stored version's bytes less its merged CSR's.
-            let loaded = load::<i64>(&mut stored(&version), 7).unwrap();
+            let loaded = load::<i64>(&mut stored(&version), 7, false).unwrap();
             let with_merged = built(&["cites", "extends", "funds"], true, build_reverse);
-            let with_merged = load::<i64>(&mut stored(&with_merged), 7).unwrap();
+            let with_merged = load::<i64>(&mut stored(&with_merged), 7, true).unwrap();
             let merged = with_merged.graph.merged().map_or(0, |merged| merged.bytes());
             assert!(merged > 0);
             assert_eq!(loaded.bytes() + merged, with_merged.bytes());
@@ -258,9 +261,20 @@ mod tests {
         let mut store = stored(&version);
         store.chunks.retain(|(_, name, _), _| name != "targets:0");
         assert!(matches!(
-            load::<i64>(&mut store, 7),
+            load::<i64>(&mut store, 7, true),
             Err(LoadError::Segment(SegmentError::SegmentMissing { version: 7, .. }))
         ));
+    }
+
+    #[test]
+    fn a_lost_merged_csr_is_an_error_where_the_graph_stores_it() {
+        let mut store = stored(&built(&["a", "b"], false, true));
+        store.chunks.retain(|(_, name, _), _| !name.ends_with(":merged"));
+        assert!(matches!(
+            load::<i64>(&mut store, 7, true),
+            Err(LoadError::Segment(SegmentError::SegmentMissing { version: 7, .. }))
+        ));
+        assert!(load::<i64>(&mut store, 7, false).is_ok());
     }
 
     #[test]
@@ -270,6 +284,6 @@ mod tests {
         let mut other_store = stored(&other);
         let rel_dict = other_store.chunks.remove(&(7, "rel_dict".to_owned(), 0)).unwrap();
         store.chunks.insert((7, "rel_dict".to_owned(), 0), rel_dict);
-        assert!(load::<i64>(&mut store, 7).is_err());
+        assert!(load::<i64>(&mut store, 7, true).is_err());
     }
 }

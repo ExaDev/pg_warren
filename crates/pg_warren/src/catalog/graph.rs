@@ -11,14 +11,10 @@ use crate::access::as_extension_owner;
 use crate::source::IdType;
 
 /// The query [`GraphDefinition::find`] runs, planned once per backend.
-/// `store_merged` is read through `to_jsonb` so that a catalog from before
-/// 0.3.0 (no such column, until `ALTER EXTENSION pg_warren UPDATE` adds it)
-/// reads as `true`, the value the update backfills.
 const FIND: &str = "SELECT graph_id, owner::oid, readers::oid[], node_query, edge_query,
                            search_path, directed, weighted, has_relations, build_reverse,
-                           retain_versions, current_version, id_type::oid,
-                           coalesce((to_jsonb(g) ->> 'store_merged')::boolean, true)
-                    FROM warren.graphs g WHERE name = $1";
+                           retain_versions, current_version, id_type::oid, store_merged
+                    FROM warren.graphs WHERE name = $1";
 
 thread_local! {
     /// The saved plan of [`FIND`].

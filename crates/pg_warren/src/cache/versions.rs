@@ -142,7 +142,7 @@ mod tests {
         let mut store = store();
         let mut cache = VersionCache::default();
         assert!(cache.get::<i64>(1).is_none());
-        let loaded = cache.insert(10, 1, load::<i64>(&mut store, 1).unwrap());
+        let loaded = cache.insert(10, 1, load::<i64>(&mut store, 1, true).unwrap());
         assert_eq!(loaded.id_map.dense_id(&2), Some(1));
         let cached = cache.get::<i64>(1).unwrap();
         assert!(Arc::ptr_eq(&loaded, &cached));
@@ -152,8 +152,8 @@ mod tests {
     fn a_lookup_marks_a_version_used_and_held_reports_its_bytes() {
         let mut store = store();
         let mut cache = VersionCache::default();
-        let first = cache.insert(10, 1, load::<i64>(&mut store, 1).unwrap());
-        cache.insert(10, 2, load::<i64>(&mut store, 2).unwrap());
+        let first = cache.insert(10, 1, load::<i64>(&mut store, 1, true).unwrap());
+        cache.insert(10, 2, load::<i64>(&mut store, 2, true).unwrap());
         std::thread::sleep(std::time::Duration::from_millis(1));
         assert!(cache.get::<i64>(1).is_some());
         let held = cache.held();
@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn a_cached_version_is_found_only_with_its_id_type() {
         let mut cache = VersionCache::default();
-        cache.insert(11, 3, load::<[u8; 16]>(&mut store(), 3).unwrap());
+        cache.insert(11, 3, load::<[u8; 16]>(&mut store(), 3, true).unwrap());
         assert!(cache.get::<[u8; 16]>(3).is_some());
         assert!(cache.get::<i64>(3).is_none());
     }
@@ -177,8 +177,8 @@ mod tests {
     fn versions_that_no_longer_exist_are_pruned() {
         let mut store = store();
         let mut cache = VersionCache::default();
-        cache.insert(10, 1, load::<i64>(&mut store, 1).unwrap());
-        cache.insert(10, 2, load::<i64>(&mut store, 2).unwrap());
+        cache.insert(10, 1, load::<i64>(&mut store, 1, true).unwrap());
+        cache.insert(10, 2, load::<i64>(&mut store, 2, true).unwrap());
         assert_eq!(cache.versions(), [1, 2]);
         cache.retain(&[2, 5]);
         assert_eq!(cache.versions(), [2]);
@@ -188,9 +188,9 @@ mod tests {
     fn evicting_a_graph_drops_only_its_versions_and_spares_holders() {
         let mut store = store();
         let mut cache = VersionCache::default();
-        let held = cache.insert(10, 1, load::<i64>(&mut store, 1).unwrap());
-        cache.insert(10, 2, load::<i64>(&mut store, 2).unwrap());
-        cache.insert(11, 3, load::<[u8; 16]>(&mut store, 3).unwrap());
+        let held = cache.insert(10, 1, load::<i64>(&mut store, 1, true).unwrap());
+        cache.insert(10, 2, load::<i64>(&mut store, 2, true).unwrap());
+        cache.insert(11, 3, load::<[u8; 16]>(&mut store, 3, true).unwrap());
         assert_eq!(cache.evict_graph(10), 2);
         assert_eq!(cache.versions(), [3]);
         assert_eq!(held.id_map.node_count(), 3, "a scan holding a version keeps it");
