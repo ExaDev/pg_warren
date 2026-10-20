@@ -718,8 +718,12 @@ def summary(result):
     reachable, why = outcome(result, "default: reachable_set")
     stats = stages.get("default: reachable_set stats", {}).get("stats")
     if reachable and stats:
-        measured["reachable_edges_per_second"] = (json.loads(stats[0])["edges_traversed"]
-                                                  / reachable["median_seconds"])
+        # A pulled level scans fewer row entries than the component has
+        # edges (DESIGN.md §9.3): the rate is the version's edges (the
+        # start's component is all but a few of its nodes) per second.
+        seconds = reachable["median_seconds"]
+        measured["reachable_row_entries_per_second"] = json.loads(stats[0])["edges_traversed"] / seconds
+        measured["reachable_edges_per_second"] = result["version_1"]["edge_count"] / seconds
     elif why is not None:
         measured["reachable_edges_per_second_failed"] = why
     _, why = outcome(result, "cold_load_probe")

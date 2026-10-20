@@ -4,10 +4,11 @@
 
 use std::ops::ControlFlow;
 
+use super::bfs::search_each;
 use super::level::{Admission, Edges, LevelSearch};
 use super::scratch::Rows;
 use super::stats::Progress;
-use super::{bfs_each, Adjacency, Limits, TraversalError, TraversalStats, Traversed, Visit};
+use super::{Adjacency, Limits, TraversalError, TraversalStats, Traversed, Visit};
 use crate::graph::DenseId;
 use crate::interrupts::Interrupts;
 
@@ -59,6 +60,15 @@ pub fn reachable_set(
 /// [`reachable_set`], handing each node to `visitor` as it is reached
 /// instead of collecting them; returning [`ControlFlow::Break`] stops the
 /// scan after that node.
+///
+/// Nodes come by depth. A level whose frontier is wide (more than a
+/// twentieth of the id space, and more nodes than are left unvisited) is
+/// pulled through the adjacency read backwards, when the graph has the
+/// CSRs for that, and its nodes come in ascending dense id order; other
+/// levels come in the order reached, as in [`bfs`](super::bfs). A pulled
+/// level scans only unvisited nodes' rows, and each only until it meets
+/// the frontier, so `edges_traversed` counts fewer row entries than a
+/// push-only search would.
 pub fn reachable_set_each(
     adjacency: &Adjacency<'_>,
     starts: &[DenseId],
@@ -67,7 +77,9 @@ pub fn reachable_set_each(
     mut visitor: impl FnMut(DenseId) -> ControlFlow<()>,
 ) -> Result<TraversalStats, TraversalError> {
     let limits = Limits { max_depth, max_results: None };
-    bfs_each(adjacency, starts, None, limits, interrupts, |visit| visitor(visit.node))
+    let reverse = adjacency.reversed().ok();
+    let edges = Edges::new(adjacency, None)?.pulling(reverse.as_ref());
+    search_each(edges, starts, limits, interrupts, |visit| visitor(visit.node))
 }
 
 #[cfg(test)]
@@ -78,6 +90,7 @@ mod tests {
     use crate::graph::RelationSelection;
     use crate::interrupts::Uninterrupted;
     use crate::traversal::example::directed;
+    use crate::traversal::{bfs, Limits};
 
     // 0 → 1 → 2 → 3, 4 → 3, 5 isolated
     fn example() -> GraphCsr {
@@ -135,6 +148,32 @@ mod tests {
         assert_eq!(stats.nodes_visited, 2);
     }
 
+    // 0 → 1, 2, 3; 1 → 5; 2 → 4: the frontier {1, 2, 3} outnumbers the
+    // unvisited {4, 5}, so depth 2 is pulled from the reverse CSR.
+    fn wide() -> [(DenseId, DenseId); 5] {
+        [(0, 1), (0, 2), (0, 3), (1, 5), (2, 4)]
+    }
+
+    #[test]
+    fn reachable_set_pulls_a_wide_level_in_ascending_dense_id_order() {
+        let graph = directed(6, &wide());
+        let found = reachable_set(&out(&graph), &[0], None, &mut Uninterrupted).unwrap();
+        assert_eq!(found.result, [0, 1, 2, 3, 4, 5]);
+        assert_eq!(found.stats.nodes_visited, 6);
+        assert_eq!(found.stats.edges_traversed, 5, "three pushed, one in-edge each for 4 and 5");
+        let bfs = bfs(&out(&graph), &[0], None, Limits::default(), &mut Uninterrupted).unwrap();
+        let order: Vec<_> = bfs.result.iter().map(|visit| visit.node).collect();
+        assert_eq!(order, [0, 1, 2, 3, 5, 4], "bfs always pushes");
+    }
+
+    #[test]
+    fn reachable_set_pushes_every_level_without_a_reverse_csr() {
+        let edges: Vec<_> = wide().iter().map(|&(s, t)| (0, s, t, 1.0)).collect();
+        let graph = crate::traversal::example::graph(6, 1, &edges, false);
+        let found = reachable_set(&out(&graph), &[0], None, &mut Uninterrupted).unwrap();
+        assert_eq!(found.result, [0, 1, 2, 3, 5, 4]);
+    }
+
     #[test]
     fn reachable_set_holds_the_starts_and_everything_they_reach() {
         let graph = example();
@@ -179,6 +218,7 @@ mod properties {
                 .collect();
 
             let set = reachable_set(&adjacency, &starts, max_depth, &mut never).unwrap().result;
+            prop_assert!(set.windows(2).all(|w| depths[&w[0]] <= depths[&w[1]]), "not by depth");
             prop_assert_eq!(set.len(), expected.len());
             prop_assert_eq!(set.into_iter().collect::<BTreeSet<_>>(), expected.clone());
 

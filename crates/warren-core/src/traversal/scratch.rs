@@ -57,6 +57,37 @@ impl Visited {
         }
     }
 
+    /// The number of nodes visited.
+    pub(crate) fn len(&self) -> u64 {
+        match self {
+            Self::Sparse { nodes, .. } => nodes.len() as u64,
+            Self::Dense(nodes) => nodes.len(),
+        }
+    }
+
+    /// Turns the set dense now, whatever its size, so that
+    /// [`Self::word`] reads a bitmap.
+    pub(crate) fn densify(&mut self) -> Result<(), TraversalError> {
+        if let Self::Sparse { id_space, nodes } = self {
+            *self = Self::Dense(NodeSet::from_dense_ids(*id_space, nodes.iter().copied())?);
+        }
+        Ok(())
+    }
+
+    /// Bit `i` of the result says whether node `64·index + i` is visited.
+    /// Constant time once [`Self::densify`] has run.
+    pub(crate) fn word(&self, index: usize) -> u64 {
+        match self {
+            Self::Dense(nodes) => nodes.word(index),
+            Self::Sparse { .. } => {
+                let first = index as u64 * u64::from(u64::BITS);
+                (0..u64::BITS)
+                    .filter(|&bit| self.contains(first + u64::from(bit)))
+                    .fold(0, |word, bit| word | 1 << bit)
+            }
+        }
+    }
+
     #[cfg(test)]
     fn is_dense(&self) -> bool {
         matches!(self, Self::Dense(_))
@@ -187,6 +218,21 @@ mod tests {
         }
         assert!(!visited.insert(17).unwrap());
         assert!(visited.insert(18).unwrap());
+    }
+
+    #[test]
+    fn a_visited_set_reads_as_bitmap_words_sparse_or_dense() {
+        let mut visited = Visited::new(130);
+        for id in [0, 63, 64, 129] {
+            visited.insert(id).unwrap();
+        }
+        assert!(!visited.is_dense());
+        let words = [visited.word(0), visited.word(1), visited.word(2)];
+        assert_eq!(words, [1 | 1 << 63, 1, 1 << 1]);
+        visited.densify().unwrap();
+        assert!(visited.is_dense());
+        assert_eq!([visited.word(0), visited.word(1), visited.word(2)], words);
+        assert_eq!(visited.len(), 4);
     }
 
     #[test]

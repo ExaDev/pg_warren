@@ -359,3 +359,19 @@ def test_the_summary_reports_how_many_times_pagerank_loaded_the_version():
 
 def test_the_cold_load_probe_lifts_the_compute_limit_so_a_version_over_both_still_loads():
     assert any("warren.max_compute_memory" in setting for setting in soak.COLD_LOAD_PROBE_SETTINGS)
+
+
+def test_reachable_set_throughput_counts_the_graph_s_edges_not_the_row_entries_scanned():
+    # A pulled level scans fewer row entries than the component has edges
+    # (DESIGN.md §9.3), so the rate is the version's edges per second.
+    result = {
+        "hardware": {"cpus": 4},
+        "version_1": {"edge_count": 100},
+        "stages": {
+            "default: reachable_set": {"median_seconds": 2.0, "rows": ["1"]},
+            "default: reachable_set stats": {"stats": ['{"edges_traversed": 30}']},
+        },
+    }
+    measured = soak.summary(result)
+    assert measured["reachable_edges_per_second"] == 50
+    assert measured["reachable_row_entries_per_second"] == 15
