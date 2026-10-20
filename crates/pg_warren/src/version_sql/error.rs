@@ -7,7 +7,7 @@ use warren_core::version::VersionError;
 use crate::access::AccessError;
 use crate::access::SqlError;
 use crate::build::BuildError;
-use crate::cache::LoadError;
+use crate::cache::{CacheError, LoadError};
 use crate::catalog::{CatalogError, VersionId};
 use crate::segment::SegmentError;
 use crate::vector::VectorError;
@@ -44,6 +44,9 @@ pub(crate) enum VersionOperationError {
     /// A version could not be loaded.
     #[error(transparent)]
     Load(#[from] LoadError),
+    /// A version could not be opened through the cache.
+    #[error(transparent)]
+    Cache(#[from] CacheError),
     /// The compacted version could not be written.
     #[error(transparent)]
     Segment(#[from] SegmentError),
@@ -68,6 +71,7 @@ impl SqlError for VersionOperationError {
             Self::Catalog(error) => error.sqlstate(),
             Self::Access(error) => error.sqlstate(),
             Self::Load(error) => error.sqlstate(),
+            Self::Cache(error) => error.sqlstate(),
             Self::Segment(error) => error.sqlstate(),
             Self::Vector(error) => error.sqlstate(),
             Self::Build(error) => error.sqlstate(),

@@ -45,5 +45,5 @@ mod vectors;
 
 pub(crate) use drop::drop_named;
 pub(crate) use error::{compute_sqlstate, entry, ComputeSqlError};
-pub(crate) use settings::{compute_memory, define_compute_settings, workers};
+pub(crate) use settings::{define_compute_settings, workers};
 pub(crate) use vectors::{vector_bytes, Vectors};

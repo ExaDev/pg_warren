@@ -14,7 +14,7 @@ use warren_core::version;
 use super::super::SpectralSqlError;
 use crate::cache::Resolved;
 use crate::catalog::compaction_between;
-use crate::compute_sql::{compute_memory, workers, Vectors};
+use crate::compute_sql::{workers, Vectors};
 use crate::interrupts::PostgresInterrupts;
 use crate::source::IdDatum;
 
@@ -49,9 +49,7 @@ impl<E: IdDatum> Pair<E> {
         } else if before.graph.id_type != after.graph.id_type {
             return Err(SpectralSqlError::IdTypeMismatch(before.graph.name, after.graph.name));
         }
-        let memory = compute_memory();
-        let before = Vectors::<E>::open_within(before, &memory)?;
-        let after = Vectors::<E>::open_within(after, &memory)?;
+        let (before, after) = Vectors::<E>::open_pair(before, after)?;
         let alignment = match same_graph {
             // One graph's versions are compared by dense id, so each shared
             // dense id must name one node (not so for sibling staged
