@@ -25,13 +25,16 @@ pub(crate) enum CacheError {
     /// Keeping a transient vector would take transient vectors past
     /// `warren.max_cache_memory`.
     #[error(
-        "cache memory limit exceeded: a transient vector of {requested} bytes requested, \
-         {in_use} of {limit} in use by transient vectors ({own} of them this role's); persist \
-         it, drop transient vectors or raise warren.max_cache_memory"
+        "cache memory limit exceeded: a transient vector of {requested} bytes would bring \
+         transient vectors to {after} bytes, over warren.max_cache_memory ({limit} bytes); \
+         {in_use} are in use, {own} of them this role's; persist it, drop transient vectors or \
+         raise warren.max_cache_memory"
     )]
     TransientOverLimit {
         /// The vector's bytes.
         requested: u64,
+        /// The bytes transient vectors would hold with it.
+        after: u64,
         /// The bytes transient vectors hold, of every role.
         in_use: u64,
         /// The bytes the current role's transient vectors hold.

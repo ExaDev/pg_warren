@@ -10,7 +10,7 @@ use std::cell::Cell;
 
 use pgrx::{notice, pg_sys, GucContext, GucFlags, GucRegistry, GucSetting};
 
-use super::lru::{admits, evictions, Held};
+use super::lru::{admits, after, evictions, Held};
 use super::open::prune_dropped;
 use super::versions::{VersionCache, CACHE};
 use super::CacheError;
@@ -63,9 +63,27 @@ enum Reloadable {
 /// callers holding an evicted entry keep it. Within the cap it returns
 /// after summing the bytes held, without allocating.
 pub(crate) fn trim() {
+    trim_within(max_cache_memory());
+}
+
+/// Before loading a version of about `expected` bytes, evicts as [`trim`]
+/// does until the cache fits the cap with room for it, so the load does not
+/// take the cache past the cap. A version that could never fit beside the
+/// transient vectors makes no room: it is dropped after the call's load.
+pub(super) fn make_room(expected: u64) {
+    let limit = max_cache_memory();
+    if expected <= limit.saturating_sub(transient_bytes()) {
+        trim_within(limit - expected);
+    }
+}
+
+/// Evicts as [`trim`] does until the cache fits in `within` bytes (at most
+/// the cap). The notice is raised only for entries that could never fit
+/// the cap itself.
+fn trim_within(within: u64) {
     let (pinned, limit) = (transient_bytes(), max_cache_memory());
     let cached = CACHE.with_borrow(VersionCache::bytes).saturating_add(cached_vector_bytes());
-    if pinned.saturating_add(cached) <= limit {
+    if pinned.saturating_add(cached) <= within {
         return;
     }
     let versions = CACHE.with_borrow(VersionCache::held).into_iter().map(|held| Held {
@@ -79,8 +97,9 @@ pub(crate) fn trim() {
         last_used,
     });
     let held = versions.chain(vectors).collect();
-    let evicted = evictions(held, pinned, limit);
-    for unfit in &evicted.unfit {
+    let evicted = evictions(held, pinned, within);
+    let room = limit.saturating_sub(pinned);
+    for unfit in evicted.unfit.iter().filter(|unfit| unfit.bytes > room) {
         if notice_due() {
             notice!("{}", unfit_notice(unfit.key, unfit.bytes, limit, pinned));
         }
@@ -137,6 +156,7 @@ pub(crate) fn admit_transient(replaced: u64, added: u64) -> Result<(), CacheErro
         true => Ok(()),
         false => Err(CacheError::TransientOverLimit {
             requested: added,
+            after: after(in_use, replaced, added),
             in_use,
             own: role_transient_bytes(),
             limit,
@@ -259,9 +279,10 @@ mod tests {
         assert_eq!(
             refused.as_deref(),
             Some(
-                "53400: cache memory limit exceeded: a transient vector of 16000 bytes \
-                 requested, 64000 of 65536 in use by transient vectors (64000 of them this \
-                 role's); persist it, drop transient vectors or raise warren.max_cache_memory"
+                "53400: cache memory limit exceeded: a transient vector of 16000 bytes would \
+                 bring transient vectors to 80000 bytes, over warren.max_cache_memory (65536 \
+                 bytes); 64000 are in use, 64000 of them this role's; persist it, drop \
+                 transient vectors or raise warren.max_cache_memory"
             )
         );
         // Replacing one is not counted twice, and a persisted vector fits
@@ -291,26 +312,66 @@ mod tests {
         assert_eq!(
             refused.as_deref(),
             Some(
-                "53400: cache memory limit exceeded: a transient vector of 16000 bytes \
-                 requested, 64000 of 65536 in use by transient vectors (0 of them this \
-                 role's); persist it, drop transient vectors or raise warren.max_cache_memory"
+                "53400: cache memory limit exceeded: a transient vector of 16000 bytes would \
+                 bring transient vectors to 80000 bytes, over warren.max_cache_memory (65536 \
+                 bytes); 64000 are in use, 0 of them this role's; persist it, drop transient \
+                 vectors or raise warren.max_cache_memory"
             )
         );
         Ok(())
     }
 
     #[pg_test]
-    fn a_dropped_graphs_transient_vectors_do_not_block_others() -> Result<(), Error> {
+    fn a_drop_rolled_back_frees_no_transient_vectors() -> Result<(), Error> {
+        // (A committed drop frees them: test/sql/cache_dropped_transients.sql.)
+        rings(&["a", "b"])?;
+        Spi::run(
+            "SELECT warren.vector_const('a', 'keep', 7, persist := false);
+             DO $$ BEGIN
+                 PERFORM warren.drop_graph('a');
+                 PERFORM warren.evict('b');
+                 RAISE EXCEPTION 'roll back';
+             EXCEPTION WHEN raise_exception THEN NULL;
+             END $$",
+        )?;
+        let sum = "SELECT sum(value) FROM warren.vector_values('a', 'keep', NULL::bigint)";
+        assert_eq!(Spi::get_one::<f64>(sum)?, Some(14000.0));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_transient_vector_may_be_replaced_by_no_larger_one_over_a_lowered_cap() -> Result<(), Error>
+    {
         rings(&["a"])?;
-        ring("b", 5, 1)?;
-        refresh("b", true)?;
-        Spi::run("SELECT warren.prewarm('b')")?;
         for name in ["v", "w", "x", "y", "z"] {
             Spi::run(&format!("SELECT warren.vector_const('a', '{name}', 1, persist := false)"))?;
         }
-        Spi::run("SELECT warren.drop_graph('a'); SET LOCAL warren.max_cache_memory = '64kB'")?;
-        // b's version is a cache hit, so no load has pruned a's vectors.
-        assert_eq!(failure("warren.vector_const('b', 'q', 1, persist := false)")?, None);
+        Spi::run("SET LOCAL warren.max_cache_memory = '64kB'")?;
+        let same = failure("warren.vector_const('a', 'v', 2, persist := false)")?;
+        let smaller = failure("warren.vector_const('a', 'w', 2, 'f32', persist := false)")?;
+        let larger = failure("warren.vector_const('a', 'u', 2, persist := false)")?;
+        assert_eq!((same, smaller), (None, None));
+        assert!(larger.unwrap_or_default().starts_with("53400"));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn room_is_made_for_a_version_before_it_is_loaded() -> Result<(), Error> {
+        rings(&["a", "b", "c"])?;
+        Spi::run(
+            "SET LOCAL warren.max_cache_memory = '250kB';
+             SELECT warren.prewarm('a'); SELECT warren.prewarm('b')",
+        )?;
+        let c = Spi::get_one::<i64>("SELECT current_version FROM warren.graphs WHERE name = 'c'")?
+            .ok_or(Error::InvalidPosition)?;
+        let expected = super::super::open::stored_bytes(c).map_err(|_| Error::InvalidPosition)?;
+        assert!(expected > 60_000, "{expected}");
+        // No room is made for what could never fit; then a, the least
+        // recently used, makes room for c.
+        super::make_room(10_000_000);
+        super::make_room(expected);
+        assert_eq!(evict("a")?, Some(0));
+        assert_eq!(evict("b")?, Some(1));
         Ok(())
     }
 
