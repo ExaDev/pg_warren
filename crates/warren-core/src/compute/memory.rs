@@ -95,12 +95,13 @@ impl ComputeMemory {
         Ok(MemoryCharge { memory: self.clone(), bytes })
     }
 
-    /// Reclaims held memory, as a failing charge would, until `bytes` more
-    /// would fit: for charges that will be made on other threads, where
-    /// nothing is reclaimed. Does nothing off the budget's thread, or if
-    /// they fit already.
+    /// Reclaims held memory until `bytes` more would fit, or all of it if
+    /// that is not enough (`bytes` may be an upper bound): for charges that
+    /// will be made on other threads, where nothing is reclaimed. Does
+    /// nothing off the budget's thread, or if they fit already.
     pub fn reclaim_for(&self, bytes: u64) {
-        self.reclaim(self.in_use().saturating_add(bytes).saturating_sub(self.0.limit));
+        let short = self.in_use().saturating_add(bytes).saturating_sub(self.0.limit);
+        self.reclaim(short.min(self.0.reclaimable.load(Ordering::Relaxed)));
     }
 
     /// Adds `bytes` to the bytes in use, if that stays within the limit,
@@ -287,6 +288,19 @@ impl Drop for MemoryCharge {
     }
 }
 
+/// A test reclaim hook that frees exactly the bytes it is asked for, as
+/// the cache's does when its entries are small.
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct Exact;
+
+#[cfg(test)]
+impl Reclaim for Exact {
+    fn reclaim(&self, bytes: u64) -> u64 {
+        bytes
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
@@ -422,6 +436,16 @@ mod tests {
         let charged =
             thread::spawn(move || worker.charge(70).map(|charge| charge.bytes())).join().unwrap();
         assert_eq!(charged, Ok(70));
+    }
+
+    #[test]
+    fn room_reclaimed_ahead_is_what_can_be_when_more_is_asked() {
+        let spare = Spare::new(30);
+        let memory = ComputeMemory::reclaiming(100, 50, 30, Box::new(spare.clone()));
+        // 90 more would be 40 over: an estimate of what the pool will
+        // charge, so all 30 reclaimable bytes are asked for.
+        memory.reclaim_for(90);
+        assert_eq!((spare.requests(), memory.in_use()), (vec![30], 20));
     }
 
     #[test]

@@ -24,12 +24,13 @@ pub(super) struct Outbox<M: Message> {
 }
 
 impl<M: Message> Outbox<M> {
-    /// About the bytes [`Self::new`] charges for `messages` over `id_space`
-    /// nodes: its offsets, the sort order and the sorted copy.
+    /// The bytes [`Self::new`] charges for `messages` over `id_space` nodes:
+    /// its offsets, the sort order and the sorted copy, which grows by the
+    /// same steps as the messages did.
     pub(super) fn bytes(messages: &Messages<M>, id_space: u64) -> u64 {
         let offsets = id_space.saturating_add(1).saturating_mul(size_of::<u64>() as u64);
         let order = (messages.len() as u64).saturating_mul(size_of::<usize>() as u64);
-        offsets.saturating_add(order).saturating_add(messages.bytes())
+        offsets.saturating_add(order).saturating_add(messages.message_bytes())
     }
 
     /// Sorts `messages` by sender, failing on a sender outside `id_space`.

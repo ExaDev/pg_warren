@@ -5,6 +5,7 @@ use proptest::prelude::*;
 
 use super::reference::{self as naive, Naive, Own, Owned, Rows};
 use super::*;
+use crate::compute::memory::Exact;
 use crate::compute::reference::{self, Edges};
 use crate::compute::{
     AnyVector, ArithmeticError, Bytes, ComputeMemory, Element, Mask, Message, MessageKind, Vector,
@@ -284,32 +285,31 @@ fn a_gather_past_the_budget_is_an_error_and_charges_nothing() {
     }
 }
 
-/// A reclaim hook that frees all of what it holds whatever it is asked.
-#[derive(Debug)]
-struct FreesAll(u64);
-
-impl crate::compute::Reclaim for FreesAll {
-    fn reclaim(&self, _bytes: u64) -> u64 {
-        self.0
-    }
-}
-
 #[test]
-fn held_memory_is_reclaimed_before_the_fan_out() {
+fn held_memory_is_reclaimed_before_the_fan_out_for_what_is_sized_ahead() {
+    // A mask that selects no receiver: the parts, which grow on the pool
+    // and are not sized ahead, stay empty, so all the pool charges is the
+    // outbox and (without reverse CSRs) the inbox. Six isolated nodes more
+    // than `example` make the inbox's offsets larger than the outbox's
+    // sort order, which it frees before the inbox is charged.
+    let edges = vec![(0, 0, 1, 2.0), (0, 0, 2, 3.0), (0, 1, 2, 4.0), (0, 2, 0, 5.0)];
+    let none = vector(vec![0i64; 10]);
+    let gather = Gather {
+        direction: Direction::Both,
+        mask: Some(Mask { vector: &none, complement: false }),
+        ..Gather::new(Combiner::Collect)
+    };
     for reverse in [true, false] {
-        let graph = example(reverse);
-        let sizing = memory();
-        let bytes = messages::<f64>(&sizing, &SENT).bytes();
-        // No room past the messages and 1 MiB held: the outbox and the
-        // result are charged on the pool, where nothing is reclaimed.
+        let graph = reference::graph(10, 1, &edges, true, reverse);
+        let bytes = messages::<f64>(&memory(), &SENT).bytes();
+        // No room past the messages and 1 MiB held, reclaimed exactly as
+        // asked.
         let held = 1 << 20;
-        let budget = ComputeMemory::reclaiming(bytes + held, held, held, Box::new(FreesAll(held)));
+        let budget = ComputeMemory::reclaiming(bytes + held, held, held, Box::new(Exact));
         let messages = messages::<f64>(&budget, &SENT);
-        let gather = Gather { direction: Direction::Both, ..Gather::new(Combiner::Collect) };
         let gathered =
-            super::gather(workers(), &budget, &mut Uninterrupted, &graph, &gather, &messages)
-                .unwrap();
-        assert_eq!(budget.in_use(), messages.bytes() + gathered.bytes());
+            super::gather(workers(), &budget, &mut Uninterrupted, &graph, &gather, &messages);
+        assert_eq!(gathered.map(|gathered| gathered.len()), Ok(0), "reverse CSRs: {reverse}");
     }
 }
 

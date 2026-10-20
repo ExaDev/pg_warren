@@ -56,6 +56,13 @@ impl<'g> CsrRows<'g> {
         self.csrs().next().is_some_and(AnyCsr::is_weighted)
     }
 
+    /// The edges the CSRs read store, summed: [`Self::edge_count`] for one
+    /// CSR, and at least it when merging on the fly (an edge in several
+    /// relations counts once per relation). O(relations).
+    pub(crate) fn stored_edges(&self) -> u64 {
+        self.csrs().map(AnyCsr::edge_count).fold(0, u64::saturating_add)
+    }
+
     /// The number of edges: distinct (source, target) pairs. O(1) for one
     /// CSR; merging on the fly, O(N + M).
     pub fn edge_count(&self) -> u64 {
