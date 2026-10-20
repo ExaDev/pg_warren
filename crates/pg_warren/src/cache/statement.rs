@@ -1,19 +1,31 @@
 //! The statement pin (DESIGN.md §5.5): every version and persisted vector
 //! a top-level statement reads or writes stays cached until the statement
-//! ends, whatever `warren.max_cache_memory` says, so a statement that makes
-//! many `warren.*` calls (a §6.7 library run) loads each once. When the
-//! statement ends, normally or with an error, the pin is released and the
-//! cache trimmed to the cap.
+//! ends, or its transaction does, whichever comes first, so a statement
+//! that makes many `warren.*` calls (a §6.7 library run) loads each once.
+//! A pinned entry that no call is using gives way only under pressure:
+//! when a load or a call's compute budget needs the room (`bound`). When
+//! the pin ends, normally or with an error, the cache is trimmed to
+//! `warren.max_cache_memory`.
 //!
 //! A top-level statement is one client message, the unit of
 //! `statement_timestamp()`: Postgres resets `MessageContext` before it
 //! reads the next message, including after an error, and a reset callback
-//! there ends the pin. Several statements sent in one simple-protocol query
-//! string are one message, and so one statement here. Outside a client
-//! connection (a background worker), where there is no `MessageContext`,
-//! the pin ends with the transaction.
+//! there ends the pin. So with the extended protocol each `Execute` is a
+//! statement: a portal fetched over several `Execute`s is pinned only
+//! during each. Several statements sent in one simple-protocol query string
+//! are one message, and so one statement here. A callback on
+//! `TopTransactionContext` ends the pin at the end of the top-level
+//! transaction too, so a `CALL` (or `DO`) that commits is pinned only
+//! within each of its transactions, and a background worker, which has no
+//! `MessageContext`, is pinned per transaction.
+//!
+//! Each callback is registered at most once per life of its context and
+//! ends whatever pin is open when it fires, which can only be one taken
+//! since: a `MessageContext` reset ends the message, and a
+//! `TopTransactionContext` reset or deletion ends the transaction, inside
+//! which any open pin began. No callback can end a later statement's pin.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 
 use pgrx::{pg_sys, PgMemoryContexts};
@@ -23,85 +35,90 @@ use crate::catalog::VersionId;
 use crate::vector::VectorId;
 
 thread_local! {
-    /// What the current top-level statement has pinned.
+    /// What the current pin holds.
     static STATEMENT: RefCell<Statement> = RefCell::new(Statement::default());
+    /// Whether a callback on `MessageContext` is registered.
+    static MESSAGE_END: Cell<bool> = const { Cell::new(false) };
+    /// Whether a callback on `TopTransactionContext` is registered.
+    static TRANSACTION_END: Cell<bool> = const { Cell::new(false) };
 }
 
-/// The current top-level statement's pins.
+/// The current pin.
 #[derive(Default)]
 struct Statement {
-    /// Whether its end will be signalled: a reset callback is registered.
-    open: bool,
-    /// The versions it has read.
+    /// The versions read.
     versions: HashSet<VersionId>,
-    /// The persisted vectors it has read or written.
+    /// The persisted vectors read or written.
     vectors: HashSet<VectorId>,
-    /// Whether it has raised the notice that a version does not fit.
+    /// Whether the notice that a version does not fit has been raised.
     noticed: bool,
 }
 
-/// Pins version `version` until the statement ends.
+/// Pins version `version` until the statement or transaction ends.
 pub(super) fn pin_version(version: VersionId) {
-    open();
+    register();
     STATEMENT.with_borrow_mut(|statement| statement.versions.insert(version));
 }
 
-/// Pins persisted vector `id` until the statement ends.
+/// Pins persisted vector `id` until the statement or transaction ends.
 pub(super) fn pin_vector(id: VectorId) {
-    open();
+    register();
     STATEMENT.with_borrow_mut(|statement| statement.vectors.insert(id));
 }
 
-/// Whether the statement has pinned version `version`.
+/// Whether version `version` is pinned.
 pub(super) fn version_pinned(version: VersionId) -> bool {
     STATEMENT.with_borrow(|statement| statement.versions.contains(&version))
 }
 
-/// Whether the statement has pinned persisted vector `id`.
+/// Whether persisted vector `id` is pinned.
 pub(super) fn vector_pinned(id: VectorId) -> bool {
     STATEMENT.with_borrow(|statement| statement.vectors.contains(&id))
 }
 
 /// Whether the notice that a version does not fit the cap is due: once
-/// per statement, so a loop over an oversize graph says so once.
+/// per pin, so a loop over an oversize graph says so once.
 pub(super) fn notice_due() -> bool {
-    open();
+    register();
     !STATEMENT.with_borrow_mut(|statement| std::mem::replace(&mut statement.noticed, true))
 }
 
-/// Ends the statement: releases its pins and trims the cache to
+/// Ends the pin: releases what it holds and trims the cache to
 /// `warren.max_cache_memory`.
 pub(crate) fn end_statement() {
     STATEMENT.take();
     trim();
 }
 
-/// Ends the statement when dropped: by the reset of the memory context
-/// that lives as long as the statement.
-struct StatementEnd;
+/// Ends the pin when dropped, by the reset or deletion of the memory
+/// context it was registered on, and clears that context's registration.
+///
+/// It must never call into Postgres and never panic: in a background worker
+/// it runs inside `AtCommit_Memory`, after the commit record is written,
+/// where an ERROR is promoted to PANIC. `end_statement` and `trim` are pure
+/// Rust over this backend's own maps.
+struct StatementEnd(&'static std::thread::LocalKey<Cell<bool>>);
 
 impl Drop for StatementEnd {
     fn drop(&mut self) {
+        self.0.set(false);
         end_statement();
     }
 }
 
-/// Registers the statement's end, once per statement.
-fn open() {
-    if STATEMENT.with_borrow(|statement| statement.open) {
-        return;
-    }
+/// Registers the ends of the message and of the transaction, once each per
+/// life of their contexts.
+fn register() {
     // SAFETY: reads the backend's memory context globals on the main
     // thread; MessageContext is NULL outside a client connection, and a
     // call always runs inside a transaction.
-    let context = unsafe {
-        match pg_sys::MessageContext.is_null() {
-            true => pg_sys::TopTransactionContext,
-            false => pg_sys::MessageContext,
+    let (message, transaction) = unsafe { (pg_sys::MessageContext, pg_sys::TopTransactionContext) };
+    for (registered, context) in [(&MESSAGE_END, message), (&TRANSACTION_END, transaction)] {
+        if !context.is_null() && !registered.get() {
+            PgMemoryContexts::For(context).leak_and_drop_on_delete(StatementEnd(registered));
+            registered.set(true);
         }
-    };
-    PgMemoryContexts::For(context).leak_and_drop_on_delete(StatementEnd);
-    STATEMENT.with_borrow_mut(|statement| statement.open = true);
+    }
 }
 
 #[cfg(any(test, feature = "pg_test"))]

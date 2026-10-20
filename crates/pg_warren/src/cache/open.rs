@@ -21,8 +21,8 @@ use crate::read_only::{read_one, read_two};
 use crate::segment::SpiSegmentStore;
 use crate::source::IdDatum;
 use crate::vector::{
-    self, remember, retain_transients, transient_versions, SpiVectorStore, VectorError, VectorId,
-    VectorRecord,
+    self, lookup_vector, remember, retain_transients, transient_versions, SpiVectorStore,
+    VectorError, VectorId, VectorRecord,
 };
 
 /// A graph and the version of it a call reads.
@@ -104,26 +104,59 @@ pub(crate) fn cached<E: IdDatum + Send + Sync>(
 }
 
 /// The loaded versions `first` and `second` name, as [`cached`] gives
-/// them, both pinned until the statement ends; refused, before either is
-/// loaded, if the two would not fit together.
+/// them, both pinned until the statement ends. Cached ones are taken (and
+/// so held) first; then those still missing are refused together, before
+/// either is loaded, if they would not fit beside them.
 pub(crate) fn cached_pair<E: IdDatum + Send + Sync>(
     first: &Resolved,
     second: &Resolved,
 ) -> Result<[Arc<LoadedVersion<E>>; 2], CacheError> {
-    let mut missing = vec![first.version, second.version];
+    let hit = |resolved: &Resolved| {
+        let loaded = CACHE.with_borrow_mut(|cache| cache.get::<E>(resolved.version))?;
+        pin_version(resolved.version);
+        Some(loaded)
+    };
+    let hits = [hit(first), hit(second)];
+    let mut missing: Vec<VersionId> = [first, second]
+        .iter()
+        .zip(&hits)
+        .filter(|(_, hit)| hit.is_none())
+        .map(|(resolved, _)| resolved.version)
+        .collect();
     missing.dedup();
-    missing.retain(|&version| !CACHE.with_borrow(|cache| cache.holds(version)));
-    if missing.len() == 2 {
+    if !missing.is_empty() {
         prune_dropped()?;
-        let expected =
-            expected_bytes::<E>(missing[0])?.saturating_add(expected_bytes::<E>(missing[1])?);
+        let mut expected = 0u64;
+        for &version in &missing {
+            expected = expected.saturating_add(expected_bytes::<E>(version)?);
+        }
         admit_load(&missing, expected)?;
     }
-    Ok([cached::<E>(first)?, cached::<E>(second)?])
+    let [first_hit, second_hit] = hits;
+    let first = match first_hit {
+        Some(loaded) => loaded,
+        None => cached::<E>(first)?,
+    };
+    let second = match second_hit {
+        Some(loaded) => loaded,
+        None => cached::<E>(second)?,
+    };
+    trim();
+    Ok([first, second])
+}
+
+/// Persisted vector `id`, if this backend's vector cache holds it: pinned
+/// until the statement ends (the lookup marks it used, and the cache is
+/// then trimmed). Its bytes are already counted by the cache.
+pub(crate) fn cached_vector_hit(id: VectorId) -> Option<Arc<AnyVector>> {
+    let vector = lookup_vector(id)?;
+    pin_vector(id);
+    trim();
+    Some(vector)
 }
 
 /// Persisted vector `record` of graph `graph_id`, from this backend's
-/// vector cache or read into it (its bytes charged to `memory`), pinned
+/// vector cache or read into it (the buffer charged to `memory`), pinned
 /// until the statement ends; the cache is then trimmed.
 pub(crate) fn cached_vector(
     memory: &ComputeMemory,

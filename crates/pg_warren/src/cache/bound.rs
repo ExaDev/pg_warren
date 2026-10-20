@@ -16,14 +16,15 @@
 use pgrx::{GucContext, GucFlags, GucRegistry, GucSetting};
 use warren_core::compute::ComputeMemory;
 
-use super::lru::{admits, after, evictions, Held};
+use super::lru::{admits, after, evictions, Evictions, Held};
 use super::open::prune_dropped;
 use super::statement::{vector_pinned, version_pinned};
 use super::versions::{VersionCache, CACHE};
 use super::CacheError;
 use crate::catalog::VersionId;
 use crate::vector::{
-    cached_vector_bytes, cached_vectors, forget, role_transient_bytes, transient_bytes, VectorId,
+    cached_vector_bytes, cached_vectors, forget, role_transient_bytes, transient_bytes,
+    vector_in_use, VectorId,
 };
 
 /// The default of both limits: 4 GiB, in kB.
@@ -82,48 +83,84 @@ fn max_compute_memory() -> u64 {
     bytes(&MAX_COMPUTE_MEMORY)
 }
 
-/// A fresh call budget of `warren.max_compute_memory`, less what the
-/// statement holds in the cache past `warren.max_cache_memory`. Made after
-/// the call has opened its versions, so that their loads are counted.
+/// A fresh call budget of `warren.max_compute_memory`, less what the cache
+/// holds past `warren.max_cache_memory` that it cannot evict. Made after
+/// the call has opened its versions, so that their loads are counted and
+/// they are in use. Pinned entries that no call uses first give way, least
+/// recently used first, until the cache fits the cap beside what it cannot
+/// evict: so the cache and the call together stay within the two limits.
 pub(crate) fn compute_memory() -> ComputeMemory {
-    ComputeMemory::with_held(max_compute_memory(), held_past_cap())
+    let (held, cap) = (unevictable(), max_cache_memory());
+    evict_idle_within(cap.max(held));
+    ComputeMemory::with_held(max_compute_memory(), held.saturating_sub(cap))
 }
 
-/// The bytes the cache holds past `warren.max_cache_memory` that cannot be
-/// evicted: transient vectors and what the statement has pinned.
-fn held_past_cap() -> u64 {
-    unevictable().saturating_sub(max_cache_memory())
-}
-
-/// The bytes the cache holds that cannot be evicted now: transient vectors
-/// and the versions and persisted vectors the statement has pinned.
+/// The bytes the cache holds that cannot be evicted now: transient
+/// vectors, versions evicted that calls still hold, and the versions and
+/// persisted vectors the statement has pinned that a call is using.
 fn unevictable() -> u64 {
-    let versions = CACHE.with_borrow(VersionCache::held);
-    let pinned_versions = versions.iter().filter(|held| version_pinned(held.key));
-    let pinned_vectors = cached_vectors().into_iter().filter(|(id, _, _)| vector_pinned(*id));
-    pinned_versions
+    let held_by_calls = CACHE.with_borrow(VersionCache::held_by_calls_bytes);
+    entries()
+        .into_iter()
+        .filter(|held| held.key.pinned() && held.key.in_use())
         .map(|held| held.bytes)
-        .chain(pinned_vectors.map(|(_, bytes, _)| bytes))
-        .fold(transient_bytes(), u64::saturating_add)
+        .fold(transient_bytes().saturating_add(held_by_calls), u64::saturating_add)
 }
 
-/// Refuses to load `versions`, about `expected` bytes in all, if the cache
-/// would then hold more than `warren.max_cache_memory` and
-/// `warren.max_compute_memory` together that it cannot evict: what is held
-/// past the cap would leave a call no compute memory.
+/// Every reloadable entry the cache holds.
+fn entries() -> Vec<Held<Reloadable>> {
+    let versions = CACHE.with_borrow(VersionCache::held).into_iter().map(|held| Held {
+        key: Reloadable::Version(held.key),
+        bytes: held.bytes,
+        last_used: held.last_used,
+    });
+    let vectors = cached_vectors().into_iter().map(|(id, bytes, last_used)| Held {
+        key: Reloadable::Vector(id),
+        bytes,
+        last_used,
+    });
+    versions.chain(vectors).collect()
+}
+
+/// The bytes the cache holds in all.
+fn cached_bytes() -> u64 {
+    let versions = CACHE.with_borrow(|cache| cache.bytes() + cache.held_by_calls_bytes());
+    versions.saturating_add(cached_vector_bytes()).saturating_add(transient_bytes())
+}
+
+/// Evicts the pinned entries no call is using, least recently used first,
+/// until the cache fits in `within` bytes (or holds none of them).
+fn evict_idle_within(within: u64) {
+    let total = cached_bytes();
+    if total <= within {
+        return;
+    }
+    let idle: Vec<_> =
+        entries().into_iter().filter(|held| held.key.pinned() && !held.key.in_use()).collect();
+    let others = total.saturating_sub(idle.iter().map(|held| held.bytes).sum());
+    evict(evictions(idle, others, within));
+}
+
+/// Refuses to load `versions`, about `expected` bytes in all, if what the
+/// cache cannot evict would then exceed `warren.max_cache_memory` and
+/// `warren.max_compute_memory` together: a call would have no compute
+/// memory left. Otherwise makes room for them within the two: pinned
+/// entries no call is using give way, least recently used first.
 pub(super) fn admit_load(versions: &[VersionId], expected: u64) -> Result<(), CacheError> {
     let held = unevictable();
     let (cache_limit, compute_limit) = (max_cache_memory(), max_compute_memory());
-    if held.saturating_add(expected) <= cache_limit.saturating_add(compute_limit) {
-        return Ok(());
+    let both = cache_limit.saturating_add(compute_limit);
+    if held.saturating_add(expected) > both {
+        return Err(CacheError::StatementOverLimit {
+            versions: versions.to_vec(),
+            expected,
+            held,
+            cache_limit,
+            compute_limit,
+        });
     }
-    Err(CacheError::StatementOverLimit {
-        versions: versions.to_vec(),
-        expected,
-        held,
-        cache_limit,
-        compute_limit,
-    })
+    evict_idle_within(both - expected);
+    Ok(())
 }
 
 /// Whether a version of `expected` bytes could never be kept within
@@ -153,24 +190,19 @@ pub(super) fn make_room(expected: u64) {
 }
 
 /// Evicts as [`trim`] does until the cache fits in `within` bytes, or holds
-/// only what it cannot evict.
+/// only what the statement has pinned and what cannot be evicted.
 fn trim_within(within: u64) {
-    let cached = CACHE.with_borrow(VersionCache::bytes).saturating_add(cached_vector_bytes());
-    if transient_bytes().saturating_add(cached) <= within {
+    let total = cached_bytes();
+    if total <= within {
         return;
     }
-    let versions = CACHE.with_borrow(VersionCache::held).into_iter().map(|held| Held {
-        key: Reloadable::Version(held.key),
-        bytes: held.bytes,
-        last_used: held.last_used,
-    });
-    let vectors = cached_vectors().into_iter().map(|(id, bytes, last_used)| Held {
-        key: Reloadable::Vector(id),
-        bytes,
-        last_used,
-    });
-    let evictable = versions.chain(vectors).filter(|held| !held.key.pinned()).collect();
-    let evicted = evictions(evictable, unevictable(), within);
+    let evictable: Vec<_> = entries().into_iter().filter(|held| !held.key.pinned()).collect();
+    let others = total.saturating_sub(evictable.iter().map(|held| held.bytes).sum());
+    evict(evictions(evictable, others, within));
+}
+
+/// Evicts `evicted`.
+fn evict(evicted: Evictions<Reloadable>) {
     for entry in evicted.unfit.into_iter().map(|unfit| unfit.key).chain(evicted.least_recent) {
         match entry {
             Reloadable::Version(version) => CACHE.with_borrow_mut(|cache| cache.remove(version)),
@@ -194,6 +226,14 @@ impl Reloadable {
         match self {
             Self::Version(version) => version_pinned(version),
             Self::Vector(id) => vector_pinned(id),
+        }
+    }
+
+    /// Whether a call is using it.
+    fn in_use(self) -> bool {
+        match self {
+            Self::Version(version) => CACHE.with_borrow(|cache| cache.in_use(version)),
+            Self::Vector(id) => vector_in_use(id),
         }
     }
 }
@@ -337,18 +377,21 @@ mod tests {
     #[pg_test]
     fn cached_vectors_are_evicted_to_fit_and_reloaded_when_read() -> Result<(), Error> {
         rings(&["a"])?;
-        // Five vectors of 16,000 bytes; four fit. The version never does.
-        Spi::run("SET LOCAL warren.max_cache_memory = '64kB'")?;
+        // Five vectors of 16,000 bytes; three fit beside the ~94 kB
+        // version in 150kB.
+        Spi::run("SET LOCAL warren.max_cache_memory = '150kB'")?;
         for name in ["p", "q", "r", "s", "t"] {
             statements(&[&format!("SELECT warren.vector_const('a', '{name}', 1)")])?;
         }
-        let sums = Spi::get_one::<String>(
-            "SELECT string_agg((SELECT sum(value) FROM warren.vector_values('a', n, NULL::bigint))::text, ' ')
-             FROM unnest(ARRAY['p', 'q', 'r', 's', 't']) n",
-        )?;
-        assert_eq!(sums.as_deref(), Some("2000 2000 2000 2000 2000"));
-        end_statement();
-        assert_eq!(evict("a")?, Some(4));
+        let mut sums = Vec::new();
+        for name in ["p", "q", "r", "s", "t"] {
+            sums.push(Spi::get_one::<f64>(&format!(
+                "SELECT sum(value) FROM warren.vector_values('a', '{name}', NULL::bigint)"
+            ))?);
+            end_statement();
+        }
+        assert_eq!(sums, [Some(2000.0); 5]);
+        assert_eq!(evict("a")?, Some(4), "the version and the three most recent vectors");
         Ok(())
     }
 
@@ -519,6 +562,59 @@ mod tests {
         Spi::run("SET LOCAL warren.max_cache_memory = '4GB'")?;
         assert_eq!(failure(wide)?, None);
         assert!(refused.starts_with("53400: compute memory limit exceeded"), "{refused}");
+        Ok(())
+    }
+
+    /// A statement that reads more graphs, one after another, than both
+    /// limits hold together: the versions no call still uses give way.
+    #[pg_test]
+    fn a_statement_reading_more_than_both_limits_in_sequence_evicts_what_no_call_uses(
+    ) -> Result<(), Error> {
+        rings(&["a", "b", "c", "d"])?;
+        Spi::run(
+            "SET LOCAL warren.max_cache_memory = '150kB';
+             SET LOCAL warren.max_compute_memory = '64kB'",
+        )?;
+        let read = Spi::get_one::<i64>(
+            "SELECT count(warren.prewarm(g)) FROM unnest(ARRAY['a', 'b', 'c', 'd']) g",
+        )?;
+        assert_eq!(read, Some(4));
+        Ok(())
+    }
+
+    /// A vector the cache already counts is not charged again when a call
+    /// reads it: ~94 kB of version and 32 kB of transient vectors fit the
+    /// 128 kB the two limits give.
+    #[pg_test]
+    fn a_read_of_a_vector_the_cache_counts_is_not_charged_again() -> Result<(), Error> {
+        rings(&["a"])?;
+        Spi::run(
+            "SET LOCAL warren.max_cache_memory = '64kB';
+             SET LOCAL warren.max_compute_memory = '64kB';
+             SELECT warren.vector_const('a', 'x', 1, persist := false);
+             SELECT warren.vector_const('a', 'y', 1, persist := false)",
+        )?;
+        assert_eq!(failure("warren.vector_reduce('a', 'x', 'sum')")?, None);
+        Ok(())
+    }
+
+    /// A version a call still holds after its eviction is memory too: it
+    /// counts against both limits until the call lets it go.
+    #[pg_test]
+    fn a_version_a_call_holds_after_eviction_counts_against_both_limits() -> Result<(), Error> {
+        rings(&["a", "b"])?;
+        let resolved =
+            super::super::resolve("a", None, "read").map_err(|_| Error::InvalidPosition)?;
+        let held = super::super::cached::<i64>(&resolved).map_err(|_| Error::InvalidPosition)?;
+        assert_eq!(evict("a")?, Some(1));
+        Spi::run(
+            "SET LOCAL warren.max_cache_memory = '64kB';
+             SET LOCAL warren.max_compute_memory = '64kB'",
+        )?;
+        let refused = failure("warren.prewarm('b')")?.unwrap_or_default();
+        assert!(refused.starts_with("53400: memory limit exceeded"), "{refused}");
+        drop(held);
+        assert_eq!(failure("warren.prewarm('b')")?, None, "once let go, it is not counted");
         Ok(())
     }
 }

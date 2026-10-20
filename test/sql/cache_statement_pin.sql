@@ -42,6 +42,30 @@ END $$;
 SELECT assert.equal(warren.evict('a'), 0::bigint, 'an error releases the pin');
 SELECT assert.equal(warren.evict('b'), 1::bigint, 'and the cap holds after it');
 
+-- A COMMIT inside a CALL ends the pin too: the CALL is one statement, but
+-- no pin spans its transactions.
+CREATE PROCEDURE a_then_b() LANGUAGE plpgsql AS $$ BEGIN
+    PERFORM warren.prewarm('a');
+    COMMIT;
+    PERFORM warren.prewarm('b');
+    PERFORM assert.equal(warren.evict('a'), 0::bigint, 'a COMMIT in a CALL ends the pin');
+END $$;
+SET warren.max_cache_memory = '100kB';
+CALL a_then_b();
+SELECT warren.evict('b');
+
+-- One message of several statements reading more graphs than both limits
+-- hold together: what no call still uses gives way, and nothing is
+-- refused.
+SET warren.max_cache_memory = '150kB';
+SET warren.max_compute_memory = '64kB';
+CREATE TABLE c_nodes AS SELECT generate_series(1, 2000)::bigint AS id;
+SELECT warren.create_graph('c', 'SELECT id FROM c_nodes', 'SELECT id, id % 2000 + 1 FROM c_nodes');
+SELECT warren.refresh('c');
+SELECT warren.prewarm('a') \; SELECT warren.prewarm('b') \; SELECT warren.prewarm('c') \; SELECT warren.prewarm('a');
+RESET warren.max_compute_memory;
+SELECT warren.evict(g) FROM unnest(ARRAY['a', 'b', 'c']) g;
+
 -- A library run (several warren.* calls per iteration) whose version fits
 -- the cap alone, but not beside its transient scratch (pagerank's eleven
 -- vectors of 16 kB), loads the version once.
