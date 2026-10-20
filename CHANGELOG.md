@@ -92,8 +92,11 @@
   using gives way to such a load, so a statement reading more graphs in
   sequence than both settings hold still works. It is charged to each call
   past the cap too, and gives way to a call's allocation only when the
-  call needs the room (on the main thread; allocations on compute worker
-  threads cannot evict), so a statement alternating between two graphs
+  call needs the room (on the main thread: kernels make room first for
+  what they allocate whole on compute worker threads, but `gather`'s
+  result and a multi-relation product's row scratch, which grow there,
+  cannot evict and can fail with 53400 where eviction would have made
+  room), so a statement alternating between two graphs
   that do not fit the cap together loads each once rather than on every
   call (two loads, not twenty, for ten rounds over two 94 kB graphs under
   a 150kB cap). Reading a vector the cache already holds is no longer

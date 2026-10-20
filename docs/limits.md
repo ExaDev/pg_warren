@@ -97,11 +97,14 @@ compute kernels from the main thread every millisecond), so
   settings hold them, and reloads them only when a call needs the room.
   Allocations that kernels make on worker threads (`warren.threads`)
   cannot evict anything, since only the backend's main thread may touch
-  the cache; `gather` makes room for its sorted messages before it fans
-  out, but a kernel's other worker-side buffers can fail with 53400 where
-  evicting the statement's idle versions would have made room. Raise
-  `warren.max_compute_memory` or `warren.max_cache_memory` if that
-  happens.
+  the cache. Kernels make room first for the buffers they allocate whole
+  there (`triangles`' adjacency, `gather`'s sorted messages and inbox),
+  but two kinds grow as they go and cannot: `gather`'s result, and the
+  row scratch of a product over several relations (`spmv`,
+  `spmm`, and `eigen` and `distance` through them). Those can
+  fail with 53400 where evicting the statement's idle versions would
+  have made room. Raise `warren.max_compute_memory` or
+  `warren.max_cache_memory` if that happens.
 - **What the cache holds past the cap comes out of
   `warren.max_compute_memory`.** That is transient vectors, the versions
   and vectors calls are using, and versions evicted while a call still
