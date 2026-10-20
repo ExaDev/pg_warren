@@ -34,4 +34,31 @@ mod tests {
         }
         Ok(())
     }
+
+    /// A cross-graph comparison of the two layouts (`graph2`, aligned by
+    /// external id) finds no change, and `info` reports the layouts.
+    #[pg_test]
+    fn the_two_layouts_compare_as_the_same_graph() -> Result<(), Error> {
+        merged_pair("sx")?;
+        // Each method's measure of change, which must be 0.
+        for (method, change) in [
+            ("'edit'", "-> 'overall' -> 'distance'"),
+            ("'degree'", "-> 'wasserstein'"),
+            ("'spectral', k := 3, dtype := 'f64'", "-> 'l2'"),
+        ] {
+            let found = Spi::get_one::<f64>(&format!(
+                "SELECT (warren.distance('sx_s',
+                            (SELECT current_version FROM warren.graphs WHERE name = 'sx_s'),
+                            (SELECT current_version FROM warren.graphs WHERE name = 'sx_u'),
+                            {method}, graph2 := 'sx_u') {change})::float8"
+            ))?;
+            assert_eq!(found, Some(0.0), "{method}");
+        }
+        let layouts = Spi::get_one::<String>(
+            "SELECT string_agg(name || ':' || (warren.info(name) ->> 'store_merged'), ' ' ORDER BY name)
+             FROM warren.graphs",
+        )?;
+        assert_eq!(layouts.as_deref(), Some("sx_s:true sx_u:false"));
+        Ok(())
+    }
 }

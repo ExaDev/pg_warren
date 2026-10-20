@@ -8,7 +8,9 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{merged_pair, same_with_or_without_merged};
+    use crate::fixture::{
+        merged_pair, merged_pair_with, same_failure, same_with_or_without_merged,
+    };
 
     /// `last_stats()` after running `query`, without the graph and version
     /// it names.
@@ -75,6 +77,37 @@ mod tests {
                 same(&format!("SELECT pg_temp.stats_after($q$SELECT count(*) FROM {walk}$q$)"))?;
             }
         }
+        Ok(())
+    }
+
+    #[pg_test]
+    fn unweighted_graphs_without_reverse_csrs_read_the_same() -> Result<(), Error> {
+        merged_pair_with("tu", false, false)?;
+        let same = |query: &str| same_with_or_without_merged("tu", query);
+        same(
+            "SELECT format('%s %s %s', node_id, depth, via)
+              FROM warren.bfs('{g}', ARRAY[1::bigint, 50], 4)",
+        )?;
+        same(
+            "SELECT format('%s %s', node_id, component_id)
+              FROM warren.components('{g}', NULL::bigint)",
+        )?;
+        same(
+            "SELECT coalesce(warren.shortest_path('{g}', 1::bigint, id)::text, '-')
+              FROM generate_series(1::bigint, 125) id",
+        )?;
+        same(
+            "SELECT format('%s %s', path, cost) FROM generate_series(1::bigint, 40) id,
+                     LATERAL warren.dijkstra('{g}', 2::bigint, id)",
+        )?;
+        same(
+            "SELECT format('%s %s %s %s', end_id, path, rels, count)
+              FROM warren.walk('{g}', ARRAY[1::bigint, 7],
+                               ARRAY[warren.s(NULL, 'out', NULL, 1, 3)], mode := 'paths',
+                               max_results := 2000)",
+        )?;
+        let refused = same_failure("tu", "warren.degree('{g}', 1::bigint, 'in')")?;
+        assert!(refused.is_some_and(|f| f.starts_with("55000")), "a reverse CSR is needed");
         Ok(())
     }
 }

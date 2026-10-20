@@ -92,6 +92,19 @@ pub(crate) fn failure(expression: &str) -> Result<Option<String>, Error> {
 /// versions: after the first refresh, nodes divisible by 17 are deleted
 /// (tombstoned) and nodes 121–125 added with edges.
 pub(crate) fn merged_pair(name: &str) -> Result<(), Error> {
+    merged_pair_with(name, true, true)
+}
+
+/// [`merged_pair`], weighted or not, with or without reverse CSRs.
+pub(crate) fn merged_pair_with(
+    name: &str,
+    weighted: bool,
+    build_reverse: bool,
+) -> Result<(), Error> {
+    let edge_query = match weighted {
+        true => "SELECT src, dst, rel, w",
+        false => "SELECT src, dst, rel",
+    };
     Spi::run(&format!(
         "CREATE ROLE {name}_owner;
          CREATE TABLE {name}_nodes (id bigint);
@@ -109,13 +122,13 @@ pub(crate) fn merged_pair(name: &str) -> Result<(), Error> {
          GRANT SELECT ON {name}_nodes, {name}_edges TO {name}_owner;
          SET ROLE {name}_owner;
          SELECT warren.create_graph('{name}_s', 'SELECT id FROM {name}_nodes',
-                                    'SELECT src, dst, rel, w FROM {name}_edges',
-                                    weighted := true, has_relations := true,
-                                    store_merged := true);
+                                    '{edge_query} FROM {name}_edges',
+                                    weighted := {weighted}, has_relations := true,
+                                    build_reverse := {build_reverse}, store_merged := true);
          SELECT warren.create_graph('{name}_u', 'SELECT id FROM {name}_nodes',
-                                    'SELECT src, dst, rel, w FROM {name}_edges',
-                                    weighted := true, has_relations := true,
-                                    store_merged := false);
+                                    '{edge_query} FROM {name}_edges',
+                                    weighted := {weighted}, has_relations := true,
+                                    build_reverse := {build_reverse}, store_merged := false);
          RESET ROLE;"
     ))?;
     for graph in ["s", "u"] {
@@ -157,6 +170,16 @@ pub(crate) fn same_with_or_without_merged(name: &str, query: &str) -> Result<Str
     let (stored, unmerged) = (on("s")?, on("u")?);
     assert_eq!(unmerged, stored, "{query}");
     assert!(!stored.is_empty(), "{query} returned no rows");
+    Ok(stored)
+}
+
+/// The failure (`failure`) of `expression` on graph `<name>_s` and on
+/// `<name>_u`, with `{g}` replaced by the graph's name: asserted identical,
+/// and returned.
+pub(crate) fn same_failure(name: &str, expression: &str) -> Result<Option<String>, Error> {
+    let stored = failure(&expression.replace("{g}", &format!("{name}_s")))?;
+    let unmerged = failure(&expression.replace("{g}", &format!("{name}_u")))?;
+    assert_eq!(unmerged, stored, "{expression}");
     Ok(stored)
 }
 

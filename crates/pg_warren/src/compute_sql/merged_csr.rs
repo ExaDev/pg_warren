@@ -9,7 +9,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{merged_pair, on_both, same_with_or_without_merged};
+    use crate::fixture::{merged_pair, merged_pair_with, on_both, same_with_or_without_merged};
 
     fn same(query: &str) -> Result<String, Error> {
         same_with_or_without_merged("cm", query)
@@ -77,6 +77,40 @@ mod tests {
         }
         let aggregate = "SELECT warren.aggregate_neighbours('{g}', 'm', 'agg', hops := 2)";
         same_after(aggregate, "matrix_rows", "agg")?;
+        Ok(())
+    }
+
+    /// Products pushed over the forward CSRs (no reverse CSR), on an
+    /// unweighted graph.
+    #[pg_test]
+    fn pushed_unweighted_products_read_the_same() -> Result<(), Error> {
+        merged_pair_with("cu", false, false)?;
+        on_both(
+            "cu",
+            "SELECT warren.vector_from_query('{g}', 'x', 'SELECT id, (id % 7)::float8 / 3 FROM cu_nodes')",
+        )?;
+        for semiring in ["plus_times", "min_plus", "any_pair"] {
+            for transpose in [false, true] {
+                on_both(
+                    "cu",
+                    &format!(
+                        "SELECT warren.spmv('{{g}}', 'x', 'y', semiring := '{semiring}',
+                                            transpose := {transpose})"
+                    ),
+                )?;
+                same_with_or_without_merged(
+                    "cu",
+                    "SELECT format('%s %s', node_id, value)
+                     FROM warren.vector_values('{g}', 'y', NULL::bigint)",
+                )?;
+            }
+        }
+        same_with_or_without_merged(
+            "cu",
+            "SELECT format('%s %s', node_id, value)
+             FROM warren.gather('{g}', 'SELECT id, id::text FROM cu_nodes', NULL::bigint,
+                                NULL::text[], direction := 'in')",
+        )?;
         Ok(())
     }
 }
