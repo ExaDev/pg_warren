@@ -1,5 +1,4 @@
 {
- "build": "f1987a1",
  "case": "b-unmerged",
  "nodes": 10000000,
  "edges": 100000000,
