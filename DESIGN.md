@@ -1143,7 +1143,15 @@ Test it by installing as a non-superuser in CI and running the suite. **Make the
 - an unweighted graph at default limits;
 - a weighted multi-relation graph, with and without the merged CSR, recording the measured peak of build, cache and compute against each limit.
 
-`docs/limits.md` gains a sizing table from those measurements. Tag `v0.3.0`. *Done so far:* the size-bounded LRU (§5.5); the 100M-edge soak (`bench/soak.py`; measured against §12 there: case a meets every row but BFS-vs-CTE, `reachable_set` and `eigen`, the weighted five-relation cases miss the memory row with or without the merged CSR, and the soak's two memory defects are fixed, §5.5; re-run at full scale after M7, which measured the streamed build within 4 GB for every case and `pagerank` loading its version once at the default limits), with `docs/limits.md`'s sizing table from it; the trusted install, with the switch elevating to the catalog's owner rather than the extension's (§7); the optional merged CSR (`create_graph(…, store_merged)`, stored by default; benchmarked for 1–5 and 10 relations and decided in §5.3 and §14 item 19); the §6.10 decision: native kernels, with GraphBLAS read rather than bound, from the SpMV bench re-run and the soak (§14 item 9). The kernel seam is defined there, and making it code is follow-up work.
+`docs/limits.md` gains a sizing table from those measurements. Tag `v0.3.0`. **Done (0.3.0, 2026-10-20):**
+- the size-bounded LRU and the statement pin, which make `warren.max_cache_memory` plus `warren.max_compute_memory` an enforced bound on a backend (§5.5, §14 items 18 and 20);
+- the build bounded as a whole by `warren.max_build_memory` and streamed to its segments (§5.4, §14 item 17);
+- the trusted install, with the switch elevating to the catalog's owner rather than the extension's, and dumps that restore (§5.1, §7);
+- the optional merged CSR (`create_graph(…, store_merged)`, stored by default; benchmarked for 1–5 and 10 relations, §5.3, §14 item 19);
+- the 100M-edge soak (`bench/soak.py`), re-run at full scale after M7: every case builds within 4 GB; case a meets every §12 row but BFS-vs-CTE, `reachable_set` and `eigen`; the five-relation weighted cases miss the memory row, by 30 MB without the merged CSR; `docs/limits.md`'s sizing table is from it (§12);
+- what the soak led to: its memory defects fixed (§5.5), `eigen`'s cheaper steps and new defaults and its refusal before solving (§6.5, §14 item 21), and direction-optimising `reachable_set` (§9.3);
+- the §6.10 decision: native kernels, with GraphBLAS read rather than bound (§14 item 9). The kernel seam is defined there; making it code is follow-up work;
+- the user documentation (README, `docs/`).
 
 Post-v0.3: locality ordering of dense ids (§14 item 22) first; then the planned library's groups 1 and 2 (§6.7); then contraction/project/lift and Louvain (§6.6, whose `PᵀAP` is the first SpGEMM), sparse matrix algebra (§6.11), DSM cache + compute worker, incremental maintenance, WASM programs, in roughly that order; a GPU backend when there is demand.
 
