@@ -75,12 +75,12 @@ pub(super) fn group_rows<T: Target, S: Target>(
     relation_edges: &[u64],
     id_space: u64,
     release: bool,
-) -> Result<Vec<Rows<T>>, GraphError> {
+) -> Result<BuildBuffer<Rows<T>>, GraphError> {
     let memory = columns.sources.memory().clone();
-    let mut rows = group
-        .clone()
-        .map(|relation| Rows::new(&memory, id_space, relation_edges[relation]))
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut rows = BuildBuffer::with_capacity(&memory, group.len())?;
+    for relation in group.clone() {
+        rows.push(Rows::new(&memory, id_space, relation_edges[relation])?)?;
+    }
     let slot = |columns: &Columns<S>, edge| {
         let relation = columns.relation(edge);
         group.contains(&relation).then(|| relation - group.start)

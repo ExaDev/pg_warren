@@ -695,7 +695,11 @@ mod tests {
                 // A plan holds at most one relation's CSRs at once (twice
                 // with reverse CSRs), not every relation's.
                 assert!(plan.bytes_needed() >= 2 * 51 * 8, "{relations}: {}", plan.bytes_needed());
-                assert!(plan.bytes_needed() <= offsets, "{relations}: {}", plan.bytes_needed());
+                // Besides the offsets, a header of a few hundred bytes for
+                // each relation's rows.
+                let headers = 256 * relations.max(1) as u64;
+                let needed = plan.bytes_needed();
+                assert!(needed <= offsets + headers, "{relations}: {needed}");
             }
         }
     }
@@ -705,14 +709,15 @@ mod tests {
         let memory = BuildMemory::new(100);
         let edges = EdgeList::within(3, false, &memory);
         let plan = BuildPlan::new(&edges, 1, 3, unmerged(false), &memory).unwrap();
-        assert_eq!(plan.bytes_needed(), 32);
-        let small = BuildMemory::new(31);
+        // One relation's offsets and targets, and the header of its rows.
+        assert!(plan.bytes_needed() > 32, "{}", plan.bytes_needed());
+        let small = BuildMemory::new(plan.bytes_needed() - 1);
         let edges = EdgeList::within(3, false, &small);
         let refused = plan.build(edges, &mut Built::default());
-        assert_eq!(
-            refused,
-            Err(GraphError::BuildMemoryLimit { requested: 32, in_use: 0, limit: 31 })
-        );
+        assert!(matches!(refused, Err(GraphError::BuildMemoryLimit { .. })), "{refused:?}");
+        let enough = BuildMemory::new(plan.bytes_needed());
+        let edges = EdgeList::within(3, false, &enough);
+        assert!(plan.build(edges, &mut Built::default()).is_ok());
     }
 
     #[derive(Debug, Clone)]

@@ -66,22 +66,38 @@ impl<E: ExternalId> LoadedVersion<E> {
     }
 }
 
+/// The id map and relation dictionary of a version, each with the build
+/// memory it holds.
+pub(crate) struct Identity<E> {
+    /// The id map.
+    pub(crate) id_map: IdMap<E>,
+    /// The charge for the id map.
+    pub(crate) id_map_charge: BuildCharge,
+    /// The relation dictionary.
+    pub(crate) relations: RelationDictionary,
+    /// The charge for the relation dictionary.
+    pub(crate) relations_charge: BuildCharge,
+}
+
 /// The id map and relation dictionary of `version`, without its CSRs: what
-/// a build needs of the version it starts from. The id map's segments, its
-/// decoding and the id map itself are charged to `memory`; returns the
-/// charge for the id map.
+/// a build needs of the version it starts from. Their segments, their
+/// decoding and what they hold are charged to `memory`.
 pub(crate) fn load_identity<E: ExternalId>(
     segments: &mut impl SegmentStore,
     version: VersionId,
     memory: &BuildMemory,
-) -> Result<(IdMap<E>, RelationDictionary, BuildCharge), LoadError> {
+) -> Result<Identity<E>, LoadError> {
     let (tombstones, _tombstones_charge) =
         read_segment_within(segments, version, TOMBSTONES, memory)?;
     let (id_map, _id_map_charge) = read_segment_within(segments, version, ID_MAP, memory)?;
-    let (id_map, charge) = IdMap::decode_within(&id_map, &tombstones, memory)?;
-    let relations =
-        RelationDictionary::decode(&read_segment(segments, version, RELATION_DICTIONARY)?)?;
-    Ok((id_map, relations, charge))
+    let (id_map, id_map_charge) = IdMap::decode_within(&id_map, &tombstones, memory)?;
+    let (encoded, _encoded_charge) =
+        read_segment_within(segments, version, RELATION_DICTIONARY, memory)?;
+    // Decoded first, then charged: it holds about twice the encoding,
+    // whose bytes are charged while it decodes.
+    let relations = RelationDictionary::decode(&encoded)?;
+    let relations_charge = memory.charge(relations.bytes())?;
+    Ok(Identity { id_map, id_map_charge, relations, relations_charge })
 }
 
 /// Loads every segment of `version`, validating each as it is decoded and
@@ -94,7 +110,8 @@ pub(crate) fn load<E: ExternalId>(
     version: VersionId,
     store_merged: bool,
 ) -> Result<LoadedVersion<E>, LoadError> {
-    let (id_map, relations, _) = load_identity(segments, version, &BuildMemory::unlimited())?;
+    let Identity { id_map, relations, .. } =
+        load_identity(segments, version, &BuildMemory::unlimited())?;
     let id_space = id_map.id_space();
     let mut csrs = Vec::new();
     for index in 0..relations.len() {
@@ -257,10 +274,13 @@ mod tests {
         let mut store = stored(&version);
         store.chunks.retain(|(_, name, _), _| !name.contains(':'));
         let memory = BuildMemory::unlimited();
-        let (id_map, relations, charge) = load_identity::<i64>(&mut store, 7, &memory).unwrap();
+        let Identity { id_map, id_map_charge, relations, relations_charge } =
+            load_identity::<i64>(&mut store, 7, &memory).unwrap();
         assert_eq!(id_map, version.id_map);
         assert_eq!(relations, version.relations);
-        assert_eq!((charge.bytes(), memory.in_use()), (id_map.bytes(), id_map.bytes()));
+        assert_eq!(id_map_charge.bytes(), id_map.bytes());
+        assert_eq!(relations_charge.bytes(), relations.bytes());
+        assert_eq!(memory.in_use(), id_map.bytes() + relations.bytes());
         // The segments and the decoding's scratch were charged while it loaded.
         assert!(memory.peak() > 2 * id_map.bytes(), "{}", memory.peak());
         let tight = BuildMemory::new(id_map.bytes());

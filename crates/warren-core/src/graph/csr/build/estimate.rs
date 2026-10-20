@@ -5,6 +5,7 @@
 
 use std::mem::size_of;
 
+use super::columns::Rows;
 use super::deduplication::{merged_entry, relation_entry};
 use super::{target_bytes, BuildPlan};
 use crate::graph::RelationIndex;
@@ -51,6 +52,7 @@ impl BuildPlan {
         for (index, group) in self.groups.iter().enumerate() {
             let release = !self.store_merged && index + 1 == self.groups.len();
             let group_edges = &self.relation_edges[group.clone()];
+            ledger.hold(rows_headers(group_edges.len()));
             for &edges in group_edges {
                 ledger.hold(offsets.saturating_add(edges.saturating_mul(target)));
             }
@@ -75,6 +77,7 @@ impl BuildPlan {
                 }
                 ledger.free(csr(edges));
             }
+            ledger.free(rows_headers(group_edges.len()));
         }
         if self.store_merged {
             ledger.hold(csr(edges).saturating_sub(edges.saturating_mul(weight)));
@@ -102,6 +105,12 @@ impl BuildPlan {
         }
         ledger.peak
     }
+}
+
+/// The bytes of the rows a group of `relations` relations is scattered
+/// into, without their buffers.
+fn rows_headers(relations: usize) -> u64 {
+    (relations as u64).saturating_mul(size_of::<Rows<u32>>() as u64)
 }
 
 /// [`relation_entry`] at a target width of `target` bytes.

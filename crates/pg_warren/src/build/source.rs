@@ -56,6 +56,8 @@ pub(super) mod tests {
         pub(in crate::build) edges: Vec<OwnedEdgeRow>,
         /// The row estimate to announce; the true count if `None`.
         pub(in crate::build) estimated_rows: Option<u64>,
+        /// How many edge rows the sink has taken, shared by clones.
+        pub(in crate::build) rows_read: std::rc::Rc<std::cell::Cell<usize>>,
     }
 
     impl SourceReader<i64> for MemorySource {
@@ -76,6 +78,7 @@ pub(super) mod tests {
                     relation: relation.as_deref(),
                     weight: *weight,
                 })?;
+                self.rows_read.set(self.rows_read.get() + 1);
             }
             Ok(())
         }

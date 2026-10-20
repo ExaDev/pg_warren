@@ -85,6 +85,7 @@ impl<'s, S: SegmentStore> SegmentWriter<'s, S> {
         self.chunked(ID_MAP, |each| id_map.encode_chunked(chunk_size, &memory, each))?;
         let tombstones = id_map.tombstones();
         self.chunked(TOMBSTONES, |each| tombstones.encode_chunked(chunk_size, &memory, each))?;
+        let _encoded_charge = memory.charge(relations.encoded_bytes())?;
         let encoded = relations.encode()?;
         self.bytes += write_segment(
             self.segments,

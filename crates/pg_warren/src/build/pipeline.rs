@@ -7,14 +7,14 @@
 //! CSRs are built where the plan shows it, else where it reserves.
 
 use warren_core::graph::{
-    BuildMemory, BuildPlan, CsrLayout, EdgeIntake, EdgeList, ExternalId, GraphCsr, IdMap,
-    RelationDictionary, RelationIndex,
+    BuildCharge, BuildMemory, BuildPlan, CsrLayout, EdgeIntake, EdgeList, ExternalId, GraphCsr,
+    GraphError, IdMap, RelationDictionary, RelationIndex,
 };
 
 use super::error::BuildError;
 use super::source::{EdgeRow, EdgeSink, SourceReader};
 use super::version::Catalog;
-use crate::cache::load_identity;
+use crate::cache::{load_identity, Identity};
 use crate::catalog::{GraphDefinition, NewVersion, VersionId, VersionStats};
 use crate::segment::{writer_memory, SegmentStore, SegmentWriter};
 
@@ -44,23 +44,33 @@ pub(crate) fn build<E: ExternalId>(
     catalog: &mut impl Catalog,
 ) -> Result<VersionId, BuildError> {
     let memory = BuildMemory::new(request.memory_budget);
-    let (base, mut relations, base_charge) = match graph.current_version {
+    let base = match graph.current_version {
         Some(version) => load_identity(segments, version, &memory)?,
-        None => (IdMap::new(), RelationDictionary::new(), memory.charge(0)?),
+        None => Identity {
+            id_map: IdMap::new(),
+            id_map_charge: BuildCharge::none(&memory),
+            relations: RelationDictionary::new(),
+            relations_charge: BuildCharge::none(&memory),
+        },
     };
+    let Identity { id_map: base, id_map_charge: base_charge, relations, relations_charge } = base;
     let (id_map, _id_map_charge) = base.rebuild_within(source.node_ids(&memory)?)?;
     drop((base, base_charge));
     let layout = CsrLayout { build_reverse: graph.build_reverse, store_merged: graph.store_merged };
+    let mut relations = Relations {
+        dictionary: relations,
+        charge: relations_charge,
+        id_space: id_map.id_space(),
+        layout,
+        budget: request.memory_budget,
+    };
     let implicit = match graph.has_relations {
         true => None,
         false => Some(relations.intern(IMPLICIT_RELATION)?),
     };
-    let check_offsets = |relations: &RelationDictionary| {
-        GraphCsr::check_offsets(relations.len(), id_map.id_space(), layout, request.memory_budget)
-    };
-    check_offsets(&relations)?;
+    relations.check_offsets()?;
     let (edges, dropped_edges) = edges(graph, &id_map, implicit, &mut relations, source, &memory)?;
-    check_offsets(&relations)?;
+    let Relations { dictionary: relations, charge: _relations_charge, .. } = relations;
     let plan = BuildPlan::new(&edges, relations.len(), id_map.id_space(), layout, &memory)?;
     memory.require(plan.bytes_needed() + writer_memory(request.chunk_size))?;
 
@@ -91,7 +101,7 @@ fn edges<E: ExternalId>(
     graph: &GraphDefinition,
     id_map: &IdMap<E>,
     implicit: Option<RelationIndex>,
-    relations: &mut RelationDictionary,
+    relations: &mut Relations,
     source: &mut impl SourceReader<E>,
     memory: &BuildMemory,
 ) -> Result<(EdgeList, u64), BuildError> {
@@ -107,12 +117,40 @@ fn edges<E: ExternalId>(
     Ok((edges, dropped_endpoints + incomplete_rows))
 }
 
+/// The relation dictionary of a build, charged to its memory as it grows,
+/// and checked to keep the version's offsets within the budget whenever a
+/// relation is added, so that neither waits for the whole edge query.
+struct Relations {
+    dictionary: RelationDictionary,
+    charge: BuildCharge,
+    id_space: u64,
+    layout: CsrLayout,
+    budget: u64,
+}
+
+impl Relations {
+    /// The index of `name`, added if it is new.
+    fn intern(&mut self, name: &str) -> Result<RelationIndex, BuildError> {
+        let before = self.dictionary.len();
+        let index = self.dictionary.intern_within(name, &mut self.charge)?;
+        if self.dictionary.len() > before {
+            self.check_offsets()?;
+        }
+        Ok(index)
+    }
+
+    /// Refuses a version whose offsets would exceed the budget.
+    fn check_offsets(&self) -> Result<(), GraphError> {
+        GraphCsr::check_offsets(self.dictionary.len(), self.id_space, self.layout, self.budget)
+    }
+}
+
 /// The edge sink of a build: remaps rows through the edge intake.
 struct EdgeCollector<'b, 'm, E> {
     graph: &'b GraphDefinition,
     /// The one relation of a graph without relations.
     implicit: Option<RelationIndex>,
-    relations: &'b mut RelationDictionary,
+    relations: &'b mut Relations,
     intake: EdgeIntake<'m, E>,
     /// Rows dropped for a NULL relation or weight.
     incomplete_rows: u64,
@@ -145,7 +183,7 @@ impl<E: ExternalId> EdgeSink<E> for EdgeCollector<'_, '_, E> {
 fn relation_and_weight<E>(
     graph: &GraphDefinition,
     implicit: Option<RelationIndex>,
-    relations: &mut RelationDictionary,
+    relations: &mut Relations,
     row: &EdgeRow<'_, E>,
 ) -> Result<Option<(RelationIndex, f64)>, BuildError> {
     let relation = match (implicit, row.relation) {
@@ -561,13 +599,18 @@ mod tests {
         let request =
             RefreshRequest { promote: true, label: None, chunk_size: 16, memory_budget: 10_000 };
         let refused = world.try_refresh(&graph, &request, &source);
-        assert!(matches!(
-            refused,
-            Err(BuildError::Graph(GraphError::OffsetsOverBudget {
-                required: 17_776,
-                budget: 10_000
-            }))
-        ));
+        // Refused at the 56th relation, while reading: 57 CSRs (with the
+        // merged one) × 2 directions × 11 offsets × 8 bytes, not after all 100.
+        assert!(
+            matches!(
+                refused,
+                Err(BuildError::Graph(GraphError::OffsetsOverBudget {
+                    required: 10_032,
+                    budget: 10_000
+                }))
+            ),
+            "{refused:?}"
+        );
         assert!(world.catalog.versions.is_empty());
     }
 
@@ -610,6 +653,59 @@ mod tests {
         assert_eq!(stats.edge_count + stats.deduplicated_edges, 300);
     }
 
+    /// Edge rows each naming a new relation, `name-<i>`, on `nodes` nodes.
+    fn one_relation_per_row(nodes: i64, rows: i64, name: &str) -> MemorySource {
+        let edges =
+            (0..rows).map(|r| typed_edge(r % nodes, (r + 1) % nodes, &format!("{name}-{r}"), 0.0));
+        MemorySource {
+            nodes: (0..nodes).collect(),
+            edges: edges.collect(),
+            ..MemorySource::default()
+        }
+    }
+
+    /// The offsets of R relations over N nodes are refused as soon as the
+    /// relations the edge rows name take them over the budget, not after
+    /// the whole edge query has been read.
+    #[test]
+    fn relations_whose_offsets_exceed_the_budget_are_refused_while_reading() {
+        let mut world = World::default();
+        let graph = GraphDefinition { has_relations: true, ..graph() };
+        let source = one_relation_per_row(10, 30_000, "relation");
+        let request =
+            RefreshRequest { promote: true, label: None, chunk_size: 16, memory_budget: 1 << 20 };
+        let refused = world.try_refresh(&graph, &request, &source);
+        assert!(
+            matches!(refused, Err(BuildError::Graph(GraphError::OffsetsOverBudget { .. }))),
+            "{refused:?}"
+        );
+        assert!(source.rows_read.get() < 10_000, "{} rows read", source.rows_read.get());
+        assert!(world.catalog.versions.is_empty());
+    }
+
+    /// The relation dictionary is charged as it grows: with one node, its
+    /// names outgrow the offsets, and the build is refused for memory while
+    /// reading (DESIGN.md §5.4).
+    #[test]
+    fn a_relation_dictionary_past_the_budget_is_refused_while_reading() {
+        let mut world = World::default();
+        let graph = GraphDefinition { has_relations: true, ..graph() };
+        let name = "a-relation-name-long-enough-to-outgrow-its-offsets";
+        let source = one_relation_per_row(1, 30_000, name);
+        let request =
+            RefreshRequest { promote: true, label: None, chunk_size: 16, memory_budget: 1 << 20 };
+        let refused = world.try_refresh(&graph, &request, &source);
+        assert!(
+            matches!(
+                refused,
+                Err(BuildError::Graph(GraphError::BuildMemoryLimit { limit: 1_048_576, .. }))
+            ),
+            "{refused:?}"
+        );
+        assert!(source.rows_read.get() < 20_000, "{} rows read", source.rows_read.get());
+        assert!(world.catalog.versions.is_empty());
+    }
+
     #[test]
     fn a_wildly_wrong_row_estimate_does_not_fail_the_build() {
         let mut world = World::default();
@@ -618,6 +714,7 @@ mod tests {
                 nodes: vec![1, 2],
                 edges: vec![edge(1, 2)],
                 estimated_rows: Some(estimate),
+                ..MemorySource::default()
             };
             let version = world.refresh(&graph(), &source, true);
             assert_eq!(world.catalog.version(version).stats.edge_count, 1);

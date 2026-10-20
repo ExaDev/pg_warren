@@ -12,8 +12,8 @@ use std::error::Error;
 use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 
 use warren_core::graph::{
-    BuildBuffer, BuildMemory, BuildPlan, BuiltCsr, CsrLayout, CsrPart, CsrSink, EdgeIntake,
-    GraphError, IdMap, RelationDictionary,
+    BuildBuffer, BuildCharge, BuildMemory, BuildPlan, BuiltCsr, CsrLayout, CsrPart, CsrSink,
+    EdgeIntake, GraphError, IdMap, RelationDictionary,
 };
 
 /// The system allocator, counting the bytes live now and at the peak.
@@ -61,12 +61,29 @@ type Outcome<T> = Result<T, Box<dyn Error>>;
 
 /// A random graph: `nodes` external ids and `edges` rows of (source,
 /// target, relation, weight), generated before anything is measured.
+#[derive(Clone, Copy)]
 struct Case {
     nodes: u64,
     edges: u64,
     relations: usize,
     weighted: bool,
     layout: CsrLayout,
+    /// Edges are emitted in both directions.
+    undirected: bool,
+    /// The edge list is reserved for the row count up front, as from an
+    /// exact planner estimate, rather than grown as rows arrive.
+    reserve: bool,
+    /// The build starts from a version over the same nodes and as many
+    /// again that have since disappeared (tombstoned).
+    base: bool,
+}
+
+impl Case {
+    fn new(nodes: u64, edges: u64, relations: usize, weighted: bool, store_merged: bool) -> Self {
+        let layout = CsrLayout { build_reverse: true, store_merged };
+        let (undirected, reserve, base) = (false, true, false);
+        Self { nodes, edges, relations, weighted, layout, undirected, reserve, base }
+    }
 }
 
 /// One edge row in external ids.
@@ -87,6 +104,15 @@ fn rows(case: &Case) -> Vec<Row> {
             (source as i64 * 3, target as i64 * 3, relation, 0.25 * (next(8) + 1) as f64)
         })
         .collect()
+}
+
+/// The `id_map` and `tombstones` segments of the version a build starts
+/// from: `nodes` ids that survive and as many that disappear.
+fn base_segments(nodes: u64) -> Outcome<(Vec<u8>, Vec<u8>)> {
+    let ids = (0..2 * nodes as i64).map(|id| if id % 2 == 0 { id / 2 * 3 } else { -id });
+    let first = IdMap::new().rebuild(ids.collect())?;
+    let base = first.rebuild((0..nodes as i64).map(|id| id * 3).collect())?;
+    Ok((base.encode()?, base.tombstones().encode()?))
 }
 
 /// The chunk size segments are encoded in, scaled down with the graphs.
@@ -111,9 +137,10 @@ impl CsrSink for Encoder {
     }
 }
 
-/// Bytes a build allocates without charging them: the vectors that track
-/// relations and groups, which grow with the relation count but not with
-/// the nodes or edges.
+/// Bytes a build allocates without charging them: a fixed few kilobytes
+/// (the plan, the budget and its groups, a segment name), whatever the
+/// nodes, edges or relations. Everything that grows with them is charged,
+/// the relation dictionary and the per-relation counts included.
 const BOOKKEEPING: u64 = 4 << 10;
 
 /// What a build of a case charged and allocated, in bytes.
@@ -132,35 +159,50 @@ struct Measured {
 /// segments, charging `memory`, as a refresh does.
 fn measure(case: &Case) -> Outcome<Measured> {
     let rows = rows(case);
-    let mut relations = RelationDictionary::new();
-    let indexes = (0..case.relations)
-        .map(|relation| relations.intern(&format!("r{relation}")))
-        .collect::<Result<Vec<_>, _>>()?;
+    let names: Vec<String> = (0..case.relations).map(|relation| format!("r{relation}")).collect();
+    let base = match case.base {
+        true => Some(base_segments(case.nodes)?),
+        false => None,
+    };
     let memory = BuildMemory::unlimited();
     let live_before = LIVE.load(SeqCst);
     PEAK.store(live_before, SeqCst);
 
+    let (base, base_charge) = match &base {
+        Some((id_map, tombstones)) => IdMap::decode_within(id_map, tombstones, &memory)?,
+        None => (IdMap::new(), BuildCharge::none(&memory)),
+    };
     let mut node_ids = BuildBuffer::new(&memory);
     for id in 0..case.nodes as i64 {
         node_ids.push(id * 3)?;
     }
-    let (id_map, _id_map_charge) = IdMap::new().rebuild_within(node_ids)?;
-    let mut intake = EdgeIntake::directed(&id_map, case.weighted).within(&memory);
-    intake.reserve(rows.len())?;
+    let (id_map, _id_map_charge) = base.rebuild_within(node_ids)?;
+    drop((base, base_charge));
+    let mut relations = RelationDictionary::new();
+    let mut relations_charge = BuildCharge::none(&memory);
+    let mut intake = match case.undirected {
+        true => EdgeIntake::undirected(&id_map, case.weighted),
+        false => EdgeIntake::directed(&id_map, case.weighted),
+    }
+    .within(&memory);
+    if case.reserve {
+        intake.reserve(rows.len())?;
+    }
     for &(source, target, relation, weight) in &rows {
-        intake.push(indexes[relation], Some(&source), Some(&target), weight)?;
+        let relation = relations.intern_within(&names[relation], &mut relations_charge)?;
+        intake.push(relation, Some(&source), Some(&target), weight)?;
     }
     let (edges, _) = intake.finish();
-    let plan = BuildPlan::new(&edges, case.relations, id_map.id_space(), case.layout, &memory)?;
+    let plan = BuildPlan::new(&edges, relations.len(), id_map.id_space(), case.layout, &memory)?;
     let chunk = (CHUNK_SIZE + 8) as u64;
     let planned = memory.peak().max(memory.in_use() + plan.bytes_needed() + chunk);
     let mut encoder = Encoder { memory: memory.clone(), bytes: 0 };
     plan.build(edges, &mut encoder)?;
-    encoder.bytes +=
-        id_map.encode_chunked(CHUNK_SIZE, &memory, &mut |_| Ok::<_, GraphError>(()))?;
-    let tombstones = id_map.tombstones();
-    encoder.bytes +=
-        tombstones.encode_chunked(CHUNK_SIZE, &memory, &mut |_| Ok::<_, GraphError>(()))?;
+    let ignore = &mut |_: &[u8]| Ok::<_, GraphError>(());
+    encoder.bytes += id_map.encode_chunked(CHUNK_SIZE, &memory, ignore)?;
+    encoder.bytes += id_map.tombstones().encode_chunked(CHUNK_SIZE, &memory, ignore)?;
+    let _encoded_charge = memory.charge(relations.encoded_bytes())?;
+    encoder.bytes += relations.encode()?.len() as u64;
 
     let allocated = (PEAK.load(SeqCst) - live_before) as u64;
     Ok(Measured { allocated, charged: memory.peak(), planned })
@@ -168,23 +210,19 @@ fn measure(case: &Case) -> Outcome<Measured> {
 
 #[test]
 fn a_build_charges_at_least_its_peak_allocation_and_plans_for_it() -> Outcome<()> {
-    let reverse = |store_merged| CsrLayout { build_reverse: true, store_merged };
+    let one = Case::new(20_000, 200_000, 1, false, true);
+    let merged = Case::new(20_000, 200_000, 5, true, true);
+    let unmerged = Case::new(20_000, 200_000, 5, true, false);
     let cases = [
-        Case {
-            nodes: 20_000,
-            edges: 200_000,
-            relations: 1,
-            weighted: false,
-            layout: reverse(true),
-        },
-        Case { nodes: 20_000, edges: 200_000, relations: 5, weighted: true, layout: reverse(true) },
-        Case {
-            nodes: 20_000,
-            edges: 200_000,
-            relations: 5,
-            weighted: true,
-            layout: reverse(false),
-        },
+        one,
+        merged,
+        unmerged,
+        Case { undirected: true, ..merged },
+        Case { reserve: false, ..unmerged },
+        Case { undirected: true, reserve: false, ..one },
+        Case { base: true, ..merged },
+        // A relation per row, as a mistaken relation column gives.
+        Case::new(10, 20_000, 20_000, true, false),
     ];
     for (number, case) in cases.iter().enumerate() {
         let measured = measure(case)?;

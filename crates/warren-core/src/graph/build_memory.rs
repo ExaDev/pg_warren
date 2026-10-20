@@ -335,6 +335,8 @@ impl<T: PartialEq> PartialEq for BuildBuffer<T> {
     }
 }
 
+impl<T: Eq> Eq for BuildBuffer<T> {}
+
 impl<T> Extend<T> for BuildBuffer<T> {
     /// Appends within the capacity already reserved; callers reserve first.
     fn extend<I: IntoIterator<Item = T>>(&mut self, values: I) {

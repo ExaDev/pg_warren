@@ -59,7 +59,7 @@ pub struct BuildPlan {
     edge_bytes: u64,
     endpoint_bytes: u64,
     /// Each relation's edges, before deduplication.
-    relation_edges: Vec<u64>,
+    relation_edges: BuildBuffer<u64>,
     groups: Vec<Range<usize>>,
     /// The most edges from one source, over all relations: a bound on any
     /// row before deduplication.
@@ -93,7 +93,7 @@ impl BuildPlan {
         let weighted = edges.weights().is_some();
         let target_bytes = target_bytes(id_space);
         let entry_bytes = target_bytes + if weighted { 8 } else { 0 };
-        let mut plan = Self {
+        let plan = Self {
             id_space,
             weighted,
             build_reverse: layout.build_reverse,
@@ -108,7 +108,6 @@ impl BuildPlan {
             relation_edges,
             longest_row,
         };
-        plan.relation_edges.shrink_to_fit();
         Ok(plan)
     }
 
@@ -177,6 +176,9 @@ impl BuildPlan {
                 self.id_space,
                 release,
             )?;
+            // The charge for the rows' headers is held until every
+            // relation of the group is built.
+            let (rows, _rows_charge) = rows.into_parts();
             for (relation, rows) in group.clone().zip(rows) {
                 let (forward, charge, folded) = rows.into_relation_csr(self.id_space)?;
                 summary.edge_count += forward.edge_count();
@@ -228,10 +230,10 @@ fn counted<S: Target>(
     relation_count: usize,
     id_space: u64,
     memory: &BuildMemory,
-) -> Result<(Vec<u64>, u64), GraphError> {
+) -> Result<(BuildBuffer<u64>, u64), GraphError> {
     let rows = usize::try_from(id_space).map_err(|_| GraphError::IdSpaceTooLarge)?;
     let mut degrees = BuildBuffer::filled(memory, rows, 0u64)?;
-    let mut relation_edges = vec![0u64; relation_count];
+    let mut relation_edges = BuildBuffer::filled(memory, relation_count, 0u64)?;
     for ((relation, source), target) in relations.iter().zip(sources).zip(targets) {
         let (source, target) = (source.dense(), target.dense());
         if source >= id_space || target >= id_space {
