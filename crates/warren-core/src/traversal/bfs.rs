@@ -53,19 +53,24 @@ pub fn bfs_each(
     filter: Option<&NodeSet>,
     limits: Limits,
     interrupts: &mut dyn Interrupts,
+    visitor: impl FnMut(Visit) -> ControlFlow<()>,
+) -> Result<TraversalStats, TraversalError> {
+    search_each(Edges::new(adjacency, filter)?, starts, limits, interrupts, visitor)
+}
+
+/// [`bfs_each`] over `edges`, which may let wide levels be pulled.
+pub(crate) fn search_each(
+    edges: Edges<'_, '_>,
+    starts: &[DenseId],
+    limits: Limits,
+    interrupts: &mut dyn Interrupts,
     mut visitor: impl FnMut(Visit) -> ControlFlow<()>,
 ) -> Result<TraversalStats, TraversalError> {
-    let edges = Edges::new(adjacency, filter)?;
+    let id_space = edges.id_space();
     let mut progress = Progress::new(interrupts);
     let mut results = Results::new(limits.max_results);
     let mut admit = |visit| results.admit(visit, &mut visitor);
-    LevelSearch::new(adjacency.id_space()).run(
-        edges,
-        starts,
-        limits.max_depth,
-        &mut progress,
-        &mut admit,
-    )?;
+    LevelSearch::new(id_space).run(edges, starts, limits.max_depth, &mut progress, &mut admit)?;
     if results.truncated {
         progress.truncate();
     }

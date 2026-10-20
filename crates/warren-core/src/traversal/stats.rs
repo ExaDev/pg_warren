@@ -4,8 +4,9 @@
 use super::TraversalError;
 use crate::interrupts::Interrupts;
 
-/// How often, in units of work (nodes visited plus edges traversed), a
-/// traversal polls for interrupts.
+/// How often, in units of work (nodes visited, edges traversed and, in a
+/// pulled level, unvisited nodes examined), a traversal polls for
+/// interrupts.
 const POLL_INTERVAL: u32 = 1 << 16;
 
 /// The work a traversal did, recorded for `warren.last_stats()`.
@@ -69,6 +70,12 @@ impl<'c> Progress<'c> {
     /// Counts a visited node, a unit of work.
     pub(crate) fn node_visited(&mut self) -> Result<(), TraversalError> {
         self.stats.nodes_visited += 1;
+        self.work()
+    }
+
+    /// Counts an unvisited node a pulled level examined, a unit of work,
+    /// so a pull over ids whose rows are empty is still polled.
+    pub(crate) fn node_examined(&mut self) -> Result<(), TraversalError> {
         self.work()
     }
 

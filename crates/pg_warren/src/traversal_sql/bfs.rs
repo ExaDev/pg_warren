@@ -68,6 +68,7 @@ fn bfs(
             rels,
             node_filter,
             max_results,
+            pull: false,
         };
         let resolved = resolve(request.graph, version, "read")?;
         let rows: Box<dyn Iterator<Item = BfsRow>> = with_id_type!(resolved.graph.id_type, E => {
@@ -79,7 +80,10 @@ fn bfs(
 }
 
 /// `warren.reachable_set`: every node within `max_depth` edges of `start`
-/// (unbounded if NULL), the starts included, once each, in BFS order.
+/// (unbounded if NULL), the starts included, once each, by depth. A level
+/// whose unvisited nodes' in-edges are fewer than its frontier's
+/// out-edges is pulled through the reverse CSR when there is one, and
+/// comes in dense id order ([`BfsCursor::reachable_set`]).
 #[pg_extern(
     schema = "warren",
     sql = r#"
@@ -108,6 +112,7 @@ fn reachable_set(
             rels,
             node_filter: None,
             max_results: None,
+            pull: true,
         };
         let resolved = resolve(request.graph, version, "read")?;
         let rows: Box<dyn Iterator<Item = AnyElement>> = with_id_type!(resolved.graph.id_type, E => {
@@ -128,6 +133,9 @@ struct Request<'a> {
     rels: Option<Vec<Option<String>>>,
     node_filter: Option<AnyArray>,
     max_results: Option<i64>,
+    /// Whether levels may be pulled: a reachable set, which reports
+    /// no `via` and promises no order within a depth.
+    pull: bool,
 }
 
 fn bfs_row<E: IdDatum>(id_map: &IdMap<E>, visit: Visit) -> Option<BfsRow> {
@@ -187,7 +195,12 @@ impl<E: IdDatum, R> LevelRows<E, R> {
             None => None,
         };
         let graph = VersionGraph(Arc::clone(&loaded));
-        let cursor = BfsCursor::new(graph, direction, relations, starts, filter, limits)?;
+        let cursor = match request.pull {
+            true => {
+                BfsCursor::reachable_set(graph, direction, relations, starts, limits.max_depth)?
+            }
+            false => BfsCursor::new(graph, direction, relations, starts, filter, limits)?,
+        };
         let recorder = Recorder::start(request.function, request.graph, version);
         Ok(Self { loaded, cursor, row, level: Vec::new(), more: true, recorder })
     }
@@ -337,6 +350,26 @@ mod tests {
         assert_eq!(found.as_deref(), Some("1 2"));
         assert_eq!(last_stats("nodes_visited")?.as_deref(), Some("2"));
         assert_eq!(last_stats("truncated")?.as_deref(), Some("false"));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn reachable_set_pulls_a_wide_level_but_bfs_keeps_its_order_and_via() -> Result<(), Error> {
+        // 1 → 2, 3, 4; 2 → 6; 3 → 5; 4 → 2: the frontier {2, 3, 4} has three
+        // row entries and the unvisited {5, 6} two in-edges, so
+        // reachable_set pulls depth 2 in dense id order.
+        Spi::run(
+            "CREATE TABLE wide_edges (src bigint, dst bigint);
+             INSERT INTO wide_edges VALUES (1, 2), (1, 3), (1, 4), (2, 6), (3, 5), (4, 2);
+             SELECT warren.create_graph('wide', 'SELECT generate_series(1::bigint, 6)',
+                                        'SELECT src, dst FROM wide_edges');
+             SELECT warren.refresh('wide')",
+        )?;
+        let found = rows("SELECT n::text FROM warren.reachable_set('wide', ARRAY[1::bigint]) n")?;
+        assert_eq!(found.as_deref(), Some("1 2 3 4 5 6"));
+        assert_eq!(last_stats("edges_traversed")?.as_deref(), Some("5"));
+        let found = bfs("'wide', ARRAY[1::bigint], NULL")?;
+        assert_eq!(found.as_deref(), Some("1:0:- 2:1:1 3:1:1 4:1:1 6:2:2 5:2:3"));
         Ok(())
     }
 

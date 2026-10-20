@@ -66,6 +66,17 @@ impl NodeSet {
         self.len += u64::from(new);
         new
     }
+
+    /// The number of 64-bit words of the bitmap.
+    pub(crate) fn word_count(&self) -> usize {
+        self.words.len()
+    }
+
+    /// Word `index` of the bitmap: bit `i` is id `64·index + i`. Zero past
+    /// the end.
+    pub(crate) fn word(&self, index: usize) -> u64 {
+        self.words.get(index).copied().unwrap_or(0)
+    }
 }
 
 fn bit(id: DenseId) -> u64 {

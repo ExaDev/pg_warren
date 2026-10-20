@@ -152,6 +152,12 @@ impl<'g> Adjacency<'g> {
         self.rows.iter().flat_map(move |rows| rows.neighbours(node))
     }
 
+    /// An upper bound on the number of [`Self::row_entries`] of `node`,
+    /// in O(1) per CSR read; exact unless relations are merged on the fly.
+    pub(crate) fn row_entry_bound(&self, node: DenseId) -> u64 {
+        self.rows.iter().map(|rows| rows.degree_bound(node)).sum()
+    }
+
     /// The hops from `node`, relation by relation in the selection's index
     /// order: each `(relation, neighbour)` pair once, so for
     /// [`Direction::Both`] a neighbour linked both ways by one relation (or
@@ -465,6 +471,8 @@ mod properties {
                     .collect();
                 prop_assert_eq!(adjacency.neighbours(node).collect::<Vec<_>>(), expected.clone());
                 prop_assert_eq!(adjacency.degree(node), expected.len() as u64);
+                let entries = adjacency.row_entries(node).count() as u64;
+                prop_assert!(adjacency.row_entry_bound(node) >= entries);
             }
         }
 

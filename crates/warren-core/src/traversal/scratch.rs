@@ -57,6 +57,18 @@ impl Visited {
         }
     }
 
+    /// The set as a bitmap, turning it dense now whatever its size.
+    pub(crate) fn densify(&mut self) -> Result<&mut NodeSet, TraversalError> {
+        match self {
+            Self::Dense(nodes) => Ok(nodes),
+            Self::Sparse { id_space, nodes } => {
+                let dense = NodeSet::from_dense_ids(*id_space, nodes.iter().copied())?;
+                *self = Self::Dense(dense);
+                self.densify()
+            }
+        }
+    }
+
     #[cfg(test)]
     fn is_dense(&self) -> bool {
         matches!(self, Self::Dense(_))
@@ -187,6 +199,18 @@ mod tests {
         }
         assert!(!visited.insert(17).unwrap());
         assert!(visited.insert(18).unwrap());
+    }
+
+    #[test]
+    fn a_sparse_visited_set_keeps_its_members_when_densified() {
+        let mut visited = Visited::new(130);
+        for id in [0, 63, 64, 129] {
+            visited.insert(id).unwrap();
+        }
+        assert!(!visited.is_dense());
+        let dense = visited.densify().unwrap();
+        assert_eq!([dense.word(0), dense.word(1), dense.word(2)], [1 | 1 << 63, 1, 1 << 1]);
+        assert!(visited.is_dense());
     }
 
     #[test]

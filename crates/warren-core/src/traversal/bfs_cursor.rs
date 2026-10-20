@@ -31,6 +31,8 @@ pub struct BfsCursor<G> {
     tally: Tally,
     /// The starts, until the first level seeds the search with them.
     starts: Option<Vec<DenseId>>,
+    /// Whether levels may be pulled (a reachable set).
+    pull: bool,
     finished: bool,
 }
 
@@ -65,8 +67,26 @@ impl<G: Borrow<GraphCsr>> BfsCursor<G> {
             results: Results::new(limits.max_results),
             tally: Tally::default(),
             starts: Some(starts),
+            pull: false,
             finished: false,
         })
+    }
+
+    /// [`reachable_set_each`](super::reachable_set_each) as a cursor: the
+    /// visits of a BFS from `starts` with no filter or result limit, whose
+    /// levels may be pulled, so that within a depth they may come in
+    /// ascending dense id order and `via` is any frontier node with an
+    /// edge to the visit.
+    pub fn reachable_set(
+        graph: G,
+        direction: Direction,
+        relations: Option<Vec<RelationIndex>>,
+        starts: Vec<DenseId>,
+        max_depth: Option<u32>,
+    ) -> Result<Self, TraversalError> {
+        let limits = Limits { max_depth, max_results: None };
+        let cursor = Self::new(graph, direction, relations, starts, None, limits)?;
+        Ok(Self { pull: true, ..cursor })
     }
 
     /// Runs the next level, handing each of its visits to `visitor`, and
@@ -82,7 +102,8 @@ impl<G: Borrow<GraphCsr>> BfsCursor<G> {
             return Ok(false);
         }
         let adjacency = adjacency(self.graph.borrow(), self.direction, self.relations.as_deref())?;
-        let edges = Edges::new(&adjacency, self.filter.as_ref())?;
+        let reverse = if self.pull { adjacency.reversed().ok() } else { None };
+        let edges = Edges::new(&adjacency, self.filter.as_ref())?.pulling(reverse.as_ref());
         let mut progress = Progress::resume(interrupts, self.tally);
         let results = &mut self.results;
         let mut admit =
@@ -236,14 +257,15 @@ mod tests {
 
 #[cfg(test)]
 mod properties {
+    use std::collections::BTreeSet;
     use std::ops::ControlFlow;
 
     use proptest::prelude::*;
 
     use super::*;
     use crate::interrupts::Uninterrupted;
-    use crate::traversal::bfs;
     use crate::traversal::reference::{directions, scenarios, selections, Scenario};
+    use crate::traversal::{bfs, reachable_set};
 
     proptest! {
         #[test]
@@ -283,6 +305,49 @@ mod properties {
             {}
             prop_assert_eq!(found, expected.result);
             prop_assert_eq!(cursor.stats(), expected.stats);
+        }
+
+        #[test]
+        fn a_reachable_set_cursor_yields_exactly_the_reachable_set(
+            (scenario, selection, starts) in scenarios().prop_flat_map(|scenario| {
+                let n = scenario.id_space;
+                let relation_count = scenario.relation_count;
+                (Just(scenario), selections(relation_count), prop::collection::vec(0..n, 0..3))
+            }),
+            direction in directions(),
+            max_depth in prop::option::of(0u32..4),
+        ) {
+            let graph = scenario.graph();
+            let indexes = scenario.indexes(&selection);
+            let adjacency = Adjacency::new(&graph, direction, Scenario::selection(&indexes)).unwrap();
+            let expected =
+                reachable_set(&adjacency, &starts, max_depth, &mut Uninterrupted).unwrap();
+
+            let mut cursor =
+                BfsCursor::reachable_set(&graph, direction, indexes, starts.clone(), max_depth)
+                    .unwrap();
+            let mut visits = Vec::new();
+            while cursor
+                .next_level(&mut Uninterrupted, |visit| {
+                    visits.push(visit);
+                    ControlFlow::Continue(())
+                })
+                .unwrap()
+            {}
+            let found: Vec<_> = visits.iter().map(|visit| visit.node).collect();
+            prop_assert_eq!(found, expected.result);
+            prop_assert_eq!(cursor.stats(), expected.stats);
+
+            let steps = scenario.steps(direction, &selection);
+            let depths = Scenario::depths(&steps, &starts, None);
+            let edges: BTreeSet<(DenseId, DenseId)> = steps.iter().map(|&(s, t, _)| (s, t)).collect();
+            for visit in &visits {
+                prop_assert_eq!(depths.get(&visit.node), Some(&visit.depth));
+                if let Some(via) = visit.via {
+                    prop_assert_eq!(depths.get(&via), Some(&(visit.depth - 1)));
+                    prop_assert!(edges.contains(&(via, visit.node)));
+                }
+            }
         }
     }
 }
