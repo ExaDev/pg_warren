@@ -7,10 +7,12 @@
 //! cannot evict (transient vectors, pinned entries a call is using, and
 //! evicted versions a call still holds) is charged past the cap to each
 //! call's compute budget, and a load that would take it past
-//! `warren.max_compute_memory` is refused; pinned entries no call is using
-//! give way, least recently used first, to a load or a call's budget that
-//! needs the room. So the cache and a call together stay within the two
-//! limits, a traversal's visited set and calls running at once aside.
+//! `warren.max_compute_memory` is refused. Pinned entries no call is using
+//! are charged too, as held memory the budget may reclaim: they give way,
+//! least recently used first, to a load or a charge on the main thread
+//! that needs the room, and not before. So the cache and a call together
+//! stay within the two limits, a traversal's visited set and calls running
+//! at once aside.
 //!
 //! Unpinned reloadable entries (versions and persisted vectors) are
 //! evicted to fit the cap, least recently used first; transient vectors
@@ -18,7 +20,7 @@
 //! would take transient vectors alone past the cap is refused.
 
 use pgrx::{GucContext, GucFlags, GucRegistry, GucSetting};
-use warren_core::compute::ComputeMemory;
+use warren_core::compute::{ComputeMemory, Reclaim};
 
 use super::lru::{admits, after, evictions, Evictions, Held};
 use super::open::prune_dropped;
@@ -88,15 +90,54 @@ fn max_compute_memory() -> u64 {
 }
 
 /// A fresh call budget of `warren.max_compute_memory`, less what the cache
-/// holds past `warren.max_cache_memory` that it cannot evict. Made after
-/// the call has opened its versions, so that their loads are counted and
-/// they are in use. Pinned entries that no call uses first give way, least
-/// recently used first, until the cache fits the cap beside what it cannot
-/// evict: so the cache and the call together stay within the two limits.
+/// holds past `warren.max_cache_memory`. Made after the call has opened
+/// its versions, so that their loads are counted and they are in use.
+/// Nothing is evicted to make it: the pinned entries no call uses are
+/// charged as held with the rest, and give way, least recently used
+/// first, only when a charge on this (the main) thread needs their room
+/// (`IdlePins`). So the cache and the call together stay within the two
+/// limits, and a statement alternating between graphs keeps them loaded
+/// while the compute budget has room.
 pub(crate) fn compute_memory() -> ComputeMemory {
-    let (held, cap) = (unevictable(), max_cache_memory());
-    evict_idle_within(cap.max(held));
-    ComputeMemory::with_held(max_compute_memory(), held.saturating_sub(cap))
+    let cap = max_cache_memory();
+    let idle = idle_entries().iter().map(|held| held.bytes).fold(0, u64::saturating_add);
+    let held = unevictable().saturating_add(idle).saturating_sub(cap);
+    ComputeMemory::reclaiming(max_compute_memory(), held, idle, Box::new(IdlePins))
+}
+
+/// The reclaim hook of a call's budget: evicts pinned entries no call is
+/// using. It runs only on the thread that made the budget, Postgres's
+/// main thread (DESIGN.md §6.9), which alone may touch the cache.
+#[derive(Debug)]
+struct IdlePins;
+
+impl Reclaim for IdlePins {
+    fn reclaim(&self, bytes: u64) -> u64 {
+        evict_idle(bytes)
+    }
+}
+
+/// Evicts the pinned entries no call is using, least recently used first,
+/// until they free `bytes` (or none are left), and returns the bytes freed.
+fn evict_idle(bytes: u64) -> u64 {
+    let mut idle = idle_entries();
+    idle.sort_by_key(|held| held.last_used);
+    let mut freed = 0u64;
+    let mut evicted = Vec::new();
+    for held in idle {
+        if freed >= bytes {
+            break;
+        }
+        freed = freed.saturating_add(held.bytes);
+        evicted.push(held.key);
+    }
+    evict(Evictions { unfit: Vec::new(), least_recent: evicted });
+    freed
+}
+
+/// The pinned entries no call is using.
+fn idle_entries() -> Vec<Held<Reloadable>> {
+    entries().into_iter().filter(|held| held.key.pinned() && !held.key.in_use()).collect()
 }
 
 /// The bytes the cache holds that cannot be evicted now: transient
@@ -139,8 +180,7 @@ fn evict_idle_within(within: u64) {
     if total <= within {
         return;
     }
-    let idle: Vec<_> =
-        entries().into_iter().filter(|held| held.key.pinned() && !held.key.in_use()).collect();
+    let idle = idle_entries();
     let others = total.saturating_sub(idle.iter().map(|held| held.bytes).sum());
     evict(evictions(idle, others, within));
 }
@@ -566,6 +606,58 @@ mod tests {
         Spi::run("SET LOCAL warren.max_cache_memory = '4GB'")?;
         assert_eq!(failure(wide)?, None);
         assert!(refused.starts_with("53400: compute memory limit exceeded"), "{refused}");
+        Ok(())
+    }
+
+    /// PR #16 re-review: a statement alternating between two graphs that
+    /// do not fit the cap together loads each once. A call's budget
+    /// charges the idle one past the cap as held and evicts it only if a
+    /// charge needs the room, which 4GB of compute memory never does here.
+    #[pg_test]
+    fn a_statement_alternating_between_two_graphs_loads_each_once() -> Result<(), Error> {
+        rings(&["a"])?;
+        let before = segment_reads()?;
+        Spi::run("SELECT warren.prewarm('a')")?;
+        let one_load = segment_reads()? - before;
+        rings(&["b"])?;
+        statements(&[
+            "SELECT warren.vector_const('a', 'x', 1)",
+            "SELECT warren.vector_const('b', 'x', 1)",
+        ])?;
+        assert_eq!((evict("a")?, evict("b")?), (Some(2), Some(2)), "a cold cache");
+        Spi::run("SET LOCAL warren.max_cache_memory = '150kB'")?;
+        let before = segment_reads()?;
+        let sums = Spi::get_one::<i64>(
+            "SELECT count(warren.vector_reduce('a', 'x', 'sum')
+                          + warren.vector_reduce('b', 'x', 'sum'))
+             FROM generate_series(1, 10)",
+        )?;
+        assert_eq!(sums, Some(10));
+        assert_eq!((segment_reads()? - before) / one_load, 2, "each graph loaded once");
+        Ok(())
+    }
+
+    /// The idle pins a call's budget charges as held give way when one of
+    /// its charges needs the room: here b's vector, 16 kB, beside the
+    /// ~50 kB by which a, idle, and b exceed a 150kB cap, in 64kB of
+    /// compute memory. a's version, used before its vector, goes first.
+    #[pg_test]
+    fn an_idle_pin_gives_way_when_a_charge_needs_its_room() -> Result<(), Error> {
+        rings(&["a", "b"])?;
+        statements(&[
+            "SELECT warren.vector_const('a', 'x', 1)",
+            "SELECT warren.vector_const('b', 'x', 1)",
+        ])?;
+        assert_eq!((evict("a")?, evict("b")?), (Some(2), Some(2)), "a cold cache");
+        Spi::run(
+            "SET LOCAL warren.max_cache_memory = '150kB';
+             SET LOCAL warren.max_compute_memory = '64kB'",
+        )?;
+        let sum = Spi::get_one::<f64>(
+            "SELECT warren.vector_reduce('a', 'x', 'sum') + warren.vector_reduce('b', 'x', 'sum')",
+        )?;
+        assert_eq!(sum, Some(4000.0));
+        assert_eq!(evict("a")?, Some(1), "only a's vector stays");
         Ok(())
     }
 
