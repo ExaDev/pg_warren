@@ -192,6 +192,8 @@ mod tests {
         assert!(pulled.stats.edges_traversed <= pushed.stats.edges_traversed);
     }
 
+    // It needs more than 65,536 units of work: too slow to interpret.
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn a_pulled_level_polls_while_it_examines_unvisited_nodes_with_empty_rows() {
         struct Polls(u32);
