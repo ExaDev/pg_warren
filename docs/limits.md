@@ -78,9 +78,11 @@ compute kernels from the main thread every millisecond), so
 - **What a statement holds gives way under pressure.** A version or vector
   the statement read that no call is using (`pagerank`'s version between
   its calls, a graph a loop has moved past) is evicted, least recently
-  used first, when a load or a call's compute memory needs the room. So a
-  statement that reads more graphs, one after another, than the two
-  settings hold together still works; it reloads what it reads again.
+  used first, when a load needs the room, and whenever a call starts while
+  the cache is over its cap. So a statement that reads more graphs, one
+  after another, than the two settings hold together still works; it
+  reloads what it reads again. A statement that alternates between graphs
+  that do not fit the cap together reloads them call by call.
 - **What the cache holds past the cap comes out of
   `warren.max_compute_memory`.** That is transient vectors, the versions
   and vectors calls are using, and versions evicted while a call still

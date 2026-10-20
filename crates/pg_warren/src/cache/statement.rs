@@ -93,9 +93,10 @@ pub(crate) fn end_statement() {
 /// Ends the pin when dropped, by the reset or deletion of the memory
 /// context it was registered on, and clears that context's registration.
 ///
-/// It must never call into Postgres and never panic: in a background worker
-/// it runs inside `AtCommit_Memory`, after the commit record is written,
-/// where an ERROR is promoted to PANIC. `end_statement` and `trim` are pure
+/// It must never call into Postgres and never panic: at the end of every
+/// transaction that pinned, in any backend, it runs inside
+/// `AtCommit_Memory`, after the commit record is written, where an ERROR is
+/// promoted to PANIC. `end_statement` and `trim` are pure
 /// Rust over this backend's own maps.
 struct StatementEnd(&'static std::thread::LocalKey<Cell<bool>>);
 
