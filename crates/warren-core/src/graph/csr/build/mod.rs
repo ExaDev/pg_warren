@@ -74,7 +74,7 @@ impl BuildPlan {
     /// `8·id_space` bytes of `memory` while the plan is made.
     ///
     /// Relations are built in the fewest groups (1, 2, 4 or at most
-    /// [`groups::MOST_GROUPS`]) whose estimated need stays within half of
+    /// 8) whose estimated need stays within half of
     /// what then remains of the budget, or within what the finest split
     /// needs if that is more: a graph small for its budget is built in one
     /// pass, a large one holds no more than the finest split would, and the
