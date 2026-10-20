@@ -23,13 +23,16 @@ const FIND: &str = "SELECT g.graph_id, g.owner::oid, g.readers::oid[], g.node_qu
                            ON v.version_id = g.current_version AND v.graph_id = g.graph_id
                     WHERE g.name = $1";
 
-/// [`GraphDefinition::lock`]'s query: `current_version` as in [`FIND`].
-const LOCK: &str = "SELECT g.current_version, v.version_id
-                    FROM warren.graphs g
-                    LEFT JOIN warren.versions v
-                           ON v.version_id = g.current_version AND v.graph_id = g.graph_id
-                    WHERE g.graph_id = $1
-                    FOR UPDATE OF g";
+/// [`GraphDefinition::lock`]'s lock on the graph's row.
+const LOCK: &str = "SELECT FROM warren.graphs WHERE graph_id = $1 FOR UPDATE";
+
+/// [`GraphDefinition::lock`]'s re-read once it holds the lock:
+/// `current_version` as in [`FIND`].
+const REREAD: &str = "SELECT g.current_version, v.version_id
+                      FROM warren.graphs g
+                      LEFT JOIN warren.versions v
+                             ON v.version_id = g.current_version AND v.graph_id = g.graph_id
+                      WHERE g.graph_id = $1";
 
 thread_local! {
     /// The saved plan of [`FIND`].
@@ -139,13 +142,19 @@ impl GraphDefinition {
     /// graph dropped since [`find`](Self::find) is not found.
     pub(crate) fn lock(&mut self) -> Result<(), CatalogError> {
         // A row lock is a write (it assigns a transaction id): only the
-        // functions that build or drop versions take it.
+        // functions that build or drop versions take it. The lock and the
+        // re-read are two statements: when the lock waits for another
+        // transaction's change to the row, READ COMMITTED re-checks only
+        // the locked row (EvalPlanQual), so a version joined in the same
+        // statement would be the one from before the wait. The re-read,
+        // as a statement of its own, takes a snapshot after the lock.
         let (stored, current) = as_catalog_owner(|| {
             Spi::connect_mut(|client| {
-                let row = client.update(LOCK, Some(1), &[self.graph_id.into()])?.first();
-                if row.is_empty() {
+                let locked = client.update(LOCK, Some(1), &[self.graph_id.into()])?.len();
+                if locked == 0 {
                     return Err(CatalogError::GraphNotFound(self.name.clone()));
                 }
+                let row = client.update(REREAD, Some(1), &[self.graph_id.into()])?.first();
                 Ok((row.get::<i64>(1)?, row.get::<i64>(2)?))
             })
         })?;
