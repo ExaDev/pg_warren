@@ -90,8 +90,14 @@
   and the bytes), so a backend's peak is about the two settings together
   (DESIGN.md §5.5, §14 item 20). What a statement read but no call is
   using gives way to such a load, so a statement reading more graphs in
-  sequence than both settings hold still works. Reading a vector the cache
-  already holds is no longer charged to the call.
+  sequence than both settings hold still works. It is charged to each call
+  past the cap too, and gives way to a call's allocation only when the
+  call needs the room (on the main thread; allocations on compute worker
+  threads cannot evict), so a statement alternating between two graphs
+  that do not fit the cap together loads each once rather than on every
+  call (two loads, not twenty, for ten rounds over two 94 kB graphs under
+  a 150kB cap). Reading a vector the cache already holds is no longer
+  charged to the call.
 - `diff`, `distance` and `vector_norm_diff` read their two versions
   through the cache, under the same rule, and refuse two that do not fit
   together before loading either. Before, `diff` loaded both outside every
