@@ -21,9 +21,9 @@ mod id_map;
 mod relation;
 mod tombstones;
 
-pub use csr::CsrSegments;
+pub use csr::{CsrPart, CsrSegments};
 
-use super::{memory, DenseId, ExternalId, GraphError};
+use super::{memory, BuildMemory, DenseId, ExternalId, GraphError};
 
 /// The length of a segment header in bytes.
 pub(crate) const HEADER_LEN: usize = 16;
@@ -112,6 +112,45 @@ pub(crate) fn with_header(
     out.extend_from_slice(&[FORMAT, kind as u8, width as u8, 0]);
     out.extend_from_slice(&count.to_le_bytes());
     Ok(out)
+}
+
+/// Receives the chunks of an encoded segment, in order.
+pub type ChunkSink<'a, X> = dyn FnMut(&[u8]) -> Result<(), X> + 'a;
+
+/// Encodes a segment of `kind` whose header counts `count` and whose payload
+/// is `elements`, passing it to `each` in chunks of `chunk_size` bytes (the
+/// last one shorter): exactly [`encode`]'s bytes, split every `chunk_size`
+/// bytes, through one chunk buffer charged to `memory` rather than the whole
+/// segment. Returns the segment's length in bytes.
+pub(crate) fn encode_chunked<E: Element, X: From<GraphError>>(
+    kind: SegmentKind,
+    count: u64,
+    elements: &[E],
+    chunk_size: usize,
+    memory: &BuildMemory,
+    each: &mut ChunkSink<'_, X>,
+) -> Result<u64, X> {
+    let chunk_size = chunk_size.max(1);
+    let length = HEADER_LEN + elements.len() * E::WIDTH;
+    let capacity = chunk_size.min(length).max(HEADER_LEN) + E::WIDTH;
+    let _charge = memory.charge(capacity as u64)?;
+    let mut chunk = with_header(kind, E::WIDTH, count, capacity - HEADER_LEN)?;
+    let mut full = |chunk: &mut Vec<u8>| -> Result<(), X> {
+        while chunk.len() >= chunk_size {
+            each(&chunk[..chunk_size])?;
+            chunk.drain(..chunk_size);
+        }
+        Ok(())
+    };
+    full(&mut chunk)?;
+    for element in elements {
+        element.write(&mut chunk);
+        full(&mut chunk)?;
+    }
+    if !chunk.is_empty() {
+        each(&chunk)?;
+    }
+    Ok(length as u64)
 }
 
 /// Encodes `elements` as a segment of `kind`.
@@ -409,6 +448,52 @@ mod tests {
                 let _ = IdMap::<[u8; 16]>::decode(input, tombstones.unwrap_or_default());
                 let _ = RelationDictionary::decode(input);
             }
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn chunked_encoding_is_the_encoding_split_every_chunk_size_bytes(
+            ids in prop::collection::btree_set(any::<i64>(), 0..40),
+            rows in prop::collection::vec(0u64..30, 0..30),
+            chunk_size in 1usize..80,
+        ) {
+            let memory = BuildMemory::new(1 << 20);
+            let chunks_of = |encode: &mut dyn FnMut(&mut ChunkSink<'_, GraphError>) -> Result<u64, GraphError>| {
+                let mut chunks = Vec::new();
+                let length = encode(&mut |chunk: &[u8]| {
+                    chunks.push(chunk.to_vec());
+                    Ok(())
+                })
+                .unwrap();
+                (chunks, length)
+            };
+            let split = |bytes: Vec<u8>| bytes.chunks(chunk_size).map(<[u8]>::to_vec).collect::<Vec<_>>();
+
+            let id_map = IdMap::new().rebuild(ids.into_iter().collect()).unwrap();
+            let (chunks, length) = chunks_of(&mut |each| id_map.encode_chunked(chunk_size, &memory, each));
+            let whole = id_map.encode().unwrap();
+            prop_assert_eq!(length, whole.len() as u64);
+            prop_assert_eq!(chunks, split(whole));
+            let tombstones = id_map.tombstones();
+            let (chunks, _) = chunks_of(&mut |each| tombstones.encode_chunked(chunk_size, &memory, each));
+            prop_assert_eq!(chunks, split(tombstones.encode().unwrap()));
+
+            let mut offsets = vec![0];
+            offsets.extend(rows.iter().scan(0, |end, &row| { *end += row; Some(*end) }));
+            let edges = offsets.last().copied().unwrap_or(0) as usize;
+            let weights = (0..edges).map(|edge| edge as f64 / 3.0).collect();
+            let targets = rows.iter().flat_map(|&row| 0..row).collect();
+            let id_space = 30.max(rows.len() as u64);
+            offsets.resize(id_space as usize + 1, edges as u64);
+            let csr = AnyCsr::U64(Csr::from_parts(id_space, offsets, targets, Some(weights)).unwrap());
+            let whole = csr.encode().unwrap();
+            for (part, bytes) in [(CsrPart::Offsets, whole.offsets()), (CsrPart::Targets, whole.targets()), (CsrPart::Weights, whole.weights().unwrap_or_default())] {
+                let (chunks, length) = chunks_of(&mut |each| Ok(csr.encode_part(part, chunk_size, &memory, each)?.unwrap_or(0)));
+                prop_assert_eq!(length, bytes.len() as u64);
+                prop_assert_eq!(chunks, split(bytes.to_vec()));
+            }
+            prop_assert_eq!(memory.in_use(), 0);
         }
     }
 }

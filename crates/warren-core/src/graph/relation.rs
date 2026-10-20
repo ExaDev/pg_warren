@@ -7,7 +7,7 @@ use std::mem::size_of;
 use super::GraphError;
 
 /// The position of a relation in its relation dictionary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RelationIndex(u32);
 
 impl RelationIndex {

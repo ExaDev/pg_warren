@@ -2,7 +2,7 @@
 //! `warren.versions` and may promote it (DESIGN.md §5.4 steps 5–6, §7).
 
 use super::error::BuildError;
-use crate::catalog::{GraphDefinition, NewVersion, VersionId};
+use crate::catalog::{GraphDefinition, NewVersion, VersionId, VersionStats};
 
 /// Records versions of a graph.
 pub(crate) trait Catalog {
@@ -10,8 +10,14 @@ pub(crate) trait Catalog {
     /// returns its id.
     fn insert_version(&mut self, version: &NewVersion<'_>) -> Result<VersionId, BuildError>;
 
-    /// Records the total size of the version's segments.
-    fn record_bytes(&mut self, version: VersionId, bytes: u64) -> Result<(), BuildError>;
+    /// Records the version's statistics and the total size of its
+    /// segments, once they are written.
+    fn record_contents(
+        &mut self,
+        version: VersionId,
+        stats: &VersionStats,
+        bytes: u64,
+    ) -> Result<(), BuildError>;
 
     /// Makes `version` the current version of `graph`, marks it no longer
     /// staged, and applies retention.
@@ -22,7 +28,6 @@ pub(crate) trait Catalog {
 #[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 pub(crate) mod tests {
     use super::*;
-    use crate::catalog::VersionStats;
 
     /// A version row of a [`MemoryCatalog`].
     #[derive(Debug, Clone, PartialEq)]
@@ -61,8 +66,14 @@ pub(crate) mod tests {
             Ok(self.versions.len() as VersionId)
         }
 
-        fn record_bytes(&mut self, version: VersionId, bytes: u64) -> Result<(), BuildError> {
-            self.versions[version as usize - 1].bytes = bytes;
+        fn record_contents(
+            &mut self,
+            version: VersionId,
+            stats: &VersionStats,
+            bytes: u64,
+        ) -> Result<(), BuildError> {
+            let row = &mut self.versions[version as usize - 1];
+            (row.stats, row.bytes) = (*stats, bytes);
             Ok(())
         }
 

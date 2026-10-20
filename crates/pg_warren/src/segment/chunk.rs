@@ -2,6 +2,8 @@
 //! rows of at most [`CHUNK_SIZE`] bytes, numbered from 0, and read back by
 //! concatenating the chunks in order (DESIGN.md §5.1).
 
+use warren_core::graph::{BuildCharge, BuildMemory};
+
 use super::SegmentError;
 use crate::catalog::VersionId;
 
@@ -83,9 +85,22 @@ pub(crate) fn read_segment(
     version: VersionId,
     segment: &str,
 ) -> Result<Vec<u8>, SegmentError> {
+    let memory = BuildMemory::unlimited();
+    read_segment_within(store, version, segment, &memory).map(|(bytes, _)| bytes)
+}
+
+/// [`read_segment`], charging its bytes to `memory` before they are
+/// reserved; returns the charge with them.
+pub(crate) fn read_segment_within(
+    store: &mut impl SegmentStore,
+    version: VersionId,
+    segment: &str,
+    memory: &BuildMemory,
+) -> Result<(Vec<u8>, BuildCharge), SegmentError> {
     let Some(length) = store.segment_bytes(version, segment)? else {
         return Err(SegmentError::SegmentMissing { version, segment: segment.to_owned() });
     };
+    let charge = memory.charge(length)?;
     let mut bytes = Vec::new();
     reserve(&mut bytes, usize::try_from(length).unwrap_or(usize::MAX), segment)?;
     let mut expected = 0;
@@ -102,7 +117,7 @@ pub(crate) fn read_segment(
         bytes.extend_from_slice(data);
         Ok(())
     })?;
-    Ok(bytes)
+    Ok((bytes, charge))
 }
 
 /// Makes room for `more` bytes in `bytes`, exactly, or fails with

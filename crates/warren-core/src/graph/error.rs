@@ -172,13 +172,26 @@ pub enum GraphError {
         /// The number of relations.
         relations: usize,
     },
-    /// The offsets arrays of a build would exceed the caller's budget.
+    /// The offsets arrays of a version would exceed the build's budget.
     #[error("CSR offsets need {required} bytes, over the budget of {budget}")]
     OffsetsOverBudget {
         /// Bytes the offsets arrays need.
         required: u64,
         /// The caller's budget in bytes.
         budget: u64,
+    },
+    /// A build would hold more memory than its budget allows
+    /// ([`super::BuildMemory`]).
+    #[error(
+        "build memory limit exceeded: {requested} bytes requested, {in_use} of {limit} in use"
+    )]
+    BuildMemoryLimit {
+        /// The bytes requested.
+        requested: u64,
+        /// The bytes already charged.
+        in_use: u64,
+        /// The budget's limit in bytes.
+        limit: u64,
     },
     /// A segment header's reserved byte must be 0.
     #[error("segment reserved byte is {found}, expected 0")]

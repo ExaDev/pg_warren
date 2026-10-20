@@ -1,6 +1,7 @@
 //! `warren.max_build_memory` (DESIGN.md §5.4, §14 item 17): the memory a
-//! build's CSR offsets may take. Offsets grow as relations × id space, so a
-//! build over the budget is refused before anything is allocated.
+//! build may hold at once, every graph-sized buffer charged to it, and the
+//! most the CSR offsets of the version it builds may take (they grow as
+//! relations × id space).
 
 use pgrx::{GucContext, GucFlags, GucRegistry, GucSetting};
 
@@ -15,9 +16,9 @@ static MAX_BUILD_MEMORY: GucSetting<i32> = GucSetting::<i32>::new(DEFAULT_KB);
 pub(crate) fn define_max_build_memory() {
     GucRegistry::define_int_guc(
         c"warren.max_build_memory",
-        c"Memory a graph build's CSR offsets may take.",
-        c"Offsets grow as relations times id space; a build whose offsets would \
-           exceed this is refused before allocating.",
+        c"Memory a graph build may hold at once.",
+        c"Every buffer a refresh holds is charged to it, and the version's CSR offsets \
+           (relations times id space) must fit it; a build over it is refused.",
         &MAX_BUILD_MEMORY,
         1024,
         i32::MAX,
@@ -38,7 +39,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{refresh, ring};
+    use crate::fixture::{failure, refresh, ring, versions};
 
     #[pg_test]
     fn max_build_memory_defaults_to_4gb() -> Result<(), Error> {
@@ -47,18 +48,44 @@ mod tests {
         Ok(())
     }
 
-    // 70 000 nodes: forward and reverse offsets take 2 × 70 001 × 8 bytes.
-    #[pg_test(error = "CSR offsets need 1120016 bytes, over the budget of 1048576")]
-    fn a_refresh_over_the_build_memory_budget_is_refused() -> Result<(), Error> {
+    /// A build over the budget is refused before its edge query runs (here
+    /// it would fail with division by zero).
+    #[pg_test]
+    fn a_refresh_over_the_build_memory_budget_is_refused_before_reading_edges() -> Result<(), Error>
+    {
         ring("budget", 70_000, 2)?;
-        Spi::run("SET LOCAL warren.max_build_memory = '1MB'")?;
-        refresh("budget", true).map(|_| ())
+        Spi::run(
+            "UPDATE warren.graphs SET edge_query = 'SELECT src, dst FROM budget_edges WHERE 1 / 0 = 0'
+             WHERE name = 'budget';
+             SET LOCAL warren.max_build_memory = '1MB'",
+        )?;
+        let refused = failure("warren.refresh('budget')")?;
+        assert!(
+            refused.as_deref().is_some_and(|f| f.starts_with("53400: build memory limit exceeded")),
+            "{refused:?}"
+        );
+        Ok(())
+    }
+
+    /// 70 000 nodes' forward and reverse offsets take 1.1 MB, within 2 MB,
+    /// but the id map, the edge list and the CSRs take the build past it.
+    #[pg_test]
+    fn a_refresh_whose_whole_build_exceeds_the_budget_is_refused() -> Result<(), Error> {
+        ring("budget", 70_000, 2)?;
+        Spi::run("SET LOCAL warren.max_build_memory = '2MB'")?;
+        let refused = failure("warren.refresh('budget')")?;
+        assert!(
+            refused.as_deref().is_some_and(|f| f.starts_with("53400: build memory limit exceeded")),
+            "{refused:?}"
+        );
+        assert_eq!(versions("budget")?.as_deref(), Some(""));
+        Ok(())
     }
 
     #[pg_test]
     fn a_refresh_within_the_budget_succeeds() -> Result<(), Error> {
         ring("budget", 70_000, 2)?;
-        Spi::run("SET LOCAL warren.max_build_memory = '2MB'")?;
+        Spi::run("SET LOCAL warren.max_build_memory = '8MB'")?;
         refresh("budget", true).map(|_| ())
     }
 }
