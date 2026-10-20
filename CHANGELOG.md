@@ -2,6 +2,17 @@
 
 ## 0.3.0 — in development (until M7)
 
+- `warren.reachable_set` is direction-optimising: a depth whose frontier
+  is wide (more than a twentieth of the nodes, and more than are left
+  unvisited) is pulled from the reverse CSR, when the version has one, so
+  each unvisited node scans its in-edges only until it meets the frontier.
+  It returns the same nodes at the same depths. Behaviour change: within a
+  pulled depth, rows come in dense id order instead of the order reached,
+  and `last_stats().edges_traversed` counts the row entries scanned (16.9M
+  rather than 100M on a G(n, m) graph of 10M nodes and 100M edges). There,
+  the traversal takes 1.06 s instead of 5.96 s, and through SQL at 1M
+  nodes and 10M edges 0.24 s instead of 0.49 s. `bfs` is unchanged: it
+  keeps push for its `via` and its order (DESIGN.md §9.3).
 - `warren.max_build_memory` now bounds everything a `refresh` holds at
   once, not only the CSR offsets: the node ids, the id map, the edge list,
   the CSRs being built and the sort and write buffers. Behaviour change:
