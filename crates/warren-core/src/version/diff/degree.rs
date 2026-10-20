@@ -3,7 +3,7 @@
 //! statistic between them.
 
 use super::nodes::is_live;
-use crate::graph::{memory, ExternalId, GraphError, IdMap, MergedRows};
+use crate::graph::{memory, CsrRows, ExternalId, GraphError, IdMap};
 
 /// How many live nodes have one degree, before and after.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,7 +33,7 @@ pub struct DegreeShift {
 /// Live nodes per degree (index) of the out-degrees in `csr`.
 pub(super) fn out_degree_counts<E: ExternalId>(
     id_map: &IdMap<E>,
-    csr: MergedRows<'_>,
+    csr: CsrRows<'_>,
 ) -> Result<Vec<u64>, GraphError> {
     counts_by_degree(id_map, |dense| csr.degree(dense))
 }
@@ -42,7 +42,7 @@ pub(super) fn out_degree_counts<E: ExternalId>(
 /// its targets so that no reverse CSR is needed.
 pub(super) fn in_degree_counts<E: ExternalId>(
     id_map: &IdMap<E>,
-    csr: MergedRows<'_>,
+    csr: CsrRows<'_>,
 ) -> Result<Vec<u64>, GraphError> {
     let mut in_degrees = memory::filled(csr.id_space() as usize, 0u64)?;
     for source in 0..csr.id_space() {

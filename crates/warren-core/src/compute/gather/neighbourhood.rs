@@ -12,8 +12,7 @@ use std::slice::Iter;
 use super::outbox::{check, running_ends, Outbox};
 use crate::compute::{ComputeError, ComputeMemory, MemoryCharge, Message};
 use crate::graph::{
-    AnyCsr, DenseId, Direction, GraphCsr, MergedNeighbours, MergedRows, Neighbours,
-    RelationSelection,
+    AnyCsr, CsrRows, DenseId, Direction, GraphCsr, Neighbours, RelationSelection, RowNeighbours,
 };
 use crate::interrupts::Cancellation;
 
@@ -21,7 +20,7 @@ use crate::interrupts::Cancellation;
 /// push into an inbox.
 #[derive(Debug)]
 pub(super) struct Sources<'g> {
-    pull: Vec<MergedRows<'g>>,
+    pull: Vec<CsrRows<'g>>,
     push: Vec<&'g AnyCsr>,
 }
 
@@ -39,15 +38,15 @@ impl<'g> Sources<'g> {
         let forward = selected.iter().map(|relation| relation.forward());
         // Every relation is read through its all-relations rows, stored or
         // merged on the fly; a selection through each relation's CSRs.
-        let (forward_rows, reverse_rows): (Vec<MergedRows<'g>>, Option<Vec<MergedRows<'g>>>) =
+        let (forward_rows, reverse_rows): (Vec<CsrRows<'g>>, Option<Vec<CsrRows<'g>>>) =
             match relations {
                 RelationSelection::All => {
                     let all = graph.all_relations();
                     (vec![all.forward()], all.reverse().map(|reverse| vec![reverse]))
                 }
                 RelationSelection::Only(_) => (
-                    forward.clone().map(MergedRows::from).collect(),
-                    selected.iter().map(|r| r.reverse().map(MergedRows::from)).collect(),
+                    forward.clone().map(CsrRows::from).collect(),
+                    selected.iter().map(|r| r.reverse().map(CsrRows::from)).collect(),
                 ),
             };
         let (mut pull, mut push) = (Vec::new(), Vec::new());
@@ -67,7 +66,7 @@ impl<'g> Sources<'g> {
 /// The senders of every receiver.
 #[derive(Debug)]
 pub(super) struct Neighbourhood<'g> {
-    rows: Vec<MergedRows<'g>>,
+    rows: Vec<CsrRows<'g>>,
     inbox: Option<Inbox>,
 }
 
@@ -168,7 +167,7 @@ impl Inbox {
 #[derive(Debug, Clone)]
 enum Row<'a> {
     Csr(Neighbours<'a>),
-    Merged(MergedNeighbours<'a>),
+    Merged(RowNeighbours<'a>),
     Inbox(Copied<Iter<'a, DenseId>>),
 }
 

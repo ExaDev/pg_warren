@@ -529,3 +529,49 @@ proptest! {
         prop_assert_eq!(run(false), run(true));
     }
 }
+
+/// The smallest compute budget under which `spmv` of `graph` succeeds.
+fn least_budget(graph: &GraphCsr, transpose: bool) -> u64 {
+    let product = Product { transpose, ..Product::new(Semiring::PlusTimes) };
+    let n = graph.all_relations().forward().id_space() as usize;
+    let x = vector(1, vec![1.0f64; n]);
+    let fits = |limit| {
+        let mut y = vector(1, vec![0.0f64; n]);
+        let memory = ComputeMemory::new(limit);
+        spmv(workers(), &memory, &mut Uninterrupted, graph, &product, &x, &mut y).is_ok()
+    };
+    let (mut low, mut high) = (0, 1 << 24);
+    while low < high {
+        let mid = (low + high) / 2;
+        if fits(mid) {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    low
+}
+
+#[test]
+fn a_product_over_several_relations_charges_its_row_scratch() {
+    // A hub with 1,000 out-edges in each of two relations: merging its row
+    // over the relations needs room for 2,000 entries.
+    let edges: Edges = (0..2).flat_map(|r| (1..=1000).map(move |t| (r, 0, t, 1.0))).collect();
+    for transpose in [false, true] {
+        let build = |store_merged, build_reverse| {
+            let layout = CsrLayout { build_reverse, store_merged };
+            reference::graph_as(1001, 2, &edges, true, layout)
+        };
+        // Pushed without a reverse CSR, transposed products scatter the
+        // forward rows; pulled with one, they read the reverse rows.
+        for reverse in [true, false] {
+            let (stored, unmerged) = (build(true, reverse), build(false, reverse));
+            // The longest row merged: the hub's 2,000 forward entries, or a
+            // leaf's two reverse ones (one per relation) when pulled over
+            // the reverse CSRs.
+            let longest = if transpose && reverse { 2 } else { 2000 };
+            let extra = least_budget(&unmerged, transpose) - least_budget(&stored, transpose);
+            assert!(extra >= longest * 16, "{transpose} {reverse}: {extra}");
+        }
+    }
+}

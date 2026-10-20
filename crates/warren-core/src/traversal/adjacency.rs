@@ -5,8 +5,8 @@ use super::TraversalError;
 use std::iter::{FusedIterator, Peekable};
 
 use crate::graph::{
-    AllRelations, AnyCsr, DenseId, Direction, GraphCsr, GraphError, MergedNeighbours, MergedRows,
-    RelationCsr, RelationIndex, RelationSelection,
+    AllRelations, AnyCsr, CsrRows, DenseId, Direction, GraphCsr, GraphError, RelationCsr,
+    RelationIndex, RelationSelection, RowNeighbours,
 };
 
 /// The CSRs a traversal reads: the selected relations in one direction.
@@ -23,7 +23,7 @@ pub struct Adjacency<'g> {
     id_space: u64,
     relations: Selected<'g>,
     weighted_relations: Vec<&'g RelationCsr>,
-    rows: Vec<MergedRows<'g>>,
+    rows: Vec<CsrRows<'g>>,
     weighted_rows: Vec<&'g AnyCsr>,
     labelled: Vec<(RelationIndex, &'g RelationCsr)>,
     labelled_rows: Vec<LabelledRows<'g>>,
@@ -188,7 +188,7 @@ impl<'g> Adjacency<'g> {
 /// [`Adjacency::neighbours`].
 #[derive(Debug, Clone)]
 pub struct DistinctNeighbours<'g> {
-    rows: Vec<Peekable<MergedNeighbours<'g>>>,
+    rows: Vec<Peekable<RowNeighbours<'g>>>,
 }
 
 impl Iterator for DistinctNeighbours<'_> {
@@ -248,12 +248,12 @@ impl Iterator for UnitedRow<'_> {
 
 impl<'g> Selected<'g> {
     /// The rows to scan in `direction`.
-    fn rows(&self, direction: Direction) -> Result<Vec<MergedRows<'g>>, TraversalError> {
+    fn rows(&self, direction: Direction) -> Result<Vec<CsrRows<'g>>, TraversalError> {
         let all = match self {
             Self::All(all) => all,
             Self::Only(relations) => {
                 let csrs = scanned(relations, direction)?;
-                return Ok(csrs.into_iter().map(MergedRows::from).collect());
+                return Ok(csrs.into_iter().map(CsrRows::from).collect());
             }
         };
         let reverse = || all.reverse().ok_or(TraversalError::ReverseCsrMissing);
@@ -498,21 +498,47 @@ mod properties {
         }
 
         /// Every traversal reads its graph through an `Adjacency`, so equal
-        /// rows, in equal order, give equal results and work counts.
+        /// rows, in equal order, give equal results and work counts. The
+        /// edges are spread over up to 12 relations, past the 8 rows a merge
+        /// holds inline; targets are `u32` or `u64`, with reverse CSRs or
+        /// without (then `in` and `both` fail alike).
         #[test]
         fn rows_read_the_same_with_or_without_the_merged_csr(
-            (scenario, selection) in scenarios().prop_flat_map(|scenario| {
-                let relation_count = scenario.relation_count;
-                (Just(scenario), selections(relation_count))
-            }),
+            (scenario, selection) in scenarios()
+                .prop_flat_map(|scenario| (Just(scenario), 1usize..13))
+                .prop_map(|(scenario, relation_count)| {
+                    let edges = scenario.edges.iter().enumerate()
+                        .map(|(i, &(r, s, t, w))| ((r + 5 * i) % relation_count, s, t, w))
+                        .collect();
+                    Scenario { relation_count, edges, ..scenario }
+                })
+                .prop_flat_map(|scenario| {
+                    let relation_count = scenario.relation_count;
+                    (Just(scenario), selections(relation_count))
+                }),
             direction in directions(),
+            build_reverse in any::<bool>(),
+            wide in any::<bool>(),
         ) {
-            let stored = Scenario { store_merged: true, ..scenario.clone() }.graph();
-            let unmerged = Scenario { store_merged: false, ..scenario.clone() }.graph();
+            let stored = scenario.graph_as(true, build_reverse, wide);
+            let unmerged = scenario.graph_as(false, build_reverse, wide);
             let indexes = scenario.indexes(&selection);
             let read = |graph| Adjacency::new(graph, direction, Scenario::selection(&indexes));
-            let (stored, unmerged) = (read(&stored).unwrap(), read(&unmerged).unwrap());
-            for (stored, unmerged) in [(stored.clone(), unmerged.clone()), (stored.reversed().unwrap(), unmerged.reversed().unwrap())] {
+            let (stored, unmerged) = match (read(&stored), read(&unmerged)) {
+                (Ok(stored), Ok(unmerged)) => (stored, unmerged),
+                (stored, unmerged) => {
+                    prop_assert_eq!(unmerged.err(), stored.err());
+                    return Ok(());
+                }
+            };
+            let reversed = match (stored.reversed(), unmerged.reversed()) {
+                (Ok(stored), Ok(unmerged)) => Some((stored, unmerged)),
+                (stored, unmerged) => {
+                    prop_assert_eq!(unmerged.err(), stored.err());
+                    None
+                }
+            };
+            for (stored, unmerged) in [(stored, unmerged)].into_iter().chain(reversed) {
                 prop_assert_eq!(unmerged.id_space(), stored.id_space());
                 for node in 0..=scenario.id_space {
                     let rows = |adjacency: &Adjacency<'_>| {

@@ -3,7 +3,7 @@
 //! relations' rows on the fly (DESIGN.md §5.3, §5.4 step 4).
 
 use super::TargetWidth;
-use super::{build, transpose::transpose, AllRelations, AnyCsr, Csr, MergedRows, Target};
+use super::{build, transpose::transpose, AllRelations, AnyCsr, Csr, CsrRows, Target};
 use crate::graph::{EdgeList, GraphError, RelationIndex, RelationSelection};
 
 /// The forward CSR of a relation, and its reverse if the graph builds one.
@@ -117,7 +117,7 @@ pub struct CsrLayout {
     pub build_reverse: bool,
     /// Store the merged CSR when there are several relations. Without it,
     /// all-relations reads merge the relations' rows on the fly
-    /// ([`MergedRows`]), with the same results (DESIGN.md §5.3).
+    /// ([`CsrRows`]), with the same results (DESIGN.md §5.3).
     pub store_merged: bool,
 }
 
@@ -313,17 +313,17 @@ impl GraphCsr {
         fn read(csrs: &RelationCsr) -> AllRelations<'_> {
             AllRelations {
                 forward: csrs.forward().into(),
-                reverse: csrs.reverse().map(MergedRows::from),
+                reverse: csrs.reverse().map(CsrRows::from),
             }
         }
         match &self.layout {
             Layout::Single(csrs) | Layout::Merged { merged: csrs, .. } => read(csrs),
             Layout::Unmerged { relations } => AllRelations {
-                forward: MergedRows::merging(relations, false),
+                forward: CsrRows::merging(relations, false),
                 reverse: relations
                     .iter()
                     .all(|relation| relation.reverse().is_some())
-                    .then(|| MergedRows::merging(relations, true)),
+                    .then(|| CsrRows::merging(relations, true)),
             },
         }
     }
@@ -367,7 +367,7 @@ mod tests {
         edges
     }
 
-    fn pairs(rows: MergedRows<'_>) -> Vec<(DenseId, DenseId)> {
+    fn pairs(rows: CsrRows<'_>) -> Vec<(DenseId, DenseId)> {
         let row = |source| rows.neighbours(source).map(move |target| (source, target));
         (0..rows.id_space()).flat_map(row).collect()
     }
@@ -669,7 +669,9 @@ mod tests {
     }
 
     fn scenarios() -> impl Strategy<Value = Scenario> {
-        (any::<bool>(), any::<bool>(), 1usize..5, 1u64..12, any::<bool>()).prop_flat_map(
+        // Up to 12 relations, so that merges on the fly spill past the 8
+        // rows they hold inline.
+        (any::<bool>(), any::<bool>(), 1usize..13, 1u64..12, any::<bool>()).prop_flat_map(
             |(wide, store_merged, relation_count, id_space, weighted)| {
                 let edge = (0..relation_count, 0..id_space, 0..id_space, 0u8..8);
                 prop::collection::vec(edge, 0..60).prop_map(move |edges| Scenario {
@@ -741,7 +743,10 @@ mod tests {
         }
 
         #[test]
-        fn rows_merged_on_the_fly_read_as_the_stored_merged_csr(scenario in scenarios()) {
+        fn rows_merged_on_the_fly_read_as_the_stored_merged_csr(
+            scenario in scenarios(),
+            build_reverse in any::<bool>(),
+        ) {
             let mut relations = RelationDictionary::new();
             let indexes: Vec<RelationIndex> = (0..scenario.relation_count)
                 .map(|r| relations.intern(&r.to_string()).unwrap())
@@ -751,16 +756,21 @@ mod tests {
                 edges.push(indexes[r], source, target, f64::from(weight)).unwrap();
             }
             let (count, id_space) = (scenario.relation_count, scenario.id_space);
+            // `wide`: u64 targets, otherwise chosen only from 2^32 nodes.
             let build = |store_merged| {
-                let layout = CsrLayout { build_reverse: true, store_merged };
-                GraphCsr::build_as(edges.clone(), count, id_space, layout).unwrap()
+                let layout = CsrLayout { build_reverse, store_merged };
+                match scenario.wide {
+                    false => GraphCsr::build_as(edges.clone(), count, id_space, layout),
+                    true => GraphCsr::build_with::<u64>(edges.clone(), count, id_space, layout),
+                }
+                .unwrap()
             };
             let (stored, unmerged) = (build(true), build(false));
             let (stored, unmerged) = (stored.all_relations(), unmerged.all_relations());
-            for (stored, unmerged) in [
-                (stored.forward(), unmerged.forward()),
-                (stored.reverse().unwrap(), unmerged.reverse().unwrap()),
-            ] {
+            prop_assert_eq!(unmerged.reverse().is_some(), build_reverse);
+            prop_assert_eq!(stored.reverse().is_some(), build_reverse);
+            let reverse = stored.reverse().zip(unmerged.reverse());
+            for (stored, unmerged) in [(stored.forward(), unmerged.forward())].into_iter().chain(reverse) {
                 prop_assert_eq!(unmerged.id_space(), stored.id_space());
                 prop_assert_eq!(unmerged.is_weighted(), stored.is_weighted());
                 prop_assert_eq!(unmerged.edge_count(), stored.edge_count());

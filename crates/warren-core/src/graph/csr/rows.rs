@@ -1,6 +1,6 @@
-//! The merged CSR's rows (DESIGN.md §5.3): read from the stored merged CSR,
-//! or merged on the fly from every relation's CSR when the graph does not
-//! store it.
+//! CSR rows behind one read API: one CSR's, or the all-relations rows
+//! (DESIGN.md §5.3) read from the stored merged CSR or merged on the fly
+//! from every relation's CSR when the graph does not store it.
 
 use std::iter::FusedIterator;
 
@@ -8,12 +8,13 @@ use super::merge::RowMerge;
 use super::{AnyCsr, Csr, Neighbours, RelationCsr, Target};
 use crate::graph::DenseId;
 
-/// The rows of one CSR, or of every relation's CSR in one direction merged
-/// row by row. Either way a row's targets are ascending and distinct: a
+/// The rows of one CSR (a relation's, or the stored merged CSR), or the
+/// all-relations rows merged on the fly from every relation's CSR in one
+/// direction. Either way a row's targets are ascending and distinct: a
 /// target reached through several relations appears once, as in the stored
 /// merged CSR, so readers see the same rows whichever the graph holds.
 #[derive(Debug, Clone, Copy)]
-pub struct MergedRows<'g>(Source<'g>);
+pub struct CsrRows<'g>(Source<'g>);
 
 #[derive(Debug, Clone, Copy)]
 enum Source<'g> {
@@ -25,7 +26,7 @@ enum Source<'g> {
     Relations { relations: &'g [RelationCsr], reverse: bool },
 }
 
-impl<'g> MergedRows<'g> {
+impl<'g> CsrRows<'g> {
     /// The forward or (if `reverse`) reverse CSRs of `relations`, merged as
     /// they are read. The caller ensures there are at least two relations
     /// and, for `reverse`, that each has a reverse CSR.
@@ -66,10 +67,10 @@ impl<'g> MergedRows<'g> {
 
     /// The targets of `source`'s row in ascending order, each once; empty
     /// outside the id space.
-    pub fn neighbours(&self, source: DenseId) -> MergedNeighbours<'g> {
+    pub fn neighbours(&self, source: DenseId) -> RowNeighbours<'g> {
         match self.0 {
-            Source::Csr(csr) => MergedNeighbours(Merge::One(csr.neighbours(source))),
-            Source::Relations { .. } => MergedNeighbours(Merge::Many(self.merge(source))),
+            Source::Csr(csr) => RowNeighbours(Merge::One(csr.neighbours(source))),
+            Source::Relations { .. } => RowNeighbours(Merge::Many(self.merge(source))),
         }
     }
 
@@ -111,27 +112,27 @@ impl<'g> MergedRows<'g> {
     }
 }
 
-/// The all-relations rows of a graph version, forward and (if the graph
-/// builds reverse CSRs) reverse.
+/// The all-relations (merged) rows of a graph version, forward and (if the
+/// graph builds reverse CSRs) reverse.
 #[derive(Debug, Clone, Copy)]
 pub struct AllRelations<'g> {
-    pub(super) forward: MergedRows<'g>,
-    pub(super) reverse: Option<MergedRows<'g>>,
+    pub(super) forward: CsrRows<'g>,
+    pub(super) reverse: Option<CsrRows<'g>>,
 }
 
 impl<'g> AllRelations<'g> {
     /// Out-edges: row `v` holds the targets of edges from `v`.
-    pub fn forward(&self) -> MergedRows<'g> {
+    pub fn forward(&self) -> CsrRows<'g> {
         self.forward
     }
 
     /// In-edges: row `v` holds the sources of edges into `v`, if built.
-    pub fn reverse(&self) -> Option<MergedRows<'g>> {
+    pub fn reverse(&self) -> Option<CsrRows<'g>> {
         self.reverse
     }
 }
 
-impl<'g> From<&'g AnyCsr> for MergedRows<'g> {
+impl<'g> From<&'g AnyCsr> for CsrRows<'g> {
     fn from(csr: &'g AnyCsr) -> Self {
         Self(Source::Csr(csr))
     }
@@ -150,11 +151,11 @@ enum Merge<'g> {
     Many(Typed<'g>),
 }
 
-/// The targets of one merged row, as dense ids, ascending and distinct.
+/// The targets of one row, as dense ids, ascending and distinct.
 #[derive(Debug, Clone)]
-pub struct MergedNeighbours<'g>(Merge<'g>);
+pub struct RowNeighbours<'g>(Merge<'g>);
 
-impl Iterator for MergedNeighbours<'_> {
+impl Iterator for RowNeighbours<'_> {
     type Item = DenseId;
 
     fn next(&mut self) -> Option<DenseId> {
@@ -166,7 +167,7 @@ impl Iterator for MergedNeighbours<'_> {
     }
 }
 
-impl FusedIterator for MergedNeighbours<'_> {}
+impl FusedIterator for RowNeighbours<'_> {}
 
 #[cfg(test)]
 mod tests {
@@ -197,20 +198,20 @@ mod tests {
             .collect()
     }
 
-    fn rows(rows: MergedRows<'_>) -> Vec<Vec<DenseId>> {
+    fn rows(rows: CsrRows<'_>) -> Vec<Vec<DenseId>> {
         (0..rows.id_space()).map(|row| rows.neighbours(row).collect()).collect()
     }
 
     #[test]
     fn rows_merged_on_the_fly_are_ascending_and_distinct() {
         let relations = relations();
-        let forward = MergedRows::merging(&relations, false);
+        let forward = CsrRows::merging(&relations, false);
         assert_eq!(rows(forward), [vec![0, 1, 3], vec![2], vec![2], vec![]]);
         assert_eq!(forward.id_space(), 4);
         assert_eq!(forward.edge_count(), 5);
         assert_eq!(forward.degree(0), 3);
         assert!(forward.has_edge(1, 2) && forward.has_edge(0, 0) && !forward.has_edge(3, 0));
-        let reverse = MergedRows::merging(&relations, true);
+        let reverse = CsrRows::merging(&relations, true);
         assert_eq!(rows(reverse), [vec![0], vec![0], vec![1, 2], vec![0]]);
         assert_eq!(reverse.edge_count(), 5);
         assert!(!forward.is_weighted());
@@ -219,7 +220,7 @@ mod tests {
     #[test]
     fn rows_outside_the_id_space_are_empty() {
         let relations = relations();
-        let forward = MergedRows::merging(&relations, false);
+        let forward = CsrRows::merging(&relations, false);
         assert_eq!(forward.neighbours(4).count(), 0);
         assert_eq!(forward.degree(u64::MAX), 0);
     }
@@ -227,7 +228,7 @@ mod tests {
     #[test]
     fn one_csr_reads_as_it_is() {
         let one = AnyCsr::from(csr(&[&[1], &[0, 1]]));
-        let rows_of_one = MergedRows::from(&one);
+        let rows_of_one = CsrRows::from(&one);
         assert_eq!(rows(rows_of_one), [vec![1], vec![0, 1]]);
         assert_eq!((rows_of_one.edge_count(), rows_of_one.degree(1)), (3, 2));
     }

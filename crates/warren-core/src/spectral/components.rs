@@ -5,7 +5,7 @@
 
 use super::{Resources, SpectralError};
 use crate::compute::ComputeError;
-use crate::graph::{DenseId, GraphCsr, MergedRows, RelationSelection};
+use crate::graph::{CsrRows, DenseId, GraphCsr, RelationSelection};
 use crate::interrupts::Interrupts;
 
 /// How often the pass polls the interrupts, in rows.
@@ -20,7 +20,7 @@ pub(super) fn components<I: Interrupts>(
     relations: RelationSelection<'_>,
     active: &[bool],
 ) -> Result<u64, SpectralError> {
-    let csrs: Vec<MergedRows<'_>> = match relations {
+    let csrs: Vec<CsrRows<'_>> = match relations {
         RelationSelection::All => vec![graph.all_relations().forward()],
         RelationSelection::Only(indexes) => indexes
             .iter()

@@ -10,7 +10,7 @@ mod any;
 mod build;
 mod graph_csr;
 mod merge;
-mod merged;
+mod rows;
 mod target;
 mod transpose;
 
@@ -18,7 +18,7 @@ use std::ops::Range;
 
 pub use any::{AnyCsr, Neighbours};
 pub use graph_csr::{CsrLayout, GraphCsr, RelationCsr};
-pub use merged::{AllRelations, MergedNeighbours, MergedRows};
+pub use rows::{AllRelations, CsrRows, RowNeighbours};
 pub use target::{Target, TargetWidth};
 
 use super::memory::held;

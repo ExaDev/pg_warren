@@ -9,7 +9,7 @@
 
 use super::super::{Resources, SpectralError};
 use crate::compute::{ComputeError, MemoryCharge};
-use crate::graph::{GraphCsr, MergedRows, Tombstones};
+use crate::graph::{CsrRows, GraphCsr, Tombstones};
 use crate::interrupts::{Cancelled, Interrupts};
 
 /// How often the histogram pass checks the cancellation flag, in rows.
@@ -59,7 +59,7 @@ struct Histogram {
 impl Histogram {
     fn of<I: Interrupts>(
         resources: &mut Resources<'_, I>,
-        csr: MergedRows<'_>,
+        csr: CsrRows<'_>,
         tombstones: &Tombstones,
     ) -> Result<Self, ComputeError> {
         let rows = csr.id_space();

@@ -4,7 +4,7 @@
 use std::cmp::Ordering;
 
 use crate::graph::RelationDictionary;
-use crate::graph::{AnyCsr, GraphCsr, MergedNeighbours, MergedRows, RelationCsr};
+use crate::graph::{AnyCsr, CsrRows, GraphCsr, RelationCsr, RowNeighbours};
 
 /// Edges before and after, and how many were added and removed. An edge is
 /// a (source, target) pair; a change of weight alone is not counted.
@@ -56,7 +56,7 @@ pub struct RelationDelta {
 
 /// The edge delta between two forward CSRs (or all-relations rows) in the
 /// same id space, by merging each pair of sorted rows. O(N + M).
-pub(super) fn edge_delta(before: MergedRows<'_>, after: MergedRows<'_>) -> EdgeDelta {
+pub(super) fn edge_delta(before: CsrRows<'_>, after: CsrRows<'_>) -> EdgeDelta {
     let rows = before.id_space().max(after.id_space());
     let shared: u64 = (0..rows)
         .map(|source| shared_targets(before.neighbours(source), after.neighbours(source)))
@@ -66,7 +66,7 @@ pub(super) fn edge_delta(before: MergedRows<'_>, after: MergedRows<'_>) -> EdgeD
 }
 
 /// The number of targets in both of two strictly ascending rows.
-fn shared_targets(mut before: MergedNeighbours<'_>, mut after: MergedNeighbours<'_>) -> u64 {
+fn shared_targets(mut before: RowNeighbours<'_>, mut after: RowNeighbours<'_>) -> u64 {
     let mut shared = 0;
     let (mut left, mut right) = (before.next(), after.next());
     while let (Some(l), Some(r)) = (left, right) {

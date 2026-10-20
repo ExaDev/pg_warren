@@ -73,6 +73,18 @@ impl Scenario {
         CsrLayout { build_reverse: true, store_merged: self.store_merged }
     }
 
+    /// The graph the build makes of the live edges with the given layout,
+    /// and `u64` targets if `wide`.
+    pub(crate) fn graph_as(&self, store_merged: bool, build_reverse: bool, wide: bool) -> GraphCsr {
+        let (count, id_space) = (self.relation_count, self.id_space);
+        let layout = CsrLayout { build_reverse, store_merged };
+        match wide {
+            false => GraphCsr::build_as(self.edge_list(), count, id_space, layout),
+            true => GraphCsr::build_with::<u64>(self.edge_list(), count, id_space, layout),
+        }
+        .unwrap()
+    }
+
     /// [`Self::graph`] with `u64` targets, which the build otherwise
     /// chooses only for id spaces of 2³² or more.
     pub(crate) fn wide_graph(&self) -> GraphCsr {
