@@ -1,6 +1,7 @@
-//! The compute GUCs (DESIGN.md §6.9): `warren.threads`, the size of the
-//! compute thread pool (default half the cores, at least 1), and
-//! `warren.max_compute_memory`, the compute memory a call may hold.
+//! The compute pool (DESIGN.md §6.9): `warren.threads`, its size (default
+//! half the cores, at least 1). `warren.max_compute_memory`, the compute
+//! memory a call may hold, is defined with the cache's bound, which it
+//! shares (`cache::compute_memory`).
 //!
 //! The pool is built once per backend and rebuilt when `warren.threads`
 //! changes. Its threads block every signal: Postgres's handlers must run
@@ -11,19 +12,13 @@ use std::rc::Rc;
 use std::thread::available_parallelism;
 
 use pgrx::{GucContext, GucFlags, GucRegistry, GucSetting};
-use warren_core::compute::{ComputeError, ComputeMemory, Workers};
+use warren_core::compute::{ComputeError, Workers};
 
 /// The most compute threads a backend may run.
 const MAX_THREADS: i32 = 1024;
 
-/// The default compute memory per call: 4 GiB, in kB.
-const DEFAULT_MEMORY_KB: i32 = 4 * 1024 * 1024;
-
 /// `warren.threads`; its boot value is set from the core count at load.
 static THREADS: GucSetting<i32> = GucSetting::<i32>::new(1);
-
-/// `warren.max_compute_memory`, in kB.
-static MAX_COMPUTE_MEMORY: GucSetting<i32> = GucSetting::<i32>::new(DEFAULT_MEMORY_KB);
 
 /// Half the cores, at least one.
 fn default_threads() -> i32 {
@@ -31,7 +26,7 @@ fn default_threads() -> i32 {
     i32::try_from(cores / 2).unwrap_or(MAX_THREADS).clamp(1, MAX_THREADS)
 }
 
-/// Registers the compute GUCs. Called once, from `_PG_init`.
+/// Registers `warren.threads`. Called once, from `_PG_init`.
 pub(crate) fn define_compute_settings() {
     // SAFETY: `_PG_init` runs on the main thread before the GUC is
     // registered, so nothing else reads or writes the setting; its value
@@ -48,23 +43,6 @@ pub(crate) fn define_compute_settings() {
         GucContext::Userset,
         GucFlags::default(),
     );
-    GucRegistry::define_int_guc(
-        c"warren.max_compute_memory",
-        c"Compute memory one warren.* call may hold: the vectors it reads and writes and \
-           its work buffers.",
-        c"A call that would exceed it fails with configuration_limit_exceeded before \
-           allocating.",
-        &MAX_COMPUTE_MEMORY,
-        64,
-        i32::MAX,
-        GucContext::Userset,
-        GucFlags::UNIT_KB,
-    );
-}
-
-/// A fresh compute memory budget of `warren.max_compute_memory`.
-pub(crate) fn compute_memory() -> ComputeMemory {
-    ComputeMemory::new(u64::try_from(MAX_COMPUTE_MEMORY.get()).unwrap_or(0) * 1024)
 }
 
 thread_local! {

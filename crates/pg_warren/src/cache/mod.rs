@@ -4,8 +4,10 @@
 //! id, shared through `Arc`s; opening a version for a query (access check,
 //! current version re-read per call, cache in front of the loader);
 //! `warren.max_cache_memory`, the size bound that evicts cached versions
-//! and vectors least recently used first (a pure policy in `lru`); and
-//! `warren.prewarm` / `warren.evict`.
+//! and vectors least recently used first (a pure policy in `lru`), with
+//! `warren.max_compute_memory`, which together bound a backend's peak; the
+//! statement pin, which keeps what a top-level statement has read cached
+//! until it ends; and `warren.prewarm` / `warren.evict`.
 //!
 //! Depends on `segment` (to read chunks), `catalog` (graphs and versions),
 //! `access` (reader checks), `source` (id types) and `vector` (evict and
@@ -18,10 +20,15 @@ mod error;
 mod load;
 mod lru;
 mod open;
+mod statement;
 mod versions;
 mod warm;
 
-pub(crate) use bound::{admit_transient, define_max_cache_memory, trim};
+pub(crate) use bound::{admit_transient, compute_memory, define_memory_settings, trim};
 pub(crate) use error::CacheError;
 pub(crate) use load::{load, load_identity, LoadError, LoadedVersion};
-pub(crate) use open::{cached, resolve, Resolved};
+pub(crate) use open::{
+    cached, cached_pair, cached_vector, cached_vector_hit, keep_vector, resolve, Resolved,
+};
+#[cfg(any(test, feature = "pg_test"))]
+pub(crate) use statement::end_statement;

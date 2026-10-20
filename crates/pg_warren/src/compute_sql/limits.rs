@@ -26,8 +26,9 @@ mod tests {
             Some("53400: compute memory limit exceeded: 160000 bytes requested, 0 of 65536 in use")
         );
         Spi::run("SET LOCAL warren.max_compute_memory = '400kB'; SELECT warren.vector_const('big', 'x', 1)")?;
-        // x (160 000 bytes) plus y: within 400 kB, but a third vector is not.
-        Spi::run("SELECT warren.spmv('big', 'x', 'y')")?;
+        // x and y (160 000 bytes each) read back from the catalog, and z:
+        // past 400 kB. (Vectors the cache holds are not charged again.)
+        Spi::run("SELECT warren.spmv('big', 'x', 'y'); SELECT warren.evict('big')")?;
         let refused = failure("warren.vector_map('big', 'z', 'x + y')")?.unwrap_or_default();
         assert!(refused.starts_with("53400: compute memory limit exceeded"), "{refused}");
         Ok(())

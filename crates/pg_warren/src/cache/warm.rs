@@ -51,6 +51,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
+    use crate::cache::end_statement;
     use crate::fixture::{refresh, ring};
 
     #[pg_test]
@@ -84,6 +85,14 @@ mod tests {
         let first = refresh("pw", true)?;
         Spi::run(&format!("SELECT warren.prewarm('pw', {first})"))?;
         refresh("pw", true)?;
+        Spi::run("SELECT warren.prewarm('pw')")?;
+        assert_eq!(
+            Spi::get_one::<i64>("SELECT warren.evict('pw')")?,
+            Some(2),
+            "not a version the statement has read"
+        );
+        Spi::run(&format!("SELECT warren.prewarm('pw', {first})"))?;
+        end_statement();
         Spi::run("SELECT warren.prewarm('pw')")?;
         assert_eq!(Spi::get_one::<i64>("SELECT warren.evict('pw')")?, Some(1));
         Ok(())
