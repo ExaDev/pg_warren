@@ -27,6 +27,8 @@ mod warm;
 pub(crate) use bound::{admit_transient, compute_memory, define_memory_settings, trim};
 pub(crate) use error::CacheError;
 pub(crate) use load::{load, load_identity, LoadError, LoadedVersion};
-pub(crate) use open::{cached, cached_pair, cached_vector, keep_vector, resolve, Resolved};
+pub(crate) use open::{
+    cached, cached_pair, cached_vector, cached_vector_hit, keep_vector, resolve, Resolved,
+};
 #[cfg(any(test, feature = "pg_test"))]
 pub(crate) use statement::end_statement;

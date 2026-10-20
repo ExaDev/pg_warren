@@ -155,6 +155,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
+    use crate::cache::end_statement;
     use crate::fixture::{failure, refresh, ring, segment_reads};
 
     #[pg_test]
@@ -275,6 +276,45 @@ mod tests {
         );
         assert_eq!(segment_reads()? - before, 0, "neither version was loaded");
         assert_eq!(Spi::get_one::<i64>("SELECT warren.evict('df')")?, Some(0));
+        Ok(())
+    }
+
+    /// One version cached, by an earlier statement, the other not: the
+    /// cached one is shared, not evicted to make room for the other.
+    #[pg_test]
+    fn a_diff_with_one_version_cached_shares_it_and_loads_only_the_other() -> Result<(), Error> {
+        let (first, second) = two_rings()?;
+        Spi::run("SET LOCAL warren.max_cache_memory = '100kB'; SELECT warren.prewarm('df')")?;
+        end_statement();
+        let before = segment_reads()?;
+        Spi::run(&format!("SELECT warren.prewarm('df', {first})"))?;
+        let one_load = segment_reads()? - before;
+        Spi::run("SELECT warren.evict('df'); SELECT warren.prewarm('df')")?;
+        end_statement();
+        let before = segment_reads()?;
+        Spi::run(&format!("SELECT warren.diff('df', {first}, {second})"))?;
+        assert_eq!(segment_reads()? - before, one_load, "only the uncached version was loaded");
+        Ok(())
+    }
+
+    /// With one version cached and the pair over both limits, the refusal
+    /// comes before any load and leaves the cached version cached.
+    #[pg_test]
+    fn a_diff_over_both_limits_with_one_version_cached_loads_nothing() -> Result<(), Error> {
+        let (first, second) = two_rings()?;
+        Spi::run(
+            "SET LOCAL warren.max_cache_memory = '100kB';
+             SET LOCAL warren.max_compute_memory = '64kB';
+             SELECT warren.prewarm('df')",
+        )?;
+        end_statement();
+        let before = segment_reads()?;
+        let refused =
+            failure(&format!("warren.diff('df', {first}, {second})"))?.unwrap_or_default();
+        assert!(refused.starts_with("53400: "), "{refused}");
+        assert_eq!(segment_reads()? - before, 0, "nothing was loaded");
+        end_statement();
+        assert_eq!(Spi::get_one::<i64>("SELECT warren.evict('df')")?, Some(1), "still cached");
         Ok(())
     }
 }
