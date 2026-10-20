@@ -79,8 +79,12 @@ compute kernels from the main thread every millisecond), so
 - `warren.max_compute_memory` bounds what one call reads and allocates;
   `warren.max_cache_memory` bounds what is held between calls. A backend's
   peak is therefore about the sum of the two, plus, while a version loads,
-  one segment's raw bytes (at most the largest targets or weights array:
-  0.8 GB for 100M weighted edges).
+  one CSR's raw segments (at most ~1.3 GB, the merged weighted CSR of 100M
+  edges; measured: a 1.2 GB version loads at a 1.69 GB peak, a 6.0 GB one at
+  7.3 GB). Two exceptions are bounded by neither limit: `refresh` (below)
+  and `diff`, which holds both versions it compares (a 7.2 GB peak for two
+  3.44 GB versions; on two 6.0 GB versions the soak's backend was killed for
+  memory at 12.8 GB), as `distance` between versions does.
 - Storage of a version, per direction: offsets 8 bytes × (id_space + 1) for
   each relation, plus the merged CSR's when there is more than one relation
   and the graph stores it (`store_merged`, the default; see below);
@@ -89,8 +93,9 @@ compute kernels from the main thread every millisecond), so
   persisted `f64` vector is 8 bytes × id_space × width (80 MB per column at
   10M nodes).
 
-Cold loads, the cost of a per-backend cache, have not been benchmarked yet;
-DESIGN.md §5.5 estimates a few hundred MB/s from TOAST.
+Cold loads, the cost of a per-backend cache, run at 0.26–0.55 GB/s from
+`warren.segments` (measured at 10M nodes: 1.2 GB in 2.2–2.9 s, 3.44 GB in
+6.2 s, 6.0 GB in 23 s).
 
 ```sql
 SET warren.max_cache_memory = '64kB';
@@ -104,24 +109,37 @@ RESET warren.max_cache_memory;
 
 ### Sizing
 
-How large a graph fits the default 4 GB limits, from DESIGN.md §12's
-estimates for 10M nodes and 100M edges (u32 targets, reverse CSR included, a
-`bigint` id map; decimal GB, while `4GB` in a setting is 4 GiB ≈ 4.29 GB):
+Measured by the 100M-edge soak (`bench/soak.py`, DESIGN.md §12): 10M nodes,
+100M edges, u32 targets, reverse CSR included, a `bigint` id map; decimal
+GB, while `4GB` in a setting is 4 GiB ≈ 4.29 GB. "Cached" is what the cache
+counts against `warren.max_cache_memory`; peaks are a backend's private
+memory (shared buffers excluded).
 
-| Graph (10M nodes, 100M edges) | Cached version |
-|---|---|
-| one relation, unweighted | ~1.2 GB |
-| one relation, weighted | ~2.8 GB |
-| five relations, unweighted | ~2.8 GB; ~1.84 GB with `store_merged := false` |
-| five relations, weighted | ~6.0 GB: over the default cap (the merged CSR alone is ~2.6 GB); ~3.44 GB with `store_merged := false` |
+| Graph (10M nodes, 100M edges) | Stored | Cached | `refresh` peak | Cold load | Fits the 4 GiB cap with `pagerank`'s scratch? |
+|---|---|---|---|---|---|
+| one relation, unweighted | 1.12 GB | 1.20 GB | 2.0 GB | 2.2–2.9 s | yes: 1.20 + 0.88 GB |
+| five relations, weighted, merged CSR (default) | 5.92 GB | 6.00 GB | 9.0 GB | 23 s | no: the graph alone is over the cap |
+| five relations, weighted, `store_merged := false` | 3.36 GB | 3.44 GB | 5.5 GB | 6.2 s | no: 3.44 + 0.88 = 4.32 GB, 30 MB over |
 
-Add the library's transient scratch (~0.88 GB for `pagerank` at 10M nodes)
-when sizing `warren.max_cache_memory`. The goal (DESIGN.md §12) is that such
-a graph and a library run fit one backend at default settings. The
-five-relation weighted case fits only without its merged CSR, and even then
-the graph plus `pagerank`'s scratch is ~4.32 GB, about 25–30 MB over the
-4 GiB default: raise `warren.max_cache_memory` slightly for it.
-These are estimates; the 100M-edge soak that measures them is M7 work.
+Not measured, and estimated the same way (the estimates matched the
+measured cached bytes to 0.1%): one weighted relation ~2.8 GB; five
+unweighted relations ~2.8 GB, or ~1.84 GB with `store_merged := false`.
+`pagerank`'s transient scratch is ~0.88 GB at 10M nodes (88 bytes per
+node).
+
+**A version larger than `warren.max_cache_memory`, or one that does not fit
+beside a library run's transient scratch, is reloaded on every call.** The
+SQL library makes several calls per superstep (`pagerank` makes 8 per
+iteration, each opening the version), so at the default cap `pagerank` on
+the five-relation weighted graph reloads it about 170 times: more than 15
+minutes (where it was stopped) with the merged CSR, at 23 s a load, and as
+long without it. Single calls pay one load each (`bfs` 21.9 s instead of
+0.73 s). The remedy is to raise `warren.max_cache_memory` to hold the graph
+and the scratch (`SET warren.max_cache_memory = '8GB'`: `pagerank` then
+takes 15.1 s with the merged CSR and 31.6 s without), or, for a graph that
+is only just over, `store_merged := false`. Weighted multi-relation builds
+of 100M edges also exceed 4 GB of build memory either way: give the
+`refresh` backend 6–10 GB.
 
 ### The merged CSR (`store_merged`)
 
@@ -146,10 +164,31 @@ memory limits. The choice is per graph, kept by `compact`, and shown by
 
 ## Measured performance
 
-These are the numbers measured so far, from DESIGN.md and `bench/results/`.
-All are on a shared 4-vCPU Xeon, at 100K nodes and 1M edges unless stated.
-The DESIGN.md §12 targets (10M nodes, 100M edges, 8 cores) have **not yet
-been measured** end to end; that is milestone M7's soak test.
+At the DESIGN.md §12 scale (10M nodes, 100M edges), from the M7 soak on a
+shared 4-vCPU Xeon (half the 8 cores §12 assumes; another agent's builds
+ran alongside, so times vary by up to 50% between runs), release build,
+`warren.threads = 4`, default memory limits; full numbers and settings in
+DESIGN.md §12 and `bench/results/soak/`:
+
+| What (target) | One relation, unweighted | Five weighted relations, merged CSR | Five weighted relations, `store_merged := false` |
+|---|---|---|---|
+| BFS depth 6 (≥ 20× a recursive CTE) | **10.5–11×** (0.69–0.76 s vs 7.6 s) | 21.9 s, reloading; 0.73 s at an 8GB cap | 0.80–0.85 s |
+| `reachable_set`, full component (> 50M edges/s) | **11–12M/s** | 3M/s reloading; 11.5M/s at 8GB | **7.6M/s** |
+| `components()` (< 10 s) | 4.5–5.4 s | **30.9 s** reloading; 5.8 s at 8GB | **10.3–10.4 s** |
+| `pagerank`, 20 iterations (< 30 s on 8 threads) | 15.2–16.7 s | **≥ 15 min** reloading; 15.1 s at 8GB | **≥ 15 min** reloading; 31.6 s at 8GB |
+| `eigen`, k = 20, normalised Laplacian (< 10 min) | **65 min, not converged** in the default 4,100 steps | 0.71 s a step | 2.6 s a step |
+| `refresh()` (< 8 min, < 4 GB) | 146–167 s, 2.0 GB | 235–347 s, **9.0 GB** | 221–234 s, **5.5 GB** |
+| `diff` (< 30 s) | 13.5–22.3 s | killed for memory (12.8 GB) | **47.7–55.2 s** |
+| Cold load (< 15 s) | 2.2–2.9 s | **23 s** | 6.2 s |
+
+Bold misses a target. Why, in short: a graph over the cache cap (or over
+it with a library run's scratch) reloads on every call (see
+[Sizing](#sizing)); weighted multi-relation builds and `diff` are bounded by
+no limit; `eigen`'s step count grows with N on a random graph's clustered
+spectrum, beyond the default `max_iter` (DESIGN.md §6.5), at ~1 s a step;
+and BFS and `reachable_set` are timed through SQL, row emission included.
+
+Smaller-scale kernel numbers (100K nodes, 1M edges unless stated):
 
 | What | Measured | Source |
 |---|---|---|
@@ -158,21 +197,9 @@ been measured** end to end; that is milestone M7's soak test.
 | `gather`, every node sending | `sum` of f64 14 ms (1 thread) / 8 ms (4); `collect` of f64 19 / 8 ms; `collect` of 8-byte messages 46 / 18 ms; pushed 30–70 ms | DESIGN §6.4, `benches/gather.rs` |
 | `diff` between two versions | ~25 ms, 1 thread | DESIGN §7, `benches/version_diff.rs` |
 | `eigen`, k = 20, f32, adjacency, largest | 1,037 steps: 9.9 s (1 thread) / 3.7 s (4); ARPACK 1,020–1,313 matvecs | DESIGN §6.5, `bench/results/eigen/` |
-| `eigen`, k = 20, f32, normalised Laplacian, smallest | 1,342 steps: 13.1 s / 5.1 s; ARPACK 1,406–1,477 matvecs | DESIGN §6.5, `bench/results/eigen/` |
+| `eigen`, k = 20, f32, normalised Laplacian, smallest | 1,342 steps: 13.1 s / 5.1 s; ARPACK 1,406–1,477 matvecs. At 1M nodes and 10M edges: not converged in the default 4,100 steps (226 s, 4 threads) where ARPACK took 4,343 matvecs (712 s); adjacency 3,174 steps (173 s) vs ARPACK 3,325 (499 s) | DESIGN §6.5, `bench/results/eigen/` |
 | BFS, 1 / 2 / 3 / 5 of 5 relations (1M weighted edges, 1 thread) | 2.0 / 4.9 / 7.2 / 5.3 ms | DESIGN §5.3, `benches/relation_layout.rs` |
 | Build, forward + reverse, 5 relations | 104 ms, 28.8 MB forward | DESIGN §5.3 |
-| Build peak memory, 100M weighted edges (scaled from 10M) | ~2.9 GB, one relation with reverse; ~5.8 GB weighted / ~2.6 GB unweighted with several relations | DESIGN §5.4 |
-
-The random 100K-node graph is about the slowest case for `eigen` (a dense
-bulk spectrum). Scaled linearly, a 10M-node, 100M-edge `eigen` with k = 20
-projects to 8–9 minutes on 4 threads; this is a projection, not a
-measurement. A weighted graph of 100M edges with several relations exceeds
-the 4 GB build budget the design aims for, because the merged CSR is stored
-in addition to the per-relation ones. `store_merged := false` leaves it
-out, but the build has not been measured that way: the estimate is the
-~2.9 GB of one weighted relation (DESIGN.md §5.4) plus ~0.8 GB of offsets
-for five relations, ~3.7 GB, close to the budget. The M7 100M-edge soak
-measures it.
 
 ## Known limitations
 
