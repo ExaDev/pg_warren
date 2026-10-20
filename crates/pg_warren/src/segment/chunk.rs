@@ -2,13 +2,14 @@
 //! rows of at most [`CHUNK_SIZE`] bytes, numbered from 0, and read back by
 //! concatenating the chunks in order (DESIGN.md §5.1).
 
-use warren_core::graph::{BuildCharge, BuildMemory, GraphError};
+use warren_core::graph::{BuildCharge, BuildMemory};
 
 use super::SegmentError;
 use crate::catalog::VersionId;
 
-/// Receives the chunks of a segment as (chunk number, bytes), one at a time.
-pub(crate) type ChunkVisitor<'a> = dyn FnMut(i32, &[u8]) -> Result<(), SegmentError> + 'a;
+/// Receives chunks as (chunk number, bytes), one at a time, in chunk order;
+/// an error `E` stops the read.
+pub(crate) type EachChunk<'a, E> = dyn FnMut(i32, &[u8]) -> Result<(), E> + 'a;
 
 /// The port to the chunks of each segment of each version.
 pub(crate) trait SegmentStore {
@@ -34,7 +35,7 @@ pub(crate) trait SegmentStore {
         &mut self,
         version: VersionId,
         segment: &str,
-        each: &mut ChunkVisitor<'_>,
+        each: &mut EachChunk<'_, SegmentError>,
     ) -> Result<(), SegmentError>;
 }
 
@@ -101,7 +102,7 @@ pub(crate) fn read_segment_within(
     };
     let charge = memory.charge(length)?;
     let mut bytes = Vec::new();
-    reserve(&mut bytes, usize::try_from(length).unwrap_or(usize::MAX))?;
+    reserve(&mut bytes, usize::try_from(length).unwrap_or(usize::MAX), segment)?;
     let mut expected = 0;
     store.read_chunks(version, segment, &mut |chunk_no, data| {
         if chunk_no != expected {
@@ -112,7 +113,7 @@ pub(crate) fn read_segment_within(
             });
         }
         expected += 1;
-        reserve(&mut bytes, data.len())?;
+        reserve(&mut bytes, data.len(), segment)?;
         bytes.extend_from_slice(data);
         Ok(())
     })?;
@@ -121,16 +122,29 @@ pub(crate) fn read_segment_within(
 
 /// Makes room for `more` bytes in `bytes`, exactly, or fails with
 /// `OutOfMemory` (53200) rather than aborting the backend.
-fn reserve(bytes: &mut Vec<u8>, more: usize) -> Result<(), SegmentError> {
-    bytes.try_reserve_exact(more).map_err(|_| GraphError::OutOfMemory { elements: more })?;
-    Ok(())
+fn reserve(bytes: &mut Vec<u8>, more: usize, segment: &str) -> Result<(), SegmentError> {
+    bytes
+        .try_reserve_exact(more)
+        .map_err(|_| SegmentError::OutOfMemory { segment: segment.to_owned(), bytes: more })
 }
 
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 pub(crate) mod tests {
     use super::*;
+    use crate::access::SqlError;
+    use pgrx::PgSqlErrorCode;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn a_failed_reservation_reports_its_bytes_and_the_segment() {
+        let error = reserve(&mut Vec::new(), usize::MAX, "targets:0").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!("out of memory reading segment \"targets:0\": {} bytes", usize::MAX)
+        );
+        assert_eq!(error.sqlstate(), PgSqlErrorCode::ERRCODE_OUT_OF_MEMORY);
+    }
 
     /// An in-memory [`SegmentStore`].
     #[derive(Debug, Default)]
@@ -166,7 +180,7 @@ pub(crate) mod tests {
             &mut self,
             version: VersionId,
             segment: &str,
-            each: &mut ChunkVisitor<'_>,
+            each: &mut EachChunk<'_, SegmentError>,
         ) -> Result<(), SegmentError> {
             self.chunks
                 .iter()

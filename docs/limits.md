@@ -83,8 +83,9 @@ compute kernels from the main thread every millisecond), so
   edges; measured: a 1.2 GB version loads at a 1.69 GB peak, a 6.0 GB one at
   7.3 GB). Two exceptions are bounded by neither limit: `refresh` (below)
   and `diff`, which holds both versions it compares (a 7.2 GB peak for two
-  3.44 GB versions; on two 6.0 GB versions the soak's backend was killed for
-  memory at 12.8 GB), as `distance` between versions does.
+  3.44 GB versions; on two 6.0 GB versions, in a soak run whose results are
+  not committed, the backend was killed for memory at 12.8 GB), as
+  `distance` between versions does.
 - Storage of a version, per direction: offsets 8 bytes × (id_space + 1) for
   each relation, plus the merged CSR's when there is more than one relation
   and the graph stores it (`store_merged`, the default; see below);
@@ -166,19 +167,19 @@ memory limits. The choice is per graph, kept by `compact`, and shown by
 
 At the DESIGN.md §12 scale (10M nodes, 100M edges), from the M7 soak on a
 shared 4-vCPU Xeon (half the 8 cores §12 assumes; another agent's builds
-ran alongside, so times vary by up to 50% between runs), release build,
+ran alongside, so times vary by up to 2× between runs), release build,
 `warren.threads = 4`, default memory limits; full numbers and settings in
 DESIGN.md §12 and `bench/results/soak/`:
 
 | What (target) | One relation, unweighted | Five weighted relations, merged CSR | Five weighted relations, `store_merged := false` |
 |---|---|---|---|
 | BFS depth 6 (≥ 20× a recursive CTE) | **10.5–11×** (0.69–0.76 s vs 7.6 s) | 21.9 s, reloading; 0.73 s at an 8GB cap | 0.80–0.85 s |
-| `reachable_set`, full component (> 50M edges/s) | **11–12M/s** | 3M/s reloading; 11.5M/s at 8GB | **7.6M/s** |
-| `components()` (< 10 s) | 4.5–5.4 s | **30.9 s** reloading; 5.8 s at 8GB | **10.3–10.4 s** |
+| `reachable_set`, full component (> 50M edges/s) | **11–12M/s** | 3M/s reloading; 11.5M/s at 8GB | **7.5–7.7M/s** |
+| `components()` (< 10 s) | 4.5–5.4 s | **30.9 s** reloading; 5.8 s at 8GB | borderline: 9.3–10.4 s |
 | `pagerank`, 20 iterations (< 30 s on 8 threads) | 15.2–16.7 s | **≥ 15 min** reloading; 15.1 s at 8GB | **≥ 15 min** reloading; 31.6 s at 8GB |
-| `eigen`, k = 20, normalised Laplacian (< 10 min) | **65 min, not converged** in the default 4,100 steps | 0.71 s a step | 2.6 s a step |
-| `refresh()` (< 8 min, < 4 GB) | 146–167 s, 2.0 GB | 235–347 s, **9.0 GB** | 221–234 s, **5.5 GB** |
-| `diff` (< 30 s) | 13.5–22.3 s | killed for memory (12.8 GB) | **47.7–55.2 s** |
+| `eigen`, k = 20, normalised Laplacian (< 10 min) | **65 min, not converged** in the default 4,100 steps | 0.83 s a step (with its load) | 2.6 s a step |
+| `refresh()` (< 8 min, < 4 GB) | 146–167 s, 2.0 GB | 347 s, **9.0 GB** | 221–234 s, **5.5 GB** |
+| `diff` (< 30 s) | 13.5–22.3 s | not in the committed run; killed for memory (12.8 GB) in an uncommitted one | **47.7–55.2 s** |
 | Cold load (< 15 s) | 2.2–2.9 s | **23 s** | 6.2 s |
 
 Bold misses a target. Why, in short: a graph over the cache cap (or over
