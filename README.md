@@ -43,6 +43,7 @@ the server headers (`postgresql-server-dev-NN`), `clang`/`libclang-dev`, and
 cargo-pgrx at exactly the version the extension uses:
 
 ```sh
+git checkout v0.3.0   # the latest release; main is the version in development
 cargo install cargo-pgrx --version 0.19.3 --locked
 cargo pgrx init --pg16 "$(command -v pg_config)"
 cd crates/pg_warren
@@ -198,15 +199,21 @@ Every SQL example in the README and `docs/` runs in CI, in
   UPDATE`, and changes some behaviour (see the changelog).
 
   A graph of 10M nodes and 100M edges builds and runs within the default
-  4 GB limits with one relation, or with five weighted relations and
-  `store_merged := false` (DESIGN.md §12; measured on 4 vCPUs). The caveats:
-  the five-relation graph beside `pagerank`'s scratch is 30 MB over the
-  cache cap (the excess is charged to compute memory) and its all-relations
-  reads are slower; with its merged CSR it is 6.0 GB, so each statement
-  reloads it, and `diff`, `distance` and `eigen` are refused unless the
-  limits are raised; BFS through SQL is 11× a recursive CTE rather than the
-  20× target; and `eigen` does not converge within 10 minutes on a uniform
-  random graph of that size ([docs/limits.md](docs/limits.md)).
+  limits (each 4 GB) with one relation, or with five weighted relations and
+  `store_merged := false` (DESIGN.md §12; measured on 4 vCPUs). A backend's
+  peak is bounded by the cache and compute limits together, not by 4 GB:
+  on the five-relation graph `pagerank` peaks at 4.5 GB and `diff` at
+  7.2 GB. The caveats: the five-relation graph beside `pagerank`'s scratch
+  is 30 MB over the cache cap (the excess is charged to compute memory) and
+  its all-relations reads are slower; with its merged CSR it is 6.0 GB, so
+  each statement reloads it, and `diff`, `distance` and `eigen` are refused
+  unless the limits are raised. Several §12 targets are missed on 4 vCPUs:
+  BFS through SQL is 11× a recursive CTE rather than 20×, `reachable_set`
+  26M rather than 50M edges/s, `pagerank` on five relations 36–40 s rather
+  than 30 s, its `diff` 58 s rather than 30 s, and `components` without the
+  merged CSR is borderline at 10.1 s; `eigen` does not converge within
+  10 minutes on a uniform random graph of that size
+  ([docs/limits.md](docs/limits.md)).
 
 - **0.4.0** (in development): locality ordering of dense ids first (DESIGN.md
   §14 item 22), then the planned library's first groups (§6.7).

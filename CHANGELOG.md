@@ -5,8 +5,9 @@
 ## 0.3.0 — hardening: bounded memory, trusted install, 100M-edge scale (2026-10-20)
 
 Milestone M7 of DESIGN.md §13. A graph of 10M nodes and 100M edges now
-builds and runs within the default 4 GB limits when it has one relation, or
-five weighted relations with `store_merged := false` (the 100M-edge soak,
+builds and runs within the default limits (each 4 GB; a backend's peak is
+bounded by the cache and compute limits together) when it has one relation,
+or five weighted relations with `store_merged := false` (the 100M-edge soak,
 DESIGN.md §12; what still misses is under Performance).
 
 ### Upgrading
@@ -16,11 +17,17 @@ DESIGN.md §12; what still misses is under Performance).
   `warren.*` function. 0.3.0 changes the schema: the update adds the column
   `warren.graphs.store_merged` (existing graphs are backfilled `true`),
   drops the foreign keys `graphs.current_version` and
-  `versions.label_vector` and adds the triggers that replace them, adds
-  `create_graph`'s `store_merged` argument, and changes the `tol` and
-  `max_iter` defaults of `eigen` and `distance`. The new library is loaded
+  `versions.label_vector` and adds the triggers that replace them (and
+  their trigger functions `warren.current_version_is_the_graphs()` and
+  `warren.current_version_is_kept()`, revoked from `PUBLIC`), adds
+  `create_graph`'s `store_merged` argument, and changes the `tol` default
+  of `eigen` and `distance` (`max_iter`'s new default comes with the
+  library, whether or not the update has run). The new library is loaded
   at once, but the catalog changes only with the update, so calls in
   between can fail.
+- `create_graph` is dropped and re-created by the update (it gains an
+  argument), so its privileges return to the defaults: re-apply any
+  `GRANT` or `REVOKE` you made on `warren.create_graph` after updating.
 - Every backend's memory is now bounded by default (below). A graph or
   call that 0.2.0 ran outside every limit can now be reloaded per
   statement or refused with 53400; raise `warren.max_cache_memory`,
@@ -104,7 +111,7 @@ DESIGN.md §12; what still misses is under Performance).
   longer before its `WARNING`; `statement_timeout` or a cancel stops it.
   Pass `tol` and `max_iter` explicitly to keep the old behaviour (with
   `dtype := 'f64'` for a tighter `tol` to count). The update changes the
-  two defaults.
+  `tol` default; the `max_iter` default changes with the library.
 - **`reachable_set` is direction-optimising.** When the version has the
   reverse CSR, a depth is pulled from it if its frontier holds more than
   1/24 of the id space and the unvisited ids have fewer in-edges than the
@@ -114,11 +121,12 @@ DESIGN.md §12; what still misses is under Performance).
   instead of the order reached (so which rows a select-list `LIMIT` keeps
   can differ from `bfs`'s; use `ORDER BY` when the order matters), and
   `last_stats().edges_traversed` counts the row entries scanned rather
-  than every edge of the visited nodes: 16.9M rather than 100M on a
+  than every edge of the visited nodes: 17.9M rather than 100M on a
   G(n, m) graph of 10M nodes and 100M edges. That is never more than a
   push-only search would scan, except that it can be on a graph of
-  several relations without the merged CSR, read with every relation. `bfs` is
-  unchanged: it keeps push for its `via` and its order (DESIGN.md §9.3).
+  several relations without the merged CSR, read with every relation.
+  `bfs` is unchanged: it keeps push for its `via` and its order (DESIGN.md
+  §9.3).
 - **Trusted install, and a new catalog owner.** pg_warren is a trusted
   extension: a role with `CREATE` on the database can run `CREATE
   EXTENSION pg_warren` without being a superuser (DESIGN.md §7). Catalog
