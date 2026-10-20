@@ -289,12 +289,13 @@ impl Drop for MemoryCharge {
 }
 
 /// A test reclaim hook that frees exactly the bytes it is asked for, as
-/// the cache's does when its entries are small.
-#[cfg(test)]
+/// the cache's does when its entries are small. Its users run kernels on
+/// the compute pool, which Miri does not run, so it is not built there.
+#[cfg(all(test, not(miri)))]
 #[derive(Debug)]
 pub(crate) struct Exact;
 
-#[cfg(test)]
+#[cfg(all(test, not(miri)))]
 impl Reclaim for Exact {
     fn reclaim(&self, bytes: u64) -> u64 {
         bytes
