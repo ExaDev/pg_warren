@@ -310,13 +310,14 @@ def test_the_settings_are_recorded_after_each_pass_sets_them_and_loads_the_libra
     assert result["settings"] == {"raised": ["x=1"]}
 
 
-def test_pagerank_counts_the_segment_rows_it_reads_in_its_own_statement():
-    sql = soak.pagerank_sql("soak")
+def test_a_call_counts_the_segment_rows_it_reads_in_its_own_statement():
+    sql = soak.with_segment_reads("warren.pagerank('soak', 'pr', tol := 0, max_iter := 20)")
     assert ";" not in sql, "one statement: the counts are this transaction's"
-    assert "warren.pagerank('soak', 'pr', tol := 0, max_iter := 20)" in sql
-    # Read before, then pagerank, then read after: each step needs the one before.
+    # Read before, then the call, then read after: each step needs the one before.
     before, run, after = (sql.index(part) for part in ("AS MATERIALIZED (SELECT", "warren.pagerank", "FROM run"))
     assert before < run < after
+    assert soak.pagerank_sql("soak") == sql
+    assert "warren.prewarm('soak')" in soak.prewarm_sql("soak")
 
 
 def test_the_first_pass_runs_at_the_given_cap_and_counts_pagerank_against_it():
@@ -343,11 +344,14 @@ def test_the_first_cap_defaults_to_the_4gb_default():
 
 
 def test_the_summary_reports_how_many_times_pagerank_loaded_the_version():
-    result = {"stages": {"default: pagerank": {"median_seconds": 3.0, "rows": ["1234|20"]},
+    # One load is what the pass's first (cold) prewarm reads.
+    result = {"stages": {"default: prewarm": {"median_seconds": 1.0, "rows": ["617|101"]},
+                         "default: pagerank": {"median_seconds": 3.0, "rows": ["1234|20"]},
                          "default: pagerank from cold": {"median_seconds": 4.0, "rows": ["617|20"]}},
-              "hardware": {"cpus": 4}, "version_1_segment_rows": 617, "planned_stages": [],
+              "hardware": {"cpus": 4}, "planned_stages": [],
               "cache_memory_bytes": 418945 * 1024}
     measured = soak.summary(result)
+    assert measured["load_segment_reads"] == 617
     assert (measured["pagerank_segment_reads"], measured["pagerank_loads"]) == (1234, 2.0)
     assert measured["pagerank_seconds"] == 3.0
     assert (measured["pagerank_cold_seconds"], measured["pagerank_cold_loads"]) == (4.0, 1.0)

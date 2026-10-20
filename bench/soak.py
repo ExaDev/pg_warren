@@ -211,15 +211,24 @@ def disk_allows(free, needed, floor):
     return free - needed >= floor
 
 
-def pagerank_sql(graph):
-    """`pagerank`, 20 iterations, as one statement that also returns the
-    rows of `warren.segments` it read (`reads|iterations`): with its
-    version's segment rows, how many times it loaded the version."""
+def with_segment_reads(call):
+    """`SELECT <call>` as one statement that also returns the rows of
+    `warren.segments` it read, as `reads|result`. A load's reads, from the
+    pass's first (cold) `prewarm`, turn another call's into a load count."""
     return (f"WITH before AS MATERIALIZED (SELECT {SEGMENT_READS.format(when='1')} AS reads), "
-            f"run AS MATERIALIZED (SELECT warren.pagerank('{graph}', 'pr', tol := 0, max_iter := 20) AS iterations "
-            f"FROM before WHERE before.reads IS NOT NULL), "
-            f"after AS MATERIALIZED (SELECT {SEGMENT_READS.format(when='run.iterations')} AS reads FROM run) "
-            f"SELECT after.reads - before.reads, run.iterations FROM before, run, after")
+            f"run AS MATERIALIZED (SELECT {call} AS result FROM before WHERE before.reads IS NOT NULL), "
+            f"after AS MATERIALIZED (SELECT {SEGMENT_READS.format(when='run.result')} AS reads FROM run) "
+            f"SELECT after.reads - before.reads, run.result FROM before, run, after")
+
+
+def pagerank_sql(graph):
+    """`pagerank`, 20 iterations, counting its segment reads."""
+    return with_segment_reads(f"warren.pagerank('{graph}', 'pr', tol := 0, max_iter := 20)")
+
+
+def prewarm_sql(graph):
+    """A load of `graph`'s current version, counting its segment reads."""
+    return with_segment_reads(f"warren.prewarm('{graph}')")
 
 
 def cap_bytes(kb):
@@ -507,9 +516,6 @@ class Soak:
                 s.run(setting)
             probe = self.stage(result, "cold_load_probe", s.measure(f"SELECT warren.prewarm('{GRAPH}')"))
             result["cached_bytes"] = cached_bytes(probe["notices"], v1["version"])
-        with self.session() as s:
-            result["version_1_segment_rows"] = int(s.run(
-                f"SELECT count(*) FROM warren.segments WHERE version_id = {v1['version']}")["rows"][0])
         result["cache_memory_bytes"] = cap_bytes(self.options.cache_memory_kb)
         self._queries(result, "default", cap=self.first_cap())
         fits = result["cached_bytes"] is not None and pagerank_fits(result["cached_bytes"], v1["id_space"],
@@ -571,7 +577,7 @@ class Soak:
                 measured = s.measure(timed(sql) if server else sql, repeat)
                 return self.stage(result, f"{label}: {name}", server_seconds(measured) if server else measured)
 
-            stage("prewarm", f"SELECT warren.prewarm('{GRAPH}')")
+            stage("prewarm", prewarm_sql(GRAPH))
             # After the SETs, and after a call loaded the library: before
             # that pg_settings does not list warren.*.
             result.setdefault("settings", {})[label] = s.run(SETTINGS_SQL)["rows"]
@@ -690,6 +696,9 @@ def summary(result):
                 measured[key], measured[f"{key}_stopped"] = stages[name][field], True
         elif why is not None:
             measured[f"{key}_failed"] = why
+    load, _ = outcome(result, "default: prewarm")
+    if load is not None and "|" in load["rows"][0]:
+        measured["load_segment_reads"] = int(load["rows"][0].split("|")[0])
     for name, prefix in (("default: pagerank", "pagerank"), ("default: pagerank from cold", "pagerank_cold")):
         pagerank, _ = outcome(result, name)
         if pagerank is None or "|" not in pagerank["rows"][0]:
@@ -698,8 +707,8 @@ def summary(result):
         measured[f"{prefix}_segment_reads"] = reads
         if prefix == "pagerank_cold":
             measured["pagerank_cold_seconds"] = pagerank["median_seconds"]
-        if result.get("version_1_segment_rows"):
-            measured[f"{prefix}_loads"] = reads / result["version_1_segment_rows"]
+        if measured.get("load_segment_reads"):
+            measured[f"{prefix}_loads"] = reads / measured["load_segment_reads"]
     eigen, _ = outcome(result, "default: eigen")
     if eigen is not None:
         measured["eigen_residual"] = float(eigen["rows"][0].split("|")[1])
