@@ -22,8 +22,10 @@ End-to-end benchmark harness and fixture generators (DESIGN.md §12,
   edges generated inside a scratch cluster, built and queried at the default
   limits, with each backend's peak memory from `/proc`; verdicts against the
   §12 targets in `results/soak/<case>.json`. Run it against a Postgres tree
-  with a release build installed (`--pg-config`), on a machine with ~15 GB of
-  RAM and ~20 GB of free disk; `--scale 1000` is a quick check.
+  with a release build installed (`--pg-config`), passing the revision and
+  profile it was built from (`--extension-revision`, `--extension-profile`;
+  recorded with the results), on a machine with ~15 GB of RAM and ~20 GB of
+  free disk; `--scale 1000` is a quick check.
 - `results/` — committed results, one directory per pg_warren version
   (record them on a quiet machine; say which in the commit).
 - `requirements.txt` — pinned Python dependencies of `bench/` and `test/`.
