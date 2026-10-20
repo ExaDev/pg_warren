@@ -31,10 +31,26 @@
   roles could plant functions or operators that `refresh` would run as
   the graph's owner.
 - `warren.max_cache_memory` (default `4GB`): a size-bound on what a
-  backend's cache holds between calls. Cached graph versions and vectors
-  are evicted least recently used first and reloaded when next used;
-  transient vectors count against it but are never evicted, and a
+  backend's cache holds between statements. Cached graph versions and
+  vectors are evicted least recently used first and reloaded when next
+  used; transient vectors count against it but are never evicted, and a
   transient write that would take them past it fails with 53400.
+- What a top-level statement reads stays cached until it ends: every
+  version and persisted vector it reads or writes is pinned, then released
+  when the statement ends, normally or with an error, and the cache
+  trimmed to the cap. A library function (`pagerank`, …) is one statement,
+  so it loads its version once even when the version and its transient
+  scratch together exceed the cap. Before, such a run reloaded the
+  version on every call: at 10M nodes and 100M edges, more than 15
+  minutes instead of 32 s. What a statement holds past the cap is charged
+  to each call's `warren.max_compute_memory`, and a load that would take
+  it past that too fails with 53400 before loading (the message names
+  both settings and the bytes), so a backend's peak is about the two
+  settings together (DESIGN.md §5.5, §14 item 20).
+- `diff`, `distance` and `vector_norm_diff` read their two versions
+  through the cache, under the same rule, and refuse two that do not fit
+  together before loading either. Before, `diff` loaded both outside every
+  limit: on two 6 GB versions a backend reached 12.8 GB and was killed.
 - `create_graph(…, store_merged boolean DEFAULT true)`: a graph of several
   relations may leave its merged (all-relations) CSR unstored. All-relations
   reads then merge the relations' rows on the fly, with identical results,
@@ -44,10 +60,13 @@
   new column `warren.graphs.store_merged` (existing graphs are backfilled
   `true`); run `ALTER EXTENSION pg_warren UPDATE` before using 0.3.0.
 - Upgrade note: the cache was unbounded before. A graph version larger
-  than 4GB, or a version plus the library's transient scratch vectors
+  than 4GB, or a version and the library's transient scratch vectors
   (`pagerank` keeps about eleven full-length `f64` vectors, ~88 bytes per
-  node) above it, is now reloaded on every call, with a `NOTICE` once per
-  statement. Raise `warren.max_cache_memory` for such graphs.
+  node) above it, is now held only for the statement that reads it and
+  reloaded by the next (a version alone over the cap says so with a
+  `NOTICE` once per statement), and a statement that would hold more than
+  `warren.max_cache_memory` and `warren.max_compute_memory` together fails
+  with 53400. Raise `warren.max_cache_memory` for such graphs.
 - Behaviour change: `vector_map` expressions that take the executor path
   now run in Postgres's read-only transaction state too, as 0.2.0 made
   source queries, `vector_from_query` and `gather` do, so an expression

@@ -71,6 +71,20 @@ pub(crate) fn rows(query: &str) -> Result<Option<String>, Error> {
     Spi::get_one::<String>(&format!("SELECT coalesce(string_agg(r, ' '), '') FROM ({query}) q(r)"))
 }
 
+/// The rows of `warren.segments` this transaction has read so far, by
+/// sequential and bitmap scans of the table and index scans of its indexes
+/// (which count their heap fetches on the index): how a test sees a
+/// version being loaded.
+pub(crate) fn segment_reads() -> Result<i64, Error> {
+    Spi::get_one::<i64>(
+        "SELECT pg_stat_get_xact_tuples_returned('warren.segments'::regclass)
+                + pg_stat_get_xact_tuples_fetched('warren.segments'::regclass)
+                + sum(pg_stat_get_xact_tuples_fetched(indexrelid))::bigint
+         FROM pg_index WHERE indrelid = 'warren.segments'::regclass",
+    )?
+    .ok_or(Error::InvalidPosition)
+}
+
 /// Runs `PERFORM <expression>` and returns the SQLSTATE and message it
 /// failed with, as `"<sqlstate>: <message>"`, or `None` if it succeeded.
 pub(crate) fn failure(expression: &str) -> Result<Option<String>, Error> {

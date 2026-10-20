@@ -5,7 +5,7 @@ use pgrx::prelude::*;
 use warren_core::compute::{norm_diff, reduce_live, Norm, Reduction};
 use warren_core::version;
 
-use super::settings::{compute_memory, workers};
+use super::settings::workers;
 use super::vectors::Vectors;
 use super::{entry, ComputeSqlError};
 use crate::cache::resolve;
@@ -69,10 +69,8 @@ fn vector_norm_diff(
                 a_side.version, b_side.version
             )));
         }
-        let memory = compute_memory();
         with_id_type!(a_side.graph.id_type, E => {
-            let mut a_vectors = Vectors::<E>::open_within(a_side, &memory)?;
-            let mut b_vectors = Vectors::<E>::open_within(b_side, &memory)?;
+            let (mut a_vectors, mut b_vectors) = Vectors::<E>::open_pair(a_side, b_side)?;
             version::shared_dense_ids(&a_vectors.loaded.id_map, &b_vectors.loaded.id_map)?;
             let (a, b) = (a_vectors.get(a)?, b_vectors.get(b)?);
             Ok(norm_diff(&*workers()?, &mut PostgresInterrupts, &a, &b, norm)?)

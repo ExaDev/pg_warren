@@ -25,6 +25,13 @@ impl ComputeMemory {
         Self(Arc::new(Budget { limit, in_use: AtomicU64::new(0) }))
     }
 
+    /// A budget of `limit` bytes of which `held` are in use from the start
+    /// and for as long as the budget lives: memory held elsewhere (by a
+    /// cache, say) that the budget's charges must fit beside.
+    pub fn with_held(limit: u64, held: u64) -> Self {
+        Self(Arc::new(Budget { limit, in_use: AtomicU64::new(held) }))
+    }
+
     /// The budget's limit in bytes.
     pub fn limit(&self) -> u64 {
         self.0.limit
@@ -219,6 +226,20 @@ mod tests {
             ComputeError::MemoryLimit { requested: 41, in_use: 60, limit: 100 }
         );
         assert!(memory.charge(40).is_ok());
+    }
+
+    #[test]
+    fn bytes_held_elsewhere_count_against_the_limit_for_the_budgets_life() {
+        let memory = ComputeMemory::with_held(100, 30);
+        assert_eq!((memory.limit(), memory.in_use()), (100, 30));
+        assert_eq!(
+            memory.charge(71).unwrap_err(),
+            ComputeError::MemoryLimit { requested: 71, in_use: 30, limit: 100 }
+        );
+        drop(memory.charge(70).unwrap());
+        assert_eq!(memory.in_use(), 30, "the held bytes are never released");
+        let over = ComputeMemory::with_held(100, 130);
+        assert!(over.charge(0).is_err(), "nothing fits once they exceed the limit");
     }
 
     #[test]

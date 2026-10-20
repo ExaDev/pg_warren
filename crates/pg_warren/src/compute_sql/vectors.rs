@@ -2,7 +2,8 @@
 //! session's transient vectors of the version first, then its persisted
 //! ones, read through the backend's vector cache and charged to the call's
 //! compute memory budget, and written back with tombstoned rows cleared.
-//! Each read or write into the backend's cache then trims it to
+//! Each read or write into the backend's cache pins what it read or wrote
+//! until the statement ends, then trims the cache to
 //! `warren.max_cache_memory` (DESIGN.md §5.5).
 
 use std::collections::HashMap;
@@ -12,16 +13,18 @@ use std::sync::{Arc, OnceLock};
 use warren_core::compute::{AnyVector, ComputeMemory, Dtype, MemoryCharge};
 use warren_core::graph::Tombstones;
 
-use super::settings::compute_memory;
 use super::ComputeSqlError;
 use crate::access::require_creator_or_owner;
-use crate::cache::{admit_transient, cached, trim, LoadedVersion, Resolved};
+use crate::cache::{
+    admit_transient, cached, cached_pair, cached_vector, compute_memory, keep_vector, trim,
+    LoadedVersion, Resolved,
+};
 use crate::catalog::{GraphDefinition, VersionId};
 use crate::segment::CHUNK_SIZE;
 use crate::source::IdDatum;
 use crate::vector::{
-    drop_transient, forget, keep_transient, load, remember, transient, transients, write_vector,
-    Binding, SpiVectorStore, VectorError, VectorId, VectorRecord, VectorStore,
+    drop_transient, forget, keep_transient, transient, transients, write_vector, Binding,
+    SpiVectorStore, VectorError, VectorId, VectorRecord, VectorStore,
 };
 
 /// The budget cached vectors are charged to while cached: unlimited, since
@@ -98,18 +101,35 @@ struct Read {
 
 impl<E: IdDatum> Vectors<E> {
     /// Opens `resolved`'s version and lists its vectors, with a fresh call
-    /// budget of `warren.max_compute_memory`.
+    /// budget of `warren.max_compute_memory` (less what the statement holds
+    /// past the cache's cap, the version included).
     pub(crate) fn open(resolved: Resolved) -> Result<Self, ComputeSqlError> {
-        Self::open_within(resolved, &compute_memory())
+        let loaded = cached::<E>(&resolved)?;
+        Self::with_loaded(resolved, loaded, &compute_memory())
     }
 
-    /// Opens `resolved`'s version and lists its vectors, charging what the
-    /// call reads to `memory` (a budget shared with other versions).
-    pub(crate) fn open_within(
+    /// Opens the versions `first` and `second` name (refused before either
+    /// is loaded if they do not fit together) and lists their vectors, with
+    /// one fresh call budget for both.
+    pub(crate) fn open_pair(
+        first: Resolved,
+        second: Resolved,
+    ) -> Result<(Self, Self), ComputeSqlError> {
+        let [first_loaded, second_loaded] = cached_pair::<E>(&first, &second)?;
+        let memory = compute_memory();
+        Ok((
+            Self::with_loaded(first, first_loaded, &memory)?,
+            Self::with_loaded(second, second_loaded, &memory)?,
+        ))
+    }
+
+    /// `resolved`'s version, `loaded`, and its vectors, charging what the
+    /// call reads to `memory`.
+    fn with_loaded(
         resolved: Resolved,
+        loaded: Arc<LoadedVersion<E>>,
         memory: &ComputeMemory,
     ) -> Result<Self, ComputeSqlError> {
-        let loaded = cached::<E>(&resolved)?;
         let records = SpiVectorStore.bound(resolved.version)?;
         Ok(Self {
             graph: resolved.graph,
@@ -170,9 +190,7 @@ impl<E: IdDatum> Vectors<E> {
                 };
                 let bytes = vector_bytes(record.dtype, record.width, record.length);
                 let charge = self.memory.charge(bytes)?;
-                let vector = load(&mut SpiVectorStore, cache_memory(), graph_id, &record)?;
-                trim();
-                (charge, vector)
+                (charge, cached_vector(cache_memory(), graph_id, &record)?)
             }
         };
         let read = Read { _charge: charge, vector: Arc::clone(&vector) };
@@ -273,8 +291,7 @@ impl<E: IdDatum> Vectors<E> {
         }
         drop_transient(graph_id, self.version, name);
         let id = record.vector;
-        remember(graph_id, id, Arc::new(vector));
-        trim();
+        keep_vector(graph_id, id, Arc::new(vector));
         self.records.retain(|bound| bound.name != name);
         self.records.push(record);
         Ok(Some(id))
