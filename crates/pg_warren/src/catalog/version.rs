@@ -3,7 +3,7 @@
 //! catalog owner.
 
 use pgrx::prelude::*;
-use warren_core::graph::{AnyCsr, ExternalId, GraphCsr, IdMap};
+use warren_core::graph::{ExternalId, GraphCsr, IdMap, TargetWidth};
 
 use super::retention::{retention, VersionSummary};
 use super::{CatalogError, GraphDefinition};
@@ -47,9 +47,10 @@ impl VersionStats {
             edge_count: graph.relations().iter().map(|r| r.forward().edge_count()).sum(),
             dropped_edges,
             deduplicated_edges,
-            target_width: match graph.all_relations().forward() {
-                AnyCsr::U32(_) => 4,
-                AnyCsr::U64(_) => 8,
+            // Every CSR of a version has the width its id space implies.
+            target_width: match TargetWidth::for_id_space(id_map.id_space()) {
+                TargetWidth::U32 => 4,
+                TargetWidth::U64 => 8,
             },
         }
     }

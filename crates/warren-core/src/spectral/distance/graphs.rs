@@ -8,7 +8,9 @@
 
 use super::super::{Resources, SpectralError};
 use crate::compute::{ComputeError, MemoryCharge};
-use crate::graph::{DenseId, EdgeList, ExternalId, GraphCsr, RelationDictionary, RelationIndex};
+use crate::graph::{
+    CsrLayout, DenseId, EdgeList, ExternalId, GraphCsr, RelationDictionary, RelationIndex,
+};
 use crate::interrupts::Interrupts;
 use crate::version::GraphVersion;
 
@@ -82,11 +84,14 @@ pub fn align_graph<E: ExternalId, I: Interrupts>(
     let (weighted, reverse) = (all.forward().is_weighted(), all.reverse().is_some());
     let edges: u64 = other.graph().relations().iter().map(|r| r.forward().edge_count()).sum();
     let relation_count = alignment.relations.len();
+    // `edit` reads only the relations' CSRs, so the rebuild needs no
+    // merged CSR.
+    let layout = CsrLayout { build_reverse: reverse, store_merged: false };
     let charge = resources.memory.charge(rebuild_bytes(
         edges,
         relation_count,
         alignment.id_space,
-        reverse,
+        layout,
     ))?;
     let mut list = EdgeList::for_id_space(alignment.id_space, weighted);
     list.reserve(edges as usize)?;
@@ -104,7 +109,7 @@ pub fn align_graph<E: ExternalId, I: Interrupts>(
             }
         }
     }
-    let graph = GraphCsr::build(list, relation_count, alignment.id_space, reverse)?;
+    let graph = GraphCsr::build_as(list, relation_count, alignment.id_space, layout)?;
     Ok(AlignedGraph { graph, _charge: charge })
 }
 
@@ -114,15 +119,15 @@ pub fn align_graph<E: ExternalId, I: Interrupts>(
 /// and the build's per-node temporaries. Those are the rows' offsets, kept
 /// until the relations' CSRs are split off, and a scatter cursor (one per
 /// transpose too, after the rows are freed): 16 bytes a node at once.
-fn rebuild_bytes(edges: u64, relation_count: usize, id_space: u64, reverse: bool) -> u64 {
-    let directions: u64 = if reverse { 2 } else { 1 };
+fn rebuild_bytes(edges: u64, relation_count: usize, id_space: u64, layout: CsrLayout) -> u64 {
+    let directions: u64 = if layout.build_reverse { 2 } else { 1 };
     let list = edges.saturating_mul(32);
     let csrs = edges.saturating_mul(16 * 2 * directions);
     let temporaries = id_space.saturating_add(1).saturating_mul(16);
     list.saturating_add(csrs).saturating_add(temporaries).saturating_add(GraphCsr::offsets_bytes(
         relation_count,
         id_space,
-        reverse,
+        layout,
     ))
 }
 
@@ -179,7 +184,9 @@ mod tests {
             let ids = align_ids(r, &v.version(), &v.version()).unwrap();
             assert_eq!((ids.dense_ids.as_slice(), ids.id_space), (&[0, 1, 2][..], 3));
             assert_eq!(&ids.relations, &v.relations);
-            assert_eq!(align_graph(r, &v.version(), &ids).unwrap().graph, v.graph);
+            // Rebuilt without the merged CSR, which `edit` does not read.
+            let aligned = align_graph(r, &v.version(), &ids).unwrap().graph;
+            assert_eq!(aligned, v.without_merged().graph);
         });
     }
 

@@ -12,7 +12,7 @@ All are ordinary GUCs, settable per session or per transaction
 | `warren.threads` | half the cores, at least 1 | 1–1024 | threads a compute kernel runs on (`spmv`, `spmm`, `vector_map`, reductions, `gather`, `eigen`, `distance`, `triangles`) | — |
 | `warren.max_compute_memory` | `4GB` | `64kB` up | memory one call holds: every vector it reads (once, cached or not), every vector and work buffer it allocates | `configuration_limit_exceeded` (53400), before allocating |
 | `warren.max_cache_memory` | `4GB` | `64kB` up | what this backend's cache holds *between* calls: cached versions, cached persisted vectors, and every role's transient vectors | versions and persisted vectors are evicted, least recently used first; a transient write that would go over is refused with 53400 |
-| `warren.max_build_memory` | `4GB` | `1MB` up | the CSR offsets a `refresh` builds (8 bytes × (id_space + 1) per relation's CSR, merged CSR included, per direction) | 53400, before anything is allocated or written |
+| `warren.max_build_memory` | `4GB` | `1MB` up | the CSR offsets a `refresh` builds (8 bytes × (id_space + 1) per relation's CSR, and the merged CSR's if stored, per direction) | 53400, before anything is allocated or written |
 | `warren.max_walk_paths` | `10000000` | 1 up | the largest `max_results` for a `walk` that returns a row per walk (`mode := 'paths'`, or `'ends'` without `distinct_ends`) | `program_limit_exceeded` (54000) |
 
 On the `kg` graph of [change-detection.md](change-detection.md):
@@ -82,7 +82,8 @@ compute kernels from the main thread every millisecond), so
   one segment's raw bytes (at most the largest targets or weights array:
   0.8 GB for 100M weighted edges).
 - Storage of a version, per direction: offsets 8 bytes × (id_space + 1) for
-  each relation, plus the merged CSR's when there is more than one relation;
+  each relation, plus the merged CSR's when there is more than one relation
+  and the graph stores it (`store_merged`, the default; see below);
   targets 4 bytes per edge (8 above 2³² nodes); weights 8 bytes per edge.
   The reverse CSR doubles it (`build_reverse := true`, the default). A
   persisted `f64` vector is 8 bytes × id_space × width (80 MB per column at
@@ -111,14 +112,37 @@ estimates for 10M nodes and 100M edges (u32 targets, reverse CSR included, a
 |---|---|
 | one relation, unweighted | ~1.2 GB |
 | one relation, weighted | ~2.8 GB |
-| five relations, unweighted | ~2.8 GB |
-| five relations, weighted | ~6.0 GB: over the default cap (the merged CSR alone is ~2.6 GB) |
+| five relations, unweighted | ~2.8 GB; ~1.84 GB with `store_merged := false` |
+| five relations, weighted | ~6.0 GB: over the default cap (the merged CSR alone is ~2.6 GB); ~3.44 GB with `store_merged := false` |
 
-Add the library's transient scratch (~0.9 GB for `pagerank` at 10M nodes)
+Add the library's transient scratch (~0.88 GB for `pagerank` at 10M nodes)
 when sizing `warren.max_cache_memory`. The goal (DESIGN.md §12) is that such
-a graph and a library run fit one backend at default settings; the
-five-relation weighted case misses it until the merged CSR is optional.
+a graph and a library run fit one backend at default settings. The
+five-relation weighted case fits only without its merged CSR, and even then
+the graph plus `pagerank`'s scratch is ~4.32 GB, about 25–30 MB over the
+4 GiB default: raise `warren.max_cache_memory` slightly for it.
 These are estimates; the 100M-edge soak that measures them is M7 work.
+
+### The merged CSR (`store_merged`)
+
+A graph with several relations stores, besides each relation's CSR, the
+merged (all-relations) CSR that every read without `rels` uses: traversal
+without `rels`, `spmv`/`spmm`/`vector_degree` without `rels`, `components`,
+`gather`, `triangles`, `eigen`, `distance` and `diff`'s `all_relations`.
+`create_graph(…, store_merged := false)` leaves it out: those reads then
+merge the relations' rows as they go, with the same results (up to NaN
+payloads), in about 44% less memory for five weighted relations and a
+faster `refresh`, but more slowly, and more so with more relations: at 2–5
+relations BFS 2–3× and SpMV 5–8× slower, at 10 relations 6× and 11×
+(DESIGN.md §5.3). Reads with `rels`
+are unaffected. Without the merged CSR, a product over all relations
+(`spmv`, `spmm`, and so `eigen` and `distance`) also needs a row scratch on
+each worker thread, charged to `warren.max_compute_memory`: 16 bytes per
+entry of the longest row, at most 16 B × the relation count × the largest
+degree in one relation. Keep the default unless the merged CSR would not fit your
+memory limits. The choice is per graph, kept by `compact`, and shown by
+`warren.info(name) -> 'store_merged'`; it cannot be changed after
+`create_graph`.
 
 ## Measured performance
 
@@ -144,7 +168,11 @@ bulk spectrum). Scaled linearly, a 10M-node, 100M-edge `eigen` with k = 20
 projects to 8–9 minutes on 4 threads; this is a projection, not a
 measurement. A weighted graph of 100M edges with several relations exceeds
 the 4 GB build budget the design aims for, because the merged CSR is stored
-in addition to the per-relation ones.
+in addition to the per-relation ones. `store_merged := false` leaves it
+out, but the build has not been measured that way: the estimate is the
+~2.9 GB of one weighted relation (DESIGN.md §5.4) plus ~0.8 GB of offsets
+for five relations, ~3.7 GB, close to the budget. The M7 100M-edge soak
+measures it.
 
 ## Known limitations
 

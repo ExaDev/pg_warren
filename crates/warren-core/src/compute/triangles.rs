@@ -16,7 +16,7 @@ use std::cmp::Ordering;
 use rayon::prelude::*;
 
 use super::{ComputeError, ComputeMemory, MemoryCharge, Vector, Workers};
-use crate::graph::{AnyCsr, DenseId, GraphCsr, RelationSelection};
+use crate::graph::{CsrRows, DenseId, GraphCsr, RelationSelection};
 use crate::interrupts::{Cancellation, Cancelled, Interrupts};
 
 /// The nodes one task handles; a task checks the cancellation flag first.
@@ -35,10 +35,19 @@ pub fn triangles<I: Interrupts>(
     graph: &GraphCsr,
     relations: RelationSelection<'_>,
 ) -> Result<Vector<i64>, ComputeError> {
-    let selected = graph
-        .selected(relations)
-        .map_err(|relation| ComputeError::UnknownRelation { relation: relation.index() })?;
-    let forward: Vec<&AnyCsr> = selected.iter().map(|relation| relation.forward()).collect();
+    // Every relation is read through its all-relations rows (stored or
+    // merged on the fly), so an edge in several relations is one entry and
+    // the scratch charged does not depend on whether the merged CSR is
+    // stored; a selection through each relation's CSR.
+    let forward: Vec<CsrRows<'_>> = match relations {
+        RelationSelection::All => vec![graph.all_relations().forward()],
+        RelationSelection::Only(_) => graph
+            .selected(relations)
+            .map_err(|relation| ComputeError::UnknownRelation { relation: relation.index() })?
+            .into_iter()
+            .map(|relation| relation.forward().into())
+            .collect(),
+    };
     let id_space = graph.all_relations().forward().id_space();
     let mut counts = Vector::filled(memory, id_space, 1, 0i64)?;
     let values = counts.values_mut();
@@ -63,7 +72,7 @@ impl Symmetric {
     fn new(
         memory: &ComputeMemory,
         cancellation: &Cancellation,
-        forward: &[&AnyCsr],
+        forward: &[CsrRows<'_>],
         id_space: u64,
     ) -> Result<Self, ComputeError> {
         let each_edge = |f: &mut dyn FnMut(DenseId, DenseId)| -> Result<(), Cancelled> {
@@ -254,7 +263,7 @@ mod tests {
     use super::*;
     use crate::compute::reference::{self, Edges};
     use crate::compute::{ComputeError, ComputeMemory, Workers};
-    use crate::graph::{EdgeList, GraphCsr, RelationSelection};
+    use crate::graph::{CsrLayout, EdgeList, GraphCsr, RelationSelection};
     use crate::interrupts::{Cancelled, Interrupts, Uninterrupted};
 
     fn workers() -> &'static Workers {
@@ -334,30 +343,33 @@ mod tests {
         assert_eq!(memory.in_use(), 0);
     }
 
-    fn scenarios() -> impl Strategy<Value = (u64, usize, Edges, Option<Vec<usize>>, bool)> {
-        (1u64..12, 1usize..3).prop_flat_map(|(id_space, relations)| {
+    type Scenario = (u64, usize, Edges, Option<Vec<usize>>, (bool, bool));
+
+    fn scenarios() -> impl Strategy<Value = Scenario> {
+        (1u64..12, 1usize..4).prop_flat_map(|(id_space, relations)| {
             let edge = (0..relations, 0..id_space, 0..id_space, Just(1.0));
             (
                 Just(id_space),
                 Just(relations),
                 prop::collection::vec(edge, 0..60),
                 prop::option::of(prop::collection::vec(0..relations, 0..2)),
-                any::<bool>(),
+                any::<(bool, bool)>(),
             )
         })
     }
 
     proptest! {
         #[test]
-        fn counts_match_the_naive_triples((id_space, relations, edges, selected, wide) in scenarios()) {
+        fn counts_match_the_naive_triples((id_space, relations, edges, selected, (wide, store_merged)) in scenarios()) {
             let indexes = reference::relations(relations);
             let mut list = EdgeList::new(false);
             for &(r, s, t, w) in &edges {
                 list.push(indexes[r], s, t, w).unwrap();
             }
+            let layout = CsrLayout { build_reverse: false, store_merged };
             let graph = match wide {
-                true => GraphCsr::build_with::<u64>(list, relations, id_space, false),
-                false => GraphCsr::build(list, relations, id_space, false),
+                true => GraphCsr::build_with::<u64>(list, relations, id_space, layout),
+                false => GraphCsr::build_as(list, relations, id_space, layout),
             }.unwrap();
             let chosen: Option<Vec<_>> = selected.as_ref().map(|s| s.iter().map(|&r| indexes[r]).collect());
             let selection = chosen.as_deref().map_or(RelationSelection::All, RelationSelection::Only);
@@ -373,6 +385,45 @@ mod tests {
         reference::graph(n + 1, 1, &edges, false, false)
     }
 
+    /// The smallest `warren.max_compute_memory` under which `triangles`
+    /// over all relations succeeds.
+    fn least_budget(graph: &GraphCsr) -> u64 {
+        let fits = |limit| {
+            let memory = ComputeMemory::new(limit);
+            triangles(workers(), &memory, &mut Uninterrupted, graph, RelationSelection::All).is_ok()
+        };
+        let (mut low, mut high) = (0, 1 << 24);
+        while low < high {
+            let mid = (low + high) / 2;
+            if fits(mid) {
+                high = mid
+            } else {
+                low = mid + 1
+            }
+        }
+        low
+    }
+
+    #[test]
+    fn the_charge_over_all_relations_does_not_depend_on_the_merged_csr() {
+        // Five relations holding the same edges: each edge is in all five.
+        let ring: Edges = (0..200).map(|i| (0, i, (i + 1) % 200, 1.0)).collect();
+        let chords: Edges = (0..200).map(|i| (0, i, (i + 2) % 200, 1.0)).collect();
+        let edges: Edges = (0..5)
+            .flat_map(|r| ring.iter().chain(&chords).map(move |&(_, s, t, w)| (r, s, t, w)))
+            .collect();
+        let build = |store_merged| {
+            let layout = CsrLayout { build_reverse: false, store_merged };
+            reference::graph_as(200, 5, &edges, false, layout)
+        };
+        let (stored, unmerged) = (build(true), build(false));
+        assert_eq!(
+            count(&unmerged, RelationSelection::All),
+            count(&stored, RelationSelection::All)
+        );
+        assert_eq!(least_budget(&unmerged), least_budget(&stored));
+    }
+
     #[test]
     fn a_hub_costs_its_degree_not_its_square() {
         // Merging the hub's row with every leaf's would take n² steps.
@@ -385,7 +436,7 @@ mod tests {
     #[test]
     fn a_cancellation_stops_a_hub_row_partway() {
         let graph = star(100_000);
-        let forward = [graph.all_relations().forward()];
+        let forward = [graph.relations()[0].forward().into()];
         let memory = ComputeMemory::new(1 << 26);
         let cancellation = Cancellation::new();
         let symmetric = Symmetric::new(&memory, &cancellation, &forward, 100_001).unwrap();

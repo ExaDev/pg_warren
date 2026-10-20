@@ -11,14 +11,16 @@ use std::slice::Iter;
 
 use super::outbox::{check, running_ends, Outbox};
 use crate::compute::{ComputeError, ComputeMemory, MemoryCharge, Message};
-use crate::graph::{AnyCsr, DenseId, Direction, GraphCsr, Neighbours, RelationSelection};
+use crate::graph::{
+    AnyCsr, CsrRows, DenseId, Direction, GraphCsr, Neighbours, RelationSelection, RowNeighbours,
+};
 use crate::interrupts::Cancellation;
 
 /// The CSRs a gather reads: rows pulled as they are, and forward rows to
 /// push into an inbox.
 #[derive(Debug)]
 pub(super) struct Sources<'g> {
-    pull: Vec<&'g AnyCsr>,
+    pull: Vec<CsrRows<'g>>,
     push: Vec<&'g AnyCsr>,
 }
 
@@ -34,13 +36,25 @@ impl<'g> Sources<'g> {
             .selected(relations)
             .map_err(|relation| ComputeError::UnknownRelation { relation: relation.index() })?;
         let forward = selected.iter().map(|relation| relation.forward());
-        let reverse: Option<Vec<&AnyCsr>> = selected.iter().map(|r| r.reverse()).collect();
+        // Every relation is read through its all-relations rows, stored or
+        // merged on the fly; a selection through each relation's CSRs.
+        let (forward_rows, reverse_rows): (Vec<CsrRows<'g>>, Option<Vec<CsrRows<'g>>>) =
+            match relations {
+                RelationSelection::All => {
+                    let all = graph.all_relations();
+                    (vec![all.forward()], all.reverse().map(|reverse| vec![reverse]))
+                }
+                RelationSelection::Only(_) => (
+                    forward.clone().map(CsrRows::from).collect(),
+                    selected.iter().map(|r| r.reverse().map(CsrRows::from)).collect(),
+                ),
+            };
         let (mut pull, mut push) = (Vec::new(), Vec::new());
         if direction != Direction::In {
-            pull.extend(forward.clone());
+            pull.extend(forward_rows);
         }
         if direction != Direction::Out {
-            match reverse {
+            match reverse_rows {
                 Some(reverse) => pull.extend(reverse),
                 None => push.extend(forward),
             }
@@ -52,7 +66,7 @@ impl<'g> Sources<'g> {
 /// The senders of every receiver.
 #[derive(Debug)]
 pub(super) struct Neighbourhood<'g> {
-    rows: Vec<&'g AnyCsr>,
+    rows: Vec<CsrRows<'g>>,
     inbox: Option<Inbox>,
 }
 
@@ -79,7 +93,7 @@ impl<'g> Neighbourhood<'g> {
 
     /// `receiver`'s senders, ascending and distinct.
     pub(super) fn senders(&self, receiver: DenseId) -> impl Iterator<Item = DenseId> + Clone + '_ {
-        let rows = self.rows.iter().map(|csr| Row::Csr(csr.neighbours(receiver)));
+        let rows = self.rows.iter().map(|rows| Row::Merged(rows.neighbours(receiver)));
         let inbox = self.inbox.iter().map(|inbox| Row::Inbox(inbox.row(receiver).iter().copied()));
         Senders::new(rows.chain(inbox))
     }
@@ -153,6 +167,7 @@ impl Inbox {
 #[derive(Debug, Clone)]
 enum Row<'a> {
     Csr(Neighbours<'a>),
+    Merged(RowNeighbours<'a>),
     Inbox(Copied<Iter<'a, DenseId>>),
 }
 
@@ -162,6 +177,7 @@ impl Iterator for Row<'_> {
     fn next(&mut self) -> Option<DenseId> {
         match self {
             Self::Csr(row) => row.next(),
+            Self::Merged(row) => row.next(),
             Self::Inbox(row) => row.next(),
         }
     }

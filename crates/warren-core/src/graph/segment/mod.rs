@@ -189,7 +189,7 @@ mod tests {
         edges.push(r, 0, 2, 1.5).unwrap();
         edges.push(r, 2, 1, 2.5).unwrap();
         let graph = GraphCsr::build(edges, 1, 3, false).unwrap();
-        graph.all_relations().forward().clone()
+        graph.relations()[0].forward().clone()
     }
 
     #[test]
@@ -371,7 +371,7 @@ mod tests {
                 edges.push(r, source, target, f64::from(weight) / 7.0).unwrap();
             }
             let graph = GraphCsr::build(edges, relations.len(), id_space, true).unwrap();
-            for csr in [graph.all_relations().forward(), graph.relation(r).unwrap().reverse().unwrap()] {
+            for csr in [graph.relations()[0].forward(), graph.relation(r).unwrap().reverse().unwrap()] {
                 let segments = csr.encode().unwrap();
                 let decoded = AnyCsr::decode(id_space, segments.offsets(), segments.targets(), segments.weights());
                 prop_assert_eq!(decoded.as_ref(), Ok(csr));

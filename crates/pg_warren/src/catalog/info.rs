@@ -25,6 +25,7 @@ fn describe(name: &str) -> Result<JsonB, CatalogError> {
                  'name', g.name, 'owner', g.owner::text, 'readers', to_jsonb(g.readers::text[]),
                  'id_type', g.id_type::text, 'search_path', g.search_path, 'directed', g.directed, 'weighted', g.weighted,
                  'has_relations', g.has_relations, 'build_reverse', g.build_reverse,
+                 'store_merged', g.store_merged,
                  'retain_versions', g.retain_versions, 'current_version', g.current_version,
                  'staleness', (SELECT (now() - c.built_at)::text FROM warren.versions c
                                WHERE c.version_id = g.current_version
@@ -91,6 +92,7 @@ mod tests {
         assert_eq!(info("{id_type}")?.as_deref(), Some("\"bigint\""));
         assert_eq!(info("{readers}")?.as_deref(), Some("[]"));
         assert_eq!(info("{retain_versions}")?.as_deref(), Some("2"));
+        assert_eq!(info("{store_merged}")?.as_deref(), Some("true"));
         assert_eq!(info("{current_version}")?, Some(promoted.to_string()));
         assert_eq!(info("{versions,1,version}")?, Some(staged.to_string()));
         assert_eq!(info("{versions,0,current}")?.as_deref(), Some("true"));

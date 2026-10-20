@@ -17,7 +17,7 @@ use crate::source::IdType;
 const FIND: &str = "SELECT g.graph_id, g.owner::oid, g.readers::oid[], g.node_query, g.edge_query,
                            g.search_path, g.directed, g.weighted, g.has_relations,
                            g.build_reverse, g.retain_versions, g.current_version, g.id_type::oid,
-                           v.version_id
+                           v.version_id, g.store_merged
                     FROM warren.graphs g
                     LEFT JOIN warren.versions v
                            ON v.version_id = g.current_version AND v.graph_id = g.graph_id
@@ -66,6 +66,9 @@ pub(crate) struct GraphDefinition {
     pub(crate) has_relations: bool,
     /// Whether to build the reverse CSRs.
     pub(crate) build_reverse: bool,
+    /// Whether to store the merged CSR of several relations, rather than
+    /// merge the relations' rows on the fly (DESIGN.md §5.3).
+    pub(crate) store_merged: bool,
     /// Promoted versions kept, the current one included.
     pub(crate) retain_versions: i32,
     /// The promoted version builds start from, if any.
@@ -89,6 +92,7 @@ pub(crate) struct NewGraph<'a> {
     pub(crate) weighted: bool,
     pub(crate) has_relations: bool,
     pub(crate) build_reverse: bool,
+    pub(crate) store_merged: bool,
     pub(crate) retain_versions: i32,
 }
 
@@ -131,6 +135,7 @@ impl GraphDefinition {
                     retain_versions: row.get(11)?.unwrap_or(1),
                     current_version: row.get(14)?,
                     stray_current_version: stray(row.get(12)?, row.get(14)?),
+                    store_merged: row.get(15)?.unwrap_or(true),
                 })
             })
         })
@@ -234,9 +239,9 @@ impl NewGraph<'_> {
                 client.update(
                     "INSERT INTO warren.graphs (name, owner, node_query, edge_query, search_path,
                          id_type, directed, weighted, has_relations, build_reverse,
-                         retain_versions)
+                         retain_versions, store_merged)
                      VALUES ($1, $2::oid::regrole, $3, $4, $5, $6::oid::regtype, $7, $8, $9,
-                             $10, $11)",
+                             $10, $11, $12)",
                     None,
                     &[
                         graph.name.into(),
@@ -250,6 +255,7 @@ impl NewGraph<'_> {
                         graph.has_relations.into(),
                         graph.build_reverse.into(),
                         graph.retain_versions.into(),
+                        graph.store_merged.into(),
                     ],
                 )?;
                 Ok(())

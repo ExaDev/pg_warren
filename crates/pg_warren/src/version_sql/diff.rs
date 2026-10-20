@@ -38,8 +38,8 @@ fn diff_versions(name: &str, v1: VersionId, v2: VersionId) -> Result<JsonB, Vers
         });
     }
     let delta = with_id_type!(graph.id_type, E => {
-        let before = load::<E>(&mut SpiSegmentStore, v1)?;
-        let after = load::<E>(&mut SpiSegmentStore, v2)?;
+        let before = load::<E>(&mut SpiSegmentStore, v1, graph.store_merged)?;
+        let after = load::<E>(&mut SpiSegmentStore, v2, graph.store_merged)?;
         delta(&before.version()?, &after.version()?)?
     });
     Ok(JsonB(diff_json(v1, v2, &delta)))
