@@ -20,7 +20,10 @@ mod relation;
 mod segment;
 mod tombstones;
 
-pub use csr::{AnyCsr, Csr, GraphCsr, Neighbours, RelationCsr, Target, TargetWidth};
+pub use csr::{
+    AllRelations, AnyCsr, Csr, CsrLayout, CsrRows, GraphCsr, Neighbours, RelationCsr,
+    RowNeighbours, Target, TargetWidth,
+};
 pub use direction::Direction;
 pub use edge_list::{EdgeIntake, EdgeList};
 pub use error::GraphError;

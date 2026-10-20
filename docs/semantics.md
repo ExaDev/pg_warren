@@ -12,7 +12,8 @@ A **graph** is a name plus two SQL queries (signature, with defaults):
 ```
 SELECT warren.create_graph(name, node_query, edge_query,
                            directed := true, weighted := false, has_relations := false,
-                           build_reverse := true, retain_versions := 2);
+                           build_reverse := true, retain_versions := 2,
+                           store_merged := true);
 ```
 
 - `node_query` returns one column, the node's **external id**: `integer`,
@@ -30,6 +31,10 @@ SELECT warren.create_graph(name, node_query, edge_query,
   (`degree`, `vector_degree`, `degree_vector` and the traversals included),
   except `gather`, which pushes over the forward CSR instead; and some
   compute runs single-threaded ([compute.md](compute.md)).
+- `store_merged` (default true) also stores the merged CSR of a graph with
+  several relations, which reads over all relations use. Without it they
+  merge the relations' rows on the fly: same results, less memory, slower
+  ([limits.md](limits.md#the-merged-csr-store_merged)).
 
 Edges are cleaned at build time, and counted, never silently:
 

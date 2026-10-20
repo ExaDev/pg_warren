@@ -199,6 +199,9 @@ mod tests {
             let v1 = Build::first(nodes1, rows1, weighted, false);
             let v2 = v1.next(nodes2, rows2, weighted, true);
             let delta = diff(&v1.version(), &v2.version()).unwrap();
+            let (u1, u2) = (v1.without_merged(), v2.without_merged());
+            prop_assert_eq!(&diff(&u1.version(), &u2.version()).unwrap(), &delta);
+            prop_assert_eq!(&diff(&v1.version(), &u2.version()).unwrap(), &delta);
 
             let (live1, edges1) = naive(nodes1, rows1);
             let (live2, edges2) = naive(nodes2, rows2);

@@ -84,6 +84,114 @@ pub(crate) fn failure(expression: &str) -> Result<Option<String>, Error> {
     Spi::get_one::<String>("SELECT max(what) FROM failure")
 }
 
+/// Graphs `<name>_s`, which stores its merged CSR, and `<name>_u`, which
+/// merges the relations' rows on the fly, over the same tables of `int8`
+/// ids, owned by role `<name>_owner`: about 900 weighted edges in three
+/// relations over 120 nodes, fractional weights, self-loops, many edges in
+/// two relations and parallel edges within one. Each has two promoted
+/// versions: after the first refresh, nodes divisible by 17 are deleted
+/// (tombstoned) and nodes 121–125 added with edges.
+pub(crate) fn merged_pair(name: &str) -> Result<(), Error> {
+    merged_pair_with(name, true, true)
+}
+
+/// [`merged_pair`], weighted or not, with or without reverse CSRs.
+pub(crate) fn merged_pair_with(
+    name: &str,
+    weighted: bool,
+    build_reverse: bool,
+) -> Result<(), Error> {
+    let edge_query = match weighted {
+        true => "SELECT src, dst, rel, w",
+        false => "SELECT src, dst, rel",
+    };
+    Spi::run(&format!(
+        "CREATE ROLE {name}_owner;
+         CREATE TABLE {name}_nodes (id bigint);
+         CREATE TABLE {name}_edges (src bigint, dst bigint, rel text, w float8);
+         INSERT INTO {name}_nodes SELECT generate_series(1, 120);
+         INSERT INTO {name}_edges
+             SELECT s, d, 'r' || (s * 7 + d) % 3, ((s * d) % 10) / 10.0 + 0.1
+             FROM generate_series(1, 120) s, generate_series(1, 120) d
+             WHERE (s * 31 + d * 17) % 23 = 0 OR (s = d AND s % 9 = 0);
+         INSERT INTO {name}_edges
+             SELECT src, dst, 'r' || (substr(rel, 2)::int + 1) % 3, 0.7 FROM {name}_edges
+             WHERE (src + dst) % 2 = 0;
+         INSERT INTO {name}_edges SELECT src, dst, rel, 0.3 FROM {name}_edges
+             WHERE (src + dst) % 5 = 0;
+         GRANT SELECT ON {name}_nodes, {name}_edges TO {name}_owner;
+         SET ROLE {name}_owner;
+         SELECT warren.create_graph('{name}_s', 'SELECT id FROM {name}_nodes',
+                                    '{edge_query} FROM {name}_edges',
+                                    weighted := {weighted}, has_relations := true,
+                                    build_reverse := {build_reverse}, store_merged := true);
+         SELECT warren.create_graph('{name}_u', 'SELECT id FROM {name}_nodes',
+                                    '{edge_query} FROM {name}_edges',
+                                    weighted := {weighted}, has_relations := true,
+                                    build_reverse := {build_reverse}, store_merged := false);
+         RESET ROLE;"
+    ))?;
+    for graph in ["s", "u"] {
+        refresh(&format!("{name}_{graph}"), true)?;
+    }
+    Spi::run(&format!(
+        "DELETE FROM {name}_nodes WHERE id % 17 = 0;
+         INSERT INTO {name}_nodes SELECT generate_series(121, 125);
+         INSERT INTO {name}_edges SELECT n, n - 100, 'r' || n % 3, 1.5
+             FROM generate_series(121, 125) n;
+         INSERT INTO {name}_edges SELECT n - 101, n, 'r' || (n + 1) % 3, 0.25
+             FROM generate_series(121, 125) n"
+    ))?;
+    for graph in ["s", "u"] {
+        refresh(&format!("{name}_{graph}"), true)?;
+    }
+    Ok(())
+}
+
+/// The rows of `query` (one text column) on graph `<name>_s` and on
+/// `<name>_u`, with `{g}` in `query` replaced by the graph's name, `{v}` by
+/// its current version and `{p}` by its first: asserted identical, and
+/// returned.
+pub(crate) fn same_with_or_without_merged(name: &str, query: &str) -> Result<String, Error> {
+    let on = |graph: &str| -> Result<String, Error> {
+        let graph = format!("{name}_{graph}");
+        let version = current(&graph)?.ok_or(Error::InvalidPosition)?;
+        let first = Spi::get_one::<i64>(&format!(
+            "SELECT min(version_id) FROM warren.versions v JOIN warren.graphs g USING (graph_id)
+             WHERE g.name = '{graph}'"
+        ))?
+        .ok_or(Error::InvalidPosition)?;
+        let query = query
+            .replace("{g}", &graph)
+            .replace("{v}", &version.to_string())
+            .replace("{p}", &first.to_string());
+        rows(&query)?.ok_or(Error::InvalidPosition)
+    };
+    let (stored, unmerged) = (on("s")?, on("u")?);
+    assert_eq!(unmerged, stored, "{query}");
+    assert!(!stored.is_empty(), "{query} returned no rows");
+    Ok(stored)
+}
+
+/// The failure (`failure`) of `expression` on graph `<name>_s` and on
+/// `<name>_u`, with `{g}` replaced by the graph's name: asserted identical,
+/// and returned.
+pub(crate) fn same_failure(name: &str, expression: &str) -> Result<Option<String>, Error> {
+    let stored = failure(&expression.replace("{g}", &format!("{name}_s")))?;
+    let unmerged = failure(&expression.replace("{g}", &format!("{name}_u")))?;
+    assert_eq!(unmerged, stored, "{expression}");
+    Ok(stored)
+}
+
+/// Runs `statements` on graph `<name>_s` and then on `<name>_u`, with `{g}`
+/// replaced by the graph's name.
+pub(crate) fn on_both(name: &str, statements: &str) -> Result<(), Error> {
+    for graph in ["s", "u"] {
+        Spi::run(&statements.replace("{g}", &format!("{name}_{graph}")))?;
+    }
+    Ok(())
+}
+
 /// Graphs `<prefix>_a` and `<prefix>_b`, rings of 3, each refreshed once;
 /// returns their versions.
 pub(crate) fn two_graphs(prefix: &str) -> Result<(i64, i64), Error> {

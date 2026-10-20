@@ -2,7 +2,9 @@
 //! in the orientation the product needs, with entries summed over
 //! relations.
 
-use super::super::ComputeError;
+use std::mem::size_of;
+
+use super::super::{ComputeError, ComputeMemory, MemoryCharge};
 use crate::graph::RelationSelection;
 use crate::graph::{AnyCsr, Csr, DenseId, GraphCsr, Target};
 
@@ -21,6 +23,34 @@ pub(super) struct Matrix<'g> {
     csrs: Vec<&'g AnyCsr>,
     weighted: bool,
     form: Form,
+    /// The budget row scratches are charged to.
+    memory: ComputeMemory,
+}
+
+/// The entries of one row of several CSRs, sorted and folded: a buffer
+/// reused across rows, its capacity charged to the compute budget before
+/// it is reserved.
+#[derive(Debug)]
+pub(super) struct RowScratch {
+    entries: Vec<(DenseId, f64)>,
+    charge: MemoryCharge,
+}
+
+impl RowScratch {
+    /// Empties the buffer and makes room for `len` entries.
+    fn clear_for(&mut self, len: usize) -> Result<&mut Vec<(DenseId, f64)>, ComputeError> {
+        self.entries.clear();
+        let capacity = self.entries.capacity();
+        if len > capacity {
+            let bytes = ((len - capacity) * size_of::<(DenseId, f64)>()) as u64;
+            self.charge.grow(bytes)?;
+            self.entries.try_reserve_exact(len).map_err(|_| {
+                self.charge.shrink(bytes);
+                ComputeError::OutOfMemory { bytes }
+            })?;
+        }
+        Ok(&mut self.entries)
+    }
 }
 
 impl<'g> Matrix<'g> {
@@ -32,6 +62,7 @@ impl<'g> Matrix<'g> {
         relations: RelationSelection<'_>,
         transpose: bool,
         weighted: Option<bool>,
+        memory: &ComputeMemory,
     ) -> Result<Self, ComputeError> {
         let selected = graph
             .selected(relations)
@@ -43,7 +74,17 @@ impl<'g> Matrix<'g> {
             (false, _) => (selected.iter().map(|r| r.forward()).collect(), Form::Pull),
         };
         let has_weights = csrs.iter().any(|csr| csr.is_weighted());
-        Ok(Self { csrs, weighted: weighted.unwrap_or(true) && has_weights, form })
+        Ok(Self {
+            csrs,
+            weighted: weighted.unwrap_or(true) && has_weights,
+            form,
+            memory: memory.clone(),
+        })
+    }
+
+    /// A row scratch for [`Self::for_each_entry`], charged to the budget.
+    pub(super) fn scratch(&self) -> Result<RowScratch, ComputeError> {
+        Ok(RowScratch { entries: Vec::new(), charge: self.memory.charge(0)? })
     }
 
     /// How the product walks the CSRs.
@@ -58,14 +99,15 @@ impl<'g> Matrix<'g> {
     pub(super) fn for_each_entry(
         &self,
         row: DenseId,
-        scratch: &mut Vec<(DenseId, f64)>,
+        scratch: &mut RowScratch,
         mut entry: impl FnMut(DenseId, f64) -> Result<(), ComputeError>,
     ) -> Result<(), ComputeError> {
         match self.csrs.as_slice() {
             [AnyCsr::U32(csr)] => entries(csr, row, self.weighted, entry),
             [AnyCsr::U64(csr)] => entries(csr, row, self.weighted, entry),
             many => {
-                scratch.clear();
+                let len = many.iter().map(|csr| csr.degree(row) as usize).sum();
+                let scratch = scratch.clear_for(len)?;
                 for csr in many {
                     let weights = csr.neighbour_weights(row).filter(|_| self.weighted);
                     scratch.extend(csr.neighbours(row).enumerate().map(|(i, column)| {

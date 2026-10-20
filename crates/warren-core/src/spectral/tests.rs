@@ -4,11 +4,11 @@
 
 use crate::compute::reference::{self, Edges};
 use crate::compute::{ComputeMemory, Workers};
-use crate::graph::{GraphCsr, RelationDictionary};
+use crate::graph::{CsrLayout, GraphCsr, RelationDictionary, Tombstones};
 use crate::interrupts::Uninterrupted;
 use crate::spectral::{
-    edit_distance, eigen, subspace_distance, ComparedRows, EigenOptions, GraphMatrix, Operator,
-    Precision, Resources, Which,
+    degree_distance, edit_distance, eigen, subspace_distance, ComparedRows, EigenOptions,
+    GraphMatrix, Operator, Precision, Resources, Which,
 };
 
 const COMMUNITIES: u64 = 4;
@@ -140,4 +140,47 @@ fn the_edit_distance_measures_only_volume() {
         assert_eq!((d.removed, d.union), (0, after.all_relations().forward().edge_count()));
         assert_eq!(d.distance, d.added as f64 / (base_edges + d.added) as f64);
     }
+}
+
+/// The bridge graph's edges spread over three relations with fractional
+/// weights, a third of them in two relations, so that the merged CSR sums
+/// weights: eigenpairs, component counts and the `degree` distance do not
+/// depend on whether it is stored.
+#[test]
+fn spectral_results_do_not_depend_on_whether_the_merged_csr_is_stored() {
+    let (nodes, edges) = version(Some(Ingest::Bridge));
+    let mut spread = Edges::new();
+    for &(_, a, b, _) in &edges {
+        let weight = 0.1 * (1 + (a * b) % 5) as f64;
+        spread.push((((a + b) % 3) as usize, a, b, weight));
+        if (a + b) % 3 == 0 {
+            spread.push((1, a, b, 0.7));
+        }
+    }
+    let build = |store_merged| {
+        let layout = CsrLayout { build_reverse: true, store_merged };
+        reference::graph_as(nodes, 3, &spread, true, layout)
+    };
+    let (stored, unmerged) = (build(true), build(false));
+    assert!(stored.merged().is_some() && unmerged.merged().is_none());
+    let workers = Workers::new(2).unwrap();
+    let memory = ComputeMemory::new(1 << 26);
+    let mut resources =
+        Resources { workers: &workers, memory: &memory, interrupts: &mut Uninterrupted };
+    let options = EigenOptions { precision: Precision::F64, ..EigenOptions::new(3) };
+    for operator in [Operator::Adjacency, Operator::NormalizedLaplacian, Operator::RandomWalk] {
+        for symmetrize in [true, false] {
+            let matrix = GraphMatrix { symmetrize, ..GraphMatrix::new(operator) };
+            let solve = |graph: &GraphCsr, resources: &mut Resources<'_, _>| {
+                eigen(resources, graph, &matrix, &options)
+            };
+            let expected = solve(&stored, &mut resources);
+            assert_eq!(solve(&unmerged, &mut resources), expected, "{operator:?} {symmetrize}");
+        }
+    }
+    let tombstones = Tombstones::new(nodes).unwrap();
+    assert_eq!(
+        degree_distance(&mut resources, (&stored, &tombstones), (&unmerged, &tombstones)).unwrap(),
+        degree_distance(&mut resources, (&stored, &tombstones), (&stored, &tombstones)).unwrap()
+    );
 }

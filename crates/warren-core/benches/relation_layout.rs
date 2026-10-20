@@ -1,26 +1,44 @@
-//! DESIGN.md §5.3 layout benchmark: per-relation CSRs (plus the merged CSR)
-//! against one CSR with a parallel `u8` relation array (pgGraph's layout).
+//! DESIGN.md §5.3 layout benchmarks, over ~1M weighted edges on 100K nodes.
 //!
-//! Five relations, ~1M weighted edges over 100K nodes. Measures build cost
-//! (forward + reverse), and relation-masked work over 1, 2, 3 and all 5
-//! relations: a BFS from one node and an SpMV-like weighted row sum. Memory
-//! is computed from the segment sizes and printed once.
+//! `relation_layout/build`, `/masked` (M1): five relations, per-relation
+//! CSRs (plus the merged CSR) against one CSR with a parallel `u8` relation
+//! array (pgGraph's layout): build cost (forward + reverse), and
+//! relation-masked work over 1, 2, 3 and all 5 relations, a BFS from one
+//! node and an SpMV-like weighted row sum. The parallel-relation layout
+//! lives only here, as the comparison baseline.
 //!
-//! The parallel-relation layout lives only here, as the comparison baseline.
+//! `relation_layout/merged` (M7): the same edges over 1 to 5 and 10
+//! relations (past the 8 rows a merge on the fly holds inline),
+//! all-relations work with the merged CSR stored against the relations'
+//! rows merged on the fly, through the real kernels: BFS out and both,
+//! weighted SpMV pulled over the forward and reverse CSRs and a `sum`
+//! gather of one `f64` per node pulled over the reverse CSRs, on one
+//! thread, components, and the build. Memory is printed once per layout.
 
 use std::collections::VecDeque;
 
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
-use warren_core::graph::{AnyCsr, Csr, EdgeList, GraphCsr, GraphError, RelationDictionary};
+use warren_core::compute::{
+    gather, spmv, AnyVector, Combiner, ComputeMemory, Gather, Messages, Product, Semiring, Vector,
+    Workers,
+};
+use warren_core::graph::{
+    AnyCsr, Csr, CsrLayout, Direction, EdgeList, GraphCsr, GraphError, RelationDictionary,
+    RelationSelection,
+};
+use warren_core::interrupts::Uninterrupted;
+use warren_core::traversal::{bfs, components, Adjacency, Limits};
 
 const ID_SPACE: u64 = 100_000;
 const EDGES: u64 = 1_000_000;
 const RELATIONS: usize = 5;
 const MASKS: [&[usize]; 4] = [&[0], &[0, 1], &[0, 1, 2], &[0, 1, 2, 3, 4]];
 
-fn random_edges() -> Result<EdgeList, GraphError> {
+/// The benchmark's edges over `relation_count` relations: the same
+/// endpoints and weights for every count.
+fn random_edges(relation_count: usize) -> Result<EdgeList, GraphError> {
     let mut dictionary = RelationDictionary::new();
-    let relations = (0..RELATIONS)
+    let relations = (0..relation_count)
         .map(|r| dictionary.intern(&format!("r{r}")))
         .collect::<Result<Vec<_>, _>>()?;
     let mut state: u64 = 0x2545_f491_4f6c_dd1d;
@@ -31,7 +49,7 @@ fn random_edges() -> Result<EdgeList, GraphError> {
     };
     let mut edges = EdgeList::for_id_space(ID_SPACE, true);
     for _ in 0..EDGES {
-        let relation = relations[next() as usize % RELATIONS];
+        let relation = relations[next() as usize % relation_count];
         let (source, target) = (next() % ID_SPACE, next() % ID_SPACE);
         edges.push(relation, source, target, (next() % 100) as f64 / 10.0)?;
     }
@@ -149,8 +167,8 @@ fn csr_bytes(csr: &Csr<u32>) -> usize {
 /// The CSRs a masked traversal reads: the merged CSR for all relations,
 /// else one per relation in the mask.
 fn per_relation_csrs<'g>(graph: &'g GraphCsr, mask: &[usize]) -> Vec<&'g Csr<u32>> {
-    if mask.len() == RELATIONS {
-        return narrow(graph.all_relations().forward()).into_iter().collect();
+    if let Some(merged) = graph.merged().filter(|_| mask.len() == RELATIONS) {
+        return narrow(merged.forward()).into_iter().collect();
     }
     mask.iter()
         .filter_map(|&r| graph.relations().get(r))
@@ -222,7 +240,7 @@ fn row_sums_tagged(tagged: &Tagged, mask: u8, x: &[f64], y: &mut [f64]) {
 }
 
 fn bench_relation_layout(c: &mut Criterion) {
-    let built = random_edges().and_then(|edges| {
+    let built = random_edges(RELATIONS).and_then(|edges| {
         GraphCsr::build(edges.clone(), RELATIONS, ID_SPACE, true).map(|graph| (edges, graph))
     });
     let (edges, graph) = match built {
@@ -235,24 +253,25 @@ fn bench_relation_layout(c: &mut Criterion) {
     let tagged = Tagged::build(&edges);
     let tagged_reverse = tagged.transpose();
 
+    let merged = graph.merged().and_then(|merged| narrow(merged.forward())).map_or(0, csr_bytes);
     let forward_bytes: usize = graph
         .relations()
         .iter()
-        .chain([graph.all_relations()])
         .filter_map(|relation| narrow(relation.forward()))
         .map(csr_bytes)
-        .sum();
+        .sum::<usize>()
+        + merged;
     eprintln!(
         "relation_layout memory (forward; reverse is the same again): per-relation + merged {:.1} MB, \
          per-relation alone {:.1} MB, parallel relation array {:.1} MB",
         forward_bytes as f64 / 1e6,
-        (forward_bytes - narrow(graph.all_relations().forward()).map_or(0, csr_bytes)) as f64 / 1e6,
+        (forward_bytes - merged) as f64 / 1e6,
         tagged.bytes() as f64 / 1e6,
     );
     eprintln!(
         "relation_layout reverse built: {} / {} entries",
         tagged_reverse.targets.len(),
-        graph.all_relations().reverse().map_or(0, AnyCsr::edge_count)
+        graph.merged().and_then(|merged| merged.reverse()).map_or(0, AnyCsr::edge_count)
     );
 
     let mut build = c.benchmark_group("relation_layout/build");
@@ -302,5 +321,71 @@ fn bench_relation_layout(c: &mut Criterion) {
     scans.finish();
 }
 
-criterion_group!(benches, bench_relation_layout);
+/// The two layouts of every relation count, stored merged CSR first.
+const LAYOUTS: [(&str, bool); 2] = [("stored", true), ("on_the_fly", false)];
+
+fn bench_merged(c: &mut Criterion) {
+    let memory = ComputeMemory::new(u64::MAX);
+    let vector = |value| Vector::filled(&memory, ID_SPACE, 1, value).map(AnyVector::from);
+    let messages = Messages::<f64>::new(&memory).and_then(|mut messages| {
+        (0..ID_SPACE).try_for_each(|node| messages.push(node, node as f64))?;
+        Ok(messages)
+    });
+    let (Ok(workers), Ok(x), Ok(mut y), Ok(messages)) =
+        (Workers::new(1), vector(1.0f64), vector(0.0f64), messages)
+    else {
+        eprintln!("skipping relation_layout/merged: setup failed");
+        return;
+    };
+    let sum = Gather::new(Combiner::Sum);
+    let mut never = Uninterrupted;
+    let mut group = c.benchmark_group("relation_layout/merged");
+    group.sample_size(10);
+    for relation_count in (1..=RELATIONS).chain([10]) {
+        let Ok(edges) = random_edges(relation_count) else { continue };
+        for (name, store_merged) in LAYOUTS {
+            let layout = CsrLayout { build_reverse: true, store_merged };
+            let id = |work: &str| format!("{work}/{relation_count}_relations/{name}");
+            group.bench_function(id("build"), |b| {
+                b.iter_batched(
+                    || edges.clone(),
+                    |edges| GraphCsr::build_as(edges, relation_count, ID_SPACE, layout),
+                    BatchSize::LargeInput,
+                )
+            });
+            let Ok(graph) = GraphCsr::build_as(edges.clone(), relation_count, ID_SPACE, layout)
+            else {
+                continue;
+            };
+            eprintln!(
+                "relation_layout/merged {relation_count} relations, {name}: {:.1} MB (forward + reverse)",
+                graph.bytes() as f64 / 1e6
+            );
+            for (work, direction) in [("bfs_out", Direction::Out), ("bfs_both", Direction::Both)] {
+                let Ok(adjacency) = Adjacency::new(&graph, direction, RelationSelection::All)
+                else {
+                    continue;
+                };
+                group.bench_function(id(work), |b| {
+                    b.iter(|| bfs(&adjacency, &[0], None, Limits::default(), &mut never))
+                });
+            }
+            for (work, transpose) in [("spmv_forward", false), ("spmv_reverse", true)] {
+                let product = Product { transpose, ..Product::new(Semiring::PlusTimes) };
+                group.bench_function(id(work), |b| {
+                    b.iter(|| spmv(&workers, &memory, &mut never, &graph, &product, &x, &mut y))
+                });
+            }
+            group.bench_function(id("gather_sum"), |b| {
+                b.iter(|| {
+                    gather(&workers, &memory, &mut never, &graph, &sum, &messages).map(|g| g.len())
+                })
+            });
+            group.bench_function(id("components"), |b| b.iter(|| components(&graph, &mut never)));
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench_relation_layout, bench_merged);
 criterion_main!(benches);

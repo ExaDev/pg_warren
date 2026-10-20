@@ -3,7 +3,8 @@
 
 use std::cmp::Ordering;
 
-use crate::graph::{AnyCsr, GraphCsr, Neighbours, RelationCsr, RelationDictionary};
+use crate::graph::RelationDictionary;
+use crate::graph::{AnyCsr, CsrRows, GraphCsr, RelationCsr, RowNeighbours};
 
 /// Edges before and after, and how many were added and removed. An edge is
 /// a (source, target) pair; a change of weight alone is not counted.
@@ -36,7 +37,7 @@ impl EdgeDelta {
     /// that version). Also the `edit` distance's merge (DESIGN.md §8).
     pub(crate) fn between(before: Option<&AnyCsr>, after: Option<&AnyCsr>) -> Self {
         match (before, after) {
-            (Some(before), Some(after)) => edge_delta(before, after),
+            (Some(before), Some(after)) => edge_delta(before.into(), after.into()),
             (None, Some(after)) => Self::all_added(after),
             (Some(before), None) => Self::all_removed(before),
             (None, None) => Self::default(),
@@ -53,23 +54,19 @@ pub struct RelationDelta {
     pub edges: EdgeDelta,
 }
 
-/// The edge delta between two forward CSRs in the same id space, by merging
-/// each pair of sorted rows. O(N + M).
-pub(super) fn edge_delta(before: &AnyCsr, after: &AnyCsr) -> EdgeDelta {
+/// The edge delta between two forward CSRs (or all-relations rows) in the
+/// same id space, by merging each pair of sorted rows. O(N + M).
+pub(super) fn edge_delta(before: CsrRows<'_>, after: CsrRows<'_>) -> EdgeDelta {
     let rows = before.id_space().max(after.id_space());
     let shared: u64 = (0..rows)
         .map(|source| shared_targets(before.neighbours(source), after.neighbours(source)))
         .sum();
-    EdgeDelta {
-        before: before.edge_count(),
-        after: after.edge_count(),
-        added: after.edge_count() - shared,
-        removed: before.edge_count() - shared,
-    }
+    let (before, after) = (before.edge_count(), after.edge_count());
+    EdgeDelta { before, after, added: after - shared, removed: before - shared }
 }
 
 /// The number of targets in both of two strictly ascending rows.
-fn shared_targets(mut before: Neighbours<'_>, mut after: Neighbours<'_>) -> u64 {
+fn shared_targets(mut before: RowNeighbours<'_>, mut after: RowNeighbours<'_>) -> u64 {
     let mut shared = 0;
     let (mut left, mut right) = (before.next(), after.next());
     while let (Some(l), Some(r)) = (left, right) {
@@ -136,11 +133,11 @@ mod tests {
         let before = csr(3, &[&[1, 2], &[0], &[]]);
         let after = csr(4, &[&[2, 3], &[0], &[1], &[0]]);
         assert_eq!(
-            edge_delta(&before, &after),
+            edge_delta((&before).into(), (&after).into()),
             EdgeDelta { before: 3, after: 5, added: 3, removed: 1 }
         );
         assert_eq!(
-            edge_delta(&after, &after),
+            edge_delta((&after).into(), (&after).into()),
             EdgeDelta { before: 5, after: 5, added: 0, removed: 0 }
         );
     }

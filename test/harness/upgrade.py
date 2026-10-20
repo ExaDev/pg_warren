@@ -116,14 +116,23 @@ def differences(expected, found):
     return "\n".join(lines)
 
 
-# State written under the released version, to exercise the upgrade's
-# backfills and what runs on the upgraded catalog: a graph with three
-# promoted versions (the first holding vector 'old', all ones) and a staged
-# one. Roles are cluster-wide, so check creates upgrade_owner once.
+# State written under the released version, by its own library and SQL
+# functions (see `check`; the control file is the version in development's), to exercise the upgrade's backfills and what
+# runs on the upgraded catalog: graph 'upgrade', with three promoted
+# versions (the first holding vector 'old', all ones) and a staged one; and
+# graph 'upgrade_typed', weighted, of three relations (some edges in two),
+# built once, whose bfs, components and (where the release has vectors)
+# spmv results are recorded in upgrade_expected. Roles are cluster-wide, so
+# check creates upgrade_owner once.
 SEED_GRAPH = """
     CREATE TABLE upgrade_nodes AS SELECT generate_series(1, 4)::bigint AS id;
     CREATE TABLE upgrade_edges AS SELECT id AS src, id % 4 + 1 AS dst FROM upgrade_nodes;
-    GRANT SELECT ON upgrade_nodes, upgrade_edges TO upgrade_owner;
+    CREATE TABLE upgrade_typed AS
+        SELECT s.id AS src, d.id AS dst, CASE WHEN (s.id + d.id) % 2 = 0 THEN 'a' ELSE 'b' END AS rel,
+               ((s.id * d.id % 5) / 4.0 + 0.25)::float8 AS w
+        FROM upgrade_nodes s, upgrade_nodes d WHERE s.id <> d.id
+        UNION ALL SELECT s.id, d.id, 'c', 0.1::float8 FROM upgrade_nodes s, upgrade_nodes d WHERE s.id < d.id;
+    GRANT SELECT ON upgrade_nodes, upgrade_edges, upgrade_typed TO upgrade_owner;
     SET ROLE upgrade_owner;
     SELECT warren.create_graph('upgrade', 'SELECT id FROM upgrade_nodes',
                                'SELECT src, dst FROM upgrade_edges');
@@ -141,7 +150,7 @@ SEED_VECTOR = """
 """
 SEED_VECTOR_DIRECTLY = """
     INSERT INTO warren.vectors (graph_id, version_id, name, dtype, length)
-    SELECT graph_id, current_version, 'old', 'f64', 4 FROM warren.graphs;
+    SELECT graph_id, current_version, 'old', 'f64', 4 FROM warren.graphs WHERE name = 'upgrade';
     INSERT INTO warren.vector_chunks
     SELECT vector_id, 0, decode(repeat('000000000000f03f', 4), 'hex') FROM warren.vectors;
 """
@@ -152,22 +161,85 @@ SEED_VERSIONS = """
     SELECT warren.refresh('upgrade', promote := false);
 """
 
+SEED_TYPED = """
+    SET ROLE upgrade_owner;
+    SELECT warren.create_graph('upgrade_typed', 'SELECT id FROM upgrade_nodes',
+                               'SELECT src, dst, rel, w FROM upgrade_typed',
+                               weighted := true, has_relations := true);
+    RESET ROLE;
+    SELECT warren.refresh('upgrade_typed');
+    CREATE TABLE upgrade_expected (what text PRIMARY KEY, result text);
+"""
 
-def seed(released):
-    """Writes the seed state with the released version's own functions."""
-    released.execute(SEED_GRAPH)
-    has_vectors = released.query(
+# The results recorded under the release and compared after the update, on
+# the version 'upgrade_typed' had then (`{version}`: NULL before the update,
+# that version after it).
+RESULTS = {
+    "bfs": """SELECT string_agg(format('%s %s %s', node_id, depth, via), ',' ORDER BY n)
+              FROM warren.bfs('upgrade_typed', ARRAY[1::bigint], 3, 'both', version := {version})
+                   WITH ORDINALITY b(node_id, depth, via, n)""",
+    "components": """SELECT string_agg(format('%s %s', node_id, component_id), ',' ORDER BY node_id)
+                     FROM warren.components('upgrade_typed', NULL::bigint, {version})""",
+}
+SPMV = """
+    SELECT warren.spmv('upgrade_typed', 'x', '{y}', version := {version});
+    INSERT INTO upgrade_results SELECT 'spmv', string_agg(format('%s %s', node_id, value), ',' ORDER BY node_id)
+    FROM warren.vector_values('upgrade_typed', '{y}', NULL::bigint, {version})
+"""
+
+
+def has_vectors(database):
+    """Whether the installed version has vector functions (0.2.0 on)."""
+    found = database.query(
         "SELECT EXISTS (SELECT FROM pg_proc"
         " WHERE proname = 'vector_const' AND pronamespace = 'warren'::regnamespace)"
     )
-    released.execute(SEED_VECTOR if has_vectors == [["t"]] else SEED_VECTOR_DIRECTLY)
+    return found == [["t"]]
+
+
+def results(database, version, spmv):
+    """Runs RESULTS on 'upgrade_typed' at `version` into table
+    upgrade_results, and if `spmv`, an spmv of its vector x into vector
+    `y_<version>`."""
+    database.execute("CREATE TABLE IF NOT EXISTS upgrade_results (what text, result text);"
+                     " TRUNCATE upgrade_results")
+    for what, query in RESULTS.items():
+        database.execute(f"INSERT INTO upgrade_results SELECT '{what}', ({query.format(version=version)})")
+    if spmv:
+        database.execute(SPMV.format(y=f"y_{version}", version=version))
+
+
+def seed(released):
+    """Writes the seed state with the released version's own library and
+    SQL functions: `check` has installed the release's build."""
+    released.execute(SEED_GRAPH)
+    released.execute(SEED_VECTOR if has_vectors(released) else SEED_VECTOR_DIRECTLY)
     released.execute(SEED_VERSIONS)
+    released.execute(SEED_TYPED)
+    spmv = has_vectors(released)
+    if spmv:
+        released.execute("SELECT warren.vector_from_query('upgrade_typed', 'x',"
+                         " 'SELECT id, id::float8 / 3 FROM upgrade_nodes')")
+    results(released, "NULL", spmv)
+    released.execute("INSERT INTO upgrade_expected SELECT * FROM upgrade_results")
 
 
-# Versions as `id:staged`, by seq.
+# Versions of graph 'upgrade' as `seq:staged`.
 VERSIONS = """
-    SELECT string_agg(version_id || ':' || staged, ' ' ORDER BY seq) FROM warren.versions
+    SELECT string_agg(seq || ':' || staged, ' ' ORDER BY seq)
+    FROM warren.versions JOIN warren.graphs USING (graph_id) WHERE name = 'upgrade'
 """
+
+# Each graph's `store_merged`, and its current version's merged segments
+# (with reverse CSRs: four if unweighted, six if weighted).
+MERGED = """
+    SELECT string_agg(name || ':' || store_merged || ':' || (
+               SELECT count(DISTINCT s.segment) FROM warren.segments s
+               WHERE s.version_id = g.current_version AND s.segment LIKE '%:merged'),
+           ' ' ORDER BY name)
+    FROM warren.graphs g
+"""
+EXPECTED_MERGED = "upgrade:true:0 upgrade_new:false:0 upgrade_typed:true:6"
 
 
 def after_update(upgraded):
@@ -181,6 +253,23 @@ def after_update(upgraded):
         "SELECT string_agg(value::text, ',') FROM warren.vector_values('upgrade', 'old', NULL::bigint, 1)")
     if values != [["1,1,1,1"]]:
         problems.append(f"the old vector reads back as {values}")
+    # The version 'upgrade_typed' had before the update loads, with its
+    # merged CSR, and gives the results the release gave.
+    built = upgraded.query("SELECT current_version FROM warren.graphs WHERE name = 'upgrade_typed'")[0][0]
+    spmv = upgraded.query("SELECT count(*) FROM upgrade_expected WHERE what = 'spmv'") == [["1"]]
+    results(upgraded, built, spmv)
+    expected = upgraded.query("SELECT what, result FROM upgrade_expected ORDER BY what")
+    found = upgraded.query("SELECT what, result FROM upgrade_results ORDER BY what")
+    if found != expected:
+        problems.append(f"the pre-update multi-relation version gives {found}, not {expected}")
+    empty = upgraded.query("SELECT count(*) FROM upgrade_expected WHERE result IS NULL OR result = ''")
+    if empty != [["0"]]:
+        problems.append(f"the release recorded empty results: {expected}")
+    segments = upgraded.query(
+        f"SELECT count(DISTINCT segment) FROM warren.segments WHERE version_id = {built}"
+        " AND segment LIKE '%:merged'")
+    if segments != [["6"]]:
+        problems.append(f"the pre-update multi-relation version has {segments} merged segments, not 6")
     before = upgraded.query(VERSIONS)
     if before != [["1:false 2:false 3:false 4:true"]]:
         problems.append(f"versions before the first promotion are {before}")
@@ -194,12 +283,29 @@ def after_update(upgraded):
     written = upgraded.query("SELECT warren.vector_const('upgrade', 'new', 2) IS NOT NULL")
     if written != [["t"]]:
         problems.append(f"a new vector could not be written: {written}")
+    # Graphs from before the update keep their merged CSR (store_merged is
+    # backfilled true, and a refresh after the update still writes it); a
+    # graph created after it may leave it unstored.
+    upgraded.execute(
+        "SELECT warren.refresh('upgrade_typed');"
+        " SELECT warren.create_graph('upgrade_new', 'SELECT id FROM upgrade_nodes',"
+        " 'SELECT src, dst, rel FROM upgrade_typed', has_relations := true,"
+        " store_merged := false);"
+        " SELECT warren.refresh('upgrade_new')")
+    merged = upgraded.query(MERGED)
+    if merged != [[EXPECTED_MERGED]]:
+        problems.append(f"store_merged and merged segments after the update are {merged}")
     return problems
 
 
-def check(cluster, current, installer):
+def check(cluster, current, installer, releases, installed):
     """Checks every released version's upgrade path, installed and updated
-    by `installer`; returns the failures."""
+    by `installer`; returns the failures. For each release, its own build
+    (`releases`: library and scripts; the control file stays the version in
+    development's, since releases before 0.3.0 were not trusted) is
+    installed while its state is seeded, then the version in development
+    (`installed`) is put back before the update, which runs in fresh
+    backends."""
     installer.prepare(cluster)
     fresh = cluster.database("postgres")
     fresh.execute("CREATE ROLE upgrade_owner")
@@ -212,8 +318,20 @@ def check(cluster, current, installer):
         name = f"upgrade_from_{version.replace('.', '_')}"
         fresh.execute(installer.create_database_sql(name))
         upgraded = cluster.database(name)
+        releases.install(version)
+        installed.restore_control()
+        install_released_scripts(releases.extension_directory)
         upgraded.execute(installer.as_installer(f"CREATE EXTENSION pg_warren VERSION '{version}'"))
+        # In a trusted install the release's own library needs the catalog
+        # granted while it seeds; the catalog comparison below checks that
+        # revoking it left the privileges as a fresh install has them.
+        grants = installer.seeding_grants_sql(True)
+        if grants:
+            upgraded.execute(grants)
         seed(upgraded)
+        if grants:
+            upgraded.execute(installer.seeding_grants_sql(False))
+        installed.restore()
         upgraded.execute(installer.as_installer("ALTER EXTENSION pg_warren UPDATE"))
         diff = differences(expected, describe(upgraded))
         if diff:

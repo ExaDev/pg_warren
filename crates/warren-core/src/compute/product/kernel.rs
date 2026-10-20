@@ -94,7 +94,7 @@ fn pull_with<E: SemiringElement, S: Ops<E>>(
             return Err(Cancelled.into());
         }
         let mut sum = vec![E::default(); width];
-        let mut scratch = Vec::new();
+        let mut scratch = matrix.scratch()?;
         for (offset, out) in rows.chunks_mut(width).enumerate() {
             let row = (task * ROWS_PER_TASK + offset) as DenseId;
             let mut present = false;
@@ -152,7 +152,7 @@ fn push_with<E: SemiringElement, S: Ops<E>>(
 ) -> Result<(), ComputeError> {
     let width = x.width();
     let PushScratch { sums, present } = scratch;
-    let mut entries = Vec::new();
+    let mut entries = matrix.scratch()?;
     for row in 0..x.id_space() {
         if row % ROWS_PER_CHECK == 0 && cancellation.is_cancelled() {
             return Err(Cancelled.into());

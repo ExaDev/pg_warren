@@ -72,7 +72,7 @@ pub(crate) fn compact_version<E: ExternalId>(
     stores: &mut Stores<'_, impl SegmentStore, impl VectorStore, impl Catalog>,
 ) -> Result<(VersionId, Vec<String>), VersionOperationError> {
     let Stores { segments, vectors, catalog } = stores;
-    let loaded = load::<E>(*segments, source)?;
+    let loaded = load::<E>(*segments, source, graph.store_merged)?;
     let compaction = renumber(&loaded.version()?)?;
     let stats = VersionStats::measure(
         &compaction.id_map,
@@ -128,6 +128,7 @@ mod unit {
             weighted: true,
             has_relations: false,
             build_reverse: true,
+            store_merged: true,
             retain_versions: 2,
             current_version: Some(1),
             stray_current_version: None,
@@ -175,10 +176,10 @@ mod unit {
         );
         assert!(!row.staged);
         assert_eq!(catalog.current_version, Some(compacted));
-        let loaded = load::<i64>(&mut store, compacted).unwrap();
+        let loaded = load::<i64>(&mut store, compacted, true).unwrap();
         assert_eq!(loaded.id_map.dense_id(&40), Some(2));
         assert_eq!(loaded.id_map.tombstones().count(), 0);
-        assert_eq!(loaded.graph.all_relations().forward().neighbour_weights(2), Some(&[3.0][..]));
+        assert_eq!(loaded.graph.relations()[0].forward().neighbour_weights(2), Some(&[3.0][..]));
         assert_eq!(loaded.relations, relations);
     }
 

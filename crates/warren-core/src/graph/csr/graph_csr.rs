@@ -1,7 +1,9 @@
 //! The CSRs of one graph version: forward and (optionally) reverse per
-//! relation, plus the merged all-relations CSR (DESIGN.md §5.3, §5.4 step 4).
+//! relation, plus the merged all-relations CSR unless the graph merges the
+//! relations' rows on the fly (DESIGN.md §5.3, §5.4 step 4).
 
-use super::{build, transpose::transpose, AnyCsr, Csr, Target, TargetWidth};
+use super::TargetWidth;
+use super::{build, transpose::transpose, AllRelations, AnyCsr, Csr, CsrRows, Target};
 use crate::graph::{EdgeList, GraphError, RelationIndex, RelationSelection};
 
 /// The forward CSR of a relation, and its reverse if the graph builds one.
@@ -48,6 +50,17 @@ impl RelationCsr {
     }
 }
 
+/// Whether a build of `relation_count` relations stores the merged CSR:
+/// always without relations (its empty CSR carries the id space and the
+/// reverse CSR's presence), never with one, else as `layout` says.
+fn stores_merged(relation_count: usize, layout: CsrLayout) -> bool {
+    match relation_count {
+        0 => true,
+        1 => false,
+        _ => layout.store_merged,
+    }
+}
+
 /// Checks that two CSRs of one graph version agree on id space, target
 /// width and weightedness.
 fn check_alike(expected: &AnyCsr, found: &AnyCsr) -> Result<(), GraphError> {
@@ -73,14 +86,16 @@ fn transposed(csr: &AnyCsr) -> Result<AnyCsr, GraphError> {
     })
 }
 
-/// How the relations and the all-relations CSR are held, so that the
-/// all-relations CSR always exists.
+/// How the relations and the all-relations rows are held, so that the
+/// all-relations rows can always be read.
 #[derive(Debug, Clone, PartialEq)]
 enum Layout {
     /// Exactly one relation, which is also the all-relations CSR.
     Single(RelationCsr),
     /// Zero or several relations, plus the merged CSR.
     Merged { relations: Vec<RelationCsr>, merged: RelationCsr },
+    /// Several relations, whose rows are merged on the fly.
+    Unmerged { relations: Vec<RelationCsr> },
 }
 
 impl Layout {
@@ -89,9 +104,21 @@ impl Layout {
         match (merged, <[RelationCsr; 1]>::try_from(relations)) {
             (None, Ok([single])) => Ok(Self::Single(single)),
             (Some(merged), Err(relations)) => Ok(Self::Merged { relations, merged }),
+            (None, Err(relations)) if count >= 2 => Ok(Self::Unmerged { relations }),
             _ => Err(GraphError::MergedCsrMismatch { relations: count }),
         }
     }
+}
+
+/// Which CSRs a build stores besides each relation's forward CSR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CsrLayout {
+    /// Build each relation's reverse CSR (by transposing the forward).
+    pub build_reverse: bool,
+    /// Store the merged CSR when there are several relations. Without it,
+    /// all-relations reads merge the relations' rows on the fly
+    /// ([`CsrRows`]), with the same results (DESIGN.md §5.3).
+    pub store_merged: bool,
 }
 
 /// All the CSRs of one graph version.
@@ -103,13 +130,13 @@ pub struct GraphCsr {
 
 impl GraphCsr {
     /// The bytes of every offsets array a build allocates: `8·(id_space + 1)`
-    /// per CSR, for each relation plus the merged CSR (unless there is
-    /// exactly one relation), twice with reverse CSRs. This term grows with
-    /// relations × nodes, independently of the edge count (DESIGN.md §5.3).
-    /// Saturates at `u64::MAX`.
-    pub fn offsets_bytes(relation_count: usize, id_space: u64, build_reverse: bool) -> u64 {
-        let merged = usize::from(relation_count != 1);
-        let directions: u64 = if build_reverse { 2 } else { 1 };
+    /// per CSR, for each relation plus the merged CSR (when there are no
+    /// relations, or several and `layout` stores it), twice with reverse
+    /// CSRs. This term grows with relations × nodes, independently of the
+    /// edge count (DESIGN.md §5.3). Saturates at `u64::MAX`.
+    pub fn offsets_bytes(relation_count: usize, id_space: u64, layout: CsrLayout) -> u64 {
+        let merged = usize::from(stores_merged(relation_count, layout));
+        let directions: u64 = if layout.build_reverse { 2 } else { 1 };
         (relation_count as u64)
             .saturating_add(merged as u64)
             .saturating_mul(directions)
@@ -123,34 +150,41 @@ impl GraphCsr {
         edges: EdgeList,
         relation_count: usize,
         id_space: u64,
-        build_reverse: bool,
+        layout: CsrLayout,
         budget: u64,
     ) -> Result<Self, GraphError> {
-        let required = Self::offsets_bytes(relation_count, id_space, build_reverse);
+        let required = Self::offsets_bytes(relation_count, id_space, layout);
         if required > budget {
             return Err(GraphError::OffsetsOverBudget { required, budget });
         }
-        Self::build(edges, relation_count, id_space, build_reverse)
+        Self::build_as(edges, relation_count, id_space, layout)
     }
 
-    /// Builds the CSRs of `edges`, whose relations index a dictionary of
-    /// `relation_count` relations and whose dense ids lie in `id_space`.
-    /// Targets are `u32` when `id_space < 2³²`, else `u64` ([`TargetWidth`]).
-    /// No memory budget applies beyond fallible allocation; the adapter
-    /// uses [`Self::build_within`].
+    /// [`Self::build_as`], storing the merged CSR.
     pub fn build(
         edges: EdgeList,
         relation_count: usize,
         id_space: u64,
         build_reverse: bool,
     ) -> Result<Self, GraphError> {
+        let layout = CsrLayout { build_reverse, store_merged: true };
+        Self::build_as(edges, relation_count, id_space, layout)
+    }
+
+    /// Builds the CSRs of `edges`, whose relations index a dictionary of
+    /// `relation_count` relations and whose dense ids lie in `id_space`,
+    /// as `layout` says. Targets are `u32` when `id_space < 2³²`, else
+    /// `u64` ([`TargetWidth`]). No memory budget applies beyond fallible
+    /// allocation; the adapter uses [`Self::build_within`].
+    pub fn build_as(
+        edges: EdgeList,
+        relation_count: usize,
+        id_space: u64,
+        layout: CsrLayout,
+    ) -> Result<Self, GraphError> {
         match TargetWidth::for_id_space(id_space) {
-            TargetWidth::U32 => {
-                Self::build_with::<u32>(edges, relation_count, id_space, build_reverse)
-            }
-            TargetWidth::U64 => {
-                Self::build_with::<u64>(edges, relation_count, id_space, build_reverse)
-            }
+            TargetWidth::U32 => Self::build_with::<u32>(edges, relation_count, id_space, layout),
+            TargetWidth::U64 => Self::build_with::<u64>(edges, relation_count, id_space, layout),
         }
     }
 
@@ -160,14 +194,15 @@ impl GraphCsr {
         edges: EdgeList,
         relation_count: usize,
         id_space: u64,
-        build_reverse: bool,
+        layout: CsrLayout,
     ) -> Result<Self, GraphError>
     where
         AnyCsr: From<Csr<T>>,
     {
-        let forward = build::forward::<T>(edges, relation_count, id_space)?;
+        let store_merged = stores_merged(relation_count, layout);
+        let forward = build::forward::<T>(edges, relation_count, id_space, store_merged)?;
         let with_reverse = |csr: Csr<T>| -> Result<RelationCsr, GraphError> {
-            let reverse = match build_reverse {
+            let reverse = match layout.build_reverse {
                 true => Some(transpose(&csr)?.into()),
                 false => None,
             };
@@ -183,8 +218,9 @@ impl GraphCsr {
     /// Assembles decoded CSRs into a graph, checking what the per-segment
     /// decoders cannot: every CSR has `id_space` (the id map's) and the
     /// target width it implies; all share weightedness; reverse CSRs are
-    /// present for all or none; and `merged` is present unless there is
-    /// exactly one relation.
+    /// present for all or none; and `merged` is present when there are no
+    /// relations, absent when there is exactly one, and either with
+    /// several (absent: merged on the fly).
     pub fn from_parts(
         id_space: u64,
         relations: Vec<RelationCsr>,
@@ -193,22 +229,25 @@ impl GraphCsr {
     ) -> Result<Self, GraphError> {
         let layout = Layout::new(relations, merged)?;
         let graph = Self { layout, deduplicated_edges };
-        let all = graph.all_relations();
-        if all.forward.id_space() != id_space {
+        let mut stored = graph.relations().iter().chain(graph.merged());
+        let Some(first) = stored.next() else {
+            return Err(GraphError::MergedCsrMismatch { relations: 0 });
+        };
+        if first.forward.id_space() != id_space {
             return Err(GraphError::IdSpaceMismatch {
                 expected: id_space,
-                found: all.forward.id_space(),
+                found: first.forward.id_space(),
             });
         }
-        if all.forward.width() != TargetWidth::for_id_space(id_space) {
+        if first.forward.width() != TargetWidth::for_id_space(id_space) {
             return Err(GraphError::TargetWidthMismatch);
         }
-        for relation in graph.relations().iter().chain([all]) {
-            if relation.reverse.is_some() != all.reverse.is_some() {
+        for relation in graph.relations().iter().chain(graph.merged()) {
+            if relation.reverse.is_some() != first.reverse.is_some() {
                 return Err(GraphError::ReversePresenceMismatch);
             }
             for csr in relation.csrs() {
-                check_alike(&all.forward, csr)?;
+                check_alike(&first.forward, csr)?;
             }
         }
         Ok(graph)
@@ -218,7 +257,7 @@ impl GraphCsr {
     pub fn relations(&self) -> &[RelationCsr] {
         match &self.layout {
             Layout::Single(single) => std::slice::from_ref(single),
-            Layout::Merged { relations, .. } => relations,
+            Layout::Merged { relations, .. } | Layout::Unmerged { relations } => relations,
         }
     }
 
@@ -227,15 +266,21 @@ impl GraphCsr {
         self.relations().get(relation.index())
     }
 
-    /// The CSRs `relations` selects: the all-relations CSRs for every
-    /// relation, else each named relation once, in index order. The error
-    /// is the smallest named relation that is not in the graph.
+    /// The CSRs `relations` selects: for every relation the stored
+    /// all-relations CSRs, or every relation's when the merged CSR is not
+    /// stored (readers of several CSRs merge them, as the merged CSR
+    /// does); else each named relation once, in index order. The error is
+    /// the smallest named relation that is not in the graph.
     pub fn selected(
         &self,
         relations: RelationSelection<'_>,
     ) -> Result<Vec<&RelationCsr>, RelationIndex> {
         match relations {
-            RelationSelection::All => Ok(vec![self.all_relations()]),
+            RelationSelection::All => Ok(match &self.layout {
+                Layout::Single(single) => vec![single],
+                Layout::Merged { merged, .. } => vec![merged],
+                Layout::Unmerged { relations } => relations.iter().collect(),
+            }),
             RelationSelection::Only(indexes) => {
                 let mut indexes = indexes.to_vec();
                 indexes.sort_unstable();
@@ -248,11 +293,11 @@ impl GraphCsr {
         }
     }
 
-    /// The merged all-relations CSRs, stored unless there is exactly one
-    /// relation.
+    /// The merged all-relations CSRs, if stored: unless there is exactly
+    /// one relation or the graph merges the relations' rows on the fly.
     pub fn merged(&self) -> Option<&RelationCsr> {
         match &self.layout {
-            Layout::Single(_) => None,
+            Layout::Single(_) | Layout::Unmerged { .. } => None,
             Layout::Merged { merged, .. } => Some(merged),
         }
     }
@@ -262,11 +307,34 @@ impl GraphCsr {
         self.relations().iter().chain(self.merged()).map(RelationCsr::bytes).sum()
     }
 
-    /// The all-relations CSRs: the merged CSR, or the only relation's.
-    pub fn all_relations(&self) -> &RelationCsr {
+    /// The all-relations rows in both directions: the stored merged CSR,
+    /// the only relation's, or every relation's merged on the fly.
+    pub fn all_relations(&self) -> AllRelations<'_> {
+        fn read(csrs: &RelationCsr) -> AllRelations<'_> {
+            AllRelations {
+                forward: csrs.forward().into(),
+                reverse: csrs.reverse().map(CsrRows::from),
+            }
+        }
         match &self.layout {
-            Layout::Single(single) => single,
-            Layout::Merged { merged, .. } => merged,
+            Layout::Single(csrs) | Layout::Merged { merged: csrs, .. } => read(csrs),
+            Layout::Unmerged { relations } => AllRelations {
+                forward: CsrRows::merging(relations, false),
+                reverse: relations
+                    .iter()
+                    .all(|relation| relation.reverse().is_some())
+                    .then(|| CsrRows::merging(relations, true)),
+            },
+        }
+    }
+
+    /// The layout it was built with: whether it has reverse CSRs, and
+    /// whether it stores its merged CSR (always without relations, never
+    /// with one).
+    pub fn layout(&self) -> CsrLayout {
+        CsrLayout {
+            build_reverse: self.all_relations().reverse().is_some(),
+            store_merged: self.merged().is_some(),
         }
     }
 
@@ -297,6 +365,11 @@ mod tests {
             }
         }
         edges
+    }
+
+    fn pairs(rows: CsrRows<'_>) -> Vec<(DenseId, DenseId)> {
+        let row = |source| rows.neighbours(source).map(move |target| (source, target));
+        (0..rows.id_space()).flat_map(row).collect()
     }
 
     fn reversed(naive: &Naive) -> Naive {
@@ -339,7 +412,7 @@ mod tests {
             Naive::from([((0, 1), 2.0), ((1, 0), 3.0)])
         );
         assert_eq!(rows(graph.relation(b).unwrap().forward()), Naive::from([((0, 1), 1.0)]));
-        let merged = graph.all_relations();
+        let merged = graph.merged().unwrap();
         assert_eq!(rows(merged.forward()), Naive::from([((0, 1), 3.0), ((1, 0), 3.0)]));
         assert_eq!(rows(merged.reverse().unwrap()), Naive::from([((1, 0), 3.0), ((0, 1), 3.0)]));
         assert_eq!(graph.deduplicated_edges(), 0);
@@ -367,7 +440,7 @@ mod tests {
         let mut edges = EdgeList::new(false);
         edges.push(b, 0, 1, 1.0).unwrap();
         let graph = GraphCsr::build(edges, 2, 2, false).unwrap();
-        assert_eq!(graph.selected(RelationSelection::All), Ok(vec![graph.all_relations()]));
+        assert_eq!(graph.selected(RelationSelection::All), Ok(vec![graph.merged().unwrap()]));
         let relation = |index| graph.relation(index).unwrap();
         assert_eq!(
             graph.selected(RelationSelection::Only(&[b, a, b])),
@@ -377,14 +450,55 @@ mod tests {
         assert_eq!(graph.selected(RelationSelection::Only(&[unknown, a])), Err(unknown));
     }
 
+    fn unmerged(reverse: bool) -> CsrLayout {
+        CsrLayout { build_reverse: reverse, store_merged: false }
+    }
+
+    #[test]
+    fn a_graph_may_leave_its_merged_csr_unstored() {
+        let (_, a, b) = two_relations();
+        let mut edges = EdgeList::new(true);
+        edges.push(b, 0, 1, 1.0).unwrap();
+        edges.push(a, 0, 1, 2.0).unwrap();
+        edges.push(a, 1, 0, 3.0).unwrap();
+        let stored = GraphCsr::build(edges.clone(), 2, 2, true).unwrap();
+        let graph = GraphCsr::build_as(edges, 2, 2, unmerged(true)).unwrap();
+        assert_eq!(graph.merged(), None);
+        assert_eq!(graph.relations(), stored.relations());
+        let merged = stored.merged().unwrap();
+        assert_eq!(graph.bytes(), stored.bytes() - merged.bytes());
+        let all = graph.all_relations();
+        assert_eq!(pairs(all.forward()), pairs(merged.forward().into()));
+        assert_eq!(all.reverse().map(pairs), merged.reverse().map(|r| pairs(r.into())));
+        assert_eq!(
+            graph.selected(RelationSelection::All),
+            Ok(graph.relations().iter().collect::<Vec<_>>())
+        );
+    }
+
+    #[test]
+    fn one_relation_or_none_ignores_the_choice() {
+        let (_, a, _) = two_relations();
+        let mut edges = EdgeList::new(false);
+        edges.push(a, 0, 1, 1.0).unwrap();
+        let single = GraphCsr::build_as(edges.clone(), 1, 2, unmerged(false)).unwrap();
+        assert_eq!(single, GraphCsr::build(edges, 1, 2, false).unwrap());
+        let none = GraphCsr::build_as(EdgeList::new(false), 0, 3, unmerged(true)).unwrap();
+        assert_eq!(none, GraphCsr::build(EdgeList::new(false), 0, 3, true).unwrap());
+        assert!(none.merged().is_some(), "an empty graph keeps its empty merged CSR");
+    }
+
     #[test]
     fn a_single_relation_is_its_own_all_relations_csr() {
         let (_, a, _) = two_relations();
         let mut edges = EdgeList::new(false);
         edges.push(a, 0, 1, 1.0).unwrap();
         let graph = GraphCsr::build(edges, 1, 2, false).unwrap();
-        assert_eq!(graph.all_relations(), &graph.relations()[0]);
-        assert_eq!(graph.all_relations().reverse(), None);
+        assert_eq!(graph.merged(), None);
+        assert_eq!(graph.selected(RelationSelection::All), Ok(vec![&graph.relations()[0]]));
+        let all = graph.all_relations();
+        assert_eq!(pairs(all.forward()), pairs(graph.relations()[0].forward().into()));
+        assert!(all.reverse().is_none());
     }
 
     #[test]
@@ -473,10 +587,8 @@ mod tests {
             check(vec![one()], Some(one())),
             Err(GraphError::MergedCsrMismatch { relations: 1 })
         );
-        assert_eq!(
-            check(vec![one(), one()], None),
-            Err(GraphError::MergedCsrMismatch { relations: 2 })
-        );
+        // Several relations without a merged CSR are merged on the fly.
+        assert!(check(vec![one(), one()], None).is_ok_and(|graph| graph.merged().is_none()));
         assert_eq!(check(vec![], None), Err(GraphError::MergedCsrMismatch { relations: 0 }));
         assert_eq!(
             GraphCsr::from_parts(3, vec![one()], None, 0),
@@ -505,7 +617,7 @@ mod tests {
         let empty = relation(csr(2, &[&[], &[]], false), None);
         let graph = GraphCsr::from_parts(2, vec![], Some(empty.clone()), 0).unwrap();
         assert!(graph.relations().is_empty());
-        assert_eq!(graph.all_relations(), &empty);
+        assert_eq!(graph.merged(), Some(&empty));
     }
 
     #[cfg(debug_assertions)]
@@ -520,28 +632,36 @@ mod tests {
 
     #[test]
     fn offsets_bytes_counts_every_offsets_array() {
+        let stored = |build_reverse| CsrLayout { build_reverse, store_merged: true };
         // 1 relation, no merged CSR: 1 forward + 1 reverse array of 4 offsets.
-        assert_eq!(GraphCsr::offsets_bytes(1, 3, true), 2 * 4 * 8);
-        // 3 relations + merged, forward only.
-        assert_eq!(GraphCsr::offsets_bytes(3, 3, false), 4 * 4 * 8);
-        assert_eq!(GraphCsr::offsets_bytes(0, 3, false), 4 * 8);
-        assert_eq!(GraphCsr::offsets_bytes(usize::MAX, u64::MAX - 1, true), u64::MAX);
+        assert_eq!(GraphCsr::offsets_bytes(1, 3, stored(true)), 2 * 4 * 8);
+        assert_eq!(GraphCsr::offsets_bytes(1, 3, unmerged(true)), 2 * 4 * 8);
+        // 3 relations + merged, forward only; without the merged CSR.
+        assert_eq!(GraphCsr::offsets_bytes(3, 3, stored(false)), 4 * 4 * 8);
+        assert_eq!(GraphCsr::offsets_bytes(3, 3, unmerged(false)), 3 * 4 * 8);
+        // No relations: the empty merged CSR alone.
+        assert_eq!(GraphCsr::offsets_bytes(0, 3, unmerged(false)), 4 * 8);
+        assert_eq!(GraphCsr::offsets_bytes(usize::MAX, u64::MAX - 1, stored(true)), u64::MAX);
     }
 
     #[test]
     fn a_build_over_its_offsets_budget_is_rejected_before_allocating() {
-        let required = GraphCsr::offsets_bytes(1000, 1 << 40, true);
+        let layout = CsrLayout { build_reverse: true, store_merged: true };
+        let required = GraphCsr::offsets_bytes(1000, 1 << 40, layout);
         assert_eq!(
-            GraphCsr::build_within(EdgeList::new(false), 1000, 1 << 40, true, 1 << 30),
+            GraphCsr::build_within(EdgeList::new(false), 1000, 1 << 40, layout, 1 << 30),
             Err(GraphError::OffsetsOverBudget { required, budget: 1 << 30 })
         );
-        let budget = GraphCsr::offsets_bytes(2, 3, true);
-        assert!(GraphCsr::build_within(EdgeList::new(false), 2, 3, true, budget).is_ok());
+        let budget = GraphCsr::offsets_bytes(2, 3, layout);
+        assert!(GraphCsr::build_within(EdgeList::new(false), 2, 3, layout, budget).is_ok());
+        // Without the merged CSR the same budget leaves room for a third relation.
+        assert!(GraphCsr::build_within(EdgeList::new(false), 3, 3, unmerged(true), budget).is_ok());
     }
 
     #[derive(Debug, Clone)]
     struct Scenario {
         wide: bool,
+        store_merged: bool,
         relation_count: usize,
         id_space: u64,
         weighted: bool,
@@ -549,11 +669,14 @@ mod tests {
     }
 
     fn scenarios() -> impl Strategy<Value = Scenario> {
-        (any::<bool>(), 1usize..4, 1u64..12, any::<bool>()).prop_flat_map(
-            |(wide, relation_count, id_space, weighted)| {
+        // Up to 12 relations, so that merges on the fly spill past the 8
+        // rows they hold inline.
+        (any::<bool>(), any::<bool>(), 1usize..13, 1u64..12, any::<bool>()).prop_flat_map(
+            |(wide, store_merged, relation_count, id_space, weighted)| {
                 let edge = (0..relation_count, 0..id_space, 0..id_space, 0u8..8);
                 prop::collection::vec(edge, 0..60).prop_map(move |edges| Scenario {
                     wide,
+                    store_merged,
                     relation_count,
                     id_space,
                     weighted,
@@ -588,13 +711,16 @@ mod tests {
             let distinct: usize = per_relation.iter().map(BTreeMap::len).sum();
 
             // The u64 path is otherwise reachable only from id spaces of 2^32.
+            let layout = CsrLayout { build_reverse: true, store_merged: scenario.store_merged };
+            let (count, id_space) = (scenario.relation_count, scenario.id_space);
             let graph = match scenario.wide {
-                false => GraphCsr::build(edges, scenario.relation_count, scenario.id_space, true),
-                true => GraphCsr::build_with::<u64>(edges, scenario.relation_count, scenario.id_space, true),
+                false => GraphCsr::build_as(edges, count, id_space, layout),
+                true => GraphCsr::build_with::<u64>(edges, count, id_space, layout),
             }
             .unwrap();
             let width = if scenario.wide { TargetWidth::U64 } else { TargetWidth::U32 };
-            prop_assert_eq!(graph.all_relations().forward().width(), width);
+            prop_assert_eq!(graph.relations()[0].forward().width(), width);
+            prop_assert_eq!(graph.merged().is_some(), scenario.store_merged && count > 1);
 
             prop_assert_eq!(graph.deduplicated_edges(), (scenario.edges.len() - distinct) as u64);
             for (relation, naive) in graph.relations().iter().zip(&per_relation) {
@@ -603,8 +729,62 @@ mod tests {
                 prop_assert_eq!(&rows(relation.forward()), naive);
                 prop_assert_eq!(rows(relation.reverse().unwrap()), reversed(naive));
             }
-            prop_assert_eq!(&rows(graph.all_relations().forward()), &merged);
-            prop_assert_eq!(rows(graph.all_relations().reverse().unwrap()), reversed(&merged));
+            // The weights of the stored all-relations CSR, if there is one.
+            if let Some(stored) = graph.merged().or((count == 1).then(|| &graph.relations()[0])) {
+                prop_assert_eq!(&rows(stored.forward()), &merged);
+                prop_assert_eq!(rows(stored.reverse().unwrap()), reversed(&merged));
+            }
+            let all = graph.all_relations();
+            let keys: Vec<_> = merged.keys().copied().collect();
+            prop_assert_eq!(pairs(all.forward()), keys);
+            let mut reverse_keys: Vec<_> = reversed(&merged).into_keys().collect();
+            reverse_keys.sort_unstable();
+            prop_assert_eq!(pairs(all.reverse().unwrap()), reverse_keys);
+        }
+
+        #[test]
+        fn rows_merged_on_the_fly_read_as_the_stored_merged_csr(
+            scenario in scenarios(),
+            build_reverse in any::<bool>(),
+        ) {
+            let mut relations = RelationDictionary::new();
+            let indexes: Vec<RelationIndex> = (0..scenario.relation_count)
+                .map(|r| relations.intern(&r.to_string()).unwrap())
+                .collect();
+            let mut edges = EdgeList::new(scenario.weighted);
+            for &(r, source, target, weight) in &scenario.edges {
+                edges.push(indexes[r], source, target, f64::from(weight)).unwrap();
+            }
+            let (count, id_space) = (scenario.relation_count, scenario.id_space);
+            // `wide`: u64 targets, otherwise chosen only from 2^32 nodes.
+            let build = |store_merged| {
+                let layout = CsrLayout { build_reverse, store_merged };
+                match scenario.wide {
+                    false => GraphCsr::build_as(edges.clone(), count, id_space, layout),
+                    true => GraphCsr::build_with::<u64>(edges.clone(), count, id_space, layout),
+                }
+                .unwrap()
+            };
+            let (stored, unmerged) = (build(true), build(false));
+            let (stored, unmerged) = (stored.all_relations(), unmerged.all_relations());
+            prop_assert_eq!(unmerged.reverse().is_some(), build_reverse);
+            prop_assert_eq!(stored.reverse().is_some(), build_reverse);
+            let reverse = stored.reverse().zip(unmerged.reverse());
+            for (stored, unmerged) in [(stored.forward(), unmerged.forward())].into_iter().chain(reverse) {
+                prop_assert_eq!(unmerged.id_space(), stored.id_space());
+                prop_assert_eq!(unmerged.is_weighted(), stored.is_weighted());
+                prop_assert_eq!(unmerged.edge_count(), stored.edge_count());
+                prop_assert_eq!(pairs(unmerged), pairs(stored));
+                for source in 0..=id_space {
+                    prop_assert_eq!(unmerged.degree(source), stored.degree(source));
+                    for target in 0..=id_space {
+                        prop_assert_eq!(
+                            unmerged.has_edge(source, target),
+                            stored.has_edge(source, target)
+                        );
+                    }
+                }
+            }
         }
 
         #[test]
@@ -632,7 +812,7 @@ mod tests {
             let (edges, dropped) = intake.finish();
             prop_assert_eq!(dropped, dangling);
             let graph = GraphCsr::build(edges, relations.len(), id_map.id_space(), false).unwrap();
-            prop_assert_eq!(rows(graph.all_relations().forward()), naive);
+            prop_assert_eq!(rows(graph.relations()[0].forward()), naive);
         }
     }
 }

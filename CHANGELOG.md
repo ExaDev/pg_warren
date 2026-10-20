@@ -35,6 +35,14 @@
   are evicted least recently used first and reloaded when next used;
   transient vectors count against it but are never evicted, and a
   transient write that would take them past it fails with 53400.
+- `create_graph(…, store_merged boolean DEFAULT true)`: a graph of several
+  relations may leave its merged (all-relations) CSR unstored. All-relations
+  reads then merge the relations' rows on the fly, with identical results,
+  in 44% fewer CSR bytes for five weighted relations and a faster build,
+  but 2–3× slower all-relations traversal and 5–8× slower all-relations
+  `spmv` at 2–5 relations (more with more relations: 6× and 11× at 10). `warren.info` reports `store_merged`. Schema change:
+  new column `warren.graphs.store_merged` (existing graphs are backfilled
+  `true`); run `ALTER EXTENSION pg_warren UPDATE` before using 0.3.0.
 - Upgrade note: the cache was unbounded before. A graph version larger
   than 4GB, or a version plus the library's transient scratch vectors
   (`pagerank` keeps about eleven full-length `f64` vectors, ~88 bytes per

@@ -107,11 +107,15 @@ fn has_edge(
             else {
                 return Ok(Some(false));
             };
-            let csr = match rel {
-                None => Some(loaded.graph.all_relations()),
-                Some(name) => loaded.relations.get(name).and_then(|r| loaded.graph.relation(r)),
+            let found = match rel {
+                None => loaded.graph.all_relations().forward().has_edge(src, dst),
+                Some(name) => loaded
+                    .relations
+                    .get(name)
+                    .and_then(|r| loaded.graph.relation(r))
+                    .is_some_and(|csr| csr.forward().has_edge(src, dst)),
             };
-            Ok(Some(csr.is_some_and(|csr| csr.forward().has_edge(src, dst))))
+            Ok(Some(found))
         })
     })
 }

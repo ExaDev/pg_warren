@@ -127,7 +127,8 @@ fn multiply<I: Interrupts>(
     if let Some(mask) = product.mask {
         mask.check(id_space)?;
     }
-    let matrix = Matrix::new(graph, product.relations, product.transpose, product.weighted)?;
+    let matrix =
+        Matrix::new(graph, product.relations, product.transpose, product.weighted, memory)?;
     let mut run = Run { workers, memory, interrupts, matrix: &matrix, product };
     match y {
         AnyVector::F32(y) => run.typed(x, y),

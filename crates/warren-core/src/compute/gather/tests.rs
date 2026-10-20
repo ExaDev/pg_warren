@@ -10,7 +10,7 @@ use crate::compute::{
     AnyVector, ArithmeticError, Bytes, ComputeMemory, Element, Mask, Message, MessageKind, Vector,
     Workers,
 };
-use crate::graph::{DenseId, Direction, EdgeList, GraphCsr, RelationIndex};
+use crate::graph::{CsrLayout, DenseId, Direction, EdgeList, GraphCsr, RelationIndex};
 use crate::interrupts::{Cancelled, Uninterrupted};
 
 fn workers() -> &'static Workers {
@@ -313,6 +313,7 @@ struct Scenario {
     edges: Edges,
     reverse: bool,
     wide: bool,
+    store_merged: bool,
     direction: Direction,
     selected: Option<Vec<usize>>,
     mask: Option<(Vec<f64>, bool)>,
@@ -328,10 +329,11 @@ impl Scenario {
         for &(relation, source, target, weight) in &self.edges {
             list.push(indexes[relation], source, target, weight).unwrap();
         }
-        let (count, id_space, reverse) = (self.relation_count, self.id_space, self.reverse);
+        let (count, id_space) = (self.relation_count, self.id_space);
+        let layout = CsrLayout { build_reverse: self.reverse, store_merged: self.store_merged };
         let graph = match self.wide {
-            true => GraphCsr::build_with::<u64>(list, count, id_space, reverse),
-            false => GraphCsr::build(list, count, id_space, reverse),
+            true => GraphCsr::build_with::<u64>(list, count, id_space, layout),
+            false => GraphCsr::build_as(list, count, id_space, layout),
         };
         graph.unwrap()
     }
@@ -360,19 +362,27 @@ fn scenarios() -> impl Strategy<Value = Scenario> {
         let mask_value = prop::sample::select(vec![0.0, -0.0, 1.0, f64::NAN]);
         (
             prop::collection::vec(edge, 0..50),
-            any::<(bool, bool)>(),
+            any::<(bool, bool, bool)>(),
             prop_oneof![Just(Direction::In), Just(Direction::Out), Just(Direction::Both)],
             prop::option::of(prop::collection::vec(0..relation_count, 0..3)),
             prop::option::of((prop::collection::vec(mask_value, id_space as usize), any::<bool>())),
             prop::sample::select(Combiner::all().collect::<Vec<_>>()),
         )
             .prop_map(
-                move |(edges, (reverse, wide), direction, selected, mask, combiner)| Scenario {
+                move |(
+                    edges,
+                    (reverse, wide, store_merged),
+                    direction,
+                    selected,
+                    mask,
+                    combiner,
+                )| Scenario {
                     id_space,
                     relation_count,
                     edges,
                     reverse,
                     wide,
+                    store_merged,
                     direction,
                     selected,
                     mask,
