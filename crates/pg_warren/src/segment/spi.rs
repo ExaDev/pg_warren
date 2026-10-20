@@ -6,7 +6,7 @@ use pgrx::prelude::*;
 use pgrx::varlena::varlena_to_byte_slice;
 use pgrx::PgMemoryContexts;
 
-use super::chunk::ChunkVisitor;
+use super::chunk::EachChunk;
 use super::{SegmentError, SegmentStore};
 use crate::access::as_catalog_owner;
 use crate::catalog::VersionId;
@@ -55,7 +55,7 @@ impl SegmentStore for SpiSegmentStore {
         &mut self,
         version: VersionId,
         segment: &str,
-        each: &mut ChunkVisitor<'_>,
+        each: &mut EachChunk<'_, SegmentError>,
     ) -> Result<(), SegmentError> {
         as_catalog_owner(|| {
             each_chunk(
@@ -67,9 +67,6 @@ impl SegmentStore for SpiSegmentStore {
         })
     }
 }
-
-/// Receives each chunk read by [`each_chunk`] as (chunk number, bytes).
-pub(crate) type EachChunk<'a, E> = dyn FnMut(i32, &[u8]) -> Result<(), E> + 'a;
 
 /// Runs `query` (rows of chunk number and bytes, in chunk order) through a
 /// read-only cursor and passes each chunk to `each`, one row at a time.
@@ -93,21 +90,21 @@ pub(crate) fn each_chunk<E: From<pgrx::spi::Error>>(
             let chunk_no = row.get::<i32>(1)?.unwrap_or_default();
             let datum = row.get_datum_by_ordinal(2)?;
             // SAFETY: `chunk` is a context this function owns. The datum is
-            // the bytea of the row just fetched; its detoasted copy (pgrx's
-            // typed getters would put it in the SPI procedure context, which
-            // lives until SPI finishes) is allocated in `chunk` and used only
-            // by `each`, which copies what it keeps, before the reset below.
-            let passed = unsafe {
-                chunk.switch_to(|_| {
-                    let data = match datum {
-                        Some(datum) => varlena_to_byte_slice(pg_sys::pg_detoast_datum_packed(
-                            datum.cast_mut_ptr(),
-                        )),
-                        None => &[],
-                    };
-                    each(chunk_no, data)
+            // the bytea of the row just fetched; only its detoasted copy
+            // (pgrx's typed getters would put it in the SPI procedure
+            // context, which lives until SPI finishes) is allocated in
+            // `chunk`, and it is used only by `each`, which copies what it
+            // keeps, before the reset below. `each` itself runs in the
+            // caller's context, so what it allocates outlives the row.
+            let data = unsafe {
+                chunk.switch_to(|_| match datum {
+                    Some(datum) => {
+                        varlena_to_byte_slice(pg_sys::pg_detoast_datum_packed(datum.cast_mut_ptr()))
+                    }
+                    None => &[],
                 })
             };
+            let passed = each(chunk_no, data);
             // SAFETY: nothing allocated in `chunk` is used after `each` returned.
             unsafe { chunk.reset() };
             passed?;
@@ -154,6 +151,35 @@ mod tests {
             .map_err(|_| Error::InvalidPosition)?;
         assert_eq!(read, bytes.len());
         assert!(peak < 1 << 20, "{peak} bytes allocated while reading");
+        Ok(())
+    }
+
+    /// The name of the current memory context.
+    fn current_context() -> String {
+        // SAFETY: CurrentMemoryContext is always a valid context, and its
+        // name a NUL-terminated string.
+        unsafe { std::ffi::CStr::from_ptr((*pg_sys::CurrentMemoryContext).name) }
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    /// What a visitor allocates must outlive the row: only the detoast
+    /// runs in the context reset after each row.
+    #[pg_test]
+    fn a_visitor_runs_outside_the_per_chunk_context() -> Result<(), Error> {
+        ring("visited", 10, 1)?;
+        let version = refresh("visited", true)?;
+        write_segment(&mut SpiSegmentStore, version, "probe", &[7u8; 4096], 1024)
+            .map_err(|_| Error::InvalidPosition)?;
+        let mut contexts = Vec::new();
+        SpiSegmentStore
+            .read_chunks(version, "probe", &mut |_, _| {
+                contexts.push(current_context());
+                Ok(())
+            })
+            .map_err(|_| Error::InvalidPosition)?;
+        assert_eq!(contexts.len(), 4);
+        assert!(contexts.iter().all(|name| name != "warren chunk"), "{contexts:?}");
         Ok(())
     }
 }

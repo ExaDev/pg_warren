@@ -36,6 +36,14 @@ pub(crate) enum SegmentError {
         /// The segment name.
         segment: String,
     },
+    /// The buffer a segment is read into could not be allocated.
+    #[error("out of memory reading segment {segment:?}: {bytes} bytes")]
+    OutOfMemory {
+        /// The segment name.
+        segment: String,
+        /// The bytes requested.
+        bytes: usize,
+    },
     /// A segment could not be encoded or decoded.
     #[error(transparent)]
     Graph(#[from] GraphError),
@@ -54,6 +62,7 @@ impl SqlError for SegmentError {
                 PgSqlErrorCode::ERRCODE_DATA_CORRUPTED
             }
             Self::TooManyChunks { .. } => PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+            Self::OutOfMemory { .. } => PgSqlErrorCode::ERRCODE_OUT_OF_MEMORY,
             Self::Graph(error) => graph_sqlstate(error),
             Self::Access(error) => error.sqlstate(),
             Self::Spi(_) => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,

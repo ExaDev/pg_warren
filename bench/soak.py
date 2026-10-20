@@ -5,10 +5,14 @@ a scratch cluster (no fixture files) and measure every §12 row at the
 default limits, with each backend's real peak memory (`/proc/<pid>/status`
 VmHWM, reset through `clear_refs`, and the peak of RssAnon polled every
 20 ms). Writes `<results>/<case>.json`, with the hardware, the cluster
-settings and a verdict per §12 target.
+settings, the provenance (argv, the harness's and the extension's
+revisions, the build profile and the installed library's sha256) and a
+verdict per §12 target: a stage that fails, or that a lost backend never
+reached, is a miss carrying its error.
 
-    bench/soak.py a b-merged b-unmerged --pg-config /path/to/pg_config --parent /var/tmp
-    bench/soak.py a --scale 1000 --no-eigen-steps        # 10K nodes, 100K edges: a quick check
+    bench/soak.py a b-merged b-unmerged --pg-config /path/to/pg_config --parent /var/tmp \
+        --extension-revision "$(git rev-parse --short HEAD)" --extension-profile release
+    bench/soak.py a --scale 1000 --no-eigen-steps --extension-revision … --extension-profile debug   # a quick check
 
 Cases: `a` is unweighted with one relation; `b-merged` and `b-unmerged` are
 weighted with five relations, with and without the stored merged CSR. Each
@@ -17,7 +21,10 @@ G(n, m) with replacement from a seeded `random()`: case `a` reads them
 from an unlogged `(src, dst)` table (which the recursive CTE baseline
 needs) and also builds once from the generator query directly, to compare;
 the `b` cases read the generator query, so they need no table on disk.
-Relations and weights are derived from the endpoints. A case whose version
+Relations and weights are derived from the endpoints. A full-scale case
+whose first version does not have the 47 deduplicated edges the committed
+runs had (the edges depend on the plan evaluating the seeding subquery
+once) is aborted. A case whose version
 (or the graph and `pagerank`'s scratch) does not fit
 `warren.max_cache_memory` is measured again with the cap raised. A second
 version, without the 0.1% of edges whose source is 7 mod 1000, is built
@@ -25,6 +32,7 @@ for `diff` and `distance` only if the disk keeps `--disk-floor` free."""
 
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import platform
@@ -56,6 +64,12 @@ SETTINGS = (
     "checkpoint_timeout = '15min'", "autovacuum = off",
 )
 MEMORY_FIELDS = ("VmHWM", "VmRSS", "RssAnon", "RssFile", "RssShmem")
+SETTINGS_SQL = (
+    "SELECT name || '=' || current_setting(name) FROM pg_settings WHERE name IN "
+    "('shared_buffers', 'work_mem', 'maintenance_work_mem', 'max_wal_size', 'wal_level', 'fsync', "
+    "'synchronous_commit', 'full_page_writes', 'jit', 'max_parallel_workers_per_gather', "
+    "'statement_timeout', 'warren.max_cache_memory', 'warren.max_build_memory', 'warren.max_compute_memory', "
+    "'warren.threads') ORDER BY 1")
 
 
 @dataclass(frozen=True)
@@ -78,6 +92,11 @@ CASES = {
     "b-unmerged": Case("b-unmerged", weighted=True, relations=5, store_merged=False, table=False),
 }
 SEED = 0.25
+# The deduplicated edges of every full-scale case with SEED (the parallel
+# edges the generator draws), recorded by the committed runs on PG 16: a
+# plan that evaluates the seeding subquery differently draws other edges.
+DEDUPLICATED_EDGES = 47
+EIGEN_TOL = 1e-6
 REMOVED, KEPT = "src % 1000 = 7", "src % 1000 <> 7"  # the edges the second version leaves out, and keeps
 
 
@@ -207,8 +226,10 @@ TARGETS = (
      lambda m: m["components_seconds"] < 10, lambda m: _seconds(m["components_seconds"])),
     ("pagerank, 20 iterations", "< 30 s (8 threads)", ("pagerank_seconds",),
      lambda m: m["pagerank_seconds"] < 30, lambda m: _seconds(m["pagerank_seconds"])),
-    ("eigen, k = 20, normalised Laplacian", "< 10 min", ("eigen_seconds",),
-     lambda m: m["eigen_seconds"] < 600, lambda m: _seconds(m["eigen_seconds"])),
+    ("eigen, k = 20, normalised Laplacian", "< 10 min, converged", ("eigen_seconds", "eigen_converged", "eigen_residual"),
+     lambda m: m["eigen_seconds"] < 600 and m["eigen_converged"],
+     lambda m: f"{_seconds(m['eigen_seconds'])}, {'converged' if m['eigen_converged'] else 'not converged'}, "
+               f"residual {m['eigen_residual']:.1e}"),
     ("refresh() incl. reverse CSR", "< 8 min, < 4 GiB RAM", ("refresh_seconds", "refresh_peak_bytes"),
      lambda m: m["refresh_seconds"] < 480 and m["refresh_peak_bytes"] < 4 * GIB,
      lambda m: f"{_seconds(m['refresh_seconds'])}, peak {size(m['refresh_peak_bytes'])}"),
@@ -224,26 +245,62 @@ TARGETS = (
 
 
 STOPPED = "canceling statement"  # a cancel or statement_timeout: the time is a lower bound
+# warren.eigen's WARNING when its test (|β·s| ≤ tol·max|θ|, DESIGN.md §6.5)
+# fails within max_iter. The explicit residual it returns floors near
+# 1e-7·‖M‖ in f32, so `residual ≤ tol` is not that test.
+UNCONVERGED = "eigen did not converge"
 
 
 def verdicts(measured):
-    """Each §12 target the measurements cover, met or not; a stage stopped
-    before it finished is a miss, its time a lower bound."""
+    """Each §12 target the measurements cover, met or not. A stage that
+    failed, or was planned but never reached, is a miss carrying its error;
+    a stage stopped before it finished is a miss, its time a lower bound."""
     found = []
     for name, target, keys, met, show in TARGETS:
-        if not all(k in measured for k in keys):
-            continue
+        failed = next((measured[f"{k}_failed"] for k in keys if f"{k}_failed" in measured), None)
         stopped = [k for k in keys if measured.get(f"{k}_stopped")]
-        if stopped:
+        if failed is not None:
+            found.append({"workload": name, "target": target, "measured": f"failed: {failed}", "error": failed,
+                          "met": False})
+        elif stopped:
             found.append({"workload": name, "target": target, "met": False,
                           "measured": f"≥ {_seconds(measured[stopped[0]])} (stopped)"})
-        else:
+        elif all(k in measured for k in keys):
             found.append({"workload": name, "target": target, "measured": show(measured), "met": bool(met(measured))})
     return found
 
 
 class BackendLost(RuntimeError):
     """The backend (or psql) went away mid-statement, e.g. killed for memory."""
+
+
+class GeneratorDrift(RuntimeError):
+    """The generator drew other edges than the committed runs did."""
+
+
+def check_edges(case, stats):
+    """Fails unless a full-scale case's first version has the deduplicated
+    edges every committed run had (scaled cases have no recorded value)."""
+    if case != CASES[case.name]:
+        return
+    found, edges = stats["deduplicated_edges"], stats["edge_count"]
+    if (found, edges) != (DEDUPLICATED_EDGES, case.edges - DEDUPLICATED_EDGES):
+        raise GeneratorDrift(f"version 1 has {found} deduplicated edges, {edges} edges; expected "
+                             f"{DEDUPLICATED_EDGES} and {case.edges - DEDUPLICATED_EDGES}")
+
+
+def planned_stages(case, options):
+    """The stages a verdict reads that `case` runs with `options`, unless
+    skipped for disk or lost with the backend."""
+    planned = {"refresh", "cold_load_probe", "default: prewarm", "default: bfs depth 6", "default: reachable_set",
+               "default: components", "default: pagerank"}
+    if options.eigen:
+        planned.add("default: eigen")
+    if case.table and options.cte:
+        planned.add("bfs_cte")
+    if "second-version" not in options.skip:
+        planned.add("diff")
+    return sorted(planned)
 
 
 class Session:
@@ -361,8 +418,8 @@ def memory_total():
 
 
 class Soak:
-    def __init__(self, cluster, options):
-        self.cluster, self.options = cluster, options
+    def __init__(self, cluster, options, provenance):
+        self.cluster, self.options, self.provenance = cluster, options, provenance
 
     def session(self):
         return Session(self.cluster, "soak")
@@ -375,13 +432,14 @@ class Soak:
         admin = self.cluster.database()
         admin.execute("DROP DATABASE IF EXISTS soak")
         admin.execute("CREATE DATABASE soak")
-        result = {"case": case.name, "nodes": case.nodes, "edges": case.edges, "weighted": case.weighted,
+        result = {"provenance": self.provenance, "case": case.name, "nodes": case.nodes, "edges": case.edges, "weighted": case.weighted,
                   "relations": case.relations, "store_merged": case.store_merged, "threads": self.options.threads,
                   "eigen_max_iter": self.options.eigen_max_iter,
-                  "statement_timeout": self.options.statement_timeout, "skip": self.options.skip, "hardware": hardware(), "started_at": _now(), "stages": {}, "skipped": {}}
+                  "statement_timeout": self.options.statement_timeout, "skip": self.options.skip, "planned_stages": planned_stages(case, self.options),
+                  "hardware": hardware(), "started_at": _now(), "stages": {}, "skipped": {}}
         try:
             self._run(case, result)
-        except BackendLost as error:
+        except (BackendLost, GeneratorDrift) as error:
             result["aborted"] = str(error)
             print(f"  ABORTED: {error}", flush=True)
         finally:
@@ -398,12 +456,6 @@ class Soak:
             s.run(TIMER)
             result["pg_warren"] = s.run("SELECT warren.version()")["rows"][0]
             result["postgres"] = s.run("SELECT current_setting('server_version')")["rows"][0]
-            result["settings"] = s.run(
-                "SELECT name || '=' || current_setting(name) FROM pg_settings WHERE name IN "
-                "('shared_buffers', 'work_mem', 'maintenance_work_mem', 'max_wal_size', 'wal_level', 'fsync', "
-                "'synchronous_commit', 'full_page_writes', 'jit', 'max_parallel_workers_per_gather', "
-                "'warren.max_cache_memory', 'warren.max_build_memory', 'warren.max_compute_memory', "
-                "'warren.threads') ORDER BY 1")["rows"]
             needed = segment_estimate(case) + (40 * case.edges if case.table else 0) + GIB
             free = free_disk(self.options.parent)
             if not disk_allows(free, needed, self.options.disk_floor):
@@ -421,6 +473,7 @@ class Soak:
         if case.table:
             self._generated_refresh(case, result)
         v1 = self._version_stats(result, "version_1")
+        check_edges(case, v1)
         with self.session() as s:
             s.run("SET warren.max_cache_memory = '64kB'")
             probe = self.stage(result, "cold_load_probe", s.measure(f"SELECT warren.prewarm('{GRAPH}')"))
@@ -454,7 +507,8 @@ class Soak:
         self.stage(result, "cte: index", s.measure("CREATE INDEX soak_edges_src ON soak_edges (src)"))
         cte = ("WITH RECURSIVE r (id, depth) AS (SELECT 1::int4, 0 UNION SELECT e.dst, r.depth + 1 FROM r "
                "JOIN soak_edges e ON e.src = r.id WHERE r.depth < 6) SELECT count(DISTINCT id) FROM r")
-        self.stage(result, "bfs_cte", s.measure(cte))
+        self.stage(result, "bfs_cte", server_seconds(s.measure(timed(cte), 1)))
+        self.stage(result, "bfs_cte count", s.measure(cte))
         s.run("DROP INDEX soak_edges_src")
 
     def _version_stats(self, result, name):
@@ -480,6 +534,9 @@ class Soak:
                 return self.stage(result, f"{label}: {name}", server_seconds(measured) if server else measured)
 
             stage("prewarm", f"SELECT warren.prewarm('{GRAPH}')")
+            # After the SETs, and after a call loaded the library: before
+            # that pg_settings does not list warren.*.
+            result.setdefault("settings", {})[label] = s.run(SETTINGS_SQL)["rows"]
             stage("bfs depth 6", f"SELECT count(*) FROM warren.bfs('{GRAPH}', ARRAY[1::bigint], 6)", 3, True)
             stage("bfs depth 6 count", f"SELECT count(*) FROM warren.bfs('{GRAPH}', ARRAY[1::bigint], 6)")
             stage("neighbours", f"SELECT count(*) FROM warren.neighbours('{GRAPH}', 1::bigint)", 3 if reloads else 20, True)
@@ -491,7 +548,7 @@ class Soak:
             if label == "default" and self.options.eigen:
                 limit = f", max_iter := {self.options.eigen_max_iter}" if self.options.eigen_max_iter else ""
                 stage("eigen", f"SELECT count(*), max(residual) FROM warren.eigen('{GRAPH}', 20, "
-                               f"'normalized_laplacian', 'smallest', tol := 1e-6{limit})")
+                               f"'normalized_laplacian', 'smallest', tol := {EIGEN_TOL}{limit})")
 
     def _eigen_steps(self, case, result):
         """warren-core's Lanczos on the same edges (as an undirected graph),
@@ -541,37 +598,102 @@ class Soak:
                 self.stage(result, f"distance {method}", s.measure(f"SELECT warren.distance({pair}, '{method}')"))
 
 
+PICK = {  # verdict key: (stage, field)
+    "bfs_seconds": ("default: bfs depth 6", "server_median_seconds"),
+    "bfs_cte_seconds": ("bfs_cte", "server_median_seconds"),
+    "components_seconds": ("default: components", "median_seconds"),
+    "pagerank_seconds": ("default: pagerank", "median_seconds"),
+    "eigen_seconds": ("default: eigen", "median_seconds"),
+    "refresh_seconds": ("refresh", "median_seconds"),
+    "refresh_peak_bytes": ("refresh", "vm_hwm"),
+    "diff_seconds": ("diff", "median_seconds"),
+    "cold_load_seconds": ("default: prewarm", "median_seconds"),
+}
+
+
+SKIPPED_BY = {"bfs_cte": "bfs_cte", "diff": "second_version"}  # stage: its key in `skipped`
+
+
+def unreached(result, name):
+    """Why planned stage `name` has no measurement, or None if it was not
+    planned or was skipped (for disk, or by option)."""
+    skipped = result.get("skipped", {})
+    if name not in result.get("planned_stages", ()) or {"case", SKIPPED_BY.get(name)} & skipped.keys():
+        return None
+    return f"not reached: {result['aborted']}" if result.get("aborted") else "not reached"
+
+
+def outcome(result, name):
+    """Stage `name` if it finished, else (None, why): its first error, or
+    why it never ran (None if that is no miss)."""
+    stage = result["stages"].get(name)
+    if stage is None:
+        return None, unreached(result, name)
+    errors = stage.get("errors")
+    return (stage, None) if not errors else (None, errors[0])
+
+
 def summary(result):
-    """The numbers the verdicts read, from a case's stages."""
+    """The numbers the verdicts read, from a case's stages: `<key>_failed`
+    holds the error of a stage that failed or was never reached, and
+    `<key>_stopped` marks a cancelled one, its time a lower bound."""
     stages, measured = result["stages"], {"cores": result["hardware"]["cpus"]}
-    pick = {"bfs_seconds": ("default: bfs depth 6", "server_median_seconds"),
-            "bfs_cte_seconds": ("bfs_cte", "median_seconds"),
-            "components_seconds": ("default: components", "median_seconds"),
-            "pagerank_seconds": ("default: pagerank", "median_seconds"),
-            "eigen_seconds": ("default: eigen", "median_seconds"),
-            "refresh_seconds": ("refresh", "median_seconds"),
-            "refresh_peak_bytes": ("refresh", "vm_hwm"),
-            "diff_seconds": ("diff", "median_seconds"),
-            "cold_load_seconds": ("default: prewarm", "median_seconds")}
-    for key, (name, field) in pick.items():
-        stage = stages.get(name)
-        if stage is None:
-            continue
-        if "errors" not in stage:
+    for key, (name, field) in PICK.items():
+        stage, why = outcome(result, name)
+        errors = stages.get(name, {}).get("errors", [])
+        if stage is not None:
             measured[key] = stage[field]
-        elif key.endswith("_seconds") and any(STOPPED in error for error in stage["errors"]):
-            measured[key], measured[f"{key}_stopped"] = stage[field], True
-    if result.get("eigen_max_iter") and "eigen_seconds" in measured:
-        measured["eigen_seconds_per_step"] = measured.pop("eigen_seconds") / result["eigen_max_iter"]
-    reachable = stages.get("default: reachable_set")
+        elif any(STOPPED in error for error in errors):
+            if key.endswith("_seconds"):
+                measured[key], measured[f"{key}_stopped"] = stages[name][field], True
+        elif why is not None:
+            measured[f"{key}_failed"] = why
+    eigen, _ = outcome(result, "default: eigen")
+    if eigen is not None:
+        measured["eigen_residual"] = float(eigen["rows"][0].split("|")[1])
+        measured["eigen_converged"] = not any(UNCONVERGED in warning for warning in eigen.get("warnings", []))
+        if result.get("eigen_max_iter"):
+            measured["eigen_seconds_per_step"] = measured.pop("eigen_seconds") / result["eigen_max_iter"]
+    reachable, why = outcome(result, "default: reachable_set")
     stats = stages.get("default: reachable_set stats", {}).get("stats")
-    if reachable and stats and "errors" not in reachable:
+    if reachable and stats:
         measured["reachable_edges_per_second"] = (json.loads(stats[0])["edges_traversed"]
                                                   / reachable["median_seconds"])
+    elif why is not None:
+        measured["reachable_edges_per_second_failed"] = why
+    _, why = outcome(result, "cold_load_probe")
     if result.get("cached_bytes"):
         measured.update(cached_bytes=result["cached_bytes"], id_space=result["version_1"]["id_space"],
                         max_cache_memory=DEFAULT_CAP)
+    elif why is not None:
+        measured["cached_bytes_failed"] = why
     return measured
+
+
+def git_revision():
+    """The harness checkout's commit, and whether `bench/` or `test/` differ from it."""
+    def git(*arguments):
+        done = subprocess.run(["git", *arguments], cwd=HERE, capture_output=True, text=True)
+        return done.stdout.strip() if done.returncode == 0 else None
+
+    revision = git("rev-parse", "HEAD")
+    status = git("status", "--porcelain", "--", str(HERE), str(HERE.parent / "test"))
+    return revision, None if status is None else bool(status)
+
+
+def provenance(argv, revision, profile, library):
+    """What produced a result: the command, the harness's revision, and the
+    extension build (its revision and profile as given, and the library
+    the cluster loads)."""
+    harness, dirty = git_revision()
+    return {"argv": argv, "harness": {"revision": harness, "dirty": dirty},
+            "extension": {"revision": revision, "profile": profile, "library": str(library),
+                          "library_sha256": hashlib.sha256(Path(library).read_bytes()).hexdigest()}}
+
+
+def installed_library(pg_config):
+    done = subprocess.run([pg_config, "--pkglibdir"], capture_output=True, text=True, check=True)
+    return Path(done.stdout.strip()) / "pg_warren.so"
 
 
 def _now():
@@ -583,6 +705,10 @@ def main(argv):
     options.add_argument("cases", nargs="*", help=f"cases to run (default: all of {', '.join(CASES)})")
     options.add_argument("--pg-config", default=os.environ.get("PG_CONFIG", "pg_config"),
                          help="the Postgres tree with a release build of pg_warren installed")
+    options.add_argument("--extension-revision", required=True,
+                         help="the git revision the installed pg_warren was built from (recorded with the results)")
+    options.add_argument("--extension-profile", required=True, choices=["release", "debug"],
+                         help="the cargo profile of the installed build (recorded with the results)")
     options.add_argument("--runas", default="runner", help="cluster user when run as root")
     options.add_argument("--parent", type=Path, default=Path("/var/tmp"), help="where the cluster directory goes")
     options.add_argument("--results", type=Path, default=HERE / "results" / "soak")
@@ -605,8 +731,10 @@ def main(argv):
     if unknown := set(args.cases) - set(CASES):
         options.error(f"unknown cases: {', '.join(sorted(unknown))}")
     args.results.mkdir(parents=True, exist_ok=True)
+    found = provenance([sys.argv[0], *argv], args.extension_revision, args.extension_profile,
+                       installed_library(args.pg_config))
     with Cluster(args.pg_config, args.runas, parent=args.parent, settings=SETTINGS) as cluster:
-        soak = Soak(cluster, args)
+        soak = Soak(cluster, args, found)
         for name in args.cases:
             case = CASES[name].scaled(args.scale) if args.scale > 1 else CASES[name]
             print(f"{name}: {case.nodes} nodes, {case.edges} edges, free disk {size(free_disk(args.parent))}",
