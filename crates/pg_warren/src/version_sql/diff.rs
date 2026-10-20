@@ -8,16 +8,18 @@ use warren_core::version::{diff as delta, DegreeShift, EdgeDelta, VersionDiff};
 
 use super::error::VersionOperationError;
 use crate::access::{entry, require_reader};
-use crate::cache::load;
+use crate::cache::{cached_pair, Resolved};
 use crate::catalog::{compaction_between, require_version, GraphDefinition, VersionId};
-use crate::segment::SpiSegmentStore;
 use crate::source::with_id_type;
 
 /// `warren.diff`: the structural delta from version `v1` of graph `name` to
 /// version `v2` — nodes added and removed, edges added and removed per
 /// relation and over all relations, and the shift of the out- and in-degree
-/// distributions. Refused across a compaction boundary. Owners and readers
-/// may call it.
+/// distributions. Refused across a compaction boundary. Both versions are
+/// read through the backend's cache and pinned until the statement ends, so
+/// they count against `warren.max_cache_memory` and, past it,
+/// `warren.max_compute_memory` (DESIGN.md §5.5). Owners and readers may
+/// call it.
 #[pg_extern(schema = "warren", stable, parallel_restricted)]
 fn diff(name: &str, v1: i64, v2: i64) -> JsonB {
     entry(|_| diff_versions(name, v1, v2))
@@ -37,9 +39,10 @@ fn diff_versions(name: &str, v1: VersionId, v2: VersionId) -> Result<JsonB, Vers
             source_version,
         });
     }
-    let delta = with_id_type!(graph.id_type, E => {
-        let before = load::<E>(&mut SpiSegmentStore, v1, graph.store_merged)?;
-        let after = load::<E>(&mut SpiSegmentStore, v2, graph.store_merged)?;
+    let before = Resolved { graph: graph.clone(), version: v1 };
+    let after = Resolved { graph, version: v2 };
+    let delta = with_id_type!(before.graph.id_type, E => {
+        let [before, after] = cached_pair::<E>(&before, &after)?;
         delta(&before.version()?, &after.version()?)?
     });
     Ok(JsonB(diff_json(v1, v2, &delta)))
@@ -152,7 +155,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{failure, refresh, ring};
+    use crate::fixture::{failure, refresh, ring, segment_reads};
 
     #[pg_test]
     fn diff_reports_the_delta_between_a_staged_and_the_current_version() -> Result<(), Error> {
@@ -226,6 +229,52 @@ mod tests {
         ));
         Spi::run("RESET ROLE")?;
         assert_eq!(delta?, Some(0));
+        Ok(())
+    }
+
+    /// Graph `df`, a ring of 2,000 nodes (about 94 kB loaded), refreshed
+    /// twice; returns both versions.
+    fn two_rings() -> Result<(i64, i64), Error> {
+        ring("df", 2000, 2)?;
+        Ok((refresh("df", true)?, refresh("df", true)?))
+    }
+
+    #[pg_test]
+    fn diff_shares_the_cached_versions() -> Result<(), Error> {
+        let (first, second) = two_rings()?;
+        Spi::run(&format!("SELECT warren.prewarm('df'); SELECT warren.prewarm('df', {first})"))?;
+        let before = segment_reads()?;
+        let nodes = Spi::get_one::<i64>(&format!(
+            "SELECT (warren.diff('df', {first}, {second}) -> 'nodes' ->> 'after')::bigint"
+        ))?;
+        assert_eq!(nodes, Some(2000));
+        assert_eq!(segment_reads()? - before, 0, "no version was loaded again");
+        assert_eq!(Spi::get_one::<i64>("SELECT warren.evict('df')")?, Some(2));
+        let before = segment_reads()?;
+        Spi::run(&format!("SELECT warren.diff('df', {first}, {second})"))?;
+        assert!(segment_reads()? > before, "with nothing cached, both are loaded");
+        assert_eq!(Spi::get_one::<i64>("SELECT warren.evict('df')")?, Some(2), "and cached");
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_diff_over_both_limits_is_refused_before_anything_is_loaded() -> Result<(), Error> {
+        let (first, second) = two_rings()?;
+        Spi::run(
+            "SET LOCAL warren.max_cache_memory = '64kB';
+             SET LOCAL warren.max_compute_memory = '64kB'",
+        )?;
+        let before = segment_reads()?;
+        let refused =
+            failure(&format!("warren.diff('df', {first}, {second})"))?.unwrap_or_default();
+        assert!(refused.starts_with("53400: "), "{refused}");
+        assert!(
+            refused.contains("warren.max_cache_memory (65536 bytes)")
+                && refused.contains("warren.max_compute_memory (65536 bytes)"),
+            "{refused}"
+        );
+        assert_eq!(segment_reads()? - before, 0, "neither version was loaded");
+        assert_eq!(Spi::get_one::<i64>("SELECT warren.evict('df')")?, Some(0));
         Ok(())
     }
 }

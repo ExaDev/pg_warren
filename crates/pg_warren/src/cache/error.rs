@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use super::LoadError;
 use crate::access::{AccessError, SqlError};
-use crate::catalog::CatalogError;
+use crate::catalog::{CatalogError, VersionId};
 
 /// Why a version could not be opened for reading.
 #[derive(Debug, Error)]
@@ -42,6 +42,30 @@ pub(crate) enum CacheError {
         /// The cap, in bytes.
         limit: u64,
     },
+    /// Loading versions would take what the statement holds in the cache,
+    /// which cannot be evicted until it ends, past `warren.max_cache_memory`
+    /// and `warren.max_compute_memory` together.
+    #[error(
+        "memory limit exceeded: loading {} ({expected} bytes) would bring what this statement \
+         holds in the cache to {} bytes, over warren.max_cache_memory ({cache_limit} bytes) \
+         and warren.max_compute_memory ({compute_limit} bytes) together; {held} bytes are held \
+         already, by transient vectors and what the statement has read; raise \
+         warren.max_cache_memory or warren.max_compute_memory",
+        versions_named(versions),
+        held.saturating_add(*expected)
+    )]
+    StatementOverLimit {
+        /// The versions to load.
+        versions: Vec<VersionId>,
+        /// About the bytes they would add.
+        expected: u64,
+        /// The bytes the cache holds that it cannot evict.
+        held: u64,
+        /// `warren.max_cache_memory`, in bytes.
+        cache_limit: u64,
+        /// `warren.max_compute_memory`, in bytes.
+        compute_limit: u64,
+    },
     /// An SPI call failed.
     #[error(transparent)]
     Spi(#[from] pgrx::spi::Error),
@@ -54,8 +78,20 @@ impl SqlError for CacheError {
             Self::Catalog(error) => error.sqlstate(),
             Self::Access(error) => error.sqlstate(),
             Self::Load(error) => error.sqlstate(),
-            Self::TransientOverLimit { .. } => PgSqlErrorCode::ERRCODE_CONFIGURATION_LIMIT_EXCEEDED,
+            Self::TransientOverLimit { .. } | Self::StatementOverLimit { .. } => {
+                PgSqlErrorCode::ERRCODE_CONFIGURATION_LIMIT_EXCEEDED
+            }
             Self::Spi(_) => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
         }
+    }
+}
+
+/// `version 3`, or `versions 3 and 4`.
+fn versions_named(versions: &[VersionId]) -> String {
+    let named: Vec<String> = versions.iter().map(ToString::to_string).collect();
+    match named.split_last() {
+        Some((last, [])) => format!("version {last}"),
+        Some((last, rest)) => format!("versions {} and {last}", rest.join(", ")),
+        None => "no version".to_owned(),
     }
 }
