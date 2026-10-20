@@ -259,7 +259,7 @@ DESIGN.md §12 and `bench/results/soak/`:
 | What (target) | One relation, unweighted | Five weighted relations, merged CSR | Five weighted relations, `store_merged := false` |
 |---|---|---|---|
 | BFS depth 6 (≥ 20× a recursive CTE) | **10.5–11×** (0.69–0.76 s vs 7.6 s) | 21.9 s, reloading; 0.73 s at an 8GB cap | 0.80–0.85 s |
-| `reachable_set`, full component (> 50M edges/s) | **11–12M/s**; since the pull below, projected 26–33M/s | 3M/s reloading; 11.5M/s at 8GB | **7.5–7.7M/s** |
+| `reachable_set`, full component (> 50M edges/s) | **11–12M/s**; since the pull below, projected 27–34M/s | 3M/s reloading; 11.5M/s at 8GB | **7.5–7.7M/s** |
 | `components()` (< 10 s) | 4.5–5.4 s | **30.9 s** reloading; 5.8 s at 8GB | borderline: 9.3–10.4 s |
 | `pagerank`, 20 iterations (< 30 s on 8 threads) | 15.2–16.7 s | **≥ 15 min** reloading; 15.1 s at 8GB | **≥ 15 min** reloading; 31.6 s at 8GB |
 | `eigen`, k = 20, normalised Laplacian (< 10 min) | **65 min, not converged** in the default 4,100 steps | 0.83 s a step (with its load) | 2.6 s a step |
@@ -277,9 +277,9 @@ default `max_iter` (DESIGN.md §6.5), at ~1 s a step;
 and BFS and `reachable_set` are timed through SQL, row emission included.
 BFS to depth 6 is about 85% row emission (the traversal itself takes
 0.11 s), so a faster kernel cannot close its gap. `reachable_set` was about
-two thirds traversal, and now pulls wide levels from the reverse CSR
-(direction-optimising BFS): 1.06 s instead of 5.96 s for the traversal at
-this scale, and 0.24 s instead of 0.49 s through SQL at 1M nodes and 10M
+two thirds traversal, and now pulls levels from the reverse CSR
+(direction-optimising BFS): 1.24 s instead of 5.96 s for the traversal at
+this scale, and 0.21 s instead of 0.49 s through SQL at 1M nodes and 10M
 edges (DESIGN.md §9.3). It is not yet re-measured at full scale.
 
 Smaller-scale kernel numbers (100K nodes, 1M edges unless stated):
@@ -319,12 +319,16 @@ In `FROM`, bound the work with `max_depth` or `max_results` instead. `walk`
 always collects its rows (within its row limit) before returning the first.
 
 **`reachable_set`'s order within a depth.** Its rows come by depth. A depth
-whose frontier is wide (more than a twentieth of the graph's nodes, and
-more than are left unvisited) is read backwards from the reverse CSR, and
-its nodes come in dense id order (the id map's order) rather than the order
-`bfs` reaches them. So which rows a select-list `LIMIT` keeps can differ
-from `bfs`'s. `last_stats()` then counts the row entries scanned, which
-are fewer than the edges. Sort with `ORDER BY` when the order matters.
+whose frontier holds more than a twenty-fourth of the id space (the
+version's dense ids, tombstoned ones included), and whose unvisited ids
+have fewer in-edges than the frontier has out-edges, is read backwards
+from the reverse CSR. Its nodes then come in dense id order (the id map's
+order) rather than the order `bfs` reaches them, so which rows a
+select-list `LIMIT` keeps can differ from `bfs`'s. Sort with `ORDER BY`
+when the order matters. `last_stats()` counts the row entries scanned,
+which for such a depth are fewer than pushing it would scan (on a graph of
+several relations without the merged CSR, read with every relation, only
+usually).
 
 **Integer `sum` overflows instead of widening.** `gather(…, 'sum')` of
 integer messages returns `bigint` and raises `bigint out of range` on
