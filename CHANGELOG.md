@@ -9,7 +9,17 @@
   the bootstrap superuser), not as `pg_extension.extowner`. The installer
   gets no privilege on those tables. A non-superuser's `pg_dump` fails
   while pg_warren is installed: dump as a superuser, or pass
-  `--exclude-table-data='warren.*'`. No schema change.
+  `--exclude-table-data='warren.*'`, then create the graphs again with
+  `create_graph` and `refresh`.
+- Dumps restore. `graphs.current_version` and `versions.label_vector` are
+  no longer foreign keys. Together with `versions.graph_id` and
+  `vectors.version_id` they made cycles that pg_dump cannot order, so a
+  dump of a database with a promoted graph failed to restore. Triggers now
+  check that a graph's current version is one of its own versions, and
+  that it is not deleted while current. Restoring needs the roles that own
+  or read graphs and wrote vectors. Upgrade note: run
+  `ALTER EXTENSION pg_warren UPDATE` (the update drops the two keys and
+  adds the triggers).
 - `warren.max_cache_memory` (default `4GB`): a size-bound on what a
   backend's cache holds between calls. Cached graph versions and vectors
   are evicted least recently used first and reloaded when next used;

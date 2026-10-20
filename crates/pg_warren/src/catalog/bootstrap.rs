@@ -45,9 +45,6 @@ CREATE TABLE warren.versions (
     UNIQUE (graph_id, seq)
 );
 
-ALTER TABLE warren.graphs
-    ADD FOREIGN KEY (current_version) REFERENCES warren.versions;
-
 CREATE TABLE warren.segments (
     version_id  bigint NOT NULL REFERENCES warren.versions ON DELETE CASCADE,
     segment     text   NOT NULL,
@@ -79,8 +76,41 @@ CREATE TABLE warren.vector_chunks (
 -- IEEE floats rarely compress, so skip pglz's attempt on every write.
 ALTER TABLE warren.vector_chunks ALTER COLUMN data SET STORAGE EXTERNAL;
 
-ALTER TABLE warren.versions
-    ADD FOREIGN KEY (label_vector) REFERENCES warren.vectors;
+-- graphs.current_version is not a foreign key: with versions.graph_id it
+-- would make a cycle, and pg_dump cannot order the data of tables in a
+-- foreign-key cycle, so a dump would not restore (DESIGN.md §5.1). These
+-- triggers keep what that key kept, and more: the current version is one of
+-- the graph's own versions, and cannot be deleted while it is current. They
+-- never fire on the inserts a restore makes. (versions.label_vector, for
+-- contraction in v1.1, has no foreign key for the same reason.)
+CREATE FUNCTION warren.current_version_is_the_graphs() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+    -- FOR KEY SHARE, as a foreign key would: a concurrent delete of the
+    -- version waits for this transaction.
+    IF NEW.current_version IS NOT NULL AND NOT EXISTS (
+        SELECT FROM warren.versions v
+        WHERE v.version_id = NEW.current_version AND v.graph_id = NEW.graph_id
+        FOR KEY SHARE) THEN
+        RAISE EXCEPTION USING ERRCODE = 'foreign_key_violation',
+            MESSAGE = format('version %s is not a version of graph "%s"', NEW.current_version, NEW.name);
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER current_version_is_the_graphs BEFORE UPDATE OF current_version ON warren.graphs
+    FOR EACH ROW EXECUTE FUNCTION warren.current_version_is_the_graphs();
+
+CREATE FUNCTION warren.current_version_is_kept() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+    IF EXISTS (SELECT FROM warren.graphs g WHERE g.current_version = OLD.version_id) THEN
+        RAISE EXCEPTION USING ERRCODE = 'foreign_key_violation',
+            MESSAGE = format('version %s is the current version of its graph', OLD.version_id);
+    END IF;
+    RETURN OLD;
+END $$;
+CREATE TRIGGER current_version_is_kept BEFORE DELETE ON warren.versions
+    FOR EACH ROW EXECUTE FUNCTION warren.current_version_is_kept();
 
 -- Only warren.* functions touch these, as the catalog owner (§7).
 REVOKE ALL ON ALL TABLES IN SCHEMA warren FROM PUBLIC;
@@ -106,6 +136,75 @@ SELECT pg_catalog.pg_extension_config_dump('warren.vector_chunks', '');
 mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
+
+    use crate::fixture::{refresh, ring};
+
+    /// The SQLSTATE `statement` fails with, or `None` if it succeeds.
+    fn sqlstate(statement: &str) -> Result<Option<String>, Error> {
+        Spi::run("CREATE TEMP TABLE IF NOT EXISTS failed (state text); TRUNCATE failed")?;
+        Spi::run(&format!(
+            "DO $do$ BEGIN {statement};
+             EXCEPTION WHEN OTHERS THEN INSERT INTO failed VALUES (SQLSTATE);
+             END $do$"
+        ))?;
+        Spi::get_one::<String>("SELECT max(state) FROM failed")
+    }
+
+    /// pg_dump loads the tables' data in foreign-key order, which a cycle
+    /// between tables makes impossible, so a dump would not restore
+    /// (DESIGN.md §5.1). A table referencing itself is checked at the end
+    /// of its COPY and needs no order.
+    #[pg_test]
+    fn the_catalog_tables_reference_each_other_without_a_cycle() -> Result<(), Error> {
+        let cycles = Spi::get_one::<i64>(
+            "WITH RECURSIVE fk (src, dst) AS (
+                 SELECT conrelid, confrelid FROM pg_constraint
+                 WHERE contype = 'f' AND connamespace = 'warren'::regnamespace
+                   AND conrelid <> confrelid),
+             walk (start, at, path) AS (
+                 SELECT src, dst, ARRAY[src] FROM fk
+                 UNION ALL
+                 SELECT w.start, fk.dst, w.path || w.at FROM walk w JOIN fk ON fk.src = w.at
+                 WHERE w.at <> ALL (w.path))
+             SELECT count(*) FROM walk WHERE at = start",
+        )?;
+        assert_eq!(cycles, Some(0));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_graphs_current_version_is_one_of_its_versions() -> Result<(), Error> {
+        ring("current_a", 3, 2)?;
+        ring("current_b", 3, 2)?;
+        refresh("current_a", true)?;
+        let other = refresh("current_b", true)?;
+        let update = |to: &str| {
+            sqlstate(&format!(
+                "UPDATE warren.graphs SET current_version = {to} WHERE name = 'current_a'"
+            ))
+        };
+        assert_eq!(
+            update(&other.to_string())?.as_deref(),
+            Some("23503"),
+            "another graph's version"
+        );
+        assert_eq!(update("-1")?.as_deref(), Some("23503"), "no version");
+        Ok(())
+    }
+
+    #[pg_test]
+    fn the_current_version_cannot_be_deleted_but_goes_with_its_graph() -> Result<(), Error> {
+        ring("current_c", 3, 2)?;
+        let version = refresh("current_c", true)?;
+        let delete = format!("DELETE FROM warren.versions WHERE version_id = {version}");
+        assert_eq!(sqlstate(&delete)?.as_deref(), Some("23503"));
+        Spi::run("SELECT warren.drop_graph('current_c')")?;
+        let left = Spi::get_one::<i64>(&format!(
+            "SELECT count(*) FROM warren.versions WHERE version_id = {version}"
+        ))?;
+        assert_eq!(left, Some(0));
+        Ok(())
+    }
 
     fn columns(table: &str) -> Result<Option<String>, Error> {
         Spi::get_one::<String>(&format!(

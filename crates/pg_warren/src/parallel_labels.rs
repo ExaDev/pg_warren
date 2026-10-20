@@ -28,6 +28,8 @@ mod tests {
         ("components", "r"),
         ("components_vector", "u"),
         ("create_graph", "u"),
+        ("current_version_is_kept", "u"),
+        ("current_version_is_the_graphs", "u"),
         ("degree", "r"),
         ("degree_vector", "u"),
         ("diff", "r"),

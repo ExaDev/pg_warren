@@ -75,10 +75,14 @@ to the bootstrap superuser. Every role, the installer included, reaches
 graphs only through the `warren.*` functions and their access checks
 (DESIGN.md §7).
 
-Because only that superuser can read the catalog, a non-superuser's
+Graphs, versions and vectors are ordinary tables, so a superuser's
+`pg_dump` includes them, and a plain (`psql`) or custom (`pg_restore`)
+restore brings them back. The roles that own and read graphs must exist
+first. Because only that superuser can read the catalog, a non-superuser's
 `pg_dump` of the database fails while pg_warren is installed. Dump as a
 superuser, or leave the graphs out with `--exclude-table-data='warren.*'`
-and create them again after the restore.
+and, after the restore, create them again with `warren.create_graph` and
+`warren.refresh`.
 
 ## Building and contributing
 

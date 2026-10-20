@@ -302,11 +302,25 @@ mod tests {
         Ok(())
     }
 
+    /// Trigger functions cannot be called, so they have no entry in
+    /// `CALLS`; they fire inside elevated catalog statements, so each pins
+    /// its own `search_path`.
+    #[pg_test]
+    fn every_trigger_function_pins_the_search_path() -> Result<(), Error> {
+        let unpinned = Spi::get_one::<String>(
+            "SELECT string_agg(proname, ',' ORDER BY proname) FROM pg_proc
+             WHERE pronamespace = 'warren'::regnamespace AND prorettype = 'trigger'::regtype
+               AND proconfig IS DISTINCT FROM '{\"search_path=pg_catalog, pg_temp\"}'",
+        )?;
+        assert_eq!(unpinned, None);
+        Ok(())
+    }
+
     #[pg_test]
     fn every_warren_function_ignores_the_callers_search_path() -> Result<(), Error> {
         let functions = Spi::get_one::<String>(
             "SELECT string_agg(DISTINCT proname, ',' ORDER BY proname) FROM pg_proc
-             WHERE pronamespace = 'warren'::regnamespace",
+             WHERE pronamespace = 'warren'::regnamespace AND prorettype <> 'trigger'::regtype",
         )?;
         let called: Vec<&str> = CALLS.iter().map(|(name, _)| *name).collect();
         assert_eq!(functions, Some(called.join(",")), "every warren.* function has a call");
