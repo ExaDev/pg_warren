@@ -245,7 +245,7 @@ graph's owner. Transient vectors are private to the role that wrote them.
 | `node_query`, `edge_query` (in `refresh`) | the graph owner | the creator's, captured at `create_graph` (`info() ->> 'search_path'`) |
 | `vector_from_query` and `gather` queries | the caller | the caller's |
 | `vector_map` expressions (on the executor path) | the caller | the caller's |
-| pg_warren's own catalog SQL | the extension owner | pinned to `pg_catalog, pg_temp` |
+| pg_warren's own catalog SQL | the catalog owner: the role that owns the `warren.*` tables (the installing superuser, or the bootstrap superuser in a trusted install) | pinned to `pg_catalog, pg_temp` |
 
 So a caller cannot redirect a graph's unqualified table names with their
 own `search_path`, and no user SQL runs with elevated rights.

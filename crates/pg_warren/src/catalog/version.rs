@@ -1,13 +1,13 @@
 //! Version rows: `warren.versions`, and promotion through
 //! `warren.graphs.current_version` (DESIGN.md §5.1, §7). Written as the
-//! extension owner.
+//! catalog owner.
 
 use pgrx::prelude::*;
 use warren_core::graph::{ExternalId, GraphCsr, IdMap, TargetWidth};
 
 use super::retention::{retention, VersionSummary};
 use super::{CatalogError, GraphDefinition};
-use crate::access::as_extension_owner;
+use crate::access::as_catalog_owner;
 use crate::read_only::read_one;
 
 /// A version id: `warren.versions.version_id`.
@@ -81,7 +81,7 @@ pub(crate) fn insert_version(
     built_lsn: &str,
 ) -> Result<VersionId, CatalogError> {
     let stats = &new.stats;
-    let version = as_extension_owner(|| {
+    let version = as_catalog_owner(|| {
         Spi::connect_mut(|client| {
             Ok::<_, CatalogError>(
                 client
@@ -117,7 +117,7 @@ pub(crate) fn insert_version(
 
 /// Records the total size of a version's segments.
 pub(crate) fn record_bytes(version: VersionId, bytes: u64) -> Result<(), CatalogError> {
-    as_extension_owner(|| {
+    as_catalog_owner(|| {
         Spi::connect_mut(|client| {
             client.update(
                 "UPDATE warren.versions SET bytes = $2 WHERE version_id = $1",
@@ -136,7 +136,7 @@ pub(crate) fn promote_version(
     graph: &GraphDefinition,
     version: VersionId,
 ) -> Result<(), CatalogError> {
-    let outcome = as_extension_owner(|| {
+    let outcome = as_catalog_owner(|| {
         Spi::connect_mut(|client| {
             client.update(
                 "WITH promoted AS (
@@ -196,7 +196,7 @@ fn kept_notice(kept: VersionId, vectors: i64, graph: &str) -> String {
 
 /// The recorded statistics of `version` and its `built_lsn` (as text).
 pub(crate) fn version_record(version: VersionId) -> Result<(VersionStats, String), CatalogError> {
-    as_extension_owner(|| {
+    as_catalog_owner(|| {
         Spi::connect(|client| {
             let row = client
                 .select(
@@ -235,7 +235,7 @@ pub(crate) fn compaction_between(
     a: VersionId,
     b: VersionId,
 ) -> Result<Option<(VersionId, VersionId)>, CatalogError> {
-    as_extension_owner(|| {
+    as_catalog_owner(|| {
         Spi::connect(|client| {
             let row = client
                 .select(
@@ -265,7 +265,7 @@ pub(crate) fn require_current_id_space(
     graph: &GraphDefinition,
     version: VersionId,
 ) -> Result<(), CatalogError> {
-    let compacted = as_extension_owner(|| {
+    let compacted = as_catalog_owner(|| {
         Spi::connect(|client| {
             let row = client
                 .select(
@@ -296,7 +296,7 @@ pub(crate) fn require_version(
     graph: &GraphDefinition,
     version: VersionId,
 ) -> Result<(), CatalogError> {
-    let found = as_extension_owner(|| {
+    let found = as_catalog_owner(|| {
         Ok::<_, CatalogError>(read_one::<bool>(
             "SELECT EXISTS (SELECT 1 FROM warren.versions WHERE version_id = $1 AND graph_id = $2)",
             &[version.into(), graph.graph_id.into()],
@@ -318,7 +318,7 @@ pub(crate) fn drop_version(
     if graph.current_version == Some(version) {
         return Err(CatalogError::DropCurrent { graph: graph.name.clone(), version });
     }
-    as_extension_owner(|| {
+    as_catalog_owner(|| {
         Spi::connect_mut(|client| {
             client.update(
                 "DELETE FROM warren.versions WHERE version_id = $1",

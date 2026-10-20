@@ -7,14 +7,29 @@ use pgrx::spi::OwnedPreparedStatement;
 use pgrx::PgOid;
 
 use super::CatalogError;
-use crate::access::as_extension_owner;
+use crate::access::as_catalog_owner;
 use crate::source::IdType;
 
 /// The query [`GraphDefinition::find`] runs, planned once per backend.
-const FIND: &str = "SELECT graph_id, owner::oid, readers::oid[], node_query, edge_query,
-                           search_path, directed, weighted, has_relations, build_reverse,
-                           retain_versions, current_version, id_type::oid, store_merged
-                    FROM warren.graphs WHERE name = $1";
+/// `current_version` is read with the version it names when that is one of
+/// the graph's (`v.version_id`), which a restored or edited row need not be
+/// (DESIGN.md §5.1).
+const FIND: &str = "SELECT g.graph_id, g.owner::oid, g.readers::oid[], g.node_query, g.edge_query,
+                           g.search_path, g.directed, g.weighted, g.has_relations,
+                           g.build_reverse, g.retain_versions, g.current_version, g.id_type::oid,
+                           v.version_id, g.store_merged
+                    FROM warren.graphs g
+                    LEFT JOIN warren.versions v
+                           ON v.version_id = g.current_version AND v.graph_id = g.graph_id
+                    WHERE g.name = $1";
+
+/// [`GraphDefinition::lock`]'s query: `current_version` as in [`FIND`].
+const LOCK: &str = "SELECT g.current_version, v.version_id
+                    FROM warren.graphs g
+                    LEFT JOIN warren.versions v
+                           ON v.version_id = g.current_version AND v.graph_id = g.graph_id
+                    WHERE g.graph_id = $1
+                    FOR UPDATE OF g";
 
 thread_local! {
     /// The saved plan of [`FIND`].
@@ -55,6 +70,9 @@ pub(crate) struct GraphDefinition {
     pub(crate) retain_versions: i32,
     /// The promoted version builds start from, if any.
     pub(crate) current_version: Option<i64>,
+    /// The version `graphs.current_version` names when that is not one of
+    /// the graph's versions (then `current_version` is `None`).
+    pub(crate) stray_current_version: Option<i64>,
 }
 
 /// A graph definition to record: the arguments of `warren.create_graph`,
@@ -80,7 +98,7 @@ impl GraphDefinition {
     /// `current_version` is read afresh on every call, through a saved
     /// plan, so a promotion is seen by the next statement (DESIGN.md §5.5).
     pub(crate) fn find(name: &str) -> Result<Self, CatalogError> {
-        as_extension_owner(|| {
+        as_catalog_owner(|| {
             Spi::connect(|client| {
                 let row = FIND_PLAN.with(|plan| {
                     if plan.get().is_none() {
@@ -112,8 +130,9 @@ impl GraphDefinition {
                     has_relations: row.get(9)?.unwrap_or_default(),
                     build_reverse: row.get(10)?.unwrap_or_default(),
                     retain_versions: row.get(11)?.unwrap_or(1),
-                    current_version: row.get(12)?,
-                    store_merged: row.get(14)?.unwrap_or(true),
+                    current_version: row.get(14)?,
+                    stray_current_version: stray(row.get(12)?, row.get(14)?),
+                    store_merged: row.get(15)?.unwrap_or(true),
                 })
             })
         })
@@ -121,31 +140,40 @@ impl GraphDefinition {
 
     /// Locks the graph's row until the end of the transaction, so that
     /// refreshes of one graph run one at a time, and re-reads its current
-    /// version, which a refresh that held the lock may have changed.
+    /// version, which a refresh that held the lock may have changed. A
+    /// graph dropped since [`find`](Self::find) is not found.
     pub(crate) fn lock(&mut self) -> Result<(), CatalogError> {
         // A row lock is a write (it assigns a transaction id): only the
         // functions that build or drop versions take it.
-        self.current_version = as_extension_owner(|| {
+        let (stored, current) = as_catalog_owner(|| {
             Spi::connect_mut(|client| {
-                Ok::<_, CatalogError>(
-                    client
-                        .update(
-                            "SELECT current_version FROM warren.graphs WHERE graph_id = $1
-                             FOR UPDATE",
-                            Some(1),
-                            &[self.graph_id.into()],
-                        )?
-                        .first()
-                        .get_one::<i64>()?,
-                )
+                let row = client.update(LOCK, Some(1), &[self.graph_id.into()])?.first();
+                if row.is_empty() {
+                    return Err(CatalogError::GraphNotFound(self.name.clone()));
+                }
+                Ok((row.get::<i64>(1)?, row.get::<i64>(2)?))
             })
         })?;
+        self.current_version = current;
+        self.stray_current_version = stray(stored, current);
         Ok(())
+    }
+
+    /// Checks that the recorded current version, if any, is one of the
+    /// graph's versions. Functions that read or build on it call this;
+    /// `promote`, the remedy, does not.
+    pub(crate) fn require_sound_current_version(&self) -> Result<(), CatalogError> {
+        match self.stray_current_version {
+            Some(version) => {
+                Err(CatalogError::StrayCurrentVersion { graph: self.name.clone(), version })
+            }
+            None => Ok(()),
+        }
     }
 
     /// Deletes the graph, and with it every version, segment and vector.
     pub(crate) fn drop_graph(&self) -> Result<(), CatalogError> {
-        as_extension_owner(|| {
+        as_catalog_owner(|| {
             Spi::connect_mut(|client| {
                 client.update(
                     "DELETE FROM warren.graphs WHERE graph_id = $1",
@@ -160,7 +188,7 @@ impl GraphDefinition {
     /// Adds `role` to the readers (if `add`) or removes it, pruning reader
     /// roles that no longer exist.
     pub(crate) fn set_reader(&self, role: pg_sys::Oid, add: bool) -> Result<(), CatalogError> {
-        as_extension_owner(|| {
+        as_catalog_owner(|| {
             Spi::connect_mut(|client| {
                 client.update(
                     "UPDATE warren.graphs SET readers = ARRAY(
@@ -178,11 +206,16 @@ impl GraphDefinition {
     }
 }
 
+/// The stored current version when it is not one of the graph's versions.
+fn stray(stored: Option<i64>, current: Option<i64>) -> Option<i64> {
+    stored.filter(|_| current.is_none())
+}
+
 impl NewGraph<'_> {
     /// Records a new graph definition.
     pub(crate) fn create(&self) -> Result<(), CatalogError> {
         let graph = self;
-        as_extension_owner(|| {
+        as_catalog_owner(|| {
             Spi::connect_mut(|client| {
                 let exists = client
                     .select(

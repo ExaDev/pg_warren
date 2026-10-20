@@ -191,3 +191,30 @@ pub(crate) fn on_both(name: &str, statements: &str) -> Result<(), Error> {
     }
     Ok(())
 }
+
+/// Graphs `<prefix>_a` and `<prefix>_b`, rings of 3, each refreshed once;
+/// returns their versions.
+pub(crate) fn two_graphs(prefix: &str) -> Result<(i64, i64), Error> {
+    ring(&format!("{prefix}_a"), 3, 2)?;
+    ring(&format!("{prefix}_b"), 3, 2)?;
+    Ok((refresh(&format!("{prefix}_a"), true)?, refresh(&format!("{prefix}_b"), true)?))
+}
+
+/// Sets graph `name`'s current version to `version` without the triggers'
+/// check, as a restore can (DESIGN.md §5.1).
+pub(crate) fn set_current_unchecked(name: &str, version: i64) -> Result<(), Error> {
+    Spi::run(&format!(
+        "SET session_replication_role = replica;
+         UPDATE warren.graphs SET current_version = {version} WHERE name = '{name}';
+         RESET session_replication_role"
+    ))
+}
+
+/// The error a call raises when graph `name`'s current version `version`
+/// is not one of its versions.
+pub(crate) fn stray_current_failure(name: &str, version: i64) -> String {
+    format!(
+        "55000: graph \"{name}\" records current version {version}, which is not one of its \
+         versions (a restored or edited catalog row); promote one of its versions"
+    )
+}

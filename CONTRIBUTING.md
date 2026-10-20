@@ -136,6 +136,9 @@ pytest
 # --runas (default postgres) via sudo.
 test/run.py --pg-config "$(command -v pg_config)"
 test/run.py --no-install test/sql/staged_build_rollback.sql   # one test, current install
+# The same suite with a trusted install: each database's pg_warren is created
+# by a non-superuser that owns the database (DESIGN.md §7). CI runs both.
+test/run.py --no-install --trusted
 
 # A fixture on its own (Appendix A scales by default; see --help per kind)
 bench/generate.py sbm --communities 4 --community-size 50 --out /tmp/sbm
@@ -160,13 +163,17 @@ format. To benchmark a new function, add a workload with `requires` to
 - **Released install scripts are immutable.** Each released
   `sql/pg_warren--<version>.sql` is listed in `sql/released.sha256`;
   `sql/schema-drift.sh` fails if one changes, or if the version in
-  development is a released one.
+  development is a released one. `sql/released.commits` records each
+  release's commit (`<sha>  <version>`); `schema-drift.sh` fails if a
+  release has none, or if that commit's install script is not the released
+  one.
 - **Every schema change after a release updates the upgrade script in the
   same commit**: `sql/pg_warren--<released>--<version>.sql`, hand-written
   (new or changed functions, tables and columns with a backfill, storage,
   grants). `test/upgrade.py` (in CI, on every major) builds and installs
-  each release from its git tag `vX.Y.Z` (so the tags must be fetched:
-  `git fetch --tags`), writes some state with that release's own library
+  each release from its commit in `sql/released.commits` (so the clone
+  needs the full history; a tag `vX.Y.Z`, where present, must name the same
+  commit), writes some state with that release's own library
   and functions (several versions, a staged one, a vector, a weighted
   multi-relation graph and its results), puts the version in development
   back, runs `ALTER EXTENSION pg_warren UPDATE`, fails on any catalog
@@ -185,13 +192,23 @@ format. To benchmark a new function, add a workload with `requires` to
   that is otherwise the version in development; that commit gets the tag
   `vX.Y.Z`. Then, in one commit: add the version's line to
   `sql/released.sha256` (`cd sql && sha256sum pg_warren--X.Y.Z.sql >>
-  released.sha256`), bump the workspace version, regenerate its install
+  released.sha256`), record the tagged commit in `sql/released.commits`
+  (`echo "$(git rev-parse vX.Y.Z^{commit})  X.Y.Z" >> sql/released.commits`),
+  bump the workspace version, regenerate its install
   script (`sql/schema-drift.sh --update`) and add the header-only upgrade
   script `sql/pg_warren--X.Y.Z--<next>.sql`. In the other order the tagged
   commit fails `schema-drift.sh` (its version would already be released).
+- pg_warren is a **trusted** extension, so a non-superuser's `CREATE` or
+  `ALTER EXTENSION` runs every install and upgrade script as the bootstrap
+  superuser. Scripts create objects only in schema `warren`, schema-qualify
+  names, and use only exact-match `pg_catalog` operators and functions in
+  anything evaluated while the script runs (defaults, constraints,
+  backfills). The rules and the audit are in DESIGN.md §7.
 
 ```sh
 test/upgrade.py --pg-config "$(command -v pg_config)"   # builds each release from its tag, then checks its path
+test/upgrade.py --no-install --trusted   # the same, installed and updated by a non-superuser
+test/dump.py --pg-config "$(command -v pg_config)"   # pg_dump and restore of graphs (plain, custom, trusted)
 ```
 
 ## Docker

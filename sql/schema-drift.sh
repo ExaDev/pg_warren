@@ -4,9 +4,11 @@
 # version in Cargo.toml (the one in development), so that every schema
 # change is deliberate and reviewed. Released install scripts are frozen:
 # each is listed in sql/released.sha256 and must match it byte for byte,
-# the version in development must not be one of them, and every released
-# version must have a chain of upgrade scripts to it (CONTRIBUTING.md,
-# "Releases and upgrades"). test/upgrade.py checks what the scripts do.
+# the version in development must not be one of them, every released
+# version must have a chain of upgrade scripts to it, and a commit recorded
+# in sql/released.commits whose install script is the released one
+# (CONTRIBUTING.md, "Releases and upgrades"). test/upgrade.py checks what
+# the scripts do.
 #
 #   sql/schema-drift.sh            # check (exit 1 and print a diff on drift)
 #   sql/schema-drift.sh --update   # regenerate the current version's file
@@ -38,9 +40,15 @@ released() {
         exit 1
     fi
     python3 -I - "$root/sql" "$version" <<'PY'
-import re, sys
+import hashlib, re, subprocess, sys
 from pathlib import Path
 sql, current = Path(sys.argv[1]), sys.argv[2]
+commits = {}
+if (sql / "released.commits").exists():
+    for line in (sql / "released.commits").read_text().splitlines():
+        if line.strip():
+            sha, released = line.split()
+            commits[released] = sha
 edges = {}
 for path in sql.glob("pg_warren--*--*.sql"):
     start, end = re.fullmatch(r"pg_warren--(.+)--(.+)\.sql", path.name).groups()
@@ -54,6 +62,14 @@ for line in (sql / "released.sha256").read_text().splitlines():
         todo += [n for n in edges.get(at, []) if n not in seen]
     if current not in seen:
         sys.exit(f"no upgrade path from released {version} to {current}: add sql/pg_warren--{version}--{current}.sql")
+    sha = commits.get(version)
+    if sha is None:
+        sys.exit(f"released {version} has no commit in sql/released.commits: record the release's commit")
+    shown = subprocess.run(["git", "show", f"{sha}:sql/pg_warren--{version}.sql"], cwd=sql, capture_output=True)
+    frozen = line.split()[0]
+    if shown.returncode != 0 or hashlib.sha256(shown.stdout).hexdigest() != frozen:
+        sys.exit(f"released {version}'s recorded commit {sha} does not hold the released "
+                 f"sql/pg_warren--{version}.sql (or is not in this clone: fetch the full history)")
 PY
 }
 released

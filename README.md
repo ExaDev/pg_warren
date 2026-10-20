@@ -36,7 +36,7 @@ backends) is **planned** as the power-user path; it is not there yet.
 ## Install
 
 pg_warren supports PostgreSQL 15, 16, 17 and 18 (16 is the development
-baseline). `CREATE EXTENSION pg_warren` needs a superuser.
+baseline). `CREATE EXTENSION pg_warren` does not need a superuser (below).
 
 **From source**, with Rust (the toolchain pinned in `rust-toolchain.toml`),
 the server headers (`postgresql-server-dev-NN`), `clang`/`libclang-dev`, and
@@ -64,6 +64,36 @@ Then, in each database:
 CREATE EXTENSION pg_warren;
 SELECT warren.version();
 ```
+
+pg_warren is a *trusted* extension, so this does not need a superuser: any
+role with `CREATE` on the database can run it, as on hosted Postgres. That
+role becomes the extension's owner. It may update the extension
+(`ALTER EXTENSION pg_warren UPDATE`) or drop it, which drops every graph in
+the database. It gets no direct access to the `warren.*` tables, which belong
+to the bootstrap superuser. Every role, the installer included, reaches
+graphs only through the `warren.*` functions and their access checks
+(DESIGN.md §7).
+
+On PG 15+ the database owner also owns schema `public`. A graph's source
+queries run as the graph's owner, under the `search_path` it was created
+with. If that path includes a schema another role can create in, such as
+`public` when someone else owns the database, that role could add a function
+or operator that the queries then call as the graph's owner at every
+`refresh`. Schema-qualify the functions and operators in source queries, or
+create graphs under a `search_path` of schemas only their owner can write;
+`create_graph` raises a `NOTICE` when it finds such a schema.
+
+Graphs, versions and vectors are ordinary tables, so a superuser's
+`pg_dump` includes them, and a plain (`psql`) or custom (`pg_restore`)
+restore brings them back. The roles that own and read graphs must exist
+first. `pg_dump` warns about circular foreign-key constraints on
+`warren.versions` (it references itself) and suggests `--disable-triggers`:
+ignore that hint, which would skip pg_warren's catalog checks, and restore
+normally. Because only that superuser can read the catalog, a non-superuser's
+`pg_dump` of the database fails while pg_warren is installed. Dump as a
+superuser, or leave the graphs out with `--exclude-table-data='warren.*'`
+and, after the restore, create them again with `warren.create_graph` and
+`warren.refresh`.
 
 **Upgrading** (from 0.1.0 or 0.2.0): install the new build, then run
 `ALTER EXTENSION pg_warren UPDATE;` in every database that has the extension,

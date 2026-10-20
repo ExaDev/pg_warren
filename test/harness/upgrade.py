@@ -3,9 +3,11 @@ pg_warren, `CREATE EXTENSION pg_warren VERSION '<released>'` then
 `ALTER EXTENSION pg_warren UPDATE` must give the same catalog as a fresh
 install of the version in development: the same functions (signatures,
 defaults, results, volatility, parallel safety, strictness, security,
-C symbols, settings, grants), relations (columns, types, nullability,
-defaults, storage, constraints, indexes, persistence, grants), types,
-casts, sequences, schema grants, comments and extension configuration."""
+C symbols, settings, grants), relations (owners, columns, types,
+nullability, defaults, storage, constraints, indexes, persistence, grants),
+types, casts, sequences, schema owner and grants, comments, extension owner
+and extension configuration. The installer (the superuser, or a
+non-superuser for a trusted install) runs CREATE and ALTER EXTENSION."""
 
 import difflib
 import re
@@ -30,7 +32,8 @@ CATALOG = {
         JOIN pg_extension e ON d.refobjid = e.oid AND d.deptype = 'e' AND e.extname = 'pg_warren'
         ORDER BY 1""",
     "relations": """
-        SELECT c.oid::regclass::text, c.relkind, c.relpersistence, coalesce(c.relacl::text, ''),
+        SELECT c.oid::regclass::text, c.relkind, c.relpersistence, pg_get_userbyid(c.relowner),
+               coalesce(c.relacl::text, ''),
                coalesce(obj_description(c.oid, 'pg_class'), '')
         FROM pg_class c JOIN pg_depend d ON d.classid = 'pg_class'::regclass AND d.objid = c.oid
         JOIN pg_extension e ON d.refobjid = e.oid AND d.deptype = 'e' AND e.extname = 'pg_warren'
@@ -73,10 +76,11 @@ CATALOG = {
         FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
         WHERE c.relnamespace = 'warren'::regnamespace AND NOT tgisinternal ORDER BY 1, 2""",
     "schema": """
-        SELECT nspname, coalesce(nspacl::text, ''), coalesce(obj_description(oid, 'pg_namespace'), '')
+        SELECT nspname, pg_get_userbyid(nspowner), coalesce(nspacl::text, ''),
+               coalesce(obj_description(oid, 'pg_namespace'), '')
         FROM pg_namespace WHERE nspname = 'warren'""",
     "extension": """
-        SELECT extversion, extrelocatable,
+        SELECT extversion, extrelocatable, pg_get_userbyid(extowner),
                coalesce((SELECT string_agg(c::regclass::text, ',' ORDER BY c::regclass::text)
                          FROM unnest(extconfig) c), ''),
                coalesce(array_to_string(extcondition, ','), '')
@@ -113,7 +117,7 @@ def differences(expected, found):
 
 
 # State written under the released version, by its own library and SQL
-# functions (see `check`), to exercise the upgrade's backfills and what
+# functions (see `check`; the control file is the version in development's), to exercise the upgrade's backfills and what
 # runs on the upgraded catalog: graph 'upgrade', with three promoted
 # versions (the first holding vector 'old', all ones) and a staged one; and
 # graph 'upgrade_typed', weighted, of three relations (some edges in two),
@@ -294,28 +298,33 @@ def after_update(upgraded):
     return problems
 
 
-def check(cluster, current, releases, installed):
-    """Checks every released version's upgrade path; returns the failures.
-    For each release, its own build (`releases`) is installed while its
-    state is seeded, then the version in development (`installed`) is put
-    back before the update, which runs in fresh backends."""
+def check(cluster, current, installer, releases, installed):
+    """Checks every released version's upgrade path, installed and updated
+    by `installer`; returns the failures. For each release, its own build
+    (`releases`: library and scripts; the control file stays the version in
+    development's, since releases before 0.3.0 were not trusted) is
+    installed while its state is seeded, then the version in development
+    (`installed`) is put back before the update, which runs in fresh
+    backends."""
+    installer.prepare(cluster)
     fresh = cluster.database("postgres")
     fresh.execute("CREATE ROLE upgrade_owner")
-    fresh.execute("CREATE DATABASE upgrade_fresh")
+    fresh.execute(installer.create_database_sql("upgrade_fresh"))
     expected_db = cluster.database("upgrade_fresh")
-    expected_db.execute("CREATE EXTENSION pg_warren")
+    expected_db.execute(installer.as_installer("CREATE EXTENSION pg_warren"))
     expected = describe(expected_db)
     failures = []
     for version in released_versions():
         name = f"upgrade_from_{version.replace('.', '_')}"
-        fresh.execute(f"CREATE DATABASE {name}")
+        fresh.execute(installer.create_database_sql(name))
         upgraded = cluster.database(name)
         releases.install(version)
+        installed.restore_control()
         install_released_scripts(releases.extension_directory)
-        upgraded.execute(f"CREATE EXTENSION pg_warren VERSION '{version}'")
+        upgraded.execute(installer.as_installer(f"CREATE EXTENSION pg_warren VERSION '{version}'"))
         seed(upgraded)
         installed.restore()
-        upgraded.execute("ALTER EXTENSION pg_warren UPDATE")
+        upgraded.execute(installer.as_installer("ALTER EXTENSION pg_warren UPDATE"))
         diff = differences(expected, describe(upgraded))
         if diff:
             failures.append(f"{version} -> {current}: the upgraded catalog differs\n{diff}")

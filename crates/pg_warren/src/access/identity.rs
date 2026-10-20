@@ -1,5 +1,5 @@
 //! Identity switches (DESIGN.md §7): source queries run as the graph owner;
-//! catalog, segment and vector statements run as the extension owner.
+//! catalog, segment and vector statements run as the catalog owner.
 
 use std::cell::Cell;
 
@@ -14,9 +14,17 @@ use crate::read_only::read_one;
 const SWITCH_CONTEXT: i32 =
     (pg_sys::SECURITY_LOCAL_USERID_CHANGE | pg_sys::SECURITY_RESTRICTED_OPERATION) as i32;
 
+/// The owner of `warren.graphs`, provided it is a member of extension
+/// pg_warren (so a same-named table outside the extension never answers).
+const CATALOG_OWNER: &str = "SELECT c.relowner FROM pg_catalog.pg_class c
+     JOIN pg_catalog.pg_depend d ON d.classid = 'pg_catalog.pg_class'::pg_catalog.regclass
+                                AND d.objid = c.oid AND d.deptype = 'e'
+     JOIN pg_catalog.pg_extension e ON e.oid = d.refobjid AND e.extname = 'pg_warren'
+     WHERE c.oid = pg_catalog.to_regclass('warren.graphs')";
+
 thread_local! {
-    /// The extension owner, read once per backend.
-    static EXTENSION_OWNER: Cell<Option<pg_sys::Oid>> = const { Cell::new(None) };
+    /// The catalog owner, read once per backend.
+    static OWNER: Cell<Option<pg_sys::Oid>> = const { Cell::new(None) };
 }
 
 /// The role running the current statement (`current_user`).
@@ -41,26 +49,27 @@ pub(crate) fn as_role<R>(role: pg_sys::Oid, f: impl FnOnce() -> R) -> R {
     result
 }
 
-/// Runs `f` as the extension owner, the only role with privileges on the
+/// Runs `f` as the catalog owner, the only role with privileges on the
 /// `warren.*` tables (DESIGN.md §5.1, §7). Only extension-written SQL
 /// against those tables may run inside.
-pub(crate) fn as_extension_owner<R, E: From<AccessError>>(
+pub(crate) fn as_catalog_owner<R, E: From<AccessError>>(
     f: impl FnOnce() -> Result<R, E>,
 ) -> Result<R, E> {
-    as_role(extension_owner()?, f)
+    as_role(catalog_owner()?, f)
 }
 
-/// The role that owns the pg_warren extension (`pg_extension.extowner`).
-pub(crate) fn extension_owner() -> Result<pg_sys::Oid, AccessError> {
-    if let Some(owner) = EXTENSION_OWNER.get() {
+/// The role that owns the `warren.*` tables: the role the install script
+/// ran as. That is the installing superuser, or, in a trusted install by a
+/// non-superuser, the bootstrap superuser. It is never taken from
+/// `pg_extension.extowner`, which in a trusted install is the
+/// non-superuser that ran `CREATE EXTENSION` (DESIGN.md §7).
+pub(crate) fn catalog_owner() -> Result<pg_sys::Oid, AccessError> {
+    if let Some(owner) = OWNER.get() {
         return Ok(owner);
     }
-    let owner = read_one::<pg_sys::Oid>(
-        "SELECT extowner FROM pg_catalog.pg_extension WHERE extname = 'pg_warren'",
-        &[],
-    )?
-    .ok_or(AccessError::ExtensionMissing)?;
-    EXTENSION_OWNER.set(Some(owner));
+    let owner =
+        read_one::<pg_sys::Oid>(CATALOG_OWNER, &[])?.ok_or(AccessError::ExtensionMissing)?;
+    OWNER.set(Some(owner));
     Ok(owner)
 }
 
@@ -98,12 +107,37 @@ mod tests {
         Ok(())
     }
 
+    fn table_owner() -> Result<Option<pg_sys::Oid>, Error> {
+        Spi::get_one::<pg_sys::Oid>(
+            "SELECT relowner FROM pg_class WHERE oid = 'warren.graphs'::regclass",
+        )
+    }
+
     #[pg_test]
-    fn the_extension_owner_is_the_role_that_created_the_extension() -> Result<(), Error> {
-        let owner = Spi::get_one::<pg_sys::Oid>(
-            "SELECT extowner FROM pg_catalog.pg_extension WHERE extname = 'pg_warren'",
+    fn the_catalog_owner_owns_the_catalog_tables() -> Result<(), Error> {
+        assert_eq!(catalog_owner().ok(), table_owner()?);
+        Ok(())
+    }
+
+    /// A trusted install: the tables are the bootstrap superuser's, while
+    /// `extowner` is the non-superuser that ran `CREATE EXTENSION`, which
+    /// has no privilege on them. The switch must elevate to the tables'
+    /// owner (DESIGN.md §7).
+    #[pg_test]
+    fn the_switch_elevates_to_the_catalog_owner_not_the_extension_owner() -> Result<(), Error> {
+        Spi::run("CREATE ROLE id_installer")?;
+        Spi::run(
+            "UPDATE pg_catalog.pg_extension SET extowner = 'id_installer'::regrole
+             WHERE extname = 'pg_warren'",
         )?;
-        assert_eq!(extension_owner().ok(), owner);
+        let owner = table_owner()?;
+        assert_eq!(catalog_owner().ok(), owner);
+        let inside = as_catalog_owner(|| {
+            Ok::<_, AccessError>(Spi::get_one::<pg_sys::Oid>(
+                "SELECT oid FROM pg_roles WHERE rolname = current_user",
+            )?)
+        });
+        assert_eq!(inside.ok().flatten(), owner);
         Ok(())
     }
 }

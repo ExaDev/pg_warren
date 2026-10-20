@@ -1,6 +1,6 @@
-"""Running SQL tests: each in a fresh database with pg_warren, the assert
-schema, its fixture (generated once per run by bench/generate.py) and its
-oracle tables."""
+"""Running SQL tests: each in a fresh database with pg_warren (installed by
+the run's installer), the assert schema, its fixture (generated once per run
+by bench/generate.py) and its oracle tables."""
 
 import hashlib
 import subprocess
@@ -38,10 +38,10 @@ class Fixtures:
         return path
 
 
-def run(cluster, test, fixtures):
+def run(cluster, test, fixtures, installer):
     started = time.monotonic()
     try:
-        database = prepare(cluster, test, fixtures)
+        database = prepare(cluster, test, fixtures, installer)
         done = database.run_file(test.path, cwd=test.path.parent)
         passed, output = done.returncode == 0, done.stdout
     except (RuntimeError, subprocess.CalledProcessError) as error:
@@ -49,12 +49,12 @@ def run(cluster, test, fixtures):
     return Outcome(test.name, passed, time.monotonic() - started, output)
 
 
-def prepare(cluster, test, fixtures):
+def prepare(cluster, test, fixtures, installer):
     name = f"test_{test.name}"
     cluster.database().execute(f'DROP DATABASE IF EXISTS "{name}"')
-    cluster.database().execute(f'CREATE DATABASE "{name}"')
+    cluster.database().execute(installer.create_database_sql(name))
     database = cluster.database(name)
-    database.execute("CREATE EXTENSION pg_warren")
+    database.execute(installer.as_installer("CREATE EXTENSION pg_warren"))
     database.run_file_checked(ASSERT_LIBRARY, cwd=ASSERT_LIBRARY.parent)
     if test.directives.fixture:
         path = fixtures.path(test.directives.fixture)

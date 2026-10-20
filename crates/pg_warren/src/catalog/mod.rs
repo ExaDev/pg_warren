@@ -2,7 +2,7 @@
 //! `warren.graphs` and `warren.versions` (DESIGN.md §5.1, §7) — creating
 //! graphs, recording and promoting versions, staging and retention.
 //!
-//! It depends on `access` (catalog statements run as the extension owner)
+//! It depends on `access` (catalog statements run as the catalog owner)
 //! and `source` (a new graph's queries are checked); `build` and the query
 //! features depend on it, never the reverse.
 

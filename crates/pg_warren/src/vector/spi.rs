@@ -1,5 +1,5 @@
 //! The SPI adapter of the vector store: `warren.vectors` and
-//! `warren.vector_chunks`, read and written as the extension owner
+//! `warren.vector_chunks`, read and written as the catalog owner
 //! (DESIGN.md §5.1, §7).
 
 use pgrx::prelude::*;
@@ -8,7 +8,7 @@ use pgrx::PgOid;
 use warren_core::compute::Dtype;
 
 use super::{Binding, ChunkSource, ChunkVisitor, VectorError, VectorId, VectorRecord, VectorStore};
-use crate::access::as_extension_owner;
+use crate::access::as_catalog_owner;
 use crate::catalog::VersionId;
 use crate::read_only::read_one;
 
@@ -32,7 +32,7 @@ fn record(row: &SpiHeapTupleData<'_>) -> Result<VectorRecord, VectorError> {
 
 impl VectorStore for SpiVectorStore {
     fn bound(&mut self, version: VersionId) -> Result<Vec<VectorRecord>, VectorError> {
-        as_extension_owner(|| {
+        as_catalog_owner(|| {
             Spi::connect(|client| {
                 client
                     .select(
@@ -72,7 +72,7 @@ impl VectorStore for SpiVectorStore {
         // A row of that name this writer did not check (committed since, or
         // in progress, which the insert waits for) is a conflict, reported
         // as a concurrent write rather than as a raw unique_violation.
-        let id = as_extension_owner(|| {
+        let id = as_catalog_owner(|| {
             Spi::connect_mut(|client| {
                 let rows = client.update(
                     "INSERT INTO warren.vectors
@@ -109,7 +109,7 @@ impl VectorStore for SpiVectorStore {
         name: &str,
         source: &mut ChunkSource<'_>,
     ) -> Result<(), VectorError> {
-        as_extension_owner(|| {
+        as_catalog_owner(|| {
             Spi::connect_mut(|client| {
                 let insert = client.prepare_mut(
                     "INSERT INTO warren.vector_chunks (vector_id, chunk_no, data)
@@ -137,7 +137,7 @@ impl VectorStore for SpiVectorStore {
         vector: VectorId,
         each: &mut ChunkVisitor<'_>,
     ) -> Result<(), VectorError> {
-        as_extension_owner(|| {
+        as_catalog_owner(|| {
             Spi::connect(|client| {
                 let mut cursor = client.try_open_cursor(
                     "SELECT chunk_no, data FROM warren.vector_chunks
@@ -160,7 +160,7 @@ impl VectorStore for SpiVectorStore {
     }
 
     fn delete(&mut self, vector: VectorId) -> Result<bool, VectorError> {
-        as_extension_owner(|| {
+        as_catalog_owner(|| {
             Spi::connect_mut(|client| {
                 let deleted = client.update(
                     "DELETE FROM warren.vectors WHERE vector_id = $1",
@@ -176,7 +176,7 @@ impl VectorStore for SpiVectorStore {
         if vectors.is_empty() {
             return Ok(Vec::new());
         }
-        as_extension_owner(|| {
+        as_catalog_owner(|| {
             Ok::<_, VectorError>(
                 read_one::<Vec<VectorId>>(
                     "SELECT coalesce(array_agg(vector_id), '{}') FROM warren.vectors

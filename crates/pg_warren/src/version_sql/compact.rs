@@ -27,6 +27,7 @@ fn compact_graph(name: &str) -> Result<VersionId, VersionOperationError> {
     let mut graph = GraphDefinition::find(name)?;
     require_owner(graph.owner, &graph.name, "compact")?;
     graph.lock()?;
+    graph.require_sound_current_version()?;
     let source = graph
         .current_version
         .ok_or_else(|| VersionOperationError::NoCurrentVersion(graph.name.clone()))?;
@@ -130,6 +131,7 @@ mod unit {
             store_merged: true,
             retain_versions: 2,
             current_version: Some(1),
+            stray_current_version: None,
         }
     }
 
@@ -197,6 +199,22 @@ mod tests {
     use pgrx::spi::Error;
 
     use crate::fixture::{current, failure, refresh, ring, rows, versions};
+
+    /// DESIGN.md §5.1: compact must not copy another graph's version (or
+    /// none) into this graph.
+    #[pg_test]
+    fn compact_refuses_a_stray_current_version() -> Result<(), Error> {
+        use crate::fixture::{set_current_unchecked, stray_current_failure, two_graphs};
+        let (_, other) = two_graphs("cstray")?;
+        for stray in [other, -1] {
+            set_current_unchecked("cstray_a", stray)?;
+            assert_eq!(
+                failure("warren.compact('cstray_a')")?,
+                Some(stray_current_failure("cstray_a", stray))
+            );
+        }
+        Ok(())
+    }
 
     /// Graph `c`: a ring of 5, built, then node 3 removed and rebuilt, so the
     /// current version has a tombstone. Returns both versions.

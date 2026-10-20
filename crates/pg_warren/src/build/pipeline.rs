@@ -174,6 +174,7 @@ mod tests {
             store_merged: true,
             retain_versions: 2,
             current_version: None,
+            stray_current_version: None,
         }
     }
 
