@@ -287,19 +287,23 @@ where
         let Some(node) = self.node(vectors, row)? else {
             return Ok(());
         };
-        let Some(datum) = row.get_datum_by_ordinal(2)? else {
+        let elements = match row.get_datum_by_ordinal(2)? {
+            Some(datum) => {
+                let array = row.column_type_oid(2)?.value();
+                // SAFETY: `datum` is the non-NULL array of `T` (the query casts its
+                // values to `T`'s array type) of the tuple `row` is at, which lives
+                // while `row` is borrowed; detoasting it, if it must be, copies it
+                // into the batch's memory context, which outlives this row's read.
+                unsafe { Array::<T>::from_polymorphic_datum(datum, false, array) }
+            }
+            None => None,
+        };
+        let Some(elements) = elements else {
             let width = self.values.as_ref().map_or(1, Vector::width);
             let null = Self::null()?;
             self.values(vectors, width)?.values_mut()[node * width..][..width].fill(null);
             return Ok(());
         };
-        let array = row.column_type_oid(2)?.value();
-        // SAFETY: `datum` is the non-NULL array of `T` (the query casts its
-        // values to `T`'s array type) of the tuple `row` is at, which lives
-        // while `row` is borrowed; detoasting it, if it must be, copies it
-        // into the batch's memory context, which outlives this row's read.
-        let elements = unsafe { Array::<T>::from_polymorphic_datum(datum, false, array) };
-        let Some(elements) = elements else { return Ok(()) };
         let width = elements.len();
         if width == 0 {
             return Err(ComputeError::ZeroWidth.into());
@@ -488,7 +492,7 @@ mod tests {
 
     /// Reading matrix rows holds no Postgres memory per row: each array is
     /// read in place, not copied into a memory context that outlives the
-    /// read (20,000 rows of 64 values held about 11 MB until the
+    /// read (20,000 rows of 64 values held 16 MiB until the
     /// transaction ended).
     #[pg_test]
     fn reading_matrix_rows_holds_no_memory_per_row() -> Result<(), Error> {
