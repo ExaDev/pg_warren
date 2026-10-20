@@ -179,8 +179,11 @@ settings together fails with 53400 before loading. Before this, the soak
 measured the cliff it replaces: the version was reloaded on every call,
 and since `pagerank` makes 8 calls per iteration, a default-cap run on the
 five-relation weighted graph reloaded it about 170 times, more than 15
-minutes (where it was stopped) instead of 32 s at an 8GB cap. The new
-behaviour has not been re-measured at this scale. Raising
+minutes (where it was stopped) instead of 32 s at an 8GB cap. Measured at
+a tenth of the scale with the cap as far under the graph and scratch
+(`bench/results/soak/`): `pagerank` now loads the version once, 6.1 s
+against 5.8 s at a raised cap, where the build before took 60.7 s over
+156 loads. Raising
 `warren.max_cache_memory` to hold the graph and the scratch (`SET
 warren.max_cache_memory = '8GB'`: `pagerank` took 15.1 s with the merged
 CSR and 31.6 s without) still saves the reload between statements, and
