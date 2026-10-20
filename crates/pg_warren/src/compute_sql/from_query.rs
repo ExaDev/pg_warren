@@ -14,12 +14,18 @@
 //! the version are skipped; a node with two rows is an error. A NULL value
 //! is stored as SQL NULL is everywhere in vectors: `NaN` in a float vector,
 //! an error in an `i64` or `bool` vector.
+//!
+//! Each batch of rows is read in a memory context reset after it, and a
+//! matrix row's array is read where it is (detoasted into that context
+//! only if stored out of line, compressed or with a short header), so the
+//! read holds no Postgres memory per row.
 
 use std::ffi::CStr;
 
+use pgrx::datum::UnboxDatum;
 use pgrx::prelude::*;
-use pgrx::spi::SpiHeapTupleData;
-use pgrx::{FromDatum, IntoDatum};
+use pgrx::spi::SpiTupleTable;
+use pgrx::{Array, FromDatum, IntoDatum};
 use warren_core::compute::{map, AnyVector, ComputeError, Dtype, MemoryCharge, Value, Vector};
 
 use super::constructors::{dtype as parse_dtype, literal};
@@ -30,7 +36,7 @@ use crate::access::{with_read_only, with_search_path, Caller};
 use crate::cache::resolve;
 use crate::interrupts::PostgresInterrupts;
 use crate::source::{
-    describe, for_each_row, open_read_only, type_name, with_id_type, ColumnType, IdDatum,
+    describe, for_each_tuple, open_read_only, type_name, with_id_type, ColumnType, IdDatum,
     SourceError,
 };
 
@@ -135,13 +141,10 @@ struct Read<'a> {
 
 impl Read<'_> {
     /// The vector of `T` the query's rows make.
-    fn vector<E: IdDatum, T: Value + FromDatum + IntoDatum>(
-        &self,
-        vectors: &Vectors<E>,
-    ) -> Result<AnyVector, ComputeSqlError>
+    fn vector<E: IdDatum, T>(&self, vectors: &Vectors<E>) -> Result<AnyVector, ComputeSqlError>
     where
         AnyVector: From<Vector<T>>,
-        Vec<Option<T>>: FromDatum,
+        for<'a> T: Value + FromDatum + IntoDatum + UnboxDatum<As<'a> = T>,
     {
         let query = self.query.trim_end().trim_end_matches(';');
         with_search_path(self.caller.search_path(), || {
@@ -167,7 +170,7 @@ impl Read<'_> {
                     );
                     let mut opened = open_read_only::<ComputeSqlError>(client, "query", &wrapped)?;
                     let mut rows = Rows::<T>::new(vectors, self.fill_value::<E, T>(vectors)?)?;
-                    for_each_row(&mut opened.cursor, |row| match array {
+                    for_each_tuple(&mut opened.cursor, |row| match array {
                         true => rows.matrix_row(vectors, row),
                         false => rows.scalar_row(vectors, row),
                     })?;
@@ -200,10 +203,10 @@ struct Rows<T> {
     _seen: MemoryCharge,
 }
 
-impl<T: Value + FromDatum + IntoDatum> Rows<T>
+impl<T> Rows<T>
 where
     AnyVector: From<Vector<T>>,
-    Vec<Option<T>>: FromDatum,
+    for<'a> T: Value + FromDatum + IntoDatum + UnboxDatum<As<'a> = T>,
 {
     fn new<E: IdDatum>(vectors: &Vectors<E>, fill: T) -> Result<Self, ComputeSqlError> {
         let id_space = vectors.id_space();
@@ -220,7 +223,7 @@ where
     fn node<E: IdDatum>(
         &mut self,
         vectors: &Vectors<E>,
-        row: &SpiHeapTupleData<'_>,
+        row: &SpiTupleTable<'_>,
     ) -> Result<Option<usize>, ComputeSqlError> {
         let Some(id) = row.get::<E::Sql>(1)?.map(E::from_sql) else {
             return Ok(None);
@@ -263,7 +266,7 @@ where
     fn scalar_row<E: IdDatum>(
         &mut self,
         vectors: &Vectors<E>,
-        row: &SpiHeapTupleData<'_>,
+        row: &SpiTupleTable<'_>,
     ) -> Result<(), ComputeSqlError> {
         let Some(node) = self.node(vectors, row)? else {
             return Ok(());
@@ -279,12 +282,23 @@ where
     fn matrix_row<E: IdDatum>(
         &mut self,
         vectors: &Vectors<E>,
-        row: &SpiHeapTupleData<'_>,
+        row: &SpiTupleTable<'_>,
     ) -> Result<(), ComputeSqlError> {
         let Some(node) = self.node(vectors, row)? else {
             return Ok(());
         };
-        let Some(elements) = row.get::<Vec<Option<T>>>(2)? else {
+        let elements = match row.get_datum_by_ordinal(2)? {
+            Some(datum) => {
+                let array = row.column_type_oid(2)?.value();
+                // SAFETY: `datum` is the non-NULL array of `T` (the query casts its
+                // values to `T`'s array type) of the tuple `row` is at, which lives
+                // while `row` is borrowed; detoasting it, if it must be, copies it
+                // into the batch's memory context, which outlives this row's read.
+                unsafe { Array::<T>::from_polymorphic_datum(datum, false, array) }
+            }
+            None => None,
+        };
+        let Some(elements) = elements else {
             let width = self.values.as_ref().map_or(1, Vector::width);
             let null = Self::null()?;
             self.values(vectors, width)?.values_mut()[node * width..][..width].fill(null);
@@ -295,7 +309,7 @@ where
             return Err(ComputeError::ZeroWidth.into());
         }
         let target = &mut self.values(vectors, width)?.values_mut()[node * width..][..width];
-        for (target, element) in target.iter_mut().zip(elements) {
+        for (target, element) in target.iter_mut().zip(elements.iter()) {
             *target = match element {
                 Some(value) => value,
                 None => Self::null()?,
@@ -320,7 +334,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{failure, rows, small};
+    use crate::fixture::{allocated, failure, refresh, ring, rows, small};
 
     fn values(name: &str) -> Result<Option<String>, Error> {
         rows(&format!(
@@ -473,6 +487,28 @@ mod tests {
         let denied = failure("warren.vector_from_query('t', 's', 'SELECT id, v FROM scores.s')")?;
         Spi::run("RESET ROLE")?;
         assert_eq!(denied.as_deref(), Some("42501: permission denied for table s"));
+        Ok(())
+    }
+
+    /// Reading matrix rows holds no Postgres memory per row: each array is
+    /// read in place, not copied into a memory context that outlives the
+    /// read (20,000 rows of 64 values held 16 MiB until the
+    /// transaction ended).
+    #[pg_test]
+    fn reading_matrix_rows_holds_no_memory_per_row() -> Result<(), Error> {
+        ring("big", 20_000, 2)?;
+        refresh("big", true)?;
+        Spi::run(
+            "CREATE TABLE big_rows AS
+                 SELECT id, array_fill(id::float8, ARRAY[64]) AS v FROM big_nodes",
+        )?;
+        let read = "SELECT warren.vector_from_query('big', 'm', 'SELECT id, v FROM big_rows',
+                                                    persist := false)";
+        Spi::run(read)?;
+        let before = allocated();
+        Spi::run(read)?;
+        let held = allocated().saturating_sub(before);
+        assert!(held < 1 << 20, "{held} bytes still allocated after the read");
         Ok(())
     }
 }

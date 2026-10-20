@@ -33,6 +33,12 @@
   the normalised Laplacian of a random graph of 1M nodes needs 4,590
   (DESIGN.md §6.5, §14 item 21). Upgrade note: `ALTER EXTENSION pg_warren
   UPDATE` changes the two defaults.
+- Fix: `vector_from_query` with array values held a copy of every
+  row's array until the transaction ended (16 MiB for 20,000 rows of 64
+  values), and `gather` from a query held what each message's send
+  function allocated until the read ended (about 230 B per `int[]`
+  message). Both now read a batch of rows at a time and free it after;
+  results are unchanged.
 - pg_warren is a trusted extension: a role with `CREATE` on the database
   can run `CREATE EXTENSION pg_warren` without being a superuser
   (DESIGN.md §7). Catalog statements now run as the owner of the
