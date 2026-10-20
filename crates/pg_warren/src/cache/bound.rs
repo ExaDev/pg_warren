@@ -19,6 +19,8 @@
 //! cannot be reloaded, so they are never evicted, and keeping one that
 //! would take transient vectors alone past the cap is refused.
 
+use std::sync::Mutex;
+
 use pgrx::{GucContext, GucFlags, GucRegistry, GucSetting};
 use warren_core::compute::{ComputeMemory, Reclaim};
 
@@ -100,39 +102,60 @@ fn max_compute_memory() -> u64 {
 /// while the compute budget has room.
 pub(crate) fn compute_memory() -> ComputeMemory {
     let cap = max_cache_memory();
-    let idle = idle_entries().iter().map(|held| held.bytes).fold(0, u64::saturating_add);
+    let pins = IdlePins::counted();
+    let idle = pins.bytes();
     let held = unevictable().saturating_add(idle).saturating_sub(cap);
-    ComputeMemory::reclaiming(max_compute_memory(), held, idle, Box::new(IdlePins))
+    ComputeMemory::reclaiming(max_compute_memory(), held, idle, Box::new(pins))
 }
 
-/// The reclaim hook of a call's budget: evicts pinned entries no call is
-/// using. It runs only on the thread that made the budget, Postgres's
-/// main thread (DESIGN.md §6.9), which alone may touch the cache.
+/// The reclaim hook of a call's budget: the pinned entries no call was
+/// using when the budget was made, which its held bytes count. It evicts,
+/// and credits, only those of them still cached and idle, least recently
+/// used first: not an entry cached since (by a nested call's query, say,
+/// or a vector the call saved, which carries the call's own charge), whose
+/// bytes the budget never counted. It runs only on the thread that made
+/// the budget, Postgres's main thread (DESIGN.md §6.9), which alone may
+/// touch the cache; the lock only makes it `Sync`.
 #[derive(Debug)]
-struct IdlePins;
+struct IdlePins(Mutex<Vec<Held<Reloadable>>>);
+
+impl IdlePins {
+    /// The pinned entries no call is using now.
+    fn counted() -> Self {
+        Self(Mutex::new(idle_entries()))
+    }
+
+    /// The bytes they hold.
+    fn bytes(&self) -> u64 {
+        self.0
+            .lock()
+            .map_or(0, |counted| counted.iter().map(|held| held.bytes).fold(0, u64::saturating_add))
+    }
+}
 
 impl Reclaim for IdlePins {
     fn reclaim(&self, bytes: u64) -> u64 {
-        evict_idle(bytes)
-    }
-}
-
-/// Evicts the pinned entries no call is using, least recently used first,
-/// until they free `bytes` (or none are left), and returns the bytes freed.
-fn evict_idle(bytes: u64) -> u64 {
-    let mut idle = idle_entries();
-    idle.sort_by_key(|held| held.last_used);
-    let mut freed = 0u64;
-    let mut evicted = Vec::new();
-    for held in idle {
-        if freed >= bytes {
-            break;
+        let Ok(mut counted) = self.0.lock() else {
+            return 0;
+        };
+        let mut idle: Vec<_> = idle_entries()
+            .into_iter()
+            .filter(|now| counted.iter().any(|held| held.key == now.key))
+            .collect();
+        idle.sort_by_key(|held| held.last_used);
+        let mut freed = 0u64;
+        let mut evicted = Vec::new();
+        for held in idle {
+            if freed >= bytes {
+                break;
+            }
+            freed = freed.saturating_add(held.bytes);
+            evicted.push(held.key);
         }
-        freed = freed.saturating_add(held.bytes);
-        evicted.push(held.key);
+        counted.retain(|held| !evicted.contains(&held.key));
+        evict(Evictions { unfit: Vec::new(), least_recent: evicted });
+        freed
     }
-    evict(Evictions { unfit: Vec::new(), least_recent: evicted });
-    freed
 }
 
 /// The pinned entries no call is using.
@@ -256,7 +279,7 @@ fn evict(evicted: Evictions<Reloadable>) {
 }
 
 /// A reloadable cache entry.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Reloadable {
     /// A cached version.
     Version(VersionId),
@@ -634,6 +657,59 @@ mod tests {
         )?;
         assert_eq!(sums, Some(10));
         assert_eq!((segment_reads()? - before) / one_load, 2, "each graph loaded once");
+        Ok(())
+    }
+
+    /// PR #20 review: `triangles` builds its symmetric adjacency on the
+    /// pool, where nothing is reclaimed, so beside an idle pin it failed
+    /// with 53400 at 145–180kB of compute memory where the eviction at
+    /// budget time had made room. It reclaims ahead for it now.
+    #[pg_test]
+    fn triangles_beside_an_idle_pin_reclaims_for_its_adjacency() -> Result<(), Error> {
+        rings(&["a", "b"])?;
+        let mut refused = Vec::new();
+        for kb in [140, 145, 150, 155, 160, 170, 180, 200] {
+            end_statement();
+            evict("a")?;
+            evict("b")?;
+            Spi::run("SET LOCAL warren.max_cache_memory = '64kB'")?;
+            Spi::run(&format!("SET LOCAL warren.max_compute_memory = '{kb}kB'"))?;
+            Spi::run("SELECT warren.prewarm('a')")?;
+            if let Some(failure) = failure("warren.triangles('b', 't', persist := false)")? {
+                refused.push(format!("{kb}kB: {failure}"));
+            }
+        }
+        assert_eq!(refused, Vec::<String>::new());
+        Ok(())
+    }
+
+    /// PR #20 review: a call's reclaim hook evicts, and credits, only the
+    /// idle pins its budget counted. b, loaded after the budget was made
+    /// (as a nested call's query might) and less recently used than a's
+    /// vector, is not one of them, so a's vector goes and b stays.
+    #[pg_test]
+    fn the_hook_evicts_only_the_idle_pins_its_budget_counted() -> Result<(), Error> {
+        rings(&["a", "b"])?;
+        statements(&["SELECT warren.vector_const('a', 'x', 1)"])?;
+        assert_eq!((evict("a")?, evict("b")?), (Some(2), Some(0)), "a cold cache");
+        let resolved =
+            super::super::resolve("a", None, "read").map_err(|_| Error::InvalidPosition)?;
+        let a = super::super::cached::<i64>(&resolved).map_err(|_| Error::InvalidPosition)?;
+        let sum = "SELECT warren.vector_reduce('a', 'x', 'sum')";
+        Spi::run(sum)?;
+        // a in use and its vector idle: ~94 kB + 16 kB, ~45 kB past the cap.
+        Spi::run(
+            "SET LOCAL warren.max_cache_memory = '64kB';
+             SET LOCAL warren.max_compute_memory = '64kB'",
+        )?;
+        let budget = super::compute_memory();
+        Spi::run("SET LOCAL warren.max_compute_memory = '4GB'; SELECT warren.prewarm('b')")?;
+        Spi::run(sum)?;
+        let charge = budget.charge(30_000);
+        assert!(charge.is_ok(), "{charge:?}");
+        assert_eq!(evict("b")?, Some(1), "b was not counted, so it stays");
+        assert_eq!(evict("a")?, Some(1), "a's vector was evicted");
+        drop(a);
         Ok(())
     }
 
