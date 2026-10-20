@@ -5,7 +5,13 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{failure, refresh, ring, rows, small};
+    use warren_core::compute::{Bytes, Messages};
+
+    use crate::cache::resolve;
+    use crate::compute_sql::gather::read;
+    use crate::compute_sql::{entry, Vectors};
+    use crate::fixture::{allocated, failure, refresh, ring, rows, small};
+    use crate::source::with_pinned_snapshot;
 
     /// `warren.gather` over the small graph, as `node:value` text.
     fn gathered(messages: &str, value_type: &str, options: &str) -> Result<Option<String>, Error> {
@@ -305,6 +311,51 @@ mod tests {
             let found = call(&args)?.unwrap_or_default();
             assert!(found.starts_with(expected), "{args}: {found}");
         }
+        Ok(())
+    }
+
+    /// Reading messages holds no Postgres memory per row: what a row's
+    /// send function allocates (an array's detoasted copy and I/O state)
+    /// is freed with its batch, not held until the read ends.
+    #[pg_test]
+    fn reading_messages_holds_no_memory_per_row() -> Result<(), Error> {
+        ring("big", 20_000, 2)?;
+        refresh("big", true)?;
+        Spi::run(
+            "CREATE TABLE big_messages AS
+                 SELECT (g % 20000 + 1)::bigint AS id, ARRAY[g, g]::int[] AS m
+                 FROM generate_series(1, 100000) g",
+        )?;
+        let (mut send, mut varlena) = (pg_sys::Oid::INVALID, false);
+        // SAFETY: the out-pointers point to live locals.
+        unsafe { pg_sys::getTypeBinaryOutputInfo(pg_sys::INT4ARRAYOID, &mut send, &mut varlena) };
+        let (rows, first_batch, peak) = with_pinned_snapshot(|| {
+            entry(|caller| {
+                let vectors = Vectors::<i64>::open(resolve("big", None, "read")?)?;
+                let mut messages = Messages::<Bytes>::new(&vectors.memory)?;
+                let (before, mut rows, mut first_batch, mut peak) = (allocated(), 0, 0, 0);
+                read::from_query(
+                    &vectors,
+                    caller,
+                    "SELECT id, m FROM big_messages",
+                    |node, row| {
+                        read::binary(send, &mut messages, node, row)?;
+                        peak = peak.max(allocated().saturating_sub(before));
+                        rows += 1;
+                        if rows == 10_000 {
+                            first_batch = peak;
+                        }
+                        Ok(())
+                    },
+                )?;
+                Ok((rows, first_batch, peak))
+            })
+        });
+        assert_eq!(rows, 100_000);
+        assert!(
+            peak <= first_batch + (256 << 10),
+            "{peak} bytes allocated while reading, {first_batch} after the first batch"
+        );
         Ok(())
     }
 }

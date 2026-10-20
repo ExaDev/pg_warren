@@ -4,10 +4,13 @@
 //! read-only transaction state (so not even a VOLATILE function it calls
 //! can write).
 //! Rows whose id is NULL, unknown or tombstoned in the version, or whose
-//! message is NULL, send nothing.
+//! message is NULL, send nothing. Each batch of rows is read in a memory
+//! context reset after it, so what reading a row allocates (a detoasted
+//! copy, a send function's state) is freed with its batch rather than
+//! held until the read ends.
 
 use pgrx::prelude::*;
-use pgrx::spi::SpiHeapTupleData;
+use pgrx::spi::SpiTupleTable;
 use pgrx::{AnyElement, FromDatum, IntoDatum};
 use warren_core::compute::{Bytes, Element, Messages};
 use warren_core::graph::DenseId;
@@ -15,7 +18,7 @@ use warren_core::graph::DenseId;
 use super::super::vectors::Vectors;
 use super::super::ComputeSqlError;
 use crate::access::{with_read_only, with_search_path, Caller};
-use crate::source::{for_each_row, open_read_only, IdDatum};
+use crate::source::{for_each_tuple, open_read_only, IdDatum};
 
 /// Every live node's value of `vector` (width 1), as a message.
 pub(super) fn from_vector<E: IdDatum, T: Element>(
@@ -41,13 +44,13 @@ pub(super) fn from_query<E: IdDatum>(
     vectors: &Vectors<E>,
     caller: &Caller,
     query: &str,
-    mut each: impl FnMut(DenseId, &SpiHeapTupleData<'_>) -> Result<(), ComputeSqlError>,
+    mut each: impl FnMut(DenseId, &SpiTupleTable<'_>) -> Result<(), ComputeSqlError>,
 ) -> Result<(), ComputeSqlError> {
     with_search_path(caller.search_path(), || {
         with_read_only(|| {
             Spi::connect(|client| {
                 let mut opened = open_read_only::<ComputeSqlError>(client, "messages", query)?;
-                for_each_row(&mut opened.cursor, |row| {
+                for_each_tuple(&mut opened.cursor, |row| {
                     let Some(id) = row.get::<E::Sql>(1)?.map(E::from_sql) else {
                         return Ok(());
                     };
@@ -65,7 +68,7 @@ pub(super) fn from_query<E: IdDatum>(
 pub(super) fn element<T: Element + FromDatum + IntoDatum>(
     messages: &mut Messages<T>,
     node: DenseId,
-    row: &SpiHeapTupleData<'_>,
+    row: &SpiTupleTable<'_>,
 ) -> Result<(), ComputeSqlError> {
     if let Some(value) = row.get::<T>(2)? {
         messages.push(node, value)?;
@@ -78,13 +81,14 @@ pub(super) fn element<T: Element + FromDatum + IntoDatum>(
 pub(super) fn payload(
     messages: &mut Messages<Bytes>,
     node: DenseId,
-    row: &SpiHeapTupleData<'_>,
+    row: &SpiTupleTable<'_>,
 ) -> Result<(), ComputeSqlError> {
     let Some(value) = row.get::<AnyElement>(2)? else {
         return Ok(());
     };
     // SAFETY: the value is a text or bytea datum, a varlena; detoasting
-    // returns it, or a palloc'd copy, which is freed after it is read.
+    // returns it, or a palloc'd copy in the batch's memory context, which
+    // is freed after it is read.
     unsafe {
         let stored = value.datum().cast_mut_ptr::<pg_sys::varlena>();
         let detoasted = pg_sys::pg_detoast_datum_packed(stored);
@@ -103,7 +107,7 @@ pub(super) fn binary(
     send: pg_sys::Oid,
     messages: &mut Messages<Bytes>,
     node: DenseId,
-    row: &SpiHeapTupleData<'_>,
+    row: &SpiTupleTable<'_>,
 ) -> Result<(), ComputeSqlError> {
     let Some(value) = row.get::<AnyElement>(2)? else {
         return Ok(());

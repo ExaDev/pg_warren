@@ -107,13 +107,8 @@ mod tests {
     use crate::build::error::BuildError;
     use crate::build::source::{EdgeRow, EdgeSink, SourceReader};
     use crate::catalog::GraphDefinition;
+    use crate::fixture::allocated;
     use crate::source::with_pinned_snapshot;
-
-    /// Bytes allocated in every Postgres memory context of the backend.
-    fn allocated() -> usize {
-        // SAFETY: TopMemoryContext is valid for the life of the backend.
-        unsafe { pg_sys::MemoryContextMemAllocated(pg_sys::TopMemoryContext, true) }
-    }
 
     /// An edge sink that records the most Postgres memory allocated since
     /// it was made, over the first batch of rows and over all of them.
