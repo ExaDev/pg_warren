@@ -56,3 +56,13 @@ pg_dump: detail: versions
 """
     found = unexpected_warnings(SELF_REFERENCE + cycle)
     assert found == ["warning: there are circular foreign-key constraints among these tables: graphs, versions"]
+
+
+def test_restore_warnings_are_unexpected():
+    stderr = """pg_restore: warning: errors ignored on restore: 1
+psql:/tmp/d.sql:12: WARNING:  no privileges were granted for "graphs"
+"""
+    assert unexpected_warnings(stderr) == [
+        "warning: errors ignored on restore: 1",
+        'warning: no privileges were granted for "graphs"',
+    ]

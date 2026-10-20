@@ -11,6 +11,7 @@ for it; with --exclude-table-data='warren.*' it dumps and restores cleanly,
 without graphs, which create_graph and refresh then build again."""
 
 import difflib
+import re
 import subprocess
 
 from .installer import TRUSTED_ROLE, Installer
@@ -119,13 +120,20 @@ def restore_command(cluster, database, path, custom, user="postgres"):
 EXPECTED_WARNING = "warning: there are circular foreign-key constraints on this table: versions"
 
 
+SERVER_WARNING = re.compile(r"^(?:psql:[^ ]*: )?WARNING:  (.*)$")
+
+
 def unexpected_warnings(stderr):
-    """pg_dump's warnings, each with its detail lines, other than
-    EXPECTED_WARNING."""
+    """The warnings in a client's output, each with its detail lines, other
+    than EXPECTED_WARNING: pg_dump's and pg_restore's own, and the server's
+    WARNINGs that psql prints."""
     warnings = []
     for line in stderr.splitlines():
-        message = line.removeprefix("pg_dump: ")
-        if message.startswith("warning: "):
+        message = re.sub(r"^(pg_dump|pg_restore): ", "", line)
+        server = SERVER_WARNING.match(line)
+        if server:
+            warnings.append([f"warning: {server.group(1)}"])
+        elif message.startswith("warning: "):
             warnings.append([message])
         elif message.startswith("detail: ") and warnings:
             warnings[-1].append(message.removeprefix("detail: "))
@@ -163,12 +171,14 @@ def check(cluster, directory):
             failures.append(f"{label}: {error}")
             continue
         failures += [f"{label}: pg_dump: {warning}" for warning in warnings]
+        warnings = []
         name = f"dump_restored_{label}"
         admin.execute(f"CREATE DATABASE {name}")
-        error = _run(restore_command(cluster, name, path, custom))
+        error = _run(restore_command(cluster, name, path, custom), warnings)
         if error:
             failures.append(f"{label} restore: {error}")
             continue
+        failures += [f"{label} restore: {warning}" for warning in warnings]
         restored = cluster.database(name)
         diff = differences(expected, describe(restored), f"restored from {label}")
         if diff:
@@ -207,13 +217,18 @@ def check_trusted(cluster, directory):
     if _run(dump_command(cluster, "dump_trusted", directory / "denied.sql", user=TRUSTED_ROLE)) is None:
         failures.append("trusted: the installer read the catalog with a plain pg_dump")
     path = directory / "trusted.sql"
-    error = _run(dump_command(cluster, "dump_trusted", path, "--exclude-table-data=warren.*", user=TRUSTED_ROLE))
+    warnings = []
+    error = _run(dump_command(cluster, "dump_trusted", path, "--exclude-table-data=warren.*", user=TRUSTED_ROLE),
+                 warnings)
     if error:
         return failures + [f"trusted dump: {error}"]
+    failures += [f"trusted dump: {warning}" for warning in warnings]
+    warnings = []
     admin.execute(installer.create_database_sql("dump_trusted_restored"))
-    error = _run(restore_command(cluster, "dump_trusted_restored", path, False, user=TRUSTED_ROLE))
+    error = _run(restore_command(cluster, "dump_trusted_restored", path, False, user=TRUSTED_ROLE), warnings)
     if error:
         return failures + [f"trusted restore: {error}"]
+    failures += [f"trusted restore: {warning}" for warning in warnings]
     restored = cluster.database("dump_trusted_restored", TRUSTED_ROLE)
     found = cluster.database("dump_trusted_restored").query(
         "SELECT extowner::regrole::text, (SELECT count(*) FROM warren.graphs) FROM pg_extension"
