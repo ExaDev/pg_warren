@@ -144,6 +144,22 @@ pub(super) fn eigenpairs<E: IdDatum>(
     Ok(spectral::eigen(&mut resources, &loaded.graph, &matrix, options)?)
 }
 
+/// Refuses `eigenpairs(vectors, operator, options)` if its working set
+/// cannot fit the compute memory, without solving.
+pub(super) fn admit<E: IdDatum>(
+    vectors: &Vectors<E>,
+    operator: &OperatorArguments,
+    options: &EigenOptions,
+) -> Result<(), SpectralSqlError> {
+    let loaded = &vectors.loaded;
+    let selected = operator.relations(&loaded.relations);
+    let matrix = operator.matrix(selected.as_deref())?;
+    let pool = workers()?;
+    let mut resources =
+        Resources { workers: &pool, memory: &vectors.memory, interrupts: &mut PostgresInterrupts };
+    Ok(spectral::admit_eigen(&mut resources, &loaded.graph, &matrix, options)?)
+}
+
 #[cfg(test)]
 mod unit {
     use super::index;
@@ -297,6 +313,27 @@ mod tests {
         assert_eq!(failure(&transient_eigen(1, "f64"))?, None);
         let gone = failure("warren.vector_values('q', 'e_2', NULL::bigint)")?;
         assert!(gone.unwrap_or_default().starts_with("42704"));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_solve_that_cannot_fit_is_refused_before_its_first_step() -> Result<(), Error> {
+        // On q (2,000 rows, so 4,096 in the basis's blocks) k = 10 in f32
+        // holds a basis of 21 vectors (344,064 bytes), the operator's
+        // 66,000, H and its decomposition (14,280), the eigenvectors
+        // (80,000) and the components pass's 16,000: 520,344 bytes. The
+        // basis and the operator fit in 450kB, the eigenvectors do not;
+        // the solve used to run its 100,000 steps before finding that out.
+        long_path()?;
+        Spi::run("SET LOCAL warren.max_compute_memory = '450kB'")?;
+        let refused = failure("warren.eigen('q', 10, tol := 0, max_iter := 100000)")?;
+        assert_eq!(
+            refused.as_deref(),
+            Some(
+                "53400: compute memory limit exceeded: the eigenproblem needs 520344 bytes, \
+                 0 of 460800 in use beside it"
+            )
+        );
         Ok(())
     }
 

@@ -2,6 +2,18 @@
 
 ## 0.3.0 — in development (until M7)
 
+- `warren.eigen` refuses before solving when its working set cannot fit
+  `warren.max_compute_memory`: once the operator's degrees give the
+  dimension, everything the solve holds at its peak (the operator's work
+  vectors and degrees, the basis, the projected matrices, the k
+  eigenvectors in the target dtype) is checked at once, evicting idle
+  pinned versions if that makes room, and a solve that cannot fit fails
+  with 53400 (`the eigenproblem needs N bytes, X of Y in use beside it`)
+  before its first step. Before, it ran every step and failed only when
+  it allocated its eigenvectors: 141.5 s into the soak's run on a 6.0 GB
+  graph at the default limits. `distance('spectral')` with a fresh solve
+  checks both versions before solving either. The projected matrices are
+  now charged to the budget too.
 - `warren.reachable_set` is direction-optimising: when the version has
   the reverse CSR, a depth is pulled from it if its frontier holds more
   than 1/24 of the id space and the unvisited ids have fewer in-edges than

@@ -221,7 +221,14 @@ statements, and single calls on a graph over the cap still pay one load
 each (`bfs` 23.4 s instead of 0.71 s). A statement that needs more than
 the two settings together is refused: on the merged graph, `diff` and
 `distance` between two versions (12.0 GB) and `eigen` (~3 GB beside the
-6.0 GB version) fail with 53400 at the default limits. For a graph that is only just over, `store_merged :=
+6.0 GB version) fail with 53400 at the default limits. `eigen`, and
+`distance('spectral')` without `vectors_prefix`, are refused before the
+first step, not after it: with n the id space, m = min(active nodes,
+max(2k + 1, 20)) basis vectors and e = 4 bytes (`f32`) or 8 (`f64`), a
+solve holds at its peak n·33 bytes of operator (n·49 for the normalised
+operators), ⌈n / 4096⌉·4096·m·e of basis, (4m² + m)·8 of projected
+matrices, k·n·e of eigenvectors and n·8 for counting components; at 10M
+nodes, k = 20, `f32` and the normalised Laplacian that is 3.0 GB. For a graph that is only just over, `store_merged :=
 false` also helps. A `refresh` of any of these graphs fits the default
 `warren.max_build_memory` (before 0.3.0, weighted multi-relation builds
 of 100M edges needed 6–10 GB).

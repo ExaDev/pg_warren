@@ -310,6 +310,38 @@ mod tests {
     }
 
     #[pg_test]
+    fn a_fresh_solve_of_either_version_that_cannot_fit_is_refused_before_either_runs(
+    ) -> Result<(), Error> {
+        // The path 1 – … – 2,000 and then 1 – … – 10,000: k = 2 in f32 on the
+        // first holds 438,640 bytes, on the second 1,486,000, so in 1000kB
+        // only the first fits. It used to solve the first (here 100,000
+        // steps) before the second was refused.
+        Spi::run(
+            "CREATE TABLE r_nodes (id bigint); CREATE TABLE r_edges (src bigint, dst bigint);
+             INSERT INTO r_nodes SELECT generate_series(1, 2000);
+             INSERT INTO r_edges SELECT g, g + 1 FROM generate_series(1, 1999) g;
+             SELECT warren.create_graph('r', 'SELECT id FROM r_nodes', 'SELECT src, dst FROM r_edges',
+                                        directed := false)",
+        )?;
+        let first = refreshed("r")?;
+        Spi::run(
+            "INSERT INTO r_nodes SELECT generate_series(2001, 10000);
+             INSERT INTO r_edges SELECT g, g + 1 FROM generate_series(2000, 9999) g",
+        )?;
+        let second = refreshed("r")?;
+        Spi::run("SET LOCAL warren.max_compute_memory = '1000kB'")?;
+        let call = format!(
+            "warren.distance('r', {first}, {second}, 'spectral', k := 2, tol := 0, max_iter := 100000)"
+        );
+        let started = std::time::Instant::now();
+        let refused = failure(&call)?.unwrap_or_default();
+        let expected = "53400: compute memory limit exceeded: the eigenproblem needs 1486000 bytes";
+        assert!(refused.starts_with(expected), "{refused}");
+        assert!(started.elapsed().as_secs_f64() < 2.0, "{:?}", started.elapsed());
+        Ok(())
+    }
+
+    #[pg_test]
     fn sibling_staged_versions_are_refused() -> Result<(), Error> {
         // Two staged builds from one current version: node 10 in one and node
         // 20 in the other get the same new dense id, relations x and y the
