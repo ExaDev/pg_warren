@@ -3,7 +3,9 @@ of a given `pg_config`. It listens only on a Unix socket in its own
 directory, so it never collides with another cluster's port.
 
 initdb and postgres refuse to run as root; as root the cluster runs as
-`runas` (default `postgres`) through sudo, as in CONTRIBUTING.md."""
+`runas` (default `postgres`) through sudo, as in CONTRIBUTING.md. `parent`
+puts the cluster directory somewhere other than the system temporary
+directory, and `settings` adds postgresql.conf lines."""
 
 import os
 import pwd
@@ -19,14 +21,16 @@ SUPERUSER = "postgres"
 
 
 class Cluster:
-    def __init__(self, pg_config, runas="postgres", keep=False):
+    def __init__(self, pg_config, runas="postgres", keep=False, parent=None, settings=()):
         self.bindir = Path(_pg_config(pg_config, "--bindir"))
         self.runas = runas if os.geteuid() == 0 else None
         self.keep = keep
+        self.parent = parent
+        self.settings = tuple(settings)
         self.directory = None
 
     def __enter__(self):
-        self.directory = Path(tempfile.mkdtemp(prefix="warren-cluster-"))
+        self.directory = Path(tempfile.mkdtemp(prefix="warren-cluster-", dir=self.parent))
         if self.runas:
             user = pwd.getpwnam(self.runas)
             os.chown(self.directory, user.pw_uid, user.pw_gid)
@@ -35,6 +39,7 @@ class Cluster:
         with open(data / "postgresql.conf", "a") as conf:
             conf.write(f"listen_addresses = ''\nunix_socket_directories = '{self.directory}'\nport = {PORT}\n"
                        "fsync = off\nsynchronous_commit = off\nfull_page_writes = off\n")
+            conf.writelines(f"{line}\n" for line in self.settings)
         self._run("pg_ctl", "-D", data, "-l", self.directory / "server.log", "-w", "start")
         return self
 
