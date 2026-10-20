@@ -322,7 +322,15 @@ def check(cluster, current, installer, releases, installed):
         installed.restore_control()
         install_released_scripts(releases.extension_directory)
         upgraded.execute(installer.as_installer(f"CREATE EXTENSION pg_warren VERSION '{version}'"))
+        # In a trusted install the release's own library needs the catalog
+        # granted while it seeds; the catalog comparison below checks that
+        # revoking it left the privileges as a fresh install has them.
+        grants = installer.seeding_grants_sql(True)
+        if grants:
+            upgraded.execute(grants)
         seed(upgraded)
+        if grants:
+            upgraded.execute(installer.seeding_grants_sql(False))
         installed.restore()
         upgraded.execute(installer.as_installer("ALTER EXTENSION pg_warren UPDATE"))
         diff = differences(expected, describe(upgraded))

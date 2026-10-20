@@ -31,6 +31,18 @@ class Installer:
         """`statement` run as the installer."""
         return f'SET ROLE "{self.role}"; {statement}; RESET ROLE' if self.role else statement
 
+    def seeding_grants_sql(self, grant):
+        """The statements that let the installer reach the catalog tables
+        (`grant`) or take that back: the libraries of releases before 0.3.0
+        elevate to the extension's owner, which in a trusted install is the
+        installer, not the tables' owner, so they cannot write a trusted
+        install's catalog themselves. None for the superuser."""
+        if not self.role:
+            return None
+        verb, direction = ("GRANT", "TO") if grant else ("REVOKE", "FROM")
+        return (f'{verb} ALL ON ALL TABLES IN SCHEMA warren {direction} "{self.role}";'
+                f' {verb} ALL ON ALL SEQUENCES IN SCHEMA warren {direction} "{self.role}"')
+
     def prepare(self, cluster):
         """Creates the installer's role in `cluster`, if it needs one."""
         sql = self.create_role_sql()
