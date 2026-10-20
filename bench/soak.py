@@ -58,6 +58,18 @@ GIB = 1 << 30
 GRAPH = "soak"
 DEFAULT_CAP = 4 * GIB  # warren.max_cache_memory, max_build_memory and max_compute_memory
 PAGERANK_SCRATCH_VECTORS = 11  # full-length f64 transient vectors (DESIGN.md §5.5)
+# The probe that reads a version's cached size from the unfit notice: a
+# tiny cap, and compute memory lifted so that a version past both still
+# loads (DESIGN.md §5.5: a load past the two together is refused).
+COLD_LOAD_PROBE_SETTINGS = ("SET warren.max_cache_memory = '64kB'",
+                            "SET warren.max_compute_memory = '2147483647kB'")
+# The rows of warren.segments this transaction has read (an index scan
+# counts its heap fetches on the index), in a subquery `{when}` correlates
+# so it runs after what it names.
+SEGMENT_READS = ("(SELECT pg_stat_get_xact_tuples_returned('warren.segments'::regclass)"
+                 " + pg_stat_get_xact_tuples_fetched('warren.segments'::regclass)"
+                 " + sum(pg_stat_get_xact_tuples_fetched(indexrelid))::bigint"
+                 " FROM pg_index WHERE indrelid = 'warren.segments'::regclass AND {when} IS NOT NULL)")
 SETTINGS = (
     "shared_buffers = '1GB'", "work_mem = '64MB'", "maintenance_work_mem = '1GB'",
     "max_wal_size = '1GB'", "min_wal_size = '256MB'", "wal_level = minimal", "max_wal_senders = 0",
@@ -197,6 +209,22 @@ def messages(lines):
 
 def disk_allows(free, needed, floor):
     return free - needed >= floor
+
+
+def pagerank_sql(graph):
+    """`pagerank`, 20 iterations, as one statement that also returns the
+    rows of `warren.segments` it read (`reads|iterations`): with its
+    version's segment rows, how many times it loaded the version."""
+    return (f"WITH before AS MATERIALIZED (SELECT {SEGMENT_READS.format(when='1')} AS reads), "
+            f"run AS MATERIALIZED (SELECT warren.pagerank('{graph}', 'pr', tol := 0, max_iter := 20) AS iterations "
+            f"FROM before WHERE before.reads IS NOT NULL), "
+            f"after AS MATERIALIZED (SELECT {SEGMENT_READS.format(when='run.iterations')} AS reads FROM run) "
+            f"SELECT after.reads - before.reads, run.iterations FROM before, run, after")
+
+
+def cap_bytes(kb):
+    """The first pass's `warren.max_cache_memory` in bytes: `kb`, or the default."""
+    return DEFAULT_CAP if kb is None else kb * 1024
 
 
 def pagerank_fits(cached, id_space, cap):
@@ -475,12 +503,17 @@ class Soak:
         v1 = self._version_stats(result, "version_1")
         check_edges(case, v1)
         with self.session() as s:
-            s.run("SET warren.max_cache_memory = '64kB'")
+            for setting in COLD_LOAD_PROBE_SETTINGS:
+                s.run(setting)
             probe = self.stage(result, "cold_load_probe", s.measure(f"SELECT warren.prewarm('{GRAPH}')"))
             result["cached_bytes"] = cached_bytes(probe["notices"], v1["version"])
-        self._queries(result, "default", cap=None)
+        with self.session() as s:
+            result["version_1_segment_rows"] = int(s.run(
+                f"SELECT count(*) FROM warren.segments WHERE version_id = {v1['version']}")["rows"][0])
+        result["cache_memory_bytes"] = cap_bytes(self.options.cache_memory_kb)
+        self._queries(result, "default", cap=self.first_cap())
         fits = result["cached_bytes"] is not None and pagerank_fits(result["cached_bytes"], v1["id_space"],
-                                                                    DEFAULT_CAP)
+                                                                    result["cache_memory_bytes"])
         if not fits:
             self._queries(result, "raised", cap=self.options.raised_cache_memory)
         if self.options.eigen and self.options.eigen_steps and case.name == "a":
@@ -518,10 +551,15 @@ class Soak:
         result[name] = stats
         return stats
 
+    def first_cap(self):
+        """The first pass's `warren.max_cache_memory` setting, or None for the default."""
+        kb = self.options.cache_memory_kb
+        return None if kb is None else f"{kb}kB"
+
     def _queries(self, result, label, cap):
         """The read workloads in one backend, from a cold cache. A version
-        that cannot fit the cap reloads on every call, so latencies repeat less."""
-        reloads = cap is None and (result["cached_bytes"] or 0) > DEFAULT_CAP
+        that cannot fit the cap reloads on every statement, so latencies repeat less."""
+        reloads = label == "default" and (result["cached_bytes"] or 0) > cap_bytes(self.options.cache_memory_kb)
         with self.session() as s:
             s.run(f"SET warren.threads = {self.options.threads}")
             if self.options.statement_timeout:
@@ -544,7 +582,7 @@ class Soak:
             self.stage(result, f"{label}: reachable_set stats", {"stats": s.run("SELECT warren.last_stats()")["rows"]})
             stage("components", f"SELECT count(*) FROM (SELECT component_id FROM warren.components('{GRAPH}', "
                                 "NULL::bigint) GROUP BY 1) c")
-            stage("pagerank", f"SELECT warren.pagerank('{GRAPH}', 'pr', tol := 0, max_iter := 20)")
+            stage("pagerank", pagerank_sql(GRAPH))
             if label == "default" and self.options.eigen:
                 limit = f", max_iter := {self.options.eigen_max_iter}" if self.options.eigen_max_iter else ""
                 stage("eigen", f"SELECT count(*), max(residual) FROM warren.eigen('{GRAPH}', 20, "
@@ -648,6 +686,12 @@ def summary(result):
                 measured[key], measured[f"{key}_stopped"] = stages[name][field], True
         elif why is not None:
             measured[f"{key}_failed"] = why
+    pagerank, _ = outcome(result, "default: pagerank")
+    if pagerank is not None and "|" in pagerank["rows"][0]:
+        reads = int(pagerank["rows"][0].split("|")[0])
+        measured["pagerank_segment_reads"] = reads
+        if result.get("version_1_segment_rows"):
+            measured["pagerank_loads"] = reads / result["version_1_segment_rows"]
     eigen, _ = outcome(result, "default: eigen")
     if eigen is not None:
         measured["eigen_residual"] = float(eigen["rows"][0].split("|")[1])
@@ -664,7 +708,7 @@ def summary(result):
     _, why = outcome(result, "cold_load_probe")
     if result.get("cached_bytes"):
         measured.update(cached_bytes=result["cached_bytes"], id_space=result["version_1"]["id_space"],
-                        max_cache_memory=DEFAULT_CAP)
+                        max_cache_memory=result.get("cache_memory_bytes", DEFAULT_CAP))
     elif why is not None:
         measured["cached_bytes_failed"] = why
     return measured
@@ -714,6 +758,8 @@ def main(argv):
     options.add_argument("--results", type=Path, default=HERE / "results" / "soak")
     options.add_argument("--scale", type=int, default=1, help="divide nodes and edges by this (quick checks)")
     options.add_argument("--threads", type=int, default=os.cpu_count())
+    options.add_argument("--cache-memory-kb", type=int,
+                         help="warren.max_cache_memory of the first pass, in kB (default: the 4GB default)")
     options.add_argument("--raised-cache-memory", default="8GB",
                          help="warren.max_cache_memory for the second pass of a case that does not fit")
     options.add_argument("--statement-timeout", help="statement_timeout of the read workloads, e.g. 15min")
