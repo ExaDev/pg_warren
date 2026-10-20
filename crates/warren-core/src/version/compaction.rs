@@ -96,8 +96,7 @@ fn rebuilt<E: ExternalId>(
     renumbering: &Renumbering,
 ) -> Result<GraphCsr, VersionError> {
     let graph = version.graph();
-    let all = graph.all_relations();
-    let mut edges = EdgeList::new(all.forward().is_weighted());
+    let mut edges = EdgeList::new(graph.all_relations().forward().is_weighted());
     for name in version.relations().names() {
         let Some(relation) = version.relations().get(name) else { continue };
         let Some(csr) = graph.relation(relation) else { continue };
@@ -119,7 +118,7 @@ fn rebuilt<E: ExternalId>(
     }
     let relation_count = graph.relations().len();
     let id_space = renumbering.new_id_space();
-    Ok(GraphCsr::build(edges, relation_count, id_space, all.reverse().is_some())?)
+    Ok(GraphCsr::build_as(edges, relation_count, id_space, graph.layout())?)
 }
 
 #[cfg(test)]
@@ -128,7 +127,7 @@ mod tests {
     use crate::graph::AnyCsr;
     use crate::version::history::{builds, Build};
     use proptest::prelude::*;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     type Edges = BTreeMap<(i64, i64), f64>;
 
@@ -189,12 +188,17 @@ mod tests {
             history in builds(3),
             weighted in any::<bool>(),
             reverse in any::<bool>(),
+            store_merged in any::<bool>(),
         ) {
             let mut build = Build::first(&history[0].0, &history[0].1, weighted, reverse);
             for (nodes, rows) in &history[1..] {
                 build = build.next(nodes, rows, weighted, reverse);
             }
+            if !store_merged {
+                build = build.without_merged();
+            }
             let compacted = compact(&build.version()).unwrap();
+            prop_assert_eq!(compacted.graph.layout(), build.graph.layout());
             let (old, new) = (&build.id_map, &compacted.id_map);
 
             prop_assert_eq!(new.id_space(), old.node_count());
@@ -215,8 +219,14 @@ mod tests {
             let old_external = |dense| old.external_id(dense).unwrap();
             let new_external = |dense| new.external_id(dense).unwrap();
             let pairs = build.graph.relations().iter().zip(compacted.graph.relations())
-                .chain([(build.graph.all_relations(), compacted.graph.all_relations())]);
+                .chain(build.graph.merged().zip(compacted.graph.merged()));
             prop_assert_eq!(compacted.graph.relations().len(), build.graph.relations().len());
+            let all = |graph: &GraphCsr, external: &dyn Fn(DenseId) -> i64| {
+                let forward = graph.all_relations().forward();
+                let row = |source| forward.neighbours(source).map(move |t| (external(source), external(t)));
+                (0..forward.id_space()).flat_map(row).collect::<BTreeSet<_>>()
+            };
+            prop_assert_eq!(all(&compacted.graph, &new_external), all(&build.graph, &old_external));
             for (before, after) in pairs {
                 prop_assert_eq!(after.forward().is_weighted(), weighted);
                 prop_assert_eq!(

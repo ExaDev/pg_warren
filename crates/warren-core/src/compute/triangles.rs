@@ -254,7 +254,7 @@ mod tests {
     use super::*;
     use crate::compute::reference::{self, Edges};
     use crate::compute::{ComputeError, ComputeMemory, Workers};
-    use crate::graph::{EdgeList, GraphCsr, RelationSelection};
+    use crate::graph::{CsrLayout, EdgeList, GraphCsr, RelationSelection};
     use crate::interrupts::{Cancelled, Interrupts, Uninterrupted};
 
     fn workers() -> &'static Workers {
@@ -334,30 +334,33 @@ mod tests {
         assert_eq!(memory.in_use(), 0);
     }
 
-    fn scenarios() -> impl Strategy<Value = (u64, usize, Edges, Option<Vec<usize>>, bool)> {
-        (1u64..12, 1usize..3).prop_flat_map(|(id_space, relations)| {
+    type Scenario = (u64, usize, Edges, Option<Vec<usize>>, (bool, bool));
+
+    fn scenarios() -> impl Strategy<Value = Scenario> {
+        (1u64..12, 1usize..4).prop_flat_map(|(id_space, relations)| {
             let edge = (0..relations, 0..id_space, 0..id_space, Just(1.0));
             (
                 Just(id_space),
                 Just(relations),
                 prop::collection::vec(edge, 0..60),
                 prop::option::of(prop::collection::vec(0..relations, 0..2)),
-                any::<bool>(),
+                any::<(bool, bool)>(),
             )
         })
     }
 
     proptest! {
         #[test]
-        fn counts_match_the_naive_triples((id_space, relations, edges, selected, wide) in scenarios()) {
+        fn counts_match_the_naive_triples((id_space, relations, edges, selected, (wide, store_merged)) in scenarios()) {
             let indexes = reference::relations(relations);
             let mut list = EdgeList::new(false);
             for &(r, s, t, w) in &edges {
                 list.push(indexes[r], s, t, w).unwrap();
             }
+            let layout = CsrLayout { build_reverse: false, store_merged };
             let graph = match wide {
-                true => GraphCsr::build_with::<u64>(list, relations, id_space, false),
-                false => GraphCsr::build(list, relations, id_space, false),
+                true => GraphCsr::build_with::<u64>(list, relations, id_space, layout),
+                false => GraphCsr::build_as(list, relations, id_space, layout),
             }.unwrap();
             let chosen: Option<Vec<_>> = selected.as_ref().map(|s| s.iter().map(|&r| indexes[r]).collect());
             let selection = chosen.as_deref().map_or(RelationSelection::All, RelationSelection::Only);
@@ -385,7 +388,7 @@ mod tests {
     #[test]
     fn a_cancellation_stops_a_hub_row_partway() {
         let graph = star(100_000);
-        let forward = [graph.all_relations().forward()];
+        let forward = [graph.relations()[0].forward()];
         let memory = ComputeMemory::new(1 << 26);
         let cancellation = Cancellation::new();
         let symmetric = Symmetric::new(&memory, &cancellation, &forward, 100_001).unwrap();

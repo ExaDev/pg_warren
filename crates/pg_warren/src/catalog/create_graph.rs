@@ -11,7 +11,10 @@ use crate::source::{check_edge_columns, check_node_columns, source_columns};
 /// `edge_query`, owned by the calling role, with the caller's
 /// `search_path`, under which every refresh will run the queries. Both queries are opened (not
 /// run) as the caller to check their columns; the node query's column type
-/// becomes the graph's `id_type`.
+/// becomes the graph's `id_type`. With several relations, `store_merged`
+/// stores the merged CSR; without it, all-relations reads merge the
+/// relations' rows on the fly, with the same results, in less memory and
+/// more time (DESIGN.md §5.3).
 #[allow(clippy::too_many_arguments)] // the SQL signature of DESIGN.md §9.3
 #[pg_extern(schema = "warren")]
 fn create_graph(
@@ -23,6 +26,7 @@ fn create_graph(
     has_relations: default!(bool, false),
     build_reverse: default!(bool, true),
     retain_versions: default!(i32, 2),
+    store_merged: default!(bool, true),
 ) {
     entry(|caller| {
         record(&NewGraph {
@@ -36,6 +40,7 @@ fn create_graph(
             weighted,
             has_relations,
             build_reverse,
+            store_merged,
             retain_versions,
         })
     });
@@ -78,20 +83,20 @@ mod tests {
             "SELECT warren.create_graph('cg', 'SELECT id FROM cg_nodes',
                  'SELECT src, dst, rel, w FROM cg_edges', directed := false,
                  weighted := true, has_relations := true, build_reverse := false,
-                 retain_versions := 3)",
+                 retain_versions := 3, store_merged := false)",
         )?;
         let row = Spi::get_one::<String>(
-            "SELECT format('%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s', owner = current_user::regrole,
+            "SELECT format('%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s', owner = current_user::regrole,
                            readers, source, node_query, edge_query, id_type, directed, weighted,
                            has_relations, build_reverse, retain_versions,
-                           current_version IS NULL)
+                           current_version IS NULL, store_merged)
              FROM warren.graphs WHERE name = 'cg'",
         )?;
         assert_eq!(
             row.as_deref(),
             Some(
                 "t|{}|query|SELECT id FROM cg_nodes|SELECT src, dst, rel, w FROM cg_edges|\
-                 bigint|f|t|t|f|3|t"
+                 bigint|f|t|t|f|3|t|f"
             )
         );
         Ok(())
@@ -105,11 +110,11 @@ mod tests {
                                         'SELECT src, dst FROM cg_edges')",
         )?;
         let flags = Spi::get_one::<String>(
-            "SELECT format('%s|%s|%s|%s|%s', directed, weighted, has_relations, build_reverse,
-                           retain_versions)
+            "SELECT format('%s|%s|%s|%s|%s|%s', directed, weighted, has_relations, build_reverse,
+                           retain_versions, store_merged)
              FROM warren.graphs WHERE name = 'cg'",
         )?;
-        assert_eq!(flags.as_deref(), Some("t|f|f|t|2"));
+        assert_eq!(flags.as_deref(), Some("t|f|f|t|2|t"));
         Ok(())
     }
 

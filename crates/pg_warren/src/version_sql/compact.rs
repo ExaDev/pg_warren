@@ -127,6 +127,7 @@ mod unit {
             weighted: true,
             has_relations: false,
             build_reverse: true,
+            store_merged: true,
             retain_versions: 2,
             current_version: Some(1),
         }
@@ -176,7 +177,7 @@ mod unit {
         let loaded = load::<i64>(&mut store, compacted).unwrap();
         assert_eq!(loaded.id_map.dense_id(&40), Some(2));
         assert_eq!(loaded.id_map.tombstones().count(), 0);
-        assert_eq!(loaded.graph.all_relations().forward().neighbour_weights(2), Some(&[3.0][..]));
+        assert_eq!(loaded.graph.relations()[0].forward().neighbour_weights(2), Some(&[3.0][..]));
         assert_eq!(loaded.relations, relations);
     }
 

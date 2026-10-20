@@ -4,7 +4,7 @@
 //! logic is `warren_core::graph`'s; this module only sequences it.
 
 use warren_core::graph::{
-    EdgeIntake, ExternalId, GraphCsr, IdMap, RelationDictionary, RelationIndex,
+    CsrLayout, EdgeIntake, ExternalId, GraphCsr, IdMap, RelationDictionary, RelationIndex,
 };
 
 use super::error::BuildError;
@@ -84,13 +84,9 @@ fn adjacency<E: ExternalId>(
     source.edges(&mut collector)?;
     let EdgeCollector { intake, incomplete_rows, relations, .. } = collector;
     let (edges, dropped_endpoints) = intake.finish();
-    let csr = GraphCsr::build_within(
-        edges,
-        relations.len(),
-        id_map.id_space(),
-        graph.build_reverse,
-        memory_budget,
-    )?;
+    let layout = CsrLayout { build_reverse: graph.build_reverse, store_merged: graph.store_merged };
+    let csr =
+        GraphCsr::build_within(edges, relations.len(), id_map.id_space(), layout, memory_budget)?;
     Ok((csr, dropped_endpoints + incomplete_rows))
 }
 
@@ -175,6 +171,7 @@ mod tests {
             weighted: false,
             has_relations: false,
             build_reverse: true,
+            store_merged: true,
             retain_versions: 2,
             current_version: None,
         }
@@ -429,6 +426,34 @@ mod tests {
         let reverse_b = world.csr(version, "rev_", "0");
         assert_eq!(neighbours(&reverse_b, &id_map, 2), [1]);
         assert!(world.has_segment(version, "rev_weights:merged"));
+    }
+
+    #[test]
+    fn a_graph_may_leave_its_merged_csr_unstored() {
+        let mut world = World::default();
+        let stored = GraphDefinition { weighted: true, has_relations: true, ..graph() };
+        let unmerged = GraphDefinition { store_merged: false, ..stored.clone() };
+        let source = MemorySource {
+            nodes: vec![1, 2, 3],
+            edges: vec![
+                typed_edge(1, 2, "a", 1.0),
+                typed_edge(1, 2, "b", 2.0),
+                typed_edge(2, 3, "b", 1.0),
+            ],
+            ..MemorySource::default()
+        };
+        let v1 = world.refresh(&stored, &source, false);
+        let v2 = world.refresh(&unmerged, &source, false);
+        assert!(world.has_segment(v1, "rev_offsets:merged"));
+        let names = |world: &World, version| -> Vec<String> {
+            let names = world.store.chunks.keys().filter(|(v, _, _)| *v == version);
+            names.map(|(_, name, _)| name.clone()).collect()
+        };
+        assert!(names(&world, v2).iter().all(|name| !name.ends_with(":merged")));
+        assert!(names(&world, v2).iter().all(|name| names(&world, v1).contains(name)));
+        let (r1, r2) = (world.catalog.version(v1), world.catalog.version(v2));
+        assert_eq!(r1.stats, r2.stats);
+        assert!(r2.bytes < r1.bytes, "{} < {}", r2.bytes, r1.bytes);
     }
 
     #[test]

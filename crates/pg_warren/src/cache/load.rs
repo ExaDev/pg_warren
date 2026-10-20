@@ -81,7 +81,8 @@ pub(crate) fn load_identity<E: ExternalId>(
 /// Loads every segment of `version`, validating each as it is decoded and
 /// then that they agree: the CSRs cover the id map's id space with the
 /// target width it implies, there is one CSR per relation, a merged CSR
-/// unless there is exactly one relation, and reverse CSRs for all or none.
+/// without relations (with several, if one was stored), and reverse CSRs
+/// for all or none.
 pub(crate) fn load<E: ExternalId>(
     segments: &mut impl SegmentStore,
     version: VersionId,
@@ -92,9 +93,12 @@ pub(crate) fn load<E: ExternalId>(
     for index in 0..relations.len() {
         csrs.push(relation_csr(segments, version, id_space, CsrScope::Relation(index))?);
     }
+    // With several relations the merged CSR is stored only if the graph
+    // stores it (`store_merged`): its forward offsets say whether it is.
     let merged = match relations.len() {
         1 => None,
-        _ => Some(relation_csr(segments, version, id_space, CsrScope::Merged)?),
+        0 => Some(relation_csr(segments, version, id_space, CsrScope::Merged)?),
+        _ => optional_relation_csr(segments, version, id_space, CsrScope::Merged)?,
     };
     let graph = GraphCsr::from_parts(id_space, csrs, merged, 0)?;
     let loaded = LoadedVersion { id_map, relations, graph };
@@ -109,27 +113,42 @@ fn relation_csr(
     id_space: u64,
     scope: CsrScope,
 ) -> Result<RelationCsr, LoadError> {
-    let forward = csr(segments, version, id_space, Direction::Forward, scope)?;
-    let reverse_offsets = csr_segment(Direction::Reverse, CsrPart::Offsets, scope);
-    let reverse = match read_optional_segment(segments, version, &reverse_offsets)? {
-        Some(_) => Some(csr(segments, version, id_space, Direction::Reverse, scope)?),
-        None => None,
-    };
-    Ok(RelationCsr::new(forward, reverse)?)
+    optional_relation_csr(segments, version, id_space, scope)?.ok_or_else(|| {
+        let segment = csr_segment(Direction::Forward, CsrPart::Offsets, scope);
+        SegmentError::SegmentMissing { version, segment }.into()
+    })
 }
 
+/// The CSRs of `scope`, if its forward CSR was stored.
+fn optional_relation_csr(
+    segments: &mut impl SegmentStore,
+    version: VersionId,
+    id_space: u64,
+    scope: CsrScope,
+) -> Result<Option<RelationCsr>, LoadError> {
+    let Some(forward) = csr(segments, version, id_space, Direction::Forward, scope)? else {
+        return Ok(None);
+    };
+    let reverse = csr(segments, version, id_space, Direction::Reverse, scope)?;
+    Ok(Some(RelationCsr::new(forward, reverse)?))
+}
+
+/// The CSR of `scope` in `direction`, if its offsets were stored (each
+/// segment is read once).
 fn csr(
     segments: &mut impl SegmentStore,
     version: VersionId,
     id_space: u64,
     direction: Direction,
     scope: CsrScope,
-) -> Result<AnyCsr, LoadError> {
+) -> Result<Option<AnyCsr>, LoadError> {
     let name = |part| csr_segment(direction, part, scope);
-    let offsets = read_segment(segments, version, &name(CsrPart::Offsets))?;
+    let Some(offsets) = read_optional_segment(segments, version, &name(CsrPart::Offsets))? else {
+        return Ok(None);
+    };
     let targets = read_segment(segments, version, &name(CsrPart::Targets))?;
     let weights = read_optional_segment(segments, version, &name(CsrPart::Weights))?;
-    Ok(AnyCsr::decode(id_space, &offsets, &targets, weights.as_deref())?)
+    Ok(Some(AnyCsr::decode(id_space, &offsets, &targets, weights.as_deref())?))
 }
 
 #[cfg(test)]
@@ -137,7 +156,7 @@ fn csr(
 mod tests {
     use super::*;
     use crate::segment::{write_version, MemorySegmentStore};
-    use warren_core::graph::{EdgeIntake, GraphCsr, IdMap, RelationDictionary};
+    use warren_core::graph::{CsrLayout, EdgeIntake, GraphCsr, IdMap, RelationDictionary};
 
     /// A version built in memory: ids 10, 20, 30, 40 with 20 tombstoned.
     struct Built {
@@ -147,6 +166,10 @@ mod tests {
     }
 
     fn built(relations: &[&str], weighted: bool, reverse: bool) -> Built {
+        built_as(relations, weighted, CsrLayout { build_reverse: reverse, store_merged: true })
+    }
+
+    fn built_as(relations: &[&str], weighted: bool, layout: CsrLayout) -> Built {
         let id_map = IdMap::new()
             .rebuild(vec![10, 20, 30, 40])
             .and_then(|m| m.rebuild(vec![10, 30, 40]))
@@ -159,7 +182,7 @@ mod tests {
             intake.push(relation, Some(&40), Some(&(10 + 30 * (i as i64 % 2))), 1.0).unwrap();
         }
         let (edges, _) = intake.finish();
-        let graph = GraphCsr::build(edges, dictionary.len(), id_map.id_space(), reverse).unwrap();
+        let graph = GraphCsr::build_as(edges, dictionary.len(), id_map.id_space(), layout).unwrap();
         Built { id_map, relations: dictionary, graph }
     }
 
@@ -171,8 +194,11 @@ mod tests {
     }
 
     fn round_trip(relations: &[&str], weighted: bool, reverse: bool) {
-        let version = built(relations, weighted, reverse);
-        let loaded = load::<i64>(&mut stored(&version), 7).unwrap();
+        loads_as_written(&built(relations, weighted, reverse));
+    }
+
+    fn loads_as_written(version: &Built) {
+        let loaded = load::<i64>(&mut stored(version), 7).unwrap();
         assert_eq!(loaded.id_map, version.id_map);
         assert_eq!(loaded.relations, version.relations);
         assert_eq!(loaded.graph, version.graph);
@@ -187,6 +213,23 @@ mod tests {
     #[test]
     fn a_version_with_weighted_relations_and_a_merged_csr_loads_as_written() {
         round_trip(&["cites", "extends", "funds"], true, true);
+    }
+
+    #[test]
+    fn a_version_without_its_merged_csr_loads_as_written() {
+        for build_reverse in [true, false] {
+            let layout = CsrLayout { build_reverse, store_merged: false };
+            let version = built_as(&["cites", "extends", "funds"], true, layout);
+            loads_as_written(&version);
+            // What the cache holds, and so counts against its cap, is the
+            // stored version's bytes less its merged CSR's.
+            let loaded = load::<i64>(&mut stored(&version), 7).unwrap();
+            let with_merged = built(&["cites", "extends", "funds"], true, build_reverse);
+            let with_merged = load::<i64>(&mut stored(&with_merged), 7).unwrap();
+            let merged = with_merged.graph.merged().map_or(0, |merged| merged.bytes());
+            assert!(merged > 0);
+            assert_eq!(loaded.bytes() + merged, with_merged.bytes());
+        }
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! Naive dense references for the compute kernels' property tests.
 
 use super::{BinaryOp, Semiring, SemiringElement};
-use crate::graph::{DenseId, EdgeList, GraphCsr, RelationDictionary, RelationIndex};
+use crate::graph::{CsrLayout, DenseId, EdgeList, GraphCsr, RelationDictionary, RelationIndex};
 
 /// A graph's edges: `(relation, source, target, weight)`.
 pub(crate) type Edges = Vec<(usize, DenseId, DenseId, f64)>;
@@ -20,12 +20,24 @@ pub(crate) fn graph(
     weighted: bool,
     reverse: bool,
 ) -> GraphCsr {
+    let layout = CsrLayout { build_reverse: reverse, store_merged: true };
+    graph_as(id_space, relation_count, edges, weighted, layout)
+}
+
+/// [`graph`] built with `layout`.
+pub(crate) fn graph_as(
+    id_space: u64,
+    relation_count: usize,
+    edges: &Edges,
+    weighted: bool,
+    layout: CsrLayout,
+) -> GraphCsr {
     let indexes = relations(relation_count);
     let mut list = EdgeList::new(weighted);
     for &(relation, source, target, weight) in edges {
         list.push(indexes[relation], source, target, weight).unwrap();
     }
-    GraphCsr::build(list, relation_count, id_space, reverse).unwrap()
+    GraphCsr::build_as(list, relation_count, id_space, layout).unwrap()
 }
 
 /// The dense adjacency matrix `A[i][j]` of the edges in `selected`

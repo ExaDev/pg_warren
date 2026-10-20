@@ -5,6 +5,7 @@ use proptest::prelude::*;
 use super::*;
 use crate::compute::reference::{self, Edges, Write};
 use crate::compute::{Dtype, Element, SemiringElement, Vector};
+use crate::graph::{CsrLayout, RelationIndex};
 use crate::interrupts::{Cancelled, Uninterrupted};
 
 fn workers() -> &'static Workers {
@@ -308,19 +309,21 @@ fn scenarios(max_width: usize) -> impl Strategy<Value = Scenario> {
     )
 }
 
-/// Runs the scenario through the kernel and the dense reference.
-fn check<E: SemiringElement>(scenario: &Scenario, x: Vec<E>, y: Vec<E>) -> Result<(), TestCaseError>
-where
-    AnyVector: From<Vector<E>>,
-{
-    let s = scenario;
-    let graph =
-        reference::graph(s.id_space, s.relation_count, &s.edges, s.weighted_graph, s.reverse);
+/// The scenario's relation selection and mask vector, for [`product_of`].
+fn operands(s: &Scenario) -> (Option<Vec<RelationIndex>>, Option<AnyVector>) {
     let indexes = reference::relations(s.relation_count);
-    let selected: Option<Vec<_>> =
-        s.selected.as_ref().map(|r| r.iter().map(|&r| indexes[r]).collect());
+    let selected = s.selected.as_ref().map(|r| r.iter().map(|&r| indexes[r]).collect());
     let mask = s.mask.as_ref().map(|(values, _)| vector::<f64>(1, values.clone()));
-    let product = Product {
+    (selected, mask)
+}
+
+/// The scenario's product over its [`operands`].
+fn product_of<'a>(
+    s: &Scenario,
+    selected: &'a Option<Vec<RelationIndex>>,
+    mask: &'a Option<AnyVector>,
+) -> Product<'a> {
+    Product {
         semiring: s.semiring,
         transpose: s.transpose,
         relations: selected.as_deref().map_or(RelationSelection::All, RelationSelection::Only),
@@ -331,7 +334,19 @@ where
             .map(|(vector, &(_, complement))| Mask { vector, complement }),
         replace: s.replace,
         accumulate: s.accumulate,
-    };
+    }
+}
+
+/// Runs the scenario through the kernel and the dense reference.
+fn check<E: SemiringElement>(scenario: &Scenario, x: Vec<E>, y: Vec<E>) -> Result<(), TestCaseError>
+where
+    AnyVector: From<Vector<E>>,
+{
+    let s = scenario;
+    let graph =
+        reference::graph(s.id_space, s.relation_count, &s.edges, s.weighted_graph, s.reverse);
+    let (selected, mask) = operands(s);
+    let product = product_of(s, &selected, &mask);
     let weighted = s.weighted.unwrap_or(true) && s.weighted_graph;
     let a = reference::adjacency(s.id_space, &s.edges, s.selected.as_deref(), weighted);
     let write = Write {
@@ -485,5 +500,32 @@ fn i64_min_times_and_max_times_supersteps_keep_unreached_nodes_at_the_identity()
             assert_eq!(values::<i64>(&x)[2], identity, "{semiring}: node 2 stays unreached");
         }
         assert_eq!(values::<i64>(&x)[..2], [5, 10], "{semiring}: 2 · 5, the identity absorbed");
+    }
+}
+
+proptest! {
+    /// Weights with fractions, so that summing an edge's weights over
+    /// relations in another order would change the bits.
+    #[test]
+    fn products_read_the_same_matrix_with_or_without_the_merged_csr(
+        (scenario, x, y) in with_values(3, |len| f64s(len).boxed()),
+        fractions in prop::collection::vec(prop::sample::select(vec![0.1, 0.7, 1e-3, 3.0, -0.0]), 1..8),
+    ) {
+        let s = &scenario;
+        let edges: Edges = s.edges.iter().zip(fractions.iter().cycle())
+            .map(|(&(r, from, to, _), &weight)| (r, from, to, weight))
+            .collect();
+        let (selected, mask) = operands(s);
+        let product = product_of(s, &selected, &mask);
+        let x = vector(s.width, x);
+        let kernel = if s.width == 1 { spmv::<Uninterrupted> } else { spmm::<Uninterrupted> };
+        let run = |store_merged| {
+            let layout = CsrLayout { build_reverse: s.reverse, store_merged };
+            let graph = reference::graph_as(s.id_space, s.relation_count, &edges, s.weighted_graph, layout);
+            let mut y = vector(s.width, y.clone());
+            let result = kernel(workers(), &memory(), &mut Uninterrupted, &graph, &product, &x, &mut y);
+            format!("{result:?} {:?}", values::<f64>(&y))
+        };
+        prop_assert_eq!(run(false), run(true));
     }
 }

@@ -17,18 +17,20 @@ use crate::graph::{memory, EdgeList, GraphError, RelationIndex};
 pub(super) struct Forward<T> {
     /// One CSR per relation, in relation-index order.
     pub(super) relations: Vec<Csr<T>>,
-    /// The all-relations CSR, unless there is exactly one relation.
+    /// The all-relations CSR, if stored.
     pub(super) merged: Option<Csr<T>>,
     /// Deduplicated edges: parallel edges folded into another edge of the
     /// same relation.
     pub(super) deduplicated_edges: u64,
 }
 
-/// Builds the forward CSRs of `edges`, consuming them.
+/// Builds the forward CSRs of `edges`, consuming them, and the merged CSR
+/// if `store_merged`.
 pub(super) fn forward<T: Target>(
     edges: EdgeList,
     relation_count: usize,
     id_space: u64,
+    store_merged: bool,
 ) -> Result<Forward<T>, GraphError> {
     let EdgeColumns { relations, endpoints, weights } = edges.into_columns();
     let rows = match endpoints {
@@ -43,9 +45,9 @@ pub(super) fn forward<T: Target>(
     }?;
     let (rows, deduplicated_edges) = deduplicated(rows)?;
     let relations = split_by_relation(rows, relation_count, id_space)?;
-    let merged = match relation_count {
-        1 => None,
-        _ => Some(united(&relations, id_space)?),
+    let merged = match store_merged {
+        true => Some(united(&relations, id_space)?),
+        false => None,
     };
     Ok(Forward { relations, merged, deduplicated_edges })
 }

@@ -8,7 +8,7 @@ use proptest::prelude::*;
 use super::example::relations;
 use crate::graph::Direction;
 use crate::graph::RelationSelection;
-use crate::graph::{AnyCsr, DenseId, EdgeList, GraphCsr, RelationIndex};
+use crate::graph::{AnyCsr, CsrLayout, DenseId, EdgeList, GraphCsr, RelationIndex};
 
 /// A small random graph: relations, self-loops, parallel edges, weights and
 /// tombstoned nodes, whose edges the build never sees.
@@ -19,10 +19,14 @@ pub(crate) struct Scenario {
     pub(crate) weighted: bool,
     pub(crate) edges: Vec<(usize, DenseId, DenseId, f64)>,
     pub(crate) tombstones: BTreeSet<DenseId>,
+    /// Whether the graph stores its merged CSR (else traversals merge the
+    /// relations' rows on the fly).
+    pub(crate) store_merged: bool,
 }
 
 pub(crate) fn scenarios() -> impl Strategy<Value = Scenario> {
-    (1u64..14, 1usize..4, any::<bool>()).prop_flat_map(|(id_space, relation_count, weighted)| {
+    let shape = (1u64..14, 1usize..4, any::<bool>(), any::<bool>());
+    shape.prop_flat_map(|(id_space, relation_count, weighted, store_merged)| {
         let edge = (0..relation_count, 0..id_space, 0..id_space, 0u8..8);
         (prop::collection::vec(edge, 0..40), prop::collection::btree_set(0..id_space, 0..3))
             .prop_map(move |(edges, tombstones)| Scenario {
@@ -34,6 +38,7 @@ pub(crate) fn scenarios() -> impl Strategy<Value = Scenario> {
                     .map(|(r, s, t, w)| (r, s, t, weight(weighted, w)))
                     .collect(),
                 tombstones,
+                store_merged,
             })
     })
 }
@@ -60,16 +65,21 @@ pub(crate) fn directions() -> impl Strategy<Value = Direction> {
 impl Scenario {
     /// The graph the build makes of the live edges, with a reverse CSR.
     pub(crate) fn graph(&self) -> GraphCsr {
-        GraphCsr::build(self.edge_list(), self.relation_count, self.id_space, true).unwrap()
+        GraphCsr::build_as(self.edge_list(), self.relation_count, self.id_space, self.layout())
+            .unwrap()
+    }
+
+    fn layout(&self) -> CsrLayout {
+        CsrLayout { build_reverse: true, store_merged: self.store_merged }
     }
 
     /// [`Self::graph`] with `u64` targets, which the build otherwise
     /// chooses only for id spaces of 2³² or more.
     pub(crate) fn wide_graph(&self) -> GraphCsr {
+        let (count, id_space) = (self.relation_count, self.id_space);
         let graph =
-            GraphCsr::build_with::<u64>(self.edge_list(), self.relation_count, self.id_space, true)
-                .unwrap();
-        assert!(matches!(graph.all_relations().forward(), AnyCsr::U64(_)));
+            GraphCsr::build_with::<u64>(self.edge_list(), count, id_space, self.layout()).unwrap();
+        assert!(matches!(graph.relations()[0].forward(), AnyCsr::U64(_)));
         graph
     }
 

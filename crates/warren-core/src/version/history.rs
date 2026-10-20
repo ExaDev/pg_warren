@@ -4,7 +4,7 @@
 use proptest::prelude::*;
 
 use super::GraphVersion;
-use crate::graph::{EdgeIntake, GraphCsr, IdMap, RelationDictionary};
+use crate::graph::{CsrLayout, EdgeIntake, EdgeList, GraphCsr, IdMap, RelationDictionary};
 
 /// One edge row: (relation name index, source, target, weight).
 pub(crate) type EdgeRow = (u8, i64, i64, u8);
@@ -46,6 +46,28 @@ impl Build {
         let (list, _) = intake.finish();
         let graph = GraphCsr::build(list, relations.len(), id_map.id_space(), reverse).unwrap();
         Self { id_map, relations, graph }
+    }
+
+    /// This build without its merged CSR: the same relations, rebuilt so
+    /// that all-relations reads merge them on the fly.
+    pub(crate) fn without_merged(&self) -> Self {
+        let graph = &self.graph;
+        let mut list = EdgeList::new(graph.all_relations().forward().is_weighted());
+        for (position, relation) in graph.relations().iter().enumerate() {
+            let index = self.relations.get(&self.relations.names()[position]).unwrap();
+            let forward = relation.forward();
+            for source in 0..forward.id_space() {
+                let weights = forward.neighbour_weights(source);
+                for (i, target) in forward.neighbours(source).enumerate() {
+                    list.push(index, source, target, weights.map_or(1.0, |w| w[i])).unwrap();
+                }
+            }
+        }
+        let layout = CsrLayout { store_merged: false, ..graph.layout() };
+        let count = graph.relations().len();
+        let id_space = self.id_map.id_space();
+        let graph = GraphCsr::build_as(list, count, id_space, layout).unwrap();
+        Self { id_map: self.id_map.clone(), relations: self.relations.clone(), graph }
     }
 
     /// This build as a version view.

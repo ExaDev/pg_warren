@@ -9,13 +9,16 @@
 mod any;
 mod build;
 mod graph_csr;
+mod merge;
+mod merged;
 mod target;
 mod transpose;
 
 use std::ops::Range;
 
 pub use any::{AnyCsr, Neighbours};
-pub use graph_csr::{GraphCsr, RelationCsr};
+pub use graph_csr::{CsrLayout, GraphCsr, RelationCsr};
+pub use merged::{AllRelations, MergedNeighbours, MergedRows};
 pub use target::{Target, TargetWidth};
 
 use super::memory::held;

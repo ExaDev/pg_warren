@@ -15,5 +15,8 @@ mod distance;
 mod eigen;
 mod error;
 mod matrix;
+#[cfg(any(test, feature = "pg_test"))]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
+mod merged_csr;
 
 pub(crate) use error::SpectralSqlError;

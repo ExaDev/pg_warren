@@ -115,15 +115,24 @@ def differences(expected, found):
 # State written under the released version, to exercise the upgrade's
 # backfills and what runs on the upgraded catalog: a graph with three
 # promoted versions (the first holding vector 'old', all ones) and a staged
-# one. Roles are cluster-wide, so check creates upgrade_owner once.
+# one, and a graph of two relations, defined but not yet built. Roles are
+# cluster-wide, so check creates upgrade_owner once. The library is the
+# version in development, whose create_graph takes arguments no released
+# script declares, so the definitions go into the catalog directly (as
+# create_graph would write them, owned by upgrade_owner).
 SEED_GRAPH = """
     CREATE TABLE upgrade_nodes AS SELECT generate_series(1, 4)::bigint AS id;
     CREATE TABLE upgrade_edges AS SELECT id AS src, id % 4 + 1 AS dst FROM upgrade_nodes;
-    GRANT SELECT ON upgrade_nodes, upgrade_edges TO upgrade_owner;
-    SET ROLE upgrade_owner;
-    SELECT warren.create_graph('upgrade', 'SELECT id FROM upgrade_nodes',
-                               'SELECT src, dst FROM upgrade_edges');
-    RESET ROLE;
+    CREATE TABLE upgrade_typed AS
+        SELECT src, dst, CASE WHEN src % 2 = 0 THEN 'a' ELSE 'b' END AS rel FROM upgrade_edges;
+    GRANT SELECT ON upgrade_nodes, upgrade_edges, upgrade_typed TO upgrade_owner;
+    INSERT INTO warren.graphs (name, owner, node_query, edge_query, search_path, id_type,
+                               has_relations)
+    VALUES ('upgrade', 'upgrade_owner', 'SELECT id FROM upgrade_nodes',
+            'SELECT src, dst FROM upgrade_edges', current_setting('search_path'), 'bigint', false),
+           ('upgrade_typed', 'upgrade_owner', 'SELECT id FROM upgrade_nodes',
+            'SELECT src, dst, rel FROM upgrade_typed', current_setting('search_path'), 'bigint',
+            true);
     SELECT warren.refresh('upgrade');
 """
 
@@ -137,7 +146,7 @@ SEED_VECTOR = """
 """
 SEED_VECTOR_DIRECTLY = """
     INSERT INTO warren.vectors (graph_id, version_id, name, dtype, length)
-    SELECT graph_id, current_version, 'old', 'f64', 4 FROM warren.graphs;
+    SELECT graph_id, current_version, 'old', 'f64', 4 FROM warren.graphs WHERE name = 'upgrade';
     INSERT INTO warren.vector_chunks
     SELECT vector_id, 0, decode(repeat('000000000000f03f', 4), 'hex') FROM warren.vectors;
 """
@@ -160,10 +169,22 @@ def seed(released):
     released.execute(SEED_VERSIONS)
 
 
-# Versions as `id:staged`, by seq.
+# Versions of graph 'upgrade' as `id:staged`, by seq.
 VERSIONS = """
-    SELECT string_agg(version_id || ':' || staged, ' ' ORDER BY seq) FROM warren.versions
+    SELECT string_agg(version_id || ':' || staged, ' ' ORDER BY seq)
+    FROM warren.versions JOIN warren.graphs USING (graph_id) WHERE name = 'upgrade'
 """
+
+# Each graph's `store_merged`, and its current version's merged segments.
+# Unweighted, with reverse CSRs: a stored merged CSR is four segments.
+MERGED = """
+    SELECT string_agg(name || ':' || store_merged || ':' || (
+               SELECT count(*) FROM warren.segments s
+               WHERE s.version_id = g.current_version AND s.segment LIKE '%:merged'),
+           ' ' ORDER BY name)
+    FROM warren.graphs g
+"""
+EXPECTED_MERGED = "upgrade:true:0 upgrade_new:false:0 upgrade_typed:true:4"
 
 
 def after_update(upgraded):
@@ -190,6 +211,18 @@ def after_update(upgraded):
     written = upgraded.query("SELECT warren.vector_const('upgrade', 'new', 2) IS NOT NULL")
     if written != [["t"]]:
         problems.append(f"a new vector could not be written: {written}")
+    # Graphs from before the update keep their merged CSR (store_merged is
+    # backfilled true, and a refresh after the update still writes it); a
+    # graph created after it may leave it unstored.
+    upgraded.execute(
+        "SELECT warren.refresh('upgrade_typed');"
+        " SELECT warren.create_graph('upgrade_new', 'SELECT id FROM upgrade_nodes',"
+        " 'SELECT src, dst, rel FROM upgrade_typed', has_relations := true,"
+        " store_merged := false);"
+        " SELECT warren.refresh('upgrade_new')")
+    merged = upgraded.query(MERGED)
+    if merged != [[EXPECTED_MERGED]]:
+        problems.append(f"store_merged and merged segments after the update are {merged}")
     return problems
 
 

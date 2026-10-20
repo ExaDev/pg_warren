@@ -11,10 +11,14 @@ use crate::access::as_extension_owner;
 use crate::source::IdType;
 
 /// The query [`GraphDefinition::find`] runs, planned once per backend.
+/// `store_merged` is read through `to_jsonb` so that a catalog from before
+/// 0.3.0 (no such column, until `ALTER EXTENSION pg_warren UPDATE` adds it)
+/// reads as `true`, the value the update backfills.
 const FIND: &str = "SELECT graph_id, owner::oid, readers::oid[], node_query, edge_query,
                            search_path, directed, weighted, has_relations, build_reverse,
-                           retain_versions, current_version, id_type::oid
-                    FROM warren.graphs WHERE name = $1";
+                           retain_versions, current_version, id_type::oid,
+                           coalesce((to_jsonb(g) ->> 'store_merged')::boolean, true)
+                    FROM warren.graphs g WHERE name = $1";
 
 thread_local! {
     /// The saved plan of [`FIND`].
@@ -48,6 +52,9 @@ pub(crate) struct GraphDefinition {
     pub(crate) has_relations: bool,
     /// Whether to build the reverse CSRs.
     pub(crate) build_reverse: bool,
+    /// Whether to store the merged CSR of several relations, rather than
+    /// merge the relations' rows on the fly (DESIGN.md §5.3).
+    pub(crate) store_merged: bool,
     /// Promoted versions kept, the current one included.
     pub(crate) retain_versions: i32,
     /// The promoted version builds start from, if any.
@@ -68,6 +75,7 @@ pub(crate) struct NewGraph<'a> {
     pub(crate) weighted: bool,
     pub(crate) has_relations: bool,
     pub(crate) build_reverse: bool,
+    pub(crate) store_merged: bool,
     pub(crate) retain_versions: i32,
 }
 
@@ -109,6 +117,7 @@ impl GraphDefinition {
                     build_reverse: row.get(10)?.unwrap_or_default(),
                     retain_versions: row.get(11)?.unwrap_or(1),
                     current_version: row.get(12)?,
+                    store_merged: row.get(14)?.unwrap_or(true),
                 })
             })
         })
@@ -192,9 +201,9 @@ impl NewGraph<'_> {
                 client.update(
                     "INSERT INTO warren.graphs (name, owner, node_query, edge_query, search_path,
                          id_type, directed, weighted, has_relations, build_reverse,
-                         retain_versions)
+                         retain_versions, store_merged)
                      VALUES ($1, $2::oid::regrole, $3, $4, $5, $6::oid::regtype, $7, $8, $9,
-                             $10, $11)",
+                             $10, $11, $12)",
                     None,
                     &[
                         graph.name.into(),
@@ -208,6 +217,7 @@ impl NewGraph<'_> {
                         graph.has_relations.into(),
                         graph.build_reverse.into(),
                         graph.retain_versions.into(),
+                        graph.store_merged.into(),
                     ],
                 )?;
                 Ok(())
