@@ -16,7 +16,10 @@ pub fn directed_graph(path: &str, nodes: u64) -> Result<GraphCsr, Box<dyn Error>
     for line in BufReader::new(File::open(path)?).lines().skip(1) {
         let line = line?;
         let (src, dst) = line.split_once(',').ok_or("expected src,dst")?;
-        edges.push(relation, src.parse::<u64>()? - 1, dst.parse::<u64>()? - 1, 1.0)?;
+        let dense = |id: &str| -> Result<u64, Box<dyn Error>> {
+            Ok(id.parse::<u64>()?.checked_sub(1).ok_or("ids count from 1")?)
+        };
+        edges.push(relation, dense(src)?, dense(dst)?, 1.0)?;
     }
     Ok(GraphCsr::build(edges, 1, nodes, true)?)
 }

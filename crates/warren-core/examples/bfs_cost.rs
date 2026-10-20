@@ -30,10 +30,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         None => directed::directed_graph(path, nodes.parse()?)?,
     };
     let adjacency = Adjacency::new(&graph, Direction::Out, RelationSelection::All)?;
-    let starts = [start.parse::<u64>()? - 1];
+    let starts = [start.parse::<u64>()?.checked_sub(1).ok_or("START counts from 1")?];
     let limits = Limits { max_depth: Some(depth.parse()?), max_results: None };
     let runs: usize = runs.parse()?;
-    report("bfs_each", runs, || {
+    let graph_edges = graph.all_relations().forward().edge_count();
+    report("bfs_each", runs, graph_edges, || {
         let mut rows = 0u64;
         let stats = bfs_each(&adjacency, &starts, None, limits, &mut Uninterrupted, |_| {
             rows += 1;
@@ -41,7 +42,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         })?;
         Ok((rows, stats))
     })?;
-    report("reachable_set_each", runs, || {
+    report("reachable_set_each", runs, graph_edges, || {
         let mut rows = 0u64;
         let stats = reachable_set_each(&adjacency, &starts, None, &mut Uninterrupted, |_| {
             rows += 1;
@@ -52,10 +53,13 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 /// Runs `kernel` `runs` times and prints the median seconds, the rows it
-/// produced and its edges traversed per second.
+/// produced, the row entries it scanned per second, and the graph's edges
+/// per second (the rate of a search over the whole graph, whatever it
+/// scanned).
 fn report(
     name: &str,
     runs: usize,
+    graph_edges: u64,
     mut kernel: impl FnMut() -> Result<(u64, TraversalStats), Box<dyn Error>>,
 ) -> Result<(), Box<dyn Error>> {
     let mut seconds = Vec::with_capacity(runs);
@@ -69,9 +73,10 @@ fn report(
     let median = seconds[seconds.len() / 2];
     let (rows, stats) = last;
     println!(
-        "{{\"kernel\": \"{name}\", \"median_seconds\": {median:e}, \"rows\": {rows}, \"edges_traversed\": {}, \"edges_per_second\": {:e}}}",
+        "{{\"kernel\": \"{name}\", \"median_seconds\": {median:e}, \"rows\": {rows}, \"edges_traversed\": {}, \"row_entries_per_second\": {:e}, \"graph_edges_per_second\": {:e}}}",
         stats.edges_traversed,
         stats.edges_traversed as f64 / median,
+        graph_edges as f64 / median,
     );
     Ok(())
 }
