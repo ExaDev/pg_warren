@@ -26,8 +26,10 @@ SELECT warren.create_graph(name, node_query, edge_query,
 - `directed := false` stores each edge in both directions with the same
   weight (a self-loop once); edge counts then count each edge twice.
 - `build_reverse` (default true) also stores the reverse CSR. Without it,
-  `direction := 'in'` or `'both'` traversals are refused and some compute
-  runs single-threaded ([compute.md](compute.md)).
+  every function that takes `direction := 'in'` or `'both'` refuses it
+  (`degree`, `vector_degree`, `degree_vector` and the traversals included),
+  except `gather`, which pushes over the forward CSR instead; and some
+  compute runs single-threaded ([compute.md](compute.md)).
 
 Edges are cleaned at build time, and counted, never silently:
 
@@ -41,7 +43,7 @@ Edges are cleaned at build time, and counted, never silently:
 ## Versions
 
 `warren.refresh(name)` runs both queries and builds a new **version**: an
-immutable snapshot of the graph. It returns the version's id.
+immutable copy of the graph's structure. It returns the version's id.
 
 - A version is **staged** until it is promoted. `refresh(name, promote :=
   false)` leaves it staged: fully built and queryable with `version := id`,
@@ -86,8 +88,13 @@ Inside a version every node has a **dense id**, `0 … id_space − 1`.
   after the highest dense id. A node that disappears keeps its dense id as a
   **tombstone** (`live = false`); if it comes back, it gets the same dense id.
   Dense ids are never reused.
-- So vectors from two versions line up row by row, which is what
-  `vector_norm_diff` and `distance` rely on.
+- So vectors from two versions along one line of versions line up row by
+  row, which is what `vector_norm_diff` and `distance` rely on.
+- The exception is **sibling staged versions**: two `refresh(promote :=
+  false)` from the same current version each append their own new nodes, so
+  the same new dense id can name different nodes. `diff`, `distance` and
+  `vector_norm_diff` refuse such a pair (22023). Siblings that added the same
+  new nodes, or none, compare.
 
 ```sql
 DELETE FROM follows WHERE dst = 5;  DELETE FROM people WHERE id = 5;
@@ -111,7 +118,7 @@ and returns its id. Compaction is a boundary:
 
 Compact only when no cross-version comparison is pending.
 
-## Snapshots and staleness
+## Staleness: the version versus the tables
 
 A traversal or compute call reads a **version**, never the tables. Writes to
 the source tables are invisible until the next `refresh` (and `promote`, if
@@ -168,8 +175,12 @@ This is what makes [change detection](change-detection.md) possible.
 Two exceptions:
 
 - **Transient vectors** (`persist := false`, [compute.md](compute.md)) live
-  in the backend's memory and are not transactional: a rollback neither
-  removes one written in it nor restores one it replaced.
+  in the backend's memory and are not transactional: a rollback does not
+  remove one written in it, nor restore a transient vector it replaced. A
+  transient write over a *persisted* name deletes the persisted row, and
+  that delete does roll back: the persisted vector is restored, but stays
+  hidden behind the transient one until `drop_vector` drops the transient
+  one.
 - The backend-local cache is not transactional either, but it holds only
   immutable versions keyed by version id, so it is never wrong; entries for
   versions that no longer exist are dropped at the next load.
@@ -183,14 +194,16 @@ Each promotion (`refresh` with `promote`, or `promote`) applies retention:
 - **Staged versions are never deleted** automatically. Drop the ones you do
   not promote with `warren.drop_version(name, version)`.
 - **A version with persisted vectors bound to it is kept**, with a `NOTICE`
-  (`version 1 of graph "social" is kept beyond retain_versions: 1 vectors are
+  (`version 1 of graph "social" is kept beyond retain_versions: 1 vector is
   bound to it`). This keeps a version somebody is comparing against. Drop
   the vectors (`drop_vector(…, version := …)`) or the version to release it.
   Eigenvectors stored by `eigen` count, so a version you ran `eigen` on stays
   until you drop them.
 - Transient vectors never pin a version.
-- After `compact`, the source's vectors have moved, so retention deletes the
-  source in turn.
+- After `compact`, the source's vectors have moved, so it is no longer
+  pinned: retention deletes it once it falls outside `retain_versions` (with
+  the default of 2, the source is the one other version kept, until the next
+  promotion).
 
 `drop_version` deletes any version except the current one, vectors included.
 `drop_graph` deletes the graph and everything built from it.
@@ -226,13 +239,14 @@ graph's owner. Transient vectors are private to the role that wrote them.
 |---|---|---|
 | `node_query`, `edge_query` (in `refresh`) | the graph owner | the creator's, captured at `create_graph` (`info() ->> 'search_path'`) |
 | `vector_from_query` and `gather` queries | the caller | the caller's |
-| `vector_map` expressions on the executor path | the caller | the caller's |
+| `vector_map` expressions (on the executor path) | the caller | the caller's |
 | pg_warren's own catalog SQL | the extension owner | pinned to `pg_catalog, pg_temp` |
 
 So a caller cannot redirect a graph's unqualified table names with their
 own `search_path`, and no user SQL runs with elevated rights.
 
-Source queries, `vector_from_query`'s query and `gather`'s messages run in
+Source queries, `vector_from_query`'s query, `gather`'s messages and
+`vector_map` expressions on the executor path run in
 Postgres's **read-only transaction state**, as under `SET TRANSACTION READ
 ONLY`. A function they call cannot write (25006), and a data-modifying CTE is
 refused (0A000). This guards the integrity of what a build or kernel reads;

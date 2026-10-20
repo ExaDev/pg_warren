@@ -1,11 +1,11 @@
 # Compute
 
 Whole-graph computation in pg_warren is **SQL all the way down**: there is
-no vertex-program language and no runner. Each primitive is one SQL call that
+no node-program language and no runner. Each primitive is one SQL call that
 works on the whole graph at once; control flow (loops, convergence tests) is
 your PL/pgSQL; per-node logic is a SQL expression.
 
-| Tier | Vertex state | Fan-out and combine | Per-node apply | Cost per superstep |
+| Tier | Node state | Fan-out and combine | Per-node apply | Cost per superstep |
 |---|---|---|---|---|
 | 1 | named **vectors** (numeric) | semiring `spmv` / `spmm` | `vector_map` (compiled SQL expression) | milliseconds at 10M nodes (design target) |
 | 2 | any table, any SQL type | `gather`, in-engine | any SQL (`UPDATE … FROM gather(…)`) | seconds at 10M nodes: N rows through the executor |
@@ -49,19 +49,31 @@ SELECT warren.vector_stats('roads', 'pop');                           -- mean 52
 
 Rules:
 
-- **Persisted or transient.** Every function that writes a vector takes
-  `persist := true`. A persisted vector is a row in `warren.vectors`
-  (transactional, survives the session, costs WAL; 8 bytes × `id_space` per
-  `f64` column) and its function returns its id. A **transient** vector
-  (`persist := false`) lives only in this backend, for this role, returns
-  NULL, costs no WAL, is not transactional, does not pin its version, counts
-  against `warren.max_cache_memory` (it is never evicted), and is
-  freed at session end or by `evict` or `drop_vector` (`if_exists := true`
-  makes a missing name a no-op). Keep loop scratch transient and persist
-  results.
+- **Persisted or transient.** The constructors (`vector_from_query`,
+  `vector_const`, `vector_degree`, `vector_dense_id`), `spmv`, `spmm`,
+  `vector_map`, `triangles` and `eigen` take `persist := true`. The library
+  functions take no `persist`: they always persist `out`. A persisted vector
+  is a row in `warren.vectors` (transactional, survives the session, costs
+  WAL; 8 bytes × `id_space` per `f64` column).
+- **Return values.** The constructors and `triangles` return the persisted
+  vector's id, or NULL when transient. `spmv`, `spmm`, `vector_map` and
+  `aggregate_neighbours` return nothing (`void`). The iterative library
+  functions return the iterations they ran, and `degree_vector` the vector
+  id.
+- A **transient** vector (`persist := false`) lives only in this backend,
+  for this role. It costs no WAL, is not transactional, does not pin its
+  version, and counts against `warren.max_cache_memory` (it is never
+  evicted). It is freed at session end, or by `evict` or `drop_vector`
+  (`if_exists := true` makes a missing name a no-op). Keep loop scratch
+  transient and persist results.
 - A name resolves to this role's transient vector first, then the persisted
   one. Writing a name replaces the vector of that name; a persisted vector
   may be replaced only by its writer or the graph owner.
+- **A transient write over a persisted name deletes the persisted row, and
+  that delete is transactional.** If the transaction rolls back, the
+  persisted vector comes back, but the transient one survives the rollback
+  and hides it until you `drop_vector` the name (which drops the transient
+  one first).
 - `vector_from_query` runs the query as you, under your `search_path`, in
   read-only transaction state (see [semantics.md](semantics.md#access)). It
   returns `(id, value)`; the id must cast *implicitly* to the id type (so
@@ -86,8 +98,9 @@ warren.spmv(graph, x, y, semiring := 'plus_times', transpose := false, rels := N
             accumulate := NULL, persist := true, version := NULL)
 ```
 
-`spmv` computes `y = A ⊗ x`, where `A[i][j]` is the weight of edge `i → j`
-(1 when unweighted, summed over the selected `rels`). With `transpose :=
+`spmv` computes `y = A ⊗ x`, where `A[i][j]` is the weight of edge `i → j`,
+summed over the selected `rels`; when the graph is unweighted it is 1, even
+for a pair linked in several relations. With `transpose :=
 false`, `y_i` combines node i's **out**-neighbours' values; with `transpose :=
 true`, its **in**-neighbours' (as PageRank does). `spmm` is the same over a
 width-d matrix, row by row.
@@ -189,12 +202,13 @@ DECLARE i int := 0; delta float8;
 BEGIN
   PERFORM warren.vector_degree(graph, 'deg', persist := false);
   PERFORM warren.vector_const(graph, 'pr', 1.0, persist := false);
+  PERFORM warren.vector_const(graph, 'teleport', 1 - damping, persist := false);
+  PERFORM warren.vector_const(graph, 'damping', damping, persist := false);
   LOOP
     i := i + 1;
     PERFORM warren.vector_map(graph, 'msg', 'pr / NULLIF(deg, 0)', persist := false);
     PERFORM warren.spmv(graph, 'msg', 'gathered', 'plus_second', transpose := true, persist := false);
-    PERFORM warren.vector_map(graph, 'next', format('%s + %s * gathered', 1 - damping, damping),
-                              persist := false);
+    PERFORM warren.vector_map(graph, 'next', 'teleport + damping * gathered', persist := false);
     delta := warren.vector_norm_diff(graph, 'next', 'pr', 'l1');
     PERFORM warren.vector_map(graph, 'pr', 'next', persist := false);
     EXIT WHEN delta < tol OR i >= 100;
@@ -203,7 +217,9 @@ BEGIN
 END $$;
 ```
 
-`plus_second` ignores edge weights; the default `plus_times` would multiply
+Constants enter the expression as constant vectors (`teleport`, `damping`),
+not as formatted text, so no client setting such as `extra_float_digits`
+rounds them. `plus_second` ignores edge weights; the default `plus_times` would multiply
 by them on a weighted graph. Pin the version (`version := …` on every call)
 if a concurrent `refresh` could promote a new one mid-loop; the library
 functions do.
@@ -223,11 +239,12 @@ warren.gather(graph, messages, NULL::<id type>, NULL::<result type>,
 - `messages` is read by its form:
   - Text that is not an identifier (or `schema.identifier`) is a **query**.
   - An identifier is a **vector** bound to the version, if one has exactly
-    that name (every live node sends its value), else a **table or view** on
-    your `search_path`. A name that is both is an error
-    (42725): vector names are shared by the graph's
-    writers, so one could otherwise redirect your `gather`.
-  - `TABLE <name>` always means the relation.
+    that name (every live node sends its value; it must have width 1, so
+    send a matrix's rows from a query), else a **table or view** on your
+    `search_path`. A name that is both is an error (42725): vector names
+    are shared by the graph's writers, so one could otherwise redirect your
+    `gather`.
+  - `TABLE <name>` always means the table or view.
 - A table or query returns `(id, message)`, runs as you under your
   `search_path`, and is read in read-only transaction state: a data-modifying
   CTE is refused (0A000), and so is a write by a function it calls (25006).
@@ -315,8 +332,9 @@ Top-k eigenpairs by Lanczos with full reorthogonalisation and thick restart.
 
 - `matrix`: `adjacency` (A), `laplacian` (D − A), `normalized_laplacian`
   (I − D^-1/2 A D^-1/2) or `random_walk` (D^-1 A). A directed graph is
-  symmetrised as (A + Aᵀ)/2; `symmetrize := false` is accepted only for a
-  graph that is already symmetric (undirected), and then halves the work.
+  symmetrised as (A + Aᵀ)/2; `symmetrize := false` is accepted only when the
+  matrix is already symmetric (an undirected graph, or a directed one whose
+  edges all come in both directions), and then halves the work.
 - `which`: `largest` (by magnitude) or `smallest` (algebraic; use it for the
   Laplacians). Under `largest`, magnitudes that differ only by rounding
   (10⁻⁶ relative for `f32`, 10⁻¹² for `f64`; never `tol`) are ties, and a

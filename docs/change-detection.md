@@ -75,7 +75,13 @@ What each step tells you:
   the nodes present in both versions. A batch that only adds volume barely
   turns them; one that merges communities or adds a new one turns them by
   about one dimension (in `test/sql/a2_spectral.sql`, 0.40 for volume against
-  1.27 for a new community and 1.43 for a bridge, at k = 6).
+  1.27 for a new community and 1.43 for a bridge, at k = 6, over communities
+  of 40).
+- In the small example above, though, the subspace barely moves (0.022): at
+  k = 2 there is one non-trivial eigenvector, and the new entity leaves the
+  split between the two communities where it was. **The signal there is the
+  spectral gap**, below. Run both measures, and calibrate each on your own
+  data, at the `k` you will use.
 - `distance('spectral')` compares eigenvalues. Here the bridge triples the
   second-smallest normalised-Laplacian eigenvalue (the spectral gap), because
   the two communities are no longer nearly disconnected.
@@ -86,8 +92,9 @@ Pick the thresholds for your data from runs on batches you already judged.
 
 To compare two candidate batches, build each as a staged version from the
 same current version and compare each with `:base`. Comparing the two
-candidates with each other is refused (22023) if they added different new
-nodes, since both handed out the same new dense ids.
+candidates with each other (`diff`, `distance`, `vector_norm_diff`) is
+refused (22023) if they added different new nodes, since both handed out the
+same new dense ids.
 
 After `COMMIT` without `promote`, the candidate is a staged version:
 queryable with `version := :candidate`, invisible by default, never deleted by
