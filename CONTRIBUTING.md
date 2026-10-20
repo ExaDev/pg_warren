@@ -197,6 +197,7 @@ format. To benchmark a new function, add a workload with `requires` to
 ```sh
 test/upgrade.py --pg-config "$(command -v pg_config)"   # installs, then checks every release's path
 test/upgrade.py --no-install --trusted   # the same, installed and updated by a non-superuser
+test/dump.py --pg-config "$(command -v pg_config)"   # pg_dump and restore of graphs (plain, custom, trusted)
 ```
 
 ## Docker

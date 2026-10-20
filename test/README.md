@@ -13,6 +13,9 @@ recursive CTEs / NetworkX on generated fixtures, and the Appendix A use cases
 - `upgrade.py` checks `ALTER EXTENSION pg_warren UPDATE` from every released
   version against a fresh install of the version in development (with
   `--trusted`, installed and updated by a non-superuser).
+- `dump.py` checks that a `pg_dump` of graphs, versions and vectors
+  restores (plain through psql, custom through pg_restore), and that a
+  trusted install's installer can dump and restore without the catalog.
 - `harness/` is the Python behind both; `tests/` are its pytest tests.
 
 ## Writing a SQL test

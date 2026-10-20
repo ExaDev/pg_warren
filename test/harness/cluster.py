@@ -45,8 +45,16 @@ class Cluster:
         else:
             shutil.rmtree(self.directory, ignore_errors=True)
 
-    def database(self, name="postgres"):
-        return Database(str(self.bindir / "psql"), ("-h", str(self.directory), "-p", PORT, "-U", SUPERUSER, "-d", name))
+    def database(self, name="postgres", user=SUPERUSER):
+        return Database(str(self.bindir / "psql"), self.connection(name, user))
+
+    def connection(self, name, user=SUPERUSER):
+        """libpq client options (psql, pg_dump, pg_restore) for database `name` as `user`."""
+        return ("-h", str(self.directory), "-p", PORT, "-U", user, "-d", name)
+
+    def client(self, program):
+        """The path of client program `program` (pg_dump, pg_restore) of this cluster's Postgres."""
+        return str(self.bindir / program)
 
     def _run(self, program, *arguments):
         command = [str(self.bindir / program), *map(str, arguments)]
