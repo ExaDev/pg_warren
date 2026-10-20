@@ -193,8 +193,9 @@ fn measure(case: &Case) -> Outcome<Measured> {
         intake.push(relation, Some(&source), Some(&target), weight)?;
     }
     let (edges, _) = intake.finish();
-    let plan = BuildPlan::new(&edges, relations.len(), id_map.id_space(), case.layout, &memory)?;
     let chunk = (CHUNK_SIZE + 8) as u64;
+    let id_space = id_map.id_space();
+    let plan = BuildPlan::new(&edges, relations.len(), id_space, case.layout, &memory, chunk)?;
     let planned = memory.peak().max(memory.in_use() + plan.bytes_needed() + chunk);
     let mut encoder = Encoder { memory: memory.clone(), bytes: 0 };
     plan.build(edges, &mut encoder)?;

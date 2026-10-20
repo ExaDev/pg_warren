@@ -71,8 +71,9 @@ pub(crate) fn build<E: ExternalId>(
     relations.check_offsets()?;
     let (edges, dropped_edges) = edges(graph, &id_map, implicit, &mut relations, source, &memory)?;
     let Relations { dictionary: relations, charge: _relations_charge, .. } = relations;
-    let plan = BuildPlan::new(&edges, relations.len(), id_map.id_space(), layout, &memory)?;
-    memory.require(plan.bytes_needed() + writer_memory(request.chunk_size))?;
+    let beside = writer_memory(request.chunk_size);
+    let plan = BuildPlan::new(&edges, relations.len(), id_map.id_space(), layout, &memory, beside)?;
+    memory.require(plan.bytes_needed() + beside)?;
 
     let stats = VersionStats::new(&id_map, 0, dropped_edges, 0);
     let version = catalog.insert_version(&NewVersion {

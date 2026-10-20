@@ -69,14 +69,24 @@ pub struct BuildPlan {
 impl BuildPlan {
     /// The plan of building `edges`, whose relations index a dictionary of
     /// `relation_count` relations and whose dense ids lie in `id_space`, as
-    /// `layout` says. Counting edges per source takes `8·id_space` bytes of
-    /// `memory` while the plan is made.
+    /// `layout` says, while the caller holds `beside` bytes of `memory` more
+    /// than now (a sink's buffers). Counting edges per source takes
+    /// `8·id_space` bytes of `memory` while the plan is made.
+    ///
+    /// Relations are built in the fewest groups (1, 2, 4 or at most
+    /// [`groups::MOST_GROUPS`]) whose estimated need stays within half of
+    /// what then remains of the budget, or within what the finest split
+    /// needs if that is more: a graph small for its budget is built in one
+    /// pass, a large one holds no more than the finest split would, and the
+    /// rest of the budget is left for the memory the build does not
+    /// account (Postgres's own, when the build runs in a backend).
     pub fn new(
         edges: &EdgeList,
         relation_count: usize,
         id_space: u64,
         layout: CsrLayout,
         memory: &BuildMemory,
+        beside: u64,
     ) -> Result<Self, GraphError> {
         if id_space == u64::MAX {
             return Err(GraphError::IdSpaceTooLarge);
@@ -93,7 +103,7 @@ impl BuildPlan {
         let weighted = edges.weights().is_some();
         let target_bytes = target_bytes(id_space);
         let entry_bytes = target_bytes + if weighted { 8 } else { 0 };
-        let plan = Self {
+        let mut plan = Self {
             id_space,
             weighted,
             build_reverse: layout.build_reverse,
@@ -104,17 +114,26 @@ impl BuildPlan {
                 TargetWidth::U32 => 4,
                 TargetWidth::U64 => 8,
             },
-            groups: groups::groups(&relation_edges, id_space, entry_bytes),
+            groups: groups::groups(&relation_edges, id_space, entry_bytes, groups::MOST_GROUPS),
             relation_edges,
             longest_row,
         };
+        let allowance = plan.bytes_needed().max(memory.remaining().saturating_sub(beside) / 2);
+        for parts in [1, 2, 4] {
+            let finest = std::mem::take(&mut plan.groups);
+            plan.groups = groups::groups(&plan.relation_edges, id_space, entry_bytes, parts);
+            if plan.bytes_needed() <= allowance {
+                break;
+            }
+            plan.groups = finest;
+        }
         Ok(plan)
     }
 
     /// The most build memory the build will hold at once beyond what the
     /// edge list holds now: what to check the budget for before starting.
-    /// It counts the CSRs a sink has not yet freed, at most one relation's
-    /// forward and reverse CSRs, but not what the sink itself allocates.
+    /// It counts the CSRs a sink has not yet freed (a group's forward CSRs
+    /// and one reverse CSR), but not what the sink itself allocates.
     pub fn bytes_needed(&self) -> u64 {
         self.peak_bytes().saturating_sub(self.edge_bytes)
     }
@@ -255,5 +274,45 @@ fn target_bytes(id_space: u64) -> u64 {
     match TargetWidth::for_id_space(id_space) {
         TargetWidth::U32 => 4,
         TargetWidth::U64 => 8,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::RelationDictionary;
+
+    /// Five relations of 2,000 edges over 1,000 nodes, weighted.
+    fn edges(memory: &BuildMemory) -> EdgeList {
+        let mut relations = RelationDictionary::new();
+        let indexes: Vec<_> = (0..5).map(|r| relations.intern(&r.to_string()).unwrap()).collect();
+        let mut edges = EdgeList::within(1000, true, memory);
+        for edge in 0..10_000u64 {
+            let relation = indexes[(edge % 5) as usize];
+            edges.push(relation, edge % 1000, (edge * 7) % 1000, 0.5).unwrap();
+        }
+        edges
+    }
+
+    #[test]
+    fn relations_share_one_group_unless_the_budget_is_tight() {
+        let layout = CsrLayout { build_reverse: true, store_merged: false };
+        let ample = BuildMemory::unlimited();
+        let one = BuildPlan::new(&edges(&ample), 5, 1000, layout, &ample, 0).unwrap();
+        assert_eq!(one.groups, vec![Range { start: 0, end: 5 }]);
+        let finest_needed = {
+            let mut finest = one.clone();
+            finest.groups = groups::groups(&finest.relation_edges, 1000, 12, groups::MOST_GROUPS);
+            finest.bytes_needed()
+        };
+        assert!(finest_needed < one.bytes_needed());
+        // A budget that leaves twice what the finest split needs gets it.
+        let tight = BuildMemory::new(u64::MAX);
+        let edges = edges(&tight);
+        let held = tight.charge(u64::MAX - tight.in_use() - 2 * finest_needed).unwrap();
+        let split = BuildPlan::new(&edges, 5, 1000, layout, &tight, 0).unwrap();
+        assert_eq!(split.groups.len(), 5);
+        assert_eq!(split.bytes_needed(), finest_needed);
+        drop(held);
     }
 }

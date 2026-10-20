@@ -178,7 +178,7 @@ impl GraphCsr {
         layout: CsrLayout,
     ) -> Result<Self, GraphError> {
         let plan =
-            BuildPlan::new(&edges, relation_count, id_space, layout, &BuildMemory::unlimited())?;
+            BuildPlan::new(&edges, relation_count, id_space, layout, &BuildMemory::unlimited(), 0)?;
         let mut built = Built::default();
         let summary = plan.build(edges, &mut built)?;
         built.into_graph(summary.deduplicated_edges)
@@ -197,7 +197,7 @@ impl GraphCsr {
         AnyCsr: From<Csr<T>>,
     {
         let plan =
-            BuildPlan::new(&edges, relation_count, id_space, layout, &BuildMemory::unlimited())?;
+            BuildPlan::new(&edges, relation_count, id_space, layout, &BuildMemory::unlimited(), 0)?;
         let mut built = Built::default();
         let summary = plan.build_with::<T, _>(edges, &mut built)?;
         built.into_graph(summary.deduplicated_edges)
@@ -685,15 +685,15 @@ mod tests {
     }
 
     #[test]
-    fn a_plan_needs_one_relations_offsets_not_every_relations() {
+    fn a_plan_needs_at_most_every_offsets_array() {
         let memory = BuildMemory::unlimited();
         for layout in [unmerged(true), CsrLayout { build_reverse: true, store_merged: true }] {
             for relations in [0, 1, 3] {
-                let plan =
-                    BuildPlan::new(&EdgeList::new(false), relations, 50, layout, &memory).unwrap();
+                let plan = BuildPlan::new(&EdgeList::new(false), relations, 50, layout, &memory, 0)
+                    .unwrap();
                 let offsets = GraphCsr::offsets_bytes(relations, 50, layout);
-                // A plan holds at most one relation's CSRs at once (twice
-                // with reverse CSRs), not every relation's.
+                // At least one relation's forward and reverse CSRs, at most
+                // every relation's.
                 assert!(plan.bytes_needed() >= 2 * 51 * 8, "{relations}: {}", plan.bytes_needed());
                 // Besides the offsets, a header of a few hundred bytes for
                 // each relation's rows.
@@ -708,7 +708,7 @@ mod tests {
     fn a_build_past_its_memory_charges_refuses_at_the_reservation() {
         let memory = BuildMemory::new(100);
         let edges = EdgeList::within(3, false, &memory);
-        let plan = BuildPlan::new(&edges, 1, 3, unmerged(false), &memory).unwrap();
+        let plan = BuildPlan::new(&edges, 1, 3, unmerged(false), &memory, 0).unwrap();
         // One relation's offsets and targets, and the header of its rows.
         assert!(plan.bytes_needed() > 32, "{}", plan.bytes_needed());
         let small = BuildMemory::new(plan.bytes_needed() - 1);
