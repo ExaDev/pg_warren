@@ -196,6 +196,12 @@ impl<E: ExternalId> IdMap<E> {
     pub fn tombstones(&self) -> &Tombstones {
         &self.tombstones
     }
+
+    /// The heap bytes it holds: both directions of the map and the
+    /// tombstones.
+    pub fn bytes(&self) -> u64 {
+        memory::held(&self.by_external) + memory::held(&self.by_dense) + self.tombstones.bytes()
+    }
 }
 
 #[cfg(test)]
@@ -217,6 +223,14 @@ mod tests {
         assert_eq!(id_map.dense_id(&20), Some(1));
         assert_eq!(id_map.dense_id(&30), Some(2));
         assert_eq!(id_map.external_id(2), Some(30));
+    }
+
+    #[test]
+    fn an_id_map_holds_both_directions_and_its_tombstones() {
+        let id_map = first_build(vec![30, 10, 20]);
+        let pair = std::mem::size_of::<(i64, DenseId)>() as u64;
+        assert_eq!(id_map.bytes(), 3 * pair + 3 * 8 + id_map.tombstones().bytes());
+        assert_eq!(IdMap::<i64>::new().bytes(), 0);
     }
 
     #[test]

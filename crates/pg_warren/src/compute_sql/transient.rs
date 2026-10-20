@@ -93,8 +93,10 @@ mod tests {
         let second = refresh("r", true)?;
         assert_eq!(versions("r")?, Some(format!("{second}:false")), "retention dropped {first}");
         Spi::run("SELECT warren.vector_const('r', 'scratch', 1, persist := false)")?;
-        // The loaded version and the transient vector.
-        assert_eq!(Spi::get_one::<i64>("SELECT warren.evict('r')")?, Some(2));
+        // The loaded version and both transient vectors: retention's delete
+        // of the first version has not committed, so its vector is kept
+        // (test/sql/cache_dropped_transients.sql covers a committed drop).
+        assert_eq!(Spi::get_one::<i64>("SELECT warren.evict('r')")?, Some(3));
         let gone = failure("warren.vector_values('r', 'scratch', NULL::bigint)")?;
         assert!(gone.unwrap_or_default().starts_with("42704"));
         Ok(())

@@ -2,6 +2,8 @@
 //! session's transient vectors of the version first, then its persisted
 //! ones, read through the backend's vector cache and charged to the call's
 //! compute memory budget, and written back with tombstoned rows cleared.
+//! Each read or write into the backend's cache then trims it to
+//! `warren.max_cache_memory` (DESIGN.md §5.5).
 
 use std::collections::HashMap;
 use std::mem::size_of;
@@ -13,7 +15,7 @@ use warren_core::graph::Tombstones;
 use super::settings::compute_memory;
 use super::ComputeSqlError;
 use crate::access::require_creator_or_owner;
-use crate::cache::{cached, LoadedVersion, Resolved};
+use crate::cache::{admit_transient, cached, trim, LoadedVersion, Resolved};
 use crate::catalog::{GraphDefinition, VersionId};
 use crate::segment::CHUNK_SIZE;
 use crate::source::IdDatum;
@@ -24,14 +26,14 @@ use crate::vector::{
 
 /// The budget cached vectors are charged to while cached: unlimited, since
 /// what bounds a call is its own budget, which each vector it reads is also
-/// charged to.
+/// charged to, and what bounds the cache is `warren.max_cache_memory`.
 fn cache_memory() -> &'static ComputeMemory {
     static CACHE_MEMORY: OnceLock<ComputeMemory> = OnceLock::new();
     CACHE_MEMORY.get_or_init(|| ComputeMemory::new(u64::MAX))
 }
 
 /// The bytes of a vector of `dtype` with `length` rows of `width`.
-fn bytes(dtype: Dtype, width: usize, length: u64) -> u64 {
+pub(crate) fn vector_bytes(dtype: Dtype, width: usize, length: u64) -> u64 {
     let element = match dtype {
         Dtype::F32 => size_of::<f32>(),
         Dtype::F64 | Dtype::I64 => size_of::<f64>(),
@@ -85,7 +87,13 @@ pub(crate) struct Vectors<E> {
     /// The call's compute memory budget.
     pub(crate) memory: ComputeMemory,
     records: Vec<VectorRecord>,
-    held: HashMap<String, MemoryCharge>,
+    held: HashMap<String, Read>,
+}
+
+/// A vector a call has read, and its charge to the call's budget.
+struct Read {
+    _charge: MemoryCharge,
+    vector: Arc<AnyVector>,
 }
 
 impl<E: IdDatum> Vectors<E> {
@@ -142,29 +150,34 @@ impl<E: IdDatum> Vectors<E> {
         })
     }
 
-    /// Charges `name`'s bytes to the call's budget, once per call.
-    fn charge(&mut self, name: &str, bytes: u64) -> Result<(), ComputeSqlError> {
-        if !self.held.contains_key(name) {
-            let charge = self.memory.charge(bytes)?;
-            self.held.insert(name.to_owned(), charge);
-        }
-        Ok(())
-    }
-
     /// Vector `name`, if bound: the session's transient vector of that
     /// name, else the persisted one. Its bytes are charged to the call's
-    /// budget (once per call) before it is read.
+    /// budget before it is first read; the call then holds it, so reading
+    /// it again returns the same vector even if the cache has evicted it.
     pub(super) fn find(&mut self, name: &str) -> Result<Option<Arc<AnyVector>>, ComputeSqlError> {
-        let graph_id = self.graph.graph_id;
-        if let Some(vector) = transient(graph_id, self.version, name) {
-            self.charge(name, bytes(vector.dtype(), vector.width(), vector.id_space()))?;
-            return Ok(Some(vector));
+        if let Some(read) = self.held.get(name) {
+            return Ok(Some(Arc::clone(&read.vector)));
         }
-        let Some(record) = self.record(name).cloned() else {
-            return Ok(None);
+        let graph_id = self.graph.graph_id;
+        let (charge, vector) = match transient(graph_id, self.version, name) {
+            Some(vector) => {
+                let bytes = vector_bytes(vector.dtype(), vector.width(), vector.id_space());
+                (self.memory.charge(bytes)?, vector)
+            }
+            None => {
+                let Some(record) = self.record(name).cloned() else {
+                    return Ok(None);
+                };
+                let bytes = vector_bytes(record.dtype, record.width, record.length);
+                let charge = self.memory.charge(bytes)?;
+                let vector = load(&mut SpiVectorStore, cache_memory(), graph_id, &record)?;
+                trim();
+                (charge, vector)
+            }
         };
-        self.charge(name, bytes(record.dtype, record.width, record.length))?;
-        Ok(Some(load(&mut SpiVectorStore, cache_memory(), graph_id, &record)?))
+        let read = Read { _charge: charge, vector: Arc::clone(&vector) };
+        self.held.insert(name.to_owned(), read);
+        Ok(Some(vector))
     }
 
     /// Whether the caller may store a vector as `name` (persisted if
@@ -184,13 +197,37 @@ impl<E: IdDatum> Vectors<E> {
         Ok(())
     }
 
+    /// Refuses, before anything is written, keeping transient vectors
+    /// `names` of `bytes` each, if they would take this backend's transient
+    /// vectors past `warren.max_cache_memory`. The current role's transient
+    /// vectors of `names` (which they replace) and of `released` (which the
+    /// caller drops before writing) are not counted.
+    pub(crate) fn admit_transients(
+        &self,
+        names: &[String],
+        released: &[String],
+        bytes: u64,
+    ) -> Result<(), ComputeSqlError> {
+        let (graph_id, version) = (self.graph.graph_id, self.version);
+        let replaced = names
+            .iter()
+            .chain(released)
+            .filter_map(|name| transient(graph_id, version, name))
+            .map(|vector| vector.bytes())
+            .sum();
+        let added = bytes.saturating_mul(names.len() as u64);
+        Ok(admit_transient(replaced, added)?)
+    }
+
     /// Stores `vector` as `name` (which may be reserved only if not
     /// `persist`) after clearing its tombstoned rows:
     /// persisted (returning its vector id) or, if not `persist`, as a
     /// transient vector of this session (returning `None`). Either replaces
     /// any vector of that name of either kind; a persisted one replaced
     /// must have been written by the caller, or the caller must own the
-    /// graph.
+    /// graph. A transient one is refused if it would take this backend's
+    /// transient vectors past `warren.max_cache_memory`; either kind is
+    /// kept in the cache only as far as the cap allows.
     pub(crate) fn save(
         &mut self,
         name: &str,
@@ -201,6 +238,10 @@ impl<E: IdDatum> Vectors<E> {
         let graph_id = self.graph.graph_id;
         let old = self.record(name).map(|old| (old.vector, old.created_by));
         let replacing = old.map(|(vector, _)| vector);
+        if !persist {
+            let replaced = transient(graph_id, self.version, name).map_or(0, |old| old.bytes());
+            admit_transient(replaced, vector.bytes())?;
+        }
         vector.clear_tombstoned(self.tombstones());
         self.held.remove(name);
         // The catalog change comes first: if it fails (a concurrent write),
@@ -220,6 +261,7 @@ impl<E: IdDatum> Vectors<E> {
                 self.records.retain(|bound| bound.name != name);
             }
             keep_transient(graph_id, self.version, name, Arc::new(vector));
+            trim();
             return Ok(None);
         }
         // SAFETY: reads the backend's current user id: the caller's role.
@@ -232,8 +274,41 @@ impl<E: IdDatum> Vectors<E> {
         drop_transient(graph_id, self.version, name);
         let id = record.vector;
         remember(graph_id, id, Arc::new(vector));
+        trim();
         self.records.retain(|bound| bound.name != name);
         self.records.push(record);
         Ok(Some(id))
+    }
+}
+
+#[cfg(any(test, feature = "pg_test"))]
+#[pgrx::pg_schema]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
+mod tests {
+    use std::sync::Arc;
+
+    use pgrx::prelude::*;
+    use pgrx::spi::Error;
+
+    use super::Vectors;
+    use crate::cache::resolve;
+    use crate::fixture::{refresh, ring};
+
+    #[pg_test]
+    fn a_vector_read_twice_in_one_call_is_loaded_once() -> Result<(), Error> {
+        ring("a", 2000, 1)?;
+        refresh("a", true)?;
+        Spi::run("SELECT warren.vector_const('a', 'p', 1)")?;
+        for name in ["w", "x", "y", "z"] {
+            Spi::run(&format!("SELECT warren.vector_const('a', '{name}', 1, persist := false)"))?;
+        }
+        // p (16,000 bytes) cannot be kept beside the transient vectors.
+        Spi::run("SET LOCAL warren.max_cache_memory = '64kB'")?;
+        let resolved = resolve("a", None, "read").map_err(|_| Error::InvalidPosition)?;
+        let mut vectors = Vectors::<i64>::open(resolved).map_err(|_| Error::InvalidPosition)?;
+        let first = vectors.get("p").map_err(|_| Error::InvalidPosition)?;
+        let second = vectors.get("p").map_err(|_| Error::InvalidPosition)?;
+        assert!(Arc::ptr_eq(&first, &second), "p was loaded again");
+        Ok(())
     }
 }
