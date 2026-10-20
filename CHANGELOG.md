@@ -2,6 +2,15 @@
 
 ## 0.3.0 — in development (until M7)
 
+- `eigen` and `distance` default to `tol := 1e-6` (was `1e-8`), about the
+  rounding of the default `f32` vectors, whose explicit residual does not
+  fall below about 10⁻⁷·‖M‖; the old default bought 5–16% more steps and no
+  accuracy. Pass `tol` explicitly to keep the old behaviour (with
+  `dtype := 'f64'` to make it count). `max_iter` now defaults to 1,000
+  operator applications per basis vector (41,000 for k = 20), up from 100:
+  the normalised Laplacian of a random graph of 1M nodes needs 4,590
+  (DESIGN.md §6.5, §14 item 21). Upgrade note: `ALTER EXTENSION pg_warren
+  UPDATE` changes the two defaults.
 - pg_warren is a trusted extension: a role with `CREATE` on the database
   can run `CREATE EXTENSION pg_warren` without being a superuser
   (DESIGN.md §7). Catalog statements now run as the owner of the

@@ -109,7 +109,7 @@ fn distance(
     rels: default!(Option<Vec<Option<String>>>, "NULL"),
     weighted: default!(Option<bool>, "NULL"),
     symmetrize: default!(Option<bool>, "true"),
-    tol: default!(Option<f64>, "1e-8"),
+    tol: default!(Option<f64>, "1e-6"),
     max_iter: default!(Option<i32>, "NULL"),
     dtype: default!(Option<&str>, "'f32'"),
     graph2: default!(Option<&str>, "NULL"),

@@ -97,7 +97,7 @@ fn eigen(
     rels: default!(Option<Vec<Option<String>>>, "NULL"),
     weighted: default!(Option<bool>, "NULL"),
     symmetrize: default!(Option<bool>, "true"),
-    tol: default!(Option<f64>, "1e-8"),
+    tol: default!(Option<f64>, "1e-6"),
     max_iter: default!(Option<i32>, "NULL"),
     vectors_prefix: default!(Option<&str>, "NULL"),
     version: default!(Option<i64>, "NULL"),
