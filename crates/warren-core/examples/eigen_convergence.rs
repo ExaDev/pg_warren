@@ -5,49 +5,41 @@
 //!
 //! ```text
 //! cargo run --release -p warren-core --example eigen_convergence -- \
-//!     EDGES_CSV NODES OPERATOR WHICH K TOL THREADS PRECISION
+//!     EDGES_CSV NODES OPERATOR WHICH K TOL THREADS PRECISION [MAX_ITER]
 //! ```
+//!
+//! `MAX_ITER` is `eigen`'s (default: its own).
 
 use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::time::Instant;
 
 use warren_core::compute::{ComputeMemory, Workers};
-use warren_core::graph::{EdgeList, GraphCsr, RelationDictionary};
 use warren_core::interrupts::Uninterrupted;
-use warren_core::spectral::{eigen, EigenOptions, GraphMatrix, Precision, Resources};
+use warren_core::spectral::{eigen, EigenOptions, GraphMatrix, Resources};
+
+#[path = "fixture/edges.rs"]
+mod edges;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let [path, nodes, operator, which, k, tol, threads, precision] = args.as_slice() else {
-        return Err("usage: EDGES_CSV NODES OPERATOR WHICH K TOL THREADS PRECISION".into());
+    let (required, max_iter) = match args.len() {
+        9 => (&args[..8], Some(args[8].parse()?)),
+        _ => (&args[..], None),
     };
-    let nodes: u64 = nodes.parse()?;
-    let precision = match precision.as_str() {
-        "f32" => Precision::F32,
-        "f64" => Precision::F64,
-        other => return Err(format!("unknown precision {other}").into()),
+    let [path, nodes, operator, which, k, tol, threads, precision] = required else {
+        return Err(
+            "usage: EDGES_CSV NODES OPERATOR WHICH K TOL THREADS PRECISION [MAX_ITER]".into()
+        );
     };
-    let relation = RelationDictionary::new().intern("edge")?;
-    let mut edges = EdgeList::for_id_space(nodes, false);
-    for line in BufReader::new(File::open(path)?).lines().skip(1) {
-        let line = line?;
-        let (src, dst) = line.split_once(',').ok_or("expected src,dst")?;
-        let (src, dst) = (src.parse::<u64>()? - 1, dst.parse::<u64>()? - 1);
-        edges.push(relation, src, dst, 1.0)?;
-        if src != dst {
-            edges.push(relation, dst, src, 1.0)?;
-        }
-    }
-    let graph = GraphCsr::build(edges, 1, nodes, false)?;
+    let graph = edges::undirected_graph(path, nodes.parse()?)?;
     let workers = Workers::new(threads.parse()?)?;
     let memory = ComputeMemory::new(u64::MAX);
     let matrix = GraphMatrix { symmetrize: false, ..GraphMatrix::new(operator.parse()?) };
     let options = EigenOptions {
         which: which.parse()?,
         tol: tol.parse()?,
-        precision,
+        precision: precision.parse()?,
+        max_iter,
         ..EigenOptions::new(k.parse()?)
     };
     let start = Instant::now();
