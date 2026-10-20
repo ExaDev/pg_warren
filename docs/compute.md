@@ -88,7 +88,9 @@ Rules:
 - Every function takes `version := …` (default: current); names are looked
   up among the vectors of that version, and results are bound to it.
   `vector_norm_diff(graph, a, b, norm, a_version, b_version)` compares
-  vectors of two versions, aligned by dense id.
+  vectors of two versions, aligned by dense id. Like `distance`, it refuses
+  (22023) versions whose shared dense ids name different nodes: across a
+  `compact`, or two sibling staged versions that added different nodes.
 
 ## Semiring products: `spmv` and `spmm`
 
@@ -179,9 +181,12 @@ SELECT warren.explain_map('roads', 'pop::numeric + 1');
   `real`, `bigint`, `integer`, `smallint` and `boolean`; and `abs`, `sqrt`, `exp`, `ln`, `log`, `power`, `floor`,
   `ceil`, `round`, `sign`. Numeric literals such as `0.85 * x` compile.
 - Anything else runs through the **executor**, row by row (a design
-  estimate of 100–500 ns per row; JIT-compiled per the `jit` settings), as you and under
-  your `search_path`. Both paths give the same results and the same errors.
-  `explain_map` says which path an expression takes, and why.
+  estimate of 100–500 ns per row; JIT-compiled per the `jit` settings). It
+  runs as you, under your `search_path`, and in read-only transaction state:
+  a function the expression calls cannot write, and `nextval` on a
+  non-temporary sequence is refused (25006). Both paths give the same
+  results and the same errors. `explain_map` says which path an expression
+  takes, and why.
 - Aggregates, window functions, set-returning functions and subqueries are
   refused.
 - The result's dtype is the expression's type (`integer` becomes `bigint`,

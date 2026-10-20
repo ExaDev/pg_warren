@@ -280,6 +280,11 @@ SELECT assert.raises($$SELECT * FROM warren.gather('roads', 'SELECT docs_writes(
                      'a write through a called function is refused', '25006');
 SELECT assert.raises($$SELECT warren.vector_from_query('roads', 'w', 'SELECT docs_writes(id), pop FROM city')$$,
                      'vector_from_query is read-only too', '25006');
+SELECT assert.raises($$SELECT warren.vector_map('roads', 'w', 'docs_writes(pop::int)')$$,
+                     'a vector_map expression cannot write', '25006');
+CREATE SEQUENCE docs_seq;
+SELECT assert.raises($$SELECT warren.vector_map('roads', 'w', 'nextval(''docs_seq'')')$$,
+                     'nor take nextval of a non-temporary sequence', '25006');
 SELECT assert.equal((SELECT count(*) FROM city), 5::bigint, 'nothing was deleted');
 
 -- "The algorithm library"
@@ -495,6 +500,11 @@ SELECT assert.raises(format($$SELECT warren.distance('kg', %s, %s, 'edit')$$, :c
                      'siblings whose new nodes diverge', '22023');
 SELECT assert.equal((warren.distance('kg', :base, :sibling, 'edit') #>> '{overall,added}')::bigint, 2::bigint,
                     'each sibling compares with the base');
+SELECT assert.raises(format($$SELECT warren.diff('kg', %s, %s)$$, :candidate, :sibling), 'diff refuses siblings', '22023');
+SELECT warren.vector_const('kg', 'd', 1, version := :candidate);
+SELECT warren.vector_const('kg', 'd', 1, version := :sibling);
+SELECT assert.raises(format($$SELECT warren.vector_norm_diff('kg', 'd', 'd', 'l2', %s, %s)$$, :candidate, :sibling),
+                     'vector_norm_diff refuses siblings', '22023');
 ROLLBACK TO SAVEPOINT siblings;
 -- 5. decide: here, the change is too large
 ROLLBACK;

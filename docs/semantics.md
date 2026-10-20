@@ -248,8 +248,10 @@ own `search_path`, and no user SQL runs with elevated rights.
 Source queries, `vector_from_query`'s query, `gather`'s messages and
 `vector_map` expressions on the executor path run in
 Postgres's **read-only transaction state**, as under `SET TRANSACTION READ
-ONLY`. A function they call cannot write (25006), and a data-modifying CTE is
-refused (0A000). This guards the integrity of what a build or kernel reads;
+ONLY`. A function they call cannot write (25006), `nextval` on a
+non-temporary sequence is refused the same way, and a data-modifying CTE is
+refused (0A000). The library functions call `vector_map`, so the same holds
+for them. This guards the integrity of what a build or kernel reads;
 it is **not a sandbox**. Writes to existing temporary tables, `pg_notify`,
 `LOCK`, `COPY … TO PROGRAM` for roles allowed it, and writes over another
 connection (`dblink_exec`) still work. None of these gains privilege, since
