@@ -208,6 +208,29 @@ fn operators() -> impl Strategy<Value = Operator> {
     prop::sample::select(Operator::ALL.to_vec())
 }
 
+#[test]
+fn a_solve_is_admitted_or_refused_without_solving() {
+    let graph = reference::graph(200, 1, &path(200), false, true);
+    let options = EigenOptions::new(4);
+    let matrix = GraphMatrix::new(Operator::Laplacian);
+    let needed = path_working_set(200, Operator::Laplacian, 4, Precision::F32).bytes();
+    for (limit, admitted) in [(needed - 1, false), (needed, true)] {
+        let memory = ComputeMemory::new(limit);
+        let mut resources =
+            Resources { workers: workers(1), memory: &memory, interrupts: &mut Uninterrupted };
+        let found = admit_eigen(&mut resources, &graph, &matrix, &options);
+        assert_eq!(found.is_ok(), admitted, "{found:?}");
+        assert_eq!(found.err(), solve_within(limit, &graph, &matrix, &options).err());
+        assert_eq!(memory.in_use(), 0);
+    }
+    let too_many = EigenOptions::new(201);
+    let memory = ComputeMemory::new(1 << 24);
+    let mut resources =
+        Resources { workers: workers(1), memory: &memory, interrupts: &mut Uninterrupted };
+    let refused = admit_eigen(&mut resources, &graph, &matrix, &too_many).unwrap_err();
+    assert_eq!(refused, SpectralError::EigenpairCount { k: 201, dimension: 200 });
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(24))]
 
@@ -312,8 +335,91 @@ fn the_lanczos_vectors_are_charged_to_the_budget() {
         Resources { workers: workers(1), memory: &memory, interrupts: &mut Uninterrupted };
     let options = EigenOptions { precision: Precision::F64, ..EigenOptions::new(2) };
     let result = eigen(&mut resources, &graph, &GraphMatrix::new(Operator::Adjacency), &options);
-    assert!(matches!(result, Err(SpectralError::Compute(ComputeError::MemoryLimit { .. }))));
+    assert!(matches!(result, Err(SpectralError::WorkingSet { .. })), "{result:?}");
     assert_eq!(memory.in_use(), 0);
+}
+
+/// The working set of `k` eigenpairs of `operator` over [`path`]`(n)`,
+/// every node of which is active.
+fn path_working_set(n: u64, operator: Operator, k: usize, precision: Precision) -> WorkingSet {
+    WorkingSet { id_space: n, dimension: n, operator, k, precision }
+}
+
+#[test]
+fn the_operator_charges_what_its_working_set_counts() {
+    let graph = reference::graph(300, 1, &path(300), false, true);
+    for operator in Operator::ALL {
+        let memory = ComputeMemory::new(1 << 24);
+        let mut resources =
+            Resources { workers: workers(1), memory: &memory, interrupts: &mut Uninterrupted };
+        let _operator =
+            LinearOperator::new(&mut resources, &graph, &GraphMatrix::new(operator)).unwrap();
+        let expected = path_working_set(300, operator, 1, Precision::F32).operator_bytes();
+        assert_eq!(memory.in_use(), expected, "{operator:?}");
+    }
+}
+
+/// Solves `matrix` over `graph` within a budget of `limit` bytes, and
+/// returns the steps it took, checking that nothing stays charged.
+fn solve_within(
+    limit: u64,
+    graph: &GraphCsr,
+    matrix: &GraphMatrix<'_>,
+    options: &EigenOptions,
+) -> Result<usize, SpectralError> {
+    let memory = ComputeMemory::new(limit);
+    let mut resources =
+        Resources { workers: workers(2), memory: &memory, interrupts: &mut Uninterrupted };
+    let steps = eigen(&mut resources, graph, matrix, options).map(|eigen| eigen.iterations);
+    assert_eq!(memory.in_use(), 0);
+    steps
+}
+
+#[test]
+fn a_solve_that_cannot_fit_is_refused_before_its_first_step() {
+    // The basis and the operator fit; the solve would run its 2,000 steps
+    // and only then fail to allocate its eigenvectors.
+    let graph = reference::graph(500, 1, &path(500), false, true);
+    let options = EigenOptions { tol: 0.0, max_iter: Some(2000), ..EigenOptions::new(10) };
+    let set = path_working_set(500, Operator::Adjacency, 10, Precision::F32);
+    // 500 rows in blocks of 7 make 504, and the basis holds 21 vectors.
+    let limit = set.operator_bytes() + 504 * 21 * 4 + 1000;
+    let refused = solve_within(limit, &graph, &GraphMatrix::new(Operator::Adjacency), &options);
+    let needed = set.bytes();
+    assert_eq!(refused.unwrap_err(), SpectralError::WorkingSet { needed, in_use: 0, limit });
+}
+
+#[test]
+fn a_budget_one_byte_short_of_the_working_set_is_refused() {
+    let graph = reference::graph(200, 1, &path(200), false, true);
+    let options = EigenOptions { precision: Precision::F64, ..EigenOptions::new(3) };
+    let matrix = GraphMatrix::new(Operator::RandomWalk);
+    let needed = path_working_set(200, Operator::RandomWalk, 3, Precision::F64).bytes();
+    let refused = solve_within(needed - 1, &graph, &matrix, &options).unwrap_err();
+    assert_eq!(refused, SpectralError::WorkingSet { needed, in_use: 0, limit: needed - 1 });
+    assert!(solve_within(needed, &graph, &matrix, &options).is_ok_and(|steps| steps > 0));
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(24))]
+
+    #[test]
+    fn a_solve_fits_a_budget_of_its_working_set(
+        operator in operators(),
+        k in 1usize..14,
+        f64s in any::<bool>(),
+        reverse in any::<bool>(),
+        n in 30u64..120,
+    ) {
+        // Without reverse CSRs the symmetrised product pushes, with a
+        // scratch of its own.
+        let graph = reference::graph(n, 1, &path(n), true, reverse);
+        let precision = if f64s { Precision::F64 } else { Precision::F32 };
+        let options = EigenOptions { precision, tol: 1e-3, max_iter: Some(300), ..EigenOptions::new(k) };
+        let bytes = path_working_set(n, operator, k, precision).bytes();
+        let solved = solve_within(bytes, &graph, &GraphMatrix::new(operator), &options);
+        prop_assert!(solved.is_ok(), "{solved:?}");
+    }
 }
 
 /// Asks to stop on the `n`th poll.

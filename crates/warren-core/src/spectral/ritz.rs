@@ -4,32 +4,45 @@
 
 use std::cmp::Ordering;
 
-use nalgebra::{DMatrix, SymmetricEigen};
+use nalgebra::{DMatrix, DMatrixView, SymmetricEigen};
 
+use super::working_set::RITZ_MATRICES;
 use super::{SpectralError, Which};
+use crate::compute::{ComputeMemory, MemoryCharge};
 
 /// The sweeps nalgebra's symmetric QR iteration may take per dimension.
 const SWEEPS_PER_DIMENSION: usize = 100;
 
 /// Ritz values and the coordinates of their Ritz vectors in the basis.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(super) struct Ritz {
     /// Ritz values in `which` order.
     pub(super) values: Vec<f64>,
     /// Column `l` holds the coordinates of the Ritz vector of `values[l]`.
     pub(super) vectors: DMatrix<f64>,
+    /// The decomposition's matrices and values, charged for as long as
+    /// the pairs are held.
+    _charge: MemoryCharge,
 }
 
 impl Ritz {
     /// The eigenpairs of the symmetric `h`, in `which` order. For
     /// `Largest`, values whose magnitudes differ by at most `tie · max|θ|`
     /// count as equal, so that `λ` comes before `−λ` whichever rounding
-    /// made larger.
-    pub(super) fn of(h: DMatrix<f64>, which: Which, tie: f64) -> Result<Self, SpectralError> {
+    /// made larger. The copy of `h` it decomposes, the eigenvectors and
+    /// them reordered are charged to `memory` before any is made.
+    pub(super) fn of(
+        memory: &ComputeMemory,
+        h: &DMatrixView<'_, f64>,
+        which: Which,
+        tie: f64,
+    ) -> Result<Self, SpectralError> {
         if h.iter().any(|value| !value.is_finite()) {
             return Err(SpectralError::NotFinite);
         }
         let n = h.nrows();
+        let charge = memory.charge_elements::<f64>(RITZ_MATRICES as usize * n * n + n)?;
+        let h = h.into_owned();
         let eigen = SymmetricEigen::try_new(h, f64::EPSILON, SWEEPS_PER_DIMENSION * n.max(1))
             .ok_or(SpectralError::NotFinite)?;
         let mut order: Vec<usize> = (0..n).collect();
@@ -39,7 +52,7 @@ impl Ritz {
             positives_first(&mut order, values, tie);
         }
         let vectors = DMatrix::from_fn(n, n, |i, l| eigen.eigenvectors[(i, order[l])]);
-        Ok(Self { values: order.iter().map(|&l| values[l]).collect(), vectors })
+        Ok(Self { values: order.iter().map(|&l| values[l]).collect(), vectors, _charge: charge })
     }
 }
 
@@ -74,17 +87,35 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::compute::ComputeError;
+
+    fn ritz(h: DMatrix<f64>, which: Which, tie: f64) -> Result<Ritz, SpectralError> {
+        Ritz::of(&ComputeMemory::new(1 << 20), &h.as_view(), which, tie)
+    }
+
+    #[test]
+    fn the_decomposition_is_charged_while_its_pairs_are_held() {
+        let h = DMatrix::from_diagonal(&nalgebra::DVector::from_vec(vec![1.0, 2.0, 3.0]));
+        let bytes = (RITZ_MATRICES * 9 + 3) * 8;
+        let memory = ComputeMemory::new(bytes);
+        let pairs = Ritz::of(&memory, &h.as_view(), Which::Largest, 0.0).unwrap();
+        assert_eq!(memory.in_use(), bytes);
+        drop(pairs);
+        let short = ComputeMemory::new(bytes - 1);
+        let refused = Ritz::of(&short, &h.as_view(), Which::Largest, 0.0).unwrap_err();
+        assert!(matches!(refused, SpectralError::Compute(ComputeError::MemoryLimit { .. })));
+    }
 
     #[test]
     fn ritz_pairs_come_in_which_order() {
         let h = DMatrix::from_diagonal(&nalgebra::DVector::from_vec(vec![1.0, -3.0, 2.0, 3.0]));
-        let largest = Ritz::of(h.clone(), Which::Largest, 0.0).unwrap();
+        let largest = ritz(h.clone(), Which::Largest, 0.0).unwrap();
         assert_eq!(largest.values, [3.0, -3.0, 2.0, 1.0]);
         assert_eq!(
             largest.vectors.column(0).iter().copied().collect::<Vec<_>>(),
             [0.0, 0.0, 0.0, 1.0]
         );
-        let smallest = Ritz::of(h, Which::Smallest, 0.0).unwrap();
+        let smallest = ritz(h, Which::Smallest, 0.0).unwrap();
         assert_eq!(smallest.values, [-3.0, 1.0, 2.0, 3.0]);
     }
 
@@ -93,16 +124,16 @@ mod tests {
         // −2 is larger in magnitude by rounding only.
         let h = DMatrix::from_diagonal(&nalgebra::DVector::from_vec(vec![1.0, -2.0 - 4e-15, 2.0]));
         assert_eq!(
-            Ritz::of(h.clone(), Which::Largest, 1e-12).unwrap().values,
+            ritz(h.clone(), Which::Largest, 1e-12).unwrap().values,
             [2.0, -2.0 - 4e-15, 1.0]
         );
         let apart = DMatrix::from_diagonal(&nalgebra::DVector::from_vec(vec![-2.1, 2.0]));
-        assert_eq!(Ritz::of(apart, Which::Largest, 1e-12).unwrap().values, [-2.1, 2.0]);
+        assert_eq!(ritz(apart, Which::Largest, 1e-12).unwrap().values, [-2.1, 2.0]);
     }
 
     fn largest(values: &[f64], tie: f64) -> Vec<f64> {
         let h = DMatrix::from_diagonal(&nalgebra::DVector::from_vec(values.to_vec()));
-        Ritz::of(h, Which::Largest, tie).unwrap().values
+        ritz(h, Which::Largest, tie).unwrap().values
     }
 
     #[test]
@@ -150,6 +181,6 @@ mod tests {
     #[test]
     fn a_non_finite_matrix_is_refused() {
         let h = DMatrix::from_element(2, 2, f64::NAN);
-        assert_eq!(Ritz::of(h, Which::Largest, 0.0).unwrap_err(), SpectralError::NotFinite);
+        assert_eq!(ritz(h, Which::Largest, 0.0).unwrap_err(), SpectralError::NotFinite);
     }
 }

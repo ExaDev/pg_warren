@@ -46,6 +46,21 @@ pub enum SpectralError {
         /// The number of active nodes.
         dimension: u64,
     },
+    /// The eigenproblem's working set does not fit the compute memory
+    /// beside what is already in use, so it is refused before its first
+    /// step.
+    #[error(
+        "compute memory limit exceeded: the eigenproblem needs {needed} bytes, \
+         {in_use} of {limit} in use beside it"
+    )]
+    WorkingSet {
+        /// The bytes the eigenproblem holds at its peak.
+        needed: u64,
+        /// The bytes in use beside it, after reclaiming what could be.
+        in_use: u64,
+        /// The budget's limit in bytes.
+        limit: u64,
+    },
     /// A value overflowed (weights too large) and the iteration cannot
     /// continue.
     #[error("the eigenproblem produced a non-finite value")]
