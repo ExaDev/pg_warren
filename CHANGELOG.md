@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.4.0 — in development
+
 ## 0.3.0 — hardening: bounded memory, trusted install, 100M-edge scale (2026-10-20)
 
 Milestone M7 of DESIGN.md §13. A graph of 10M nodes and 100M edges now

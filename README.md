@@ -208,6 +208,9 @@ Every SQL example in the README and `docs/` runs in CI, in
   20× target; and `eigen` does not converge within 10 minutes on a uniform
   random graph of that size ([docs/limits.md](docs/limits.md)).
 
+- **0.4.0** (in development): locality ordering of dense ids first (DESIGN.md
+  §14 item 22), then the planned library's first groups (§6.7).
+
 See [CHANGELOG.md](CHANGELOG.md). This is pre-1.0 software: the SQL surface
 may still change between minor versions, with an upgrade script each time.
 
