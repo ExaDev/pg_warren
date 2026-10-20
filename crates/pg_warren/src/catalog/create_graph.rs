@@ -8,18 +8,24 @@ use crate::access::{current_user, entry, with_search_path};
 use crate::read_only::read_one;
 use crate::source::{check_edge_columns, check_node_columns, source_columns};
 
-/// Of the schemas in `$1`, those, in order, in which a role other than the
-/// caller that is not a superuser and not predefined (`pg_*`;
-/// `pg_database_owner` counts through the database's owner) may create
-/// objects. (Membership is not excluded: a superuser is a member of every
-/// role, and a group role's other members could create there too.)
-const WRITABLE_SCHEMAS: &str = "SELECT pg_catalog.string_agg(s.name, ', ' ORDER BY s.position)
+/// Of the schemas in `$1`, those, in order and quoted, in which PUBLIC or
+/// a role other than the caller that is not a superuser and not predefined
+/// (`pg_*`; `pg_database_owner` counts through the database's owner) may
+/// create objects. (Membership is not excluded: a superuser is a member of
+/// every role, and a group role's other members could create there too.)
+/// Temporary schemas are left out: Postgres reports CREATE on this
+/// session's own for every role with TEMP, but no other session can use
+/// it.
+const WRITABLE_SCHEMAS: &str = "SELECT pg_catalog.string_agg(pg_catalog.quote_ident(s.name), ', '
+                                                ORDER BY s.position)
      FROM pg_catalog.unnest($1::pg_catalog.name[]) WITH ORDINALITY AS s (name, position)
      JOIN pg_catalog.pg_namespace n ON n.nspname = s.name
-     WHERE EXISTS (SELECT FROM pg_catalog.pg_roles r
-                   WHERE NOT r.rolsuper AND NOT pg_catalog.starts_with(r.rolname, 'pg_')
-                     AND r.rolname <> pg_catalog.current_user()
-                     AND pg_catalog.has_schema_privilege(r.oid, n.oid, 'CREATE'))";
+     WHERE n.oid <> pg_catalog.pg_my_temp_schema() AND NOT pg_catalog.pg_is_other_temp_schema(n.oid)
+       AND (pg_catalog.has_schema_privilege('public', n.oid, 'CREATE')
+            OR EXISTS (SELECT FROM pg_catalog.pg_roles r
+                       WHERE NOT r.rolsuper AND NOT pg_catalog.starts_with(r.rolname, 'pg_')
+                         AND r.rolname <> pg_catalog.current_user()
+                         AND pg_catalog.has_schema_privilege(r.oid, n.oid, 'CREATE')))";
 
 /// `warren.create_graph`: records graph `name` over `node_query` and
 /// `edge_query`, owned by the calling role, with the caller's
@@ -128,6 +134,34 @@ mod tests {
         assert_eq!(found("cg_private")?, None, "only the owner (a superuser) can create there");
         assert_eq!(found("public")?, None, "PG 15+: only the database owner, here a superuser");
         assert_eq!(found("cg_missing, pg_catalog")?, None, "missing and system schemas");
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_schema_public_can_create_in_is_found_without_other_roles() -> Result<(), Error> {
+        Spi::run("CREATE SCHEMA cg_open; GRANT CREATE ON SCHEMA cg_open TO PUBLIC")?;
+        let found = super::writable_schemas("cg_open").map_err(|_| Error::InvalidPosition)?;
+        assert_eq!(found.as_deref(), Some("cg_open"));
+        Ok(())
+    }
+
+    /// Every role with TEMP on the database has CREATE on this session's
+    /// own temporary schema, as Postgres reports it; nobody else can use it.
+    #[pg_test]
+    fn the_sessions_temporary_schema_is_not_found() -> Result<(), Error> {
+        Spi::run("CREATE ROLE cg_temp_other; CREATE TEMP TABLE cg_temp (x int)")?;
+        let found = super::writable_schemas("pg_temp").map_err(|_| Error::InvalidPosition)?;
+        assert_eq!(found, None);
+        Ok(())
+    }
+
+    #[pg_test]
+    fn schema_names_are_quoted() -> Result<(), Error> {
+        Spi::run(
+            r#"CREATE ROLE cg_quoted; CREATE SCHEMA "cg Odd"; GRANT CREATE ON SCHEMA "cg Odd" TO cg_quoted"#,
+        )?;
+        let found = super::writable_schemas(r#""cg Odd""#).map_err(|_| Error::InvalidPosition)?;
+        assert_eq!(found.as_deref(), Some(r#""cg Odd""#));
         Ok(())
     }
 
