@@ -92,8 +92,9 @@ impl<E: ExternalId> IdMap<E> {
 
     /// [`Self::rebuild`], charging every buffer to the memory `externals`
     /// is charged to; returns the charge for the id map it holds. The
-    /// externals are sorted in place and freed before the inverse map is
-    /// built.
+    /// externals are sorted in place, the new ids among them counted, and
+    /// every buffer reserved exactly; they are freed before the inverse map
+    /// is built.
     pub fn rebuild_within(
         &self,
         mut externals: BuildBuffer<E>,
@@ -101,11 +102,12 @@ impl<E: ExternalId> IdMap<E> {
         let memory = externals.memory().clone();
         externals.sort_unstable();
         externals.dedup();
-        let capacity = self.by_external.len() + externals.len();
-        let mut by_external = BuildBuffer::with_capacity(&memory, capacity)?;
-        let mut fresh = BuildBuffer::with_capacity(&memory, externals.len())?;
-        let most_words = Tombstones::bytes_for(self.id_space() + externals.len() as u64);
-        let mut tombstones_charge = memory.charge(most_words)?;
+        let fresh_count = self.fresh(&externals);
+        let mut by_external =
+            BuildBuffer::with_capacity(&memory, self.by_external.len() + fresh_count)?;
+        let mut fresh = BuildBuffer::with_capacity(&memory, fresh_count)?;
+        let words = Tombstones::bytes_for(self.id_space() + fresh_count as u64);
+        let tombstones_charge = memory.charge(words)?;
         let mut tombstones = self.tombstones.try_clone()?;
         let mut next_dense = self.id_space();
         let mut previous = self.by_external.iter().peekable();
@@ -141,18 +143,28 @@ impl<E: ExternalId> IdMap<E> {
             }
         }
         drop(externals);
-        by_external.shrink_to_fit();
         let mut by_dense = BuildBuffer::with_capacity(&memory, self.by_dense.len() + fresh.len())?;
         by_dense.extend(self.by_dense.iter().copied());
         by_dense.extend(fresh.iter().copied());
         drop(fresh);
         tombstones.grow_to(next_dense)?;
-        tombstones_charge.shrink(most_words.saturating_sub(tombstones.bytes()));
         let (by_external, mut charge) = by_external.into_parts();
         let (by_dense, by_dense_charge) = by_dense.into_parts();
         charge.absorb(by_dense_charge);
         charge.absorb(tombstones_charge);
         Ok((Self { by_external, by_dense, tombstones }, charge))
+    }
+
+    /// How many of the sorted, distinct `externals` this map does not hold.
+    fn fresh(&self, externals: &[E]) -> usize {
+        let mut known = self.by_external.iter().map(|(external, _)| external).peekable();
+        externals
+            .iter()
+            .filter(|external| {
+                while known.next_if(|known| known < external).is_some() {}
+                known.peek() != Some(external)
+            })
+            .count()
     }
 
     /// An id map from its (external id, dense id) pairs and tombstones,
@@ -255,6 +267,28 @@ mod tests {
         let pair = std::mem::size_of::<(i64, DenseId)>() as u64;
         assert_eq!(id_map.bytes(), 3 * pair + 3 * 8 + id_map.tombstones().bytes());
         assert_eq!(IdMap::<i64>::new().bytes(), 0);
+    }
+
+    /// A rebuild reserves exactly what the result holds: with a stable
+    /// node set, its peak is the externals and the result, not a second
+    /// copy of the base and a fresh-id buffer for every external.
+    #[test]
+    fn a_rebuild_charges_no_more_than_its_externals_and_its_result() {
+        let nodes = 10_000i64;
+        let base = first_build((0..nodes).collect());
+        for externals in [(0..nodes).collect::<Vec<_>>(), (nodes / 2..nodes * 3 / 2).collect()] {
+            let memory = BuildMemory::unlimited();
+            let externals = BuildBuffer::from_vec(&memory, externals);
+            let held = externals.bytes();
+            let (rebuilt, charge) = base.rebuild_within(externals).unwrap();
+            assert_eq!(charge.bytes(), rebuilt.bytes());
+            assert!(
+                memory.peak() <= held + rebuilt.bytes(),
+                "{} > {held} + {}",
+                memory.peak(),
+                rebuilt.bytes()
+            );
+        }
     }
 
     #[test]
