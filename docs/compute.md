@@ -166,8 +166,9 @@ SELECT warren.explain_map('roads', 'pop::numeric + 1');
   `real`, `bigint`, `integer`, `smallint` and `boolean`; and `abs`, `sqrt`, `exp`, `ln`, `log`, `power`, `floor`,
   `ceil`, `round`, `sign`. Numeric literals such as `0.85 * x` compile.
 - Anything else runs through the **executor**, row by row (a design
-  estimate of 100–500 ns per row; JIT-compiled per the `jit` settings), as you and under
-  your `search_path`. Both paths give the same results and the same errors.
+  estimate of 100–500 ns per row; JIT-compiled per the `jit` settings), as you, under
+  your `search_path` and in read-only transaction state (a function the
+  expression calls cannot write, 25006). Both paths give the same results and the same errors.
   `explain_map` says which path an expression takes, and why.
 - Aggregates, window functions, set-returning functions and subqueries are
   refused.

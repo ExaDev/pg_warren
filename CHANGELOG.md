@@ -12,6 +12,14 @@
   (`pagerank` keeps about eleven full-length `f64` vectors, ~88 bytes per
   node) above it, is now reloaded on every call, with a `NOTICE` once per
   statement. Raise `warren.max_cache_memory` for such graphs.
+- Behaviour change: `vector_map` expressions that take the executor path
+  now run in Postgres's read-only transaction state too, as 0.2.0 made
+  source queries, `vector_from_query` and `gather` do, so an expression
+  that writes through a function it calls (a PL/pgSQL `w(x)` that inserts)
+  now fails with 25006 instead of writing, as does `nextval` on a
+  non-temporary sequence. The library functions, which
+  call `vector_map`, inherit this. An integrity guard, not a sandbox
+  (DESIGN.md §7).
 
 ## 0.2.0 — vectors, compute and spectral analysis
 

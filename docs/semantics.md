@@ -232,9 +232,10 @@ graph's owner. Transient vectors are private to the role that wrote them.
 So a caller cannot redirect a graph's unqualified table names with their
 own `search_path`, and no user SQL runs with elevated rights.
 
-Source queries, `vector_from_query`'s query and `gather`'s messages run in
-Postgres's **read-only transaction state**, as under `SET TRANSACTION READ
-ONLY`. A function they call cannot write (25006), and a data-modifying CTE is
+Source queries, `vector_from_query`'s query, `gather`'s messages and
+`vector_map` expressions on the executor path run in Postgres's **read-only
+transaction state**, as under `SET TRANSACTION READ ONLY`. A function they
+call cannot write (25006), and a data-modifying CTE is
 refused (0A000). This guards the integrity of what a build or kernel reads;
 it is **not a sandbox**. Writes to existing temporary tables, `pg_notify`,
 `LOCK`, `COPY … TO PROGRAM` for roles allowed it, and writes over another
