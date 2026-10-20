@@ -304,15 +304,21 @@ mod tests {
 
     /// Trigger functions cannot be called, so they have no entry in
     /// `CALLS`; they fire inside elevated catalog statements, so each pins
-    /// its own `search_path`.
+    /// its own `search_path`, and PUBLIC has no EXECUTE on them.
     #[pg_test]
-    fn every_trigger_function_pins_the_search_path() -> Result<(), Error> {
+    fn every_trigger_function_pins_the_search_path_and_is_not_public() -> Result<(), Error> {
         let unpinned = Spi::get_one::<String>(
             "SELECT string_agg(proname, ',' ORDER BY proname) FROM pg_proc
              WHERE pronamespace = 'warren'::regnamespace AND prorettype = 'trigger'::regtype
                AND proconfig IS DISTINCT FROM '{\"search_path=pg_catalog, pg_temp\"}'",
         )?;
         assert_eq!(unpinned, None);
+        let executable = Spi::get_one::<String>(
+            "SELECT string_agg(proname, ',' ORDER BY proname) FROM pg_proc
+             WHERE pronamespace = 'warren'::regnamespace AND prorettype = 'trigger'::regtype
+               AND has_function_privilege('public', oid, 'EXECUTE')",
+        )?;
+        assert_eq!(executable, None, "PUBLIC may execute a trigger function");
         Ok(())
     }
 

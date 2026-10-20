@@ -11,7 +11,7 @@ use super::bound::make_room;
 use super::versions::{VersionCache, CACHE};
 use super::{load, trim, CacheError, LoadedVersion};
 use crate::access::{as_catalog_owner, require_reader};
-use crate::catalog::{require_version, GraphDefinition, VersionId};
+use crate::catalog::{require_version, CatalogError, GraphDefinition, VersionId};
 use crate::read_only::read_one;
 use crate::segment::SpiSegmentStore;
 use crate::source::IdDatum;
@@ -25,8 +25,8 @@ pub(crate) struct Resolved {
     pub(crate) version: VersionId,
 }
 
-/// Graph `name` and the version a call reads: `version` if given (which
-/// must be a version of the graph), else its current version. The caller
+/// Graph `name` and the version a call reads: `version` if given, else its
+/// current version; either must be a version of the graph. The caller
 /// must be a member of the owner role or of a reader role; `action` names
 /// what it does, for the error.
 pub(crate) fn resolve(
@@ -42,7 +42,19 @@ pub(crate) fn resolve(
             version
         }
         None => {
-            graph.current_version.ok_or_else(|| CacheError::NoCurrentVersion(graph.name.clone()))?
+            let current = graph
+                .current_version
+                .ok_or_else(|| CacheError::NoCurrentVersion(graph.name.clone()))?;
+            match require_version(&graph, current) {
+                Err(CatalogError::VersionNotFound { .. }) => {
+                    return Err(CacheError::StrayCurrentVersion {
+                        graph: graph.name.clone(),
+                        version: current,
+                    })
+                }
+                found => found?,
+            }
+            current
         }
     };
     Ok(Resolved { graph, version })
@@ -137,4 +149,40 @@ fn existing_versions(versions: &[VersionId]) -> Result<Vec<VersionId>, CacheErro
             .unwrap_or_default(),
         )
     })
+}
+
+#[cfg(any(test, feature = "pg_test"))]
+#[pgrx::pg_schema]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
+mod tests {
+    use pgrx::prelude::*;
+    use pgrx::spi::Error;
+
+    use crate::fixture::{failure, refresh, ring};
+
+    /// A restore writes `graphs.current_version` without the triggers'
+    /// check (DESIGN.md §5.1), so a call must not read whatever version it
+    /// names: another graph's version, or none.
+    #[pg_test]
+    fn a_current_version_that_is_not_one_of_the_graphs_is_an_error() -> Result<(), Error> {
+        ring("stray_a", 3, 2)?;
+        ring("stray_b", 3, 2)?;
+        refresh("stray_a", true)?;
+        let other = refresh("stray_b", true)?;
+        for stray in [other, -1] {
+            Spi::run(&format!(
+                "SET session_replication_role = replica;
+                 UPDATE warren.graphs SET current_version = {stray} WHERE name = 'stray_a';
+                 RESET session_replication_role"
+            ))?;
+            assert_eq!(
+                failure("warren.degree('stray_a', 1::bigint)")?,
+                Some(format!(
+                    "55000: the current version {stray} of graph \"stray_a\" is not one of its \
+                     versions; promote one of them"
+                ))
+            );
+        }
+        Ok(())
+    }
 }

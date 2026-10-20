@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from harness.dump import STATE, differences, restore_command
+from harness.dump import STATE, differences, restore_command, unexpected_warnings
 
 
 class FakeCluster:
@@ -36,3 +36,23 @@ def test_a_changed_row_is_reported_with_its_kind():
     after = dict(before, vectors=[["2"]])
     diff = differences(before, after, "restored")
     assert "restored: vectors" in diff and "-1" in diff and "+2" in diff
+
+
+SELF_REFERENCE = """pg_dump: warning: there are circular foreign-key constraints on this table:
+pg_dump: detail: versions
+pg_dump: hint: You might not be able to restore the dump without using --disable-triggers or temporarily dropping the constraints.
+pg_dump: hint: Consider using a full dump instead of a --data-only dump to avoid this problem.
+"""
+
+
+def test_the_versions_self_reference_warning_is_expected():
+    assert unexpected_warnings(SELF_REFERENCE) == []
+
+
+def test_a_cycle_between_tables_is_an_unexpected_warning():
+    cycle = """pg_dump: warning: there are circular foreign-key constraints among these tables:
+pg_dump: detail: graphs
+pg_dump: detail: versions
+"""
+    found = unexpected_warnings(SELF_REFERENCE + cycle)
+    assert found == ["warning: there are circular foreign-key constraints among these tables: graphs, versions"]

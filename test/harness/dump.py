@@ -110,10 +110,38 @@ def restore_command(cluster, database, path, custom, user="postgres"):
             "-f", str(path)]
 
 
-def _run(command):
-    """Runs `command`; returns its error output if it failed, else None."""
+# pg_dump warns about every foreign-key cycle among the tables it dumps,
+# including a table that references itself (warren.versions:
+# compacted_from, parent_version), and hints at --disable-triggers. A
+# self-reference is checked at the end of its table's COPY, so that warning
+# is expected and its hint is not to be followed (DESIGN.md §5.1); any
+# other warning is a failure.
+EXPECTED_WARNING = "warning: there are circular foreign-key constraints on this table: versions"
+
+
+def unexpected_warnings(stderr):
+    """pg_dump's warnings, each with its detail lines, other than
+    EXPECTED_WARNING."""
+    warnings = []
+    for line in stderr.splitlines():
+        message = line.removeprefix("pg_dump: ")
+        if message.startswith("warning: "):
+            warnings.append([message])
+        elif message.startswith("detail: ") and warnings:
+            warnings[-1].append(message.removeprefix("detail: "))
+    found = [f"{w[0]} {', '.join(w[1:])}".strip() for w in warnings]
+    return [w for w in found if w != EXPECTED_WARNING]
+
+
+def _run(command, warnings=None):
+    """Runs `command`; returns its error output if it failed, else None.
+    Appends pg_dump's unexpected warnings to `warnings`, if given."""
     done = subprocess.run(command, capture_output=True, text=True)
-    return None if done.returncode == 0 else f"{' '.join(command[:1])} failed: {done.stdout}{done.stderr}"
+    if done.returncode != 0:
+        return f"{' '.join(command[:1])} failed: {done.stdout}{done.stderr}"
+    if warnings is not None:
+        warnings += unexpected_warnings(done.stderr)
+    return None
 
 
 def check(cluster, directory):
@@ -129,10 +157,12 @@ def check(cluster, directory):
     failures = [f"the seeded database has no {kind} to compare" for kind, rows in expected.items() if not rows]
     for label, custom in (("plain", False), ("custom", True)):
         path = directory / f"dump.{label}"
-        error = _run(dump_command(cluster, "dump_source", path, "-Fc" if custom else "-Fp"))
+        warnings = []
+        error = _run(dump_command(cluster, "dump_source", path, "-Fc" if custom else "-Fp"), warnings)
         if error:
             failures.append(f"{label}: {error}")
             continue
+        failures += [f"{label}: pg_dump: {warning}" for warning in warnings]
         name = f"dump_restored_{label}"
         admin.execute(f"CREATE DATABASE {name}")
         error = _run(restore_command(cluster, name, path, custom))
