@@ -2,30 +2,37 @@
 //! with edges whose endpoints are NULL or unknown dropped and counted
 //! (DESIGN.md §5.4 step 3).
 
-use super::{memory, DenseId, ExternalId, GraphError, IdMap, RelationIndex, Target, TargetWidth};
+use std::mem::size_of;
+
+use super::build_memory::growth;
+use super::{
+    BuildBuffer, BuildMemory, DenseId, ExternalId, GraphError, IdMap, RelationIndex, Target,
+    TargetWidth,
+};
 
 /// Edges in dense ids, as parallel arrays, in the order they were pushed.
 /// Endpoints are stored at the target width of the id space, so a weighted
-/// edge costs 20 bytes below a 2³² id space (DESIGN.md §5.4).
+/// edge costs 20 bytes below a 2³² id space (DESIGN.md §5.4). Its columns
+/// are charged to a [`BuildMemory`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct EdgeList {
-    relations: Vec<RelationIndex>,
+    relations: BuildBuffer<RelationIndex>,
     endpoints: Endpoints,
-    weights: Option<Vec<f64>>,
+    weights: Option<BuildBuffer<f64>>,
 }
 
 /// The source and target columns, at one width.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Endpoints {
-    U32 { sources: Vec<u32>, targets: Vec<u32> },
-    U64 { sources: Vec<u64>, targets: Vec<u64> },
+    U32 { sources: BuildBuffer<u32>, targets: BuildBuffer<u32> },
+    U64 { sources: BuildBuffer<u64>, targets: BuildBuffer<u64> },
 }
 
 /// The columns of an edge list, for the CSR build to consume one by one.
 pub(crate) struct EdgeColumns {
-    pub(crate) relations: Vec<RelationIndex>,
+    pub(crate) relations: BuildBuffer<RelationIndex>,
     pub(crate) endpoints: Endpoints,
-    pub(crate) weights: Option<Vec<f64>>,
+    pub(crate) weights: Option<BuildBuffer<f64>>,
 }
 
 impl EdgeList {
@@ -36,36 +43,65 @@ impl EdgeList {
     }
 
     /// An empty edge list whose endpoints lie in `id_space`, stored at the
-    /// width the id space implies.
+    /// width the id space implies, with no memory limit.
     pub fn for_id_space(id_space: u64, weighted: bool) -> Self {
+        Self::within(id_space, weighted, &BuildMemory::unlimited())
+    }
+
+    /// An empty edge list whose endpoints lie in `id_space`, charged to
+    /// `memory`.
+    pub fn within(id_space: u64, weighted: bool, memory: &BuildMemory) -> Self {
         let endpoints = match TargetWidth::for_id_space(id_space) {
-            TargetWidth::U32 => Endpoints::U32 { sources: Vec::new(), targets: Vec::new() },
-            TargetWidth::U64 => Endpoints::U64 { sources: Vec::new(), targets: Vec::new() },
+            TargetWidth::U32 => Endpoints::U32 {
+                sources: BuildBuffer::new(memory),
+                targets: BuildBuffer::new(memory),
+            },
+            TargetWidth::U64 => Endpoints::U64 {
+                sources: BuildBuffer::new(memory),
+                targets: BuildBuffer::new(memory),
+            },
         };
-        Self { relations: Vec::new(), endpoints, weights: weighted.then(Vec::new) }
+        let weights = weighted.then(|| BuildBuffer::new(memory));
+        Self { relations: BuildBuffer::new(memory), endpoints, weights }
+    }
+
+    /// The bytes one edge takes in each column together.
+    fn edge_bytes(&self) -> u64 {
+        let endpoint = match self.width() {
+            TargetWidth::U32 => size_of::<u32>(),
+            TargetWidth::U64 => size_of::<u64>(),
+        };
+        let weight = self.weights.as_ref().map_or(0, |_| size_of::<f64>());
+        (size_of::<RelationIndex>() + 2 * endpoint + weight) as u64
     }
 
     /// Makes room for exactly `additional` more edges, so a caller that
     /// knows the edge count avoids the geometric growth of [`Self::push`].
+    /// Nothing is reserved if the whole reservation does not fit the budget.
     pub fn reserve(&mut self, additional: usize) -> Result<(), GraphError> {
-        reserve_exact(&mut self.relations, additional)?;
+        let spare = self.relations.capacity_left();
+        let more = additional.saturating_sub(spare) as u64;
+        self.relations.memory().require(more.saturating_mul(self.edge_bytes()))?;
+        self.relations.reserve_exact(additional)?;
         match &mut self.endpoints {
             Endpoints::U32 { sources, targets } => {
-                reserve_exact(sources, additional)?;
-                reserve_exact(targets, additional)
+                sources.reserve_exact(additional)?;
+                targets.reserve_exact(additional)
             }
             Endpoints::U64 { sources, targets } => {
-                reserve_exact(sources, additional)?;
-                reserve_exact(targets, additional)
+                sources.reserve_exact(additional)?;
+                targets.reserve_exact(additional)
             }
         }?;
         match &mut self.weights {
-            Some(weights) => reserve_exact(weights, additional),
+            Some(weights) => weights.reserve_exact(additional),
             None => Ok(()),
         }
     }
 
-    /// Appends an edge. `weight` is ignored by an unweighted list.
+    /// Appends an edge. `weight` is ignored by an unweighted list. A full
+    /// list grows every column by the same number of edges, as many as fit
+    /// the budget up to doubling.
     pub fn push(
         &mut self,
         relation: RelationIndex,
@@ -73,17 +109,46 @@ impl EdgeList {
         target: DenseId,
         weight: f64,
     ) -> Result<(), GraphError> {
+        if self.relations.capacity_left() == 0 {
+            let room = growth(self.len(), self.relations.memory(), self.edge_bytes());
+            self.reserve(room)?;
+        }
         match &mut self.endpoints {
             Endpoints::U32 { sources, targets } => push_endpoints(sources, targets, source, target),
             Endpoints::U64 { sources, targets } => push_endpoints(sources, targets, source, target),
         }?;
-        memory::reserve_one(&mut self.relations)?;
-        self.relations.push(relation);
+        self.relations.push(relation)?;
         if let Some(weights) = &mut self.weights {
-            memory::reserve_one(weights)?;
-            weights.push(weight);
+            weights.push(weight)?;
         }
         Ok(())
+    }
+
+    /// The heap bytes its columns hold.
+    pub fn bytes(&self) -> u64 {
+        let endpoints = match &self.endpoints {
+            Endpoints::U32 { sources, targets } => sources.bytes() + targets.bytes(),
+            Endpoints::U64 { sources, targets } => sources.bytes() + targets.bytes(),
+        };
+        self.relations.bytes() + endpoints + self.weights.as_ref().map_or(0, BuildBuffer::bytes)
+    }
+
+    /// Releases the capacity beyond the edges held.
+    fn shrink_to_fit(&mut self) {
+        self.relations.shrink_to_fit();
+        match &mut self.endpoints {
+            Endpoints::U32 { sources, targets } => {
+                sources.shrink_to_fit();
+                targets.shrink_to_fit();
+            }
+            Endpoints::U64 { sources, targets } => {
+                sources.shrink_to_fit();
+                targets.shrink_to_fit();
+            }
+        }
+        if let Some(weights) = &mut self.weights {
+            weights.shrink_to_fit();
+        }
     }
 
     /// The number of edges.
@@ -129,8 +194,8 @@ impl EdgeList {
 }
 
 fn push_endpoints<T: Target>(
-    sources: &mut Vec<T>,
-    targets: &mut Vec<T>,
+    sources: &mut BuildBuffer<T>,
+    targets: &mut BuildBuffer<T>,
     source: DenseId,
     target: DenseId,
 ) -> Result<(), GraphError> {
@@ -138,17 +203,8 @@ fn push_endpoints<T: Target>(
     else {
         return Err(GraphError::EdgeOutsideIdSpace { from: source, to: target });
     };
-    memory::reserve_one(sources)?;
-    memory::reserve_one(targets)?;
-    sources.push(narrow_source);
-    targets.push(narrow_target);
-    Ok(())
-}
-
-fn reserve_exact<V>(column: &mut Vec<V>, additional: usize) -> Result<(), GraphError> {
-    column
-        .try_reserve_exact(additional)
-        .map_err(|_| GraphError::OutOfMemory { elements: column.len().saturating_add(additional) })
+    sources.push(narrow_source)?;
+    targets.push(narrow_target)
 }
 
 /// Remaps edges from external ids to dense ids through an id map.
@@ -176,6 +232,14 @@ impl<'m, E: ExternalId> EdgeIntake<'m, E> {
     fn new(id_map: &'m IdMap<E>, directed: bool, weighted: bool) -> Self {
         let edges = EdgeList::for_id_space(id_map.id_space(), weighted);
         Self { id_map, directed, edges, dropped_edges: 0 }
+    }
+
+    /// This intake with its edge list charged to `memory`. Call it before
+    /// the first edge: it starts the edge list afresh.
+    pub fn within(self, memory: &BuildMemory) -> Self {
+        let weighted = self.edges.weights.is_some();
+        let edges = EdgeList::within(self.id_map.id_space(), weighted, memory);
+        Self { edges, ..self }
     }
 
     /// Makes room for `rows` more edge rows (twice that for an undirected
@@ -208,8 +272,10 @@ impl<'m, E: ExternalId> EdgeIntake<'m, E> {
         Ok(())
     }
 
-    /// The remapped edges and the number of dropped edges.
-    pub fn finish(self) -> (EdgeList, u64) {
+    /// The remapped edges, without spare capacity, and the number of
+    /// dropped edges.
+    pub fn finish(mut self) -> (EdgeList, u64) {
+        self.edges.shrink_to_fit();
         (self.edges, self.dropped_edges)
     }
 }

@@ -3,7 +3,7 @@
 //! (DESIGN.md §5.4 step 1, §7).
 
 use pgrx::prelude::*;
-use warren_core::graph::GraphError;
+use warren_core::graph::{BuildBuffer, BuildMemory};
 
 use super::error::BuildError;
 use super::source::{EdgeRow, EdgeSink, SourceReader};
@@ -27,7 +27,7 @@ impl<'g> SpiSource<'g> {
 }
 
 impl<E: IdDatum> SourceReader<E> for SpiSource<'_> {
-    fn node_ids(&mut self) -> Result<Vec<E>, BuildError> {
+    fn node_ids(&mut self, memory: &BuildMemory) -> Result<BuildBuffer<E>, BuildError> {
         let graph = self.graph;
         as_role(graph.owner, || {
             with_search_path(&graph.search_path, || {
@@ -45,13 +45,10 @@ impl<E: IdDatum> SourceReader<E> for SpiSource<'_> {
                             }
                             .into());
                         }
-                        let mut ids = Vec::new();
+                        let mut ids = BuildBuffer::new(memory);
                         for_each_row::<BuildError>(&mut opened.cursor, |row| {
                             if let Some(id) = row.get::<E::Sql>(1)?.map(E::from_sql) {
-                                ids.try_reserve(1).map_err(|_| GraphError::OutOfMemory {
-                                    elements: ids.len() + 1,
-                                })?;
-                                ids.push(id);
+                                ids.push(id)?;
                             }
                             Ok(())
                         })?;

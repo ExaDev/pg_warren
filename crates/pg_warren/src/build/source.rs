@@ -2,6 +2,8 @@
 //! read under one snapshot (DESIGN.md §5.4 steps 1–3). Its SPI adapter is
 //! [`super::spi_source::SpiSource`].
 
+use warren_core::graph::{BuildBuffer, BuildMemory};
+
 use super::error::BuildError;
 
 /// One row of an edge query. Fields the graph does not have are `None`.
@@ -19,8 +21,9 @@ pub(crate) struct EdgeRow<'r, E> {
 
 /// Reads a graph's node ids and edge rows.
 pub(crate) trait SourceReader<E> {
-    /// Every non-NULL external id the node query returns.
-    fn node_ids(&mut self) -> Result<Vec<E>, BuildError>;
+    /// Every non-NULL external id the node query returns, in a buffer
+    /// charged to `memory`.
+    fn node_ids(&mut self, memory: &BuildMemory) -> Result<BuildBuffer<E>, BuildError>;
 
     /// Passes every row of the edge query to `sink`, stopping at its first
     /// error, after telling it roughly how many rows to expect.
@@ -56,8 +59,12 @@ pub(super) mod tests {
     }
 
     impl SourceReader<i64> for MemorySource {
-        fn node_ids(&mut self) -> Result<Vec<i64>, BuildError> {
-            Ok(self.nodes.clone())
+        fn node_ids(&mut self, memory: &BuildMemory) -> Result<BuildBuffer<i64>, BuildError> {
+            let mut ids = BuildBuffer::new(memory);
+            for &id in &self.nodes {
+                ids.push(id)?;
+            }
+            Ok(ids)
         }
 
         fn edges(&mut self, sink: &mut dyn EdgeSink<i64>) -> Result<(), BuildError> {

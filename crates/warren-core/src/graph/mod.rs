@@ -10,6 +10,7 @@
 //! `decode`s, which validate each segment, then [`RelationCsr::new`] and
 //! [`GraphCsr::from_parts`], which validate the segments against each other.
 
+pub(crate) mod build_memory;
 mod csr;
 mod direction;
 pub(crate) mod edge_list;
@@ -20,16 +21,17 @@ mod relation;
 mod segment;
 mod tombstones;
 
+pub use build_memory::{BuildBuffer, BuildCharge, BuildMemory};
 pub use csr::{
-    AllRelations, AnyCsr, Csr, CsrLayout, CsrRows, GraphCsr, Neighbours, RelationCsr,
-    RowNeighbours, Target, TargetWidth,
+    AllRelations, AnyCsr, BuildPlan, BuildSummary, BuiltCsr, Csr, CsrDirection, CsrLayout, CsrRows,
+    CsrScope, CsrSink, GraphCsr, Neighbours, RelationCsr, RowNeighbours, Target, TargetWidth,
 };
 pub use direction::Direction;
 pub use edge_list::{EdgeIntake, EdgeList};
 pub use error::GraphError;
 pub use id_map::{ExternalId, IdMap};
 pub use relation::{RelationDictionary, RelationIndex, RelationSelection};
-pub use segment::CsrSegments;
+pub use segment::{ChunkSink, CsrPart, CsrSegments};
 pub use tombstones::Tombstones;
 
 /// A dense id: a node's position in the id space of a graph (DESIGN.md §5.2).

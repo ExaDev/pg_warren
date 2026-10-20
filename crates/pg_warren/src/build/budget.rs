@@ -38,7 +38,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{refresh, ring};
+    use crate::fixture::{failure, refresh, ring, versions};
 
     #[pg_test]
     fn max_build_memory_defaults_to_4gb() -> Result<(), Error> {
@@ -47,18 +47,44 @@ mod tests {
         Ok(())
     }
 
-    // 70 000 nodes: forward and reverse offsets take 2 × 70 001 × 8 bytes.
-    #[pg_test(error = "CSR offsets need 1120016 bytes, over the budget of 1048576")]
-    fn a_refresh_over_the_build_memory_budget_is_refused() -> Result<(), Error> {
+    /// A build over the budget is refused before its edge query runs (here
+    /// it would fail with division by zero).
+    #[pg_test]
+    fn a_refresh_over_the_build_memory_budget_is_refused_before_reading_edges() -> Result<(), Error>
+    {
         ring("budget", 70_000, 2)?;
-        Spi::run("SET LOCAL warren.max_build_memory = '1MB'")?;
-        refresh("budget", true).map(|_| ())
+        Spi::run(
+            "UPDATE warren.graphs SET edge_query = 'SELECT src, dst FROM budget_edges WHERE 1 / 0 = 0'
+             WHERE name = 'budget';
+             SET LOCAL warren.max_build_memory = '1MB'",
+        )?;
+        let refused = failure("warren.refresh('budget')")?;
+        assert!(
+            refused.as_deref().is_some_and(|f| f.starts_with("53400: build memory limit exceeded")),
+            "{refused:?}"
+        );
+        Ok(())
+    }
+
+    /// 70 000 nodes' forward and reverse offsets take 1.1 MB, within 2 MB,
+    /// but the id map, the edge list and the CSRs take the build past it.
+    #[pg_test]
+    fn a_refresh_whose_whole_build_exceeds_the_budget_is_refused() -> Result<(), Error> {
+        ring("budget", 70_000, 2)?;
+        Spi::run("SET LOCAL warren.max_build_memory = '2MB'")?;
+        let refused = failure("warren.refresh('budget')")?;
+        assert!(
+            refused.as_deref().is_some_and(|f| f.starts_with("53400: build memory limit exceeded")),
+            "{refused:?}"
+        );
+        assert_eq!(versions("budget")?.as_deref(), Some(""));
+        Ok(())
     }
 
     #[pg_test]
     fn a_refresh_within_the_budget_succeeds() -> Result<(), Error> {
         ring("budget", 70_000, 2)?;
-        Spi::run("SET LOCAL warren.max_build_memory = '2MB'")?;
+        Spi::run("SET LOCAL warren.max_build_memory = '8MB'")?;
         refresh("budget", true).map(|_| ())
     }
 }

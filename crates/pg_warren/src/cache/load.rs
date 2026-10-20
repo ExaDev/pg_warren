@@ -4,7 +4,8 @@
 use pgrx::PgSqlErrorCode;
 use thiserror::Error;
 use warren_core::graph::{
-    AnyCsr, ExternalId, GraphCsr, GraphError, IdMap, RelationCsr, RelationDictionary, Tombstones,
+    AnyCsr, BuildCharge, BuildMemory, ExternalId, GraphCsr, GraphError, IdMap, RelationCsr,
+    RelationDictionary,
 };
 use warren_core::version::{GraphVersion, VersionError};
 
@@ -12,8 +13,8 @@ use crate::access::SqlError;
 use crate::catalog::VersionId;
 use crate::extension::graph_sqlstate;
 use crate::segment::{
-    csr_segment, read_optional_segment, read_segment, CsrPart, CsrScope, Direction, SegmentError,
-    SegmentStore, ID_MAP, RELATION_DICTIONARY, TOMBSTONES,
+    csr_segment, read_optional_segment, read_segment, read_segment_within, CsrPart, CsrScope,
+    Direction, SegmentError, SegmentStore, ID_MAP, RELATION_DICTIONARY, TOMBSTONES,
 };
 
 /// Why a version could not be loaded.
@@ -66,16 +67,21 @@ impl<E: ExternalId> LoadedVersion<E> {
 }
 
 /// The id map and relation dictionary of `version`, without its CSRs: what
-/// a build needs of the version it starts from.
+/// a build needs of the version it starts from. The id map's segments, its
+/// decoding and the id map itself are charged to `memory`; returns the
+/// charge for the id map.
 pub(crate) fn load_identity<E: ExternalId>(
     segments: &mut impl SegmentStore,
     version: VersionId,
-) -> Result<(IdMap<E>, RelationDictionary), LoadError> {
-    let tombstones = Tombstones::decode(&read_segment(segments, version, TOMBSTONES)?)?;
-    let id_map = IdMap::decode(&read_segment(segments, version, ID_MAP)?, tombstones)?;
+    memory: &BuildMemory,
+) -> Result<(IdMap<E>, RelationDictionary, BuildCharge), LoadError> {
+    let (tombstones, _tombstones_charge) =
+        read_segment_within(segments, version, TOMBSTONES, memory)?;
+    let (id_map, _id_map_charge) = read_segment_within(segments, version, ID_MAP, memory)?;
+    let (id_map, charge) = IdMap::decode_within(&id_map, &tombstones, memory)?;
     let relations =
         RelationDictionary::decode(&read_segment(segments, version, RELATION_DICTIONARY)?)?;
-    Ok((id_map, relations))
+    Ok((id_map, relations, charge))
 }
 
 /// Loads every segment of `version`, validating each as it is decoded and
@@ -88,7 +94,7 @@ pub(crate) fn load<E: ExternalId>(
     version: VersionId,
     store_merged: bool,
 ) -> Result<LoadedVersion<E>, LoadError> {
-    let (id_map, relations) = load_identity(segments, version)?;
+    let (id_map, relations, _) = load_identity(segments, version, &BuildMemory::unlimited())?;
     let id_space = id_map.id_space();
     let mut csrs = Vec::new();
     for index in 0..relations.len() {
@@ -250,9 +256,19 @@ mod tests {
         let version = built(&["a", "b"], false, true);
         let mut store = stored(&version);
         store.chunks.retain(|(_, name, _), _| !name.contains(':'));
-        let (id_map, relations) = load_identity::<i64>(&mut store, 7).unwrap();
+        let memory = BuildMemory::unlimited();
+        let (id_map, relations, charge) = load_identity::<i64>(&mut store, 7, &memory).unwrap();
         assert_eq!(id_map, version.id_map);
         assert_eq!(relations, version.relations);
+        assert_eq!((charge.bytes(), memory.in_use()), (id_map.bytes(), id_map.bytes()));
+        // The segments and the decoding's scratch were charged while it loaded.
+        assert!(memory.peak() > 2 * id_map.bytes(), "{}", memory.peak());
+        let tight = BuildMemory::new(id_map.bytes());
+        assert!(matches!(
+            load_identity::<i64>(&mut store, 7, &tight),
+            Err(LoadError::Graph(GraphError::BuildMemoryLimit { .. }))
+                | Err(LoadError::Segment(SegmentError::Graph(GraphError::BuildMemoryLimit { .. })))
+        ));
     }
 
     #[test]
