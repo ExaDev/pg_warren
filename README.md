@@ -203,7 +203,8 @@ Every SQL example in the README and `docs/` runs in CI, in
   A graph of 10M nodes and 100M edges builds and runs within the default
   limits (each 4 GB) with one relation, or with five weighted relations and
   `store_merged := false` (DESIGN.md §12; measured on 4 vCPUs). A backend's
-  peak is bounded by the cache and compute limits together, not by 4 GB:
+  peak is bounded by the cache and compute limits together (and the build
+  limit while a `refresh` or `contract` runs), not by 4 GB:
   on the five-relation graph `pagerank` peaks at 4.5 GB and `diff` at
   7.2 GB. The caveats: the five-relation graph beside `pagerank`'s scratch
   is 30 MB over the cache cap (the excess is charged to compute memory) and

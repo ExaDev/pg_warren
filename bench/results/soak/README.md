@@ -228,8 +228,8 @@ because every level writes a quotient of the whole graph that a random
 graph barely shrinks. Leiden's refinement needs 88 B a node more than
 fits beside the 3.2 GB undirected view at the 4 GB compute limit. The peak
 past `warren.max_cache_memory` plus `warren.max_compute_memory` (b-unmerged
-`louvain`, 9.50 GB) is `contract`'s build scratch, charged to
-`warren.max_build_memory`.
+`louvain`, 9.50 GB against 8.59 GB) is `contract`'s build scratch, charged
+to `warren.max_build_memory`, verified below.
 
 ### Locality order on the random graph
 
@@ -245,3 +245,19 @@ on a uniform random graph, which has no locality for an ordering to
 recover. Its first build peaked at 2.51 GB private (VmHWM 3.66 GB) against
 1.55 GB, as DESIGN.md §14 item 22 predicts for the ordering's scratch, and
 took 163 against 160 s, within the 4 GB and 8 min targets.
+
+### Louvain's peak against its charges
+
+`b-unmerged-scale10-louvain-peak.json` checks the 9.50 GB `louvain` peak
+above at a tenth of the scale (case b-unmerged at 1M nodes and 10M edges,
+the same build and machine; the file records the script that ran it).
+`louvain` at the default limits peaks at 1.081 GB private. Bisecting each
+limit in turn (to within 3%), it still runs with `warren.max_cache_memory`
+at 28 MB (its transient vectors; pinned versions past the cap go to
+compute), then `warren.max_compute_memory` at 710 MB, then
+`warren.max_build_memory` at 302 MB; with all three at those values it
+runs at a peak of 1.083 GB, 15 MB (1.4%) past their 1.065 GB sum and
+3.2 MB of baseline: Postgres's own memory (executor, SPI, PL/pgSQL), which
+no warren setting covers. So nothing warren holds is uncharged, and the
+part of the peak past cache and compute is `contract`'s build scratch: a
+statement that runs `contract` is bounded by the three limits together.

@@ -145,7 +145,14 @@ compute kernels from the main thread every millisecond), so
   its own budget against the same cache), plus, while a version loads,
   one CSR's raw segments (at most ~1.3 GB, the merged weighted CSR of 100M
   edges; measured: a 1.2 GB version loads at a 1.69 GB peak, a 6.0 GB one at
-  7.3 GB). `refresh` (below) is bounded by neither. `diff`, `distance` and
+  7.3 GB). `refresh` (below) is bounded by neither. A `refresh` or a
+  `contract` adds its build scratch, charged to `warren.max_build_memory`,
+  so a statement that runs one, as `louvain` and `leiden` run `contract`
+  once a level, is bounded by the three settings together: on the 0.4.0
+  soak's five-relation graph `louvain` peaked at 9.50 GB, past the 8.59 GB
+  of cache and compute (at 1M nodes, its peak with all three limits at
+  the least it needs was within 1.5% of their sum, that 1.5% Postgres's
+  own memory). `diff`, `distance` and
   `vector_norm_diff` read their two versions through the cache under the
   same rule, and refuse two that do not fit the two settings together
   before loading either (before, `diff` held both outside every limit: a
