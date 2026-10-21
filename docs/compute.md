@@ -435,6 +435,103 @@ SELECT warren.dag_longest_path('plan', 'hours');                       -- 5: 4 �
 SELECT warren.strong_components_vector('plan', 'scc');                 -- 5: no cycles
 ```
 
+### Shortest-path centralities
+
+`betweenness_centrality`, `closeness_centrality` and `harmonic_centrality`
+write an `f64` vector `out` and return how many sources they used. Each is
+NetworkX's function of the same name over the shortest paths under `rels`:
+along edges (`directed := true`, the default) or in the undirected simple
+graph (`directed := false`; a pair joined both ways weighs the lighter of
+its two), weighted if `weighted` (NULL: if the graph has weights; paths are
+then the lightest, by Dijkstra, and every weight on a path must be positive
+and finite, else 22023), else by edge count. An edge in several selected
+relations is one edge, its weights summed. Closeness and harmonic
+centrality use the distances *to* each node, as NetworkX does on a directed
+graph.
+
+With `k := NULL` (the default) every live node is a source and the result
+is exact: O(N·(N + M)), for graphs up to some thousands of nodes. With `k`,
+`k` sources are sampled with `seed` (default 0): the same seed samples the
+same nodes, on any thread count and after a refresh, for the nodes that
+survive it. `sources := '<vector>'` restricts the sources to the nodes a
+vector selects (all of them if `k` is NULL), so a sample can be chosen in
+SQL, or the same sources given to another tool.
+
+- **Betweenness** is rescaled exactly as NetworkX 3.7 rescales it for
+  `normalized` (default true), `endpoints` (default false) and a sample of
+  `k` sources: a node's sum over the sampled sources is scaled up to all
+  sources, and without `endpoints` a sampled source, which is never its own
+  path's end, is scaled by one source fewer (NaN when `k = 1` and
+  `normalized`, as NetworkX). Unnormalised undirected betweenness counts each
+  unordered pair once.
+- **Closeness** is `(r − 1) / Σ d(v, u)` over the `r − 1` nodes `v` that
+  reach `u`, times `(r − 1) / (n − 1)` with `wf_improved` (default true);
+  **harmonic** is `Σ 1 / d(v, u)`. From a sample `S`, each node's sources
+  other than itself, `k_u = |S \ {u}|`, stand for all `n − 1` other nodes:
+  closeness is `m_u / Σ_{s ∈ S} d(s, u)` over the `m_u` sources that reach
+  it, times `m_u / k_u`, and harmonic is scaled by `(n − 1) / k_u`. With
+  distances bounded by the diameter Δ, the sampled mean distance to a node
+  is within ε·Δ of the true mean with probability at least `1 − 2e^(−2kε²)`
+  (Hoeffding; Eppstein and Wang), so `k = O(log n / ε²)` sources estimate
+  every node's closeness to within ε·Δ in its average distance; harmonic
+  centrality's terms are in [0, 1], so `harmonic / (n − 1)` is within ε of
+  the truth with the same probability.
+
+The sources run one per compute thread at a time, each search touching only
+the nodes it reaches; each thread's scratch is 16 bytes per node in the id
+space (32 for betweenness), charged to `warren.max_compute_memory`, plus a
+Dijkstra queue when weighted, and `directed := false` builds the symmetric
+adjacency (16 bytes per stored edge, 32 weighted). Contributions are added
+in ascending source order whatever the thread count.
+
+```sql
+SELECT warren.betweenness_centrality('roads', 'between', normalized := false, directed := false);
+                                         -- 5 sources: 0, 3, 4, 3, 0 (birch, cedar, dale carry the paths)
+SELECT warren.closeness_centrality('roads', 'close');                  -- cedar closest: 2/17
+SELECT warren.harmonic_centrality('roads', 'reach', k := 3, seed := 42, weighted := false);  -- 3 sources
+```
+
+### Neighbourhood similarity
+
+`similarity`, `most_similar` and `similar_pairs` score pairs of nodes for
+link prediction by `measure`: `'jaccard'` (the default), `'adamic_adar'` or
+`'common_neighbours'`, over the undirected simple graph under `rels`
+(directions and self-loops ignored), as NetworkX's
+`jaccard_coefficient`, `adamic_adar_index` and `common_neighbors`. They
+return rows of external ids, write nothing and are `PARALLEL RESTRICTED`.
+
+- `similarity(graph, pairs, id_type, measure, rels, version)` scores the
+  pairs a query returns (NetworkX's `ebunch`): two id columns, run as the
+  caller under their `search_path`, read-only. Rows come in the query's
+  order; a pair with a NULL, unknown or deleted id is skipped.
+- `most_similar(graph, node, k DEFAULT 10, measure, rels, version)` ranks
+  one node's candidates: the nodes sharing a neighbour with it that are
+  neither it nor its neighbours (NetworkX's non-edges, less those scoring
+  0), best first, ties by dense id.
+- `similar_pairs(graph, id_type, k DEFAULT 10, measure, nodes, rels,
+  version)` ranks each node's candidates the same way (only for the nodes
+  vector `nodes` selects, if given): at most `k` rows per node. All pairs
+  are never scored: that is N² rows.
+
+Pairs are scored by intersecting two sorted neighbour rows, merged or, for
+a hub, binary-searched, as `triangles` does; rankings expand two hops from
+each node, `Σ_{w ∈ N(u)} |N(w)|` steps, so a node next to a hub pays for
+the hub's row. When every selected relation has a reverse CSR, `similarity`
+and `most_similar` read the rows they need directly, so one node's ranking
+costs its two-hop neighbourhood; otherwise, and always for `similar_pairs`,
+the symmetric adjacency is built first (16 bytes per stored edge, and 8 per
+node for degrees), costing about a `triangles` call. `similar_pairs` keeps
+20 bytes per node per compute thread. Adamic–Adar's term for a common
+neighbour `w` is `1 / ln |N(w)|`; only a node paired with itself can share a
+neighbour of degree 1, whose term is +∞ (NetworkX raises
+`ZeroDivisionError`).
+
+```sql
+SELECT * FROM warren.most_similar('roads', 1);                         -- cedar 1, elm 0.5
+SELECT * FROM warren.similarity('roads', 'VALUES (2, 4), (1, 5)', NULL::int, 'adamic_adar');
+                                                                       -- 2.885…, 0.910…
+```
+
 ## `eigen`
 
 ```

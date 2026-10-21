@@ -9,8 +9,9 @@
   `warren.*` function. 0.4.0 changes the schema: the update adds the column
   `warren.graphs.node_order` (existing graphs are backfilled `'id'`, the
   order they were built in) and the `node_order` arguments of
-  `create_graph` and `compact`, creates the new library functions and
-  structural kernels below, and replaces `pagerank` (a fix below).
+  `create_graph` and `compact`, creates the new library functions,
+  structural kernels, centralities and similarity functions below, and
+  replaces `pagerank` (a fix below).
 - `create_graph` and `compact` are dropped and re-created by the update
   (each gains an argument). Unlike 0.3.0's update, this one grants again
   every privilege that was set on them, so a `GRANT` or `REVOKE` you made
@@ -79,6 +80,36 @@
   They run on one compute thread, charge their scratch to
   `warren.max_compute_memory` and can be cancelled. Timings at 1M and 10M
   nodes are in docs/limits.md.
+- **Shortest-path centralities** (DESIGN.md §6.7, planned library group
+  2): `betweenness_centrality(graph, out, k, seed, normalized, endpoints,
+  directed, sources, rels, weighted, persist, version)`,
+  `closeness_centrality(…, wf_improved, …)` and `harmonic_centrality(…)`
+  write an `f64` vector and return their number of sources. Exact with
+  `k := NULL` (every live node a source); otherwise from `k` sources
+  sampled with `seed` (default 0; the same sample on any thread count and
+  across refreshes), or from the nodes a bool vector `sources` selects.
+  Brandes' algorithm, breadth-first or (weighted, positive weights only,
+  else 22023) Dijkstra, along edges or (`directed := false`) in the
+  undirected simple graph, one source per compute thread at a time, summed
+  in source order so results are bit-identical on any thread count.
+  Betweenness is rescaled exactly as NetworkX 3.7 (including its sampling
+  adjustment); closeness (with `wf_improved`) and harmonic centrality use
+  incoming distances as NetworkX does, and from a sample are estimated from
+  each node's sampled sources (DESIGN.md §6.7 has the estimator and its
+  error). Checked against NetworkX given the same sources
+  (`test/sql/oracle_paths.sql`, `oracle_paths_sampled.sql`).
+- **Neighbourhood similarity for link prediction** (DESIGN.md §6.7):
+  `similarity(graph, pairs, id_type, measure, rels, version)` scores the
+  pairs a query returns, `most_similar(graph, node, k, measure, rels,
+  version)` ranks one node's candidates and `similar_pairs(graph, id_type,
+  k, measure, nodes, rels, version)` each node's, by `jaccard`,
+  `adamic_adar` or `common_neighbours` over the undirected simple graph,
+  as NetworkX's link-prediction functions (`test/sql/oracle_similarity.sql`).
+  Candidates are non-neighbours sharing a neighbour, best first, ties by
+  dense id; no all-pairs form. With reverse CSRs, `similarity` and
+  `most_similar` read only the rows they need. A node paired with itself
+  scores Adamic–Adar +∞ where it shares a degree-1 neighbour (NetworkX
+  raises). Timings at 1M and 10M nodes are in docs/limits.md.
 
 ### Fixes
 
