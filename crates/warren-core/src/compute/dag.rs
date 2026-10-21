@@ -273,8 +273,8 @@ mod tests {
     fn tombstoned_nodes_take_no_position() {
         let graph = reference::graph(4, 1, &edges(&[(3, 1)]), false, false);
         let mut tombstones = none(4);
-        tombstones.insert(0);
-        tombstones.insert(2);
+        tombstones.insert(0).unwrap();
+        tombstones.insert(2).unwrap();
         assert_eq!(order(&graph, &tombstones), Ok(vec![0, 1, 0, 0]));
     }
 

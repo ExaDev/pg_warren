@@ -337,7 +337,7 @@ fn build(
     let layout = CsrLayout { build_reverse: false, store_merged: true };
     let graph = GraphCsr::build_as(list, *relations, *id_space, layout).unwrap();
     let mut tombstones = Tombstones::new(*id_space).unwrap();
-    tombstoned.iter().for_each(|&t| tombstones.insert(t));
+    tombstoned.iter().for_each(|&t| tombstones.insert(t).unwrap());
     let mut a = reference::adjacency(*id_space, &edges, None, *weighted);
     if !directed {
         let pairs: Vec<(usize, usize)> =

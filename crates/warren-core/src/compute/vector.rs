@@ -238,7 +238,7 @@ mod tests {
     #[test]
     fn tombstoned_rows_are_cleared_to_zero() {
         let mut tombstones = Tombstones::new(3).unwrap();
-        tombstones.insert(1);
+        tombstones.insert(1).unwrap();
         let mut matrix: AnyVector = Vector::filled(&memory(), 3, 2, f64::NAN).unwrap().into();
         matrix.clear_tombstoned(&tombstones);
         let values = f64::vector(&matrix).unwrap().values();

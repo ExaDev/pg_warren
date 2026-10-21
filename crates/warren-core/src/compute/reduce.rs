@@ -362,7 +362,7 @@ mod tests {
 
     fn tombstoned(id_space: u64, ids: &[u64]) -> Tombstones {
         let mut tombstones = Tombstones::new(id_space).unwrap();
-        ids.iter().for_each(|&id| tombstones.insert(id));
+        ids.iter().for_each(|&id| tombstones.insert(id).unwrap());
         tombstones
     }
 

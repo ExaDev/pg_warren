@@ -101,7 +101,7 @@ mod tests {
 
     fn version(id_space: u64, edges: &Edges, tombstoned: &[u64]) -> (GraphCsr, Tombstones) {
         let mut tombstones = Tombstones::new(id_space).unwrap();
-        tombstoned.iter().for_each(|&id| tombstones.insert(id));
+        tombstoned.iter().for_each(|&id| tombstones.insert(id).unwrap());
         (reference::graph(id_space, 1, edges, false, false), tombstones)
     }
 

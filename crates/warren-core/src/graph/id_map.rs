@@ -124,13 +124,13 @@ impl<E: ExternalId> IdMap<E> {
             match order {
                 Ordering::Less => {
                     if let Some(&(old, dense)) = previous.next() {
-                        tombstones.insert(dense);
+                        tombstones.insert(dense)?;
                         by_external.push((old, dense))?;
                     }
                 }
                 Ordering::Equal => {
                     if let Some(&(old, dense)) = previous.next() {
-                        tombstones.remove(dense);
+                        tombstones.remove(dense)?;
                         by_external.push((old, dense))?;
                     }
                     current.next();
@@ -222,7 +222,7 @@ impl<E: ExternalId> IdMap<E> {
             let _charge = memory.charge(Tombstones::bytes_for(self.id_space()))?;
             let mut tombstones = Tombstones::new(self.id_space())?;
             for old in (0..self.id_space()).filter(|&old| self.tombstones.contains(old)) {
-                tombstones.insert(permutation.new_dense_id(old));
+                tombstones.insert(permutation.new_dense_id(old))?;
             }
             self.tombstones = tombstones;
         }

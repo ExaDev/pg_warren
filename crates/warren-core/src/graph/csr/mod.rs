@@ -22,16 +22,15 @@ pub use graph_csr::{CsrLayout, GraphCsr, RelationCsr};
 pub use rows::{AllRelations, CsrRows, RowNeighbours};
 pub use target::{Target, TargetWidth};
 
-use super::memory::held;
-use super::{DenseId, GraphError};
+use super::{DenseId, GraphError, SegmentBuffer};
 
 /// The CSR of one relation in one direction, with targets of width `T`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Csr<T> {
     id_space: u64,
-    offsets: Vec<u64>,
-    targets: Vec<T>,
-    weights: Option<Vec<f64>>,
+    offsets: SegmentBuffer<u64>,
+    targets: SegmentBuffer<T>,
+    weights: Option<SegmentBuffer<f64>>,
 }
 
 impl<T: Target> Csr<T> {
@@ -44,6 +43,17 @@ impl<T: Target> Csr<T> {
         offsets: Vec<u64>,
         targets: Vec<T>,
         weights: Option<Vec<f64>>,
+    ) -> Result<Self, GraphError> {
+        Self::from_segments(id_space, offsets.into(), targets.into(), weights.map(Into::into))
+    }
+
+    /// [`Self::from_parts`] over segment buffers, owned or shared views,
+    /// with the same checks.
+    pub fn from_segments(
+        id_space: u64,
+        offsets: SegmentBuffer<u64>,
+        targets: SegmentBuffer<T>,
+        weights: Option<SegmentBuffer<f64>>,
     ) -> Result<Self, GraphError> {
         let rows = id_space.checked_add(1).ok_or(GraphError::IdSpaceTooLarge)?;
         if T::TARGET_WIDTH == TargetWidth::U32
@@ -121,7 +131,9 @@ impl<T: Target> Csr<T> {
 
     /// The heap bytes its offsets, targets and weights hold.
     pub fn bytes(&self) -> u64 {
-        held(&self.offsets) + held(&self.targets) + self.weights.as_ref().map_or(0, held)
+        self.offsets.bytes()
+            + self.targets.bytes()
+            + self.weights.as_ref().map_or(0, SegmentBuffer::bytes)
     }
 
     /// The targets of `source`'s row in ascending order; empty outside the
@@ -159,6 +171,7 @@ impl<T: Target> Csr<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph::HeapSegment;
 
     // 0 → {1, 2}, 1 → {}, 2 → {0, 2}
     fn example() -> Csr<u32> {
@@ -213,6 +226,34 @@ mod tests {
         let wide = Csr::from_parts(3, vec![0, 2, 2, 4], vec![1u64, 2, 0, 2], None).unwrap();
         assert_eq!(AnyCsr::U64(wide).bytes(), 4 * 8 + 4 * 8);
         assert_eq!(AnyCsr::U32(example()).bytes(), example().bytes());
+    }
+
+    fn shared<T: Clone + Send + Sync + 'static>(elements: &[T]) -> SegmentBuffer<T> {
+        SegmentBuffer::shared(HeapSegment::of(elements))
+    }
+
+    #[test]
+    fn a_csr_of_shared_views_reads_as_the_owned_one() {
+        let owned = example();
+        let shared = Csr::from_segments(
+            3,
+            shared(&[0, 2, 2, 4]),
+            shared(&[1u32, 2, 0, 2]),
+            Some(shared(&[0.5, 1.5, 2.5, 3.5])),
+        )
+        .unwrap();
+        assert_eq!(shared, owned);
+        assert_eq!(shared.neighbours(2), &[0, 2]);
+        assert_eq!(shared.neighbour_weights(0), Some(&[0.5, 1.5][..]));
+        assert_eq!(shared.bytes(), owned.bytes());
+    }
+
+    #[test]
+    fn shared_views_are_validated_as_owned_buffers_are() {
+        let short_targets = Csr::from_segments(3, shared(&[0, 2, 2, 4]), shared(&[1u32, 2]), None);
+        assert_eq!(short_targets, Err(GraphError::FinalOffset { expected: 2, found: 4 }));
+        let unsorted = Csr::from_segments(3, shared(&[0, 2, 2, 2]), shared(&[2u32, 1]), None);
+        assert_eq!(unsorted, Err(GraphError::RowNotSorted { row: 0 }));
     }
 
     fn invalid(offsets: Vec<u64>, targets: Vec<u32>, weights: Option<Vec<f64>>) -> GraphError {

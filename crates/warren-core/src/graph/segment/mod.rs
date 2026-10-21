@@ -312,7 +312,7 @@ mod tests {
     #[test]
     fn decoding_tombstones_rejects_bits_outside_the_id_space() {
         let mut tombstones = Tombstones::new(70).unwrap();
-        tombstones.insert(69);
+        tombstones.insert(69).unwrap();
         let mut bytes = tombstones.encode().unwrap();
         assert_eq!(Tombstones::decode(&bytes), Ok(tombstones));
         let last = bytes.len() - 1;

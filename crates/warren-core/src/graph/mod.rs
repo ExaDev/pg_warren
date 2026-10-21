@@ -21,6 +21,7 @@ pub(crate) mod memory;
 mod node_order;
 mod relation;
 mod segment;
+mod segment_buffer;
 mod tombstones;
 
 pub use build_memory::{BuildBuffer, BuildCharge, BuildMemory};
@@ -37,6 +38,9 @@ pub(crate) use membership::NO_COMMUNITY;
 pub use node_order::{NodeOrder, Permutation};
 pub use relation::{RelationDictionary, RelationIndex, RelationSelection};
 pub use segment::{ChunkSink, CsrPart, CsrSegments};
+#[cfg(test)]
+pub(crate) use segment_buffer::HeapSegment;
+pub use segment_buffer::{SegmentBuffer, SharedSegment};
 pub use tombstones::Tombstones;
 
 /// A dense id: a node's position in the id space of a graph (DESIGN.md §5.2).
