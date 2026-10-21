@@ -89,4 +89,44 @@ mod tests {
         );
         Ok(())
     }
+
+    #[pg_test]
+    fn hits_is_networkxs() -> Result<(), Error> {
+        ring("r", 4, 2)?;
+        refresh("r", true)?;
+        compiled("r", "hits", "SELECT warren.hits('r', 'hub', 'authority')")?;
+        let uniform = Some("1:0.250000 2:0.250000 3:0.250000 4:0.250000");
+        assert_eq!(values("r", "hub", 6)?.as_deref(), uniform);
+        assert_eq!(values("r", "authority", 6)?.as_deref(), uniform);
+
+        small("t")?;
+        let iterations = Spi::get_one::<i32>("SELECT warren.hits('t', 'hub', 'authority')")?;
+        assert_eq!(iterations, Some(11), "as many iterations as NetworkX needs");
+        assert_eq!(
+            values("t", "hub", 6)?.as_deref(),
+            Some("1:0.838516 2:0.000000 3:0.161484 4:0.000000 5:0.000000 6:0.000000")
+        );
+        assert_eq!(
+            values("t", "authority", 6)?.as_deref(),
+            Some("1:0.000000 2:0.161484 3:0.000000 4:0.838516 5:0.000000 6:0.000000")
+        );
+        // Not normalized: hubs and authorities are scaled to a largest value of 1.
+        Spi::run("SELECT warren.hits('t', 'hub', 'authority', normalized := false)")?;
+        assert_eq!(
+            values("t", "hub", 6)?.as_deref(),
+            Some("1:1.000000 2:0.000000 3:0.192582 4:0.000000 5:0.000000 6:0.000000")
+        );
+        assert_eq!(
+            values("t", "authority", 6)?.as_deref(),
+            Some("1:0.000000 2:0.192582 3:0.000000 4:1.000000 5:0.000000 6:0.000000")
+        );
+        Spi::run(
+            "SELECT warren.hits('t', 'hub', 'authority', rels := ARRAY['b'], weighted := false)",
+        )?;
+        assert_eq!(
+            values("t", "hub", 6)?.as_deref(),
+            Some("1:0.500000 2:0.000000 3:0.500000 4:0.000000 5:0.000000 6:0.000000")
+        );
+        Ok(())
+    }
 }

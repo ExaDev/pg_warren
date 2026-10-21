@@ -261,6 +261,7 @@ mod tests {
         ("gather", "warren.gather('victim', 'SELECT 1::bigint, 1', NULL::bigint, NULL::int[])"),
         ("grant", "warren.grant('victim', 'eve')"),
         ("has_edge", "warren.has_edge('victim', 1::bigint, 2::bigint)"),
+        ("hits", "warren.hits('victim', 'h', 'a')"),
         ("id_map", "warren.id_map('victim', NULL::bigint)"),
         ("info", "warren.info('victim')"),
         ("katz_centrality", "warren.katz_centrality('victim', 'k')"),

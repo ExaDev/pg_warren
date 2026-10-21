@@ -45,6 +45,7 @@ mod tests {
         ("gather", "u"),
         ("grant", "u"),
         ("has_edge", "r"),
+        ("hits", "u"),
         ("id_map", "r"),
         ("info", "r"),
         ("katz_centrality", "u"),

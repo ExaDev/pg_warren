@@ -10,7 +10,7 @@ as a table the SQL test compares against.
 | triangles | oracle_triangles | node_id, triangles: the node's triangles in the undirected graph without self-loops |
 | eigenvector | oracle_eigenvector | node_id, score: `nx.eigenvector_centrality` (weighted when the edges have weights) |
 | katz | oracle_katz | node_id, score: `nx.katz_centrality` (`--alpha`, `--beta`, `--no-normalized`; weighted when the edges have weights) |
-| hits | oracle_hits | node_id, hub, authority: `nx.hits` (power iteration; weighted when the edges have weights) |
+| hits | oracle_hits | node_id, hub, authority: `nx.hits` (power iteration, `max_iter` 1000; weighted when the edges have weights) |
 | label_propagation_majority | oracle_label_propagation_majority | node_id, label: `warren.label_propagation_majority`'s rule reimplemented, from each node's own id as its label (`--max-iter`, default 100) |
 | clustering | oracle_clustering | node_id, coefficient: `nx.clustering` of the undirected graph without self-loops |
 
@@ -66,7 +66,7 @@ def compute(computation, graph, arguments):
     if computation == "katz":
         return katz(graph, arguments)
     if computation == "hits":
-        hubs, authorities = nx.hits(graph)
+        hubs, authorities = nx.hits(graph, max_iter=1000)
         return [(node, hubs[node], authorities[node]) for node in graph]
     if computation == "label_propagation_majority":
         return label_propagation_majority(graph, arguments)
