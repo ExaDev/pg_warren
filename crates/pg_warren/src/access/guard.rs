@@ -267,6 +267,7 @@ mod tests {
         ("info", "warren.info('victim')"),
         ("katz_centrality", "warren.katz_centrality('victim', 'k')"),
         ("label_propagation", "warren.label_propagation('victim', 'lp')"),
+        ("label_propagation_majority", "warren.label_propagation_majority('victim', 'lpm')"),
         ("last_stats", "warren.last_stats()"),
         ("matrix_rows", "warren.matrix_rows('victim', 'c', NULL::bigint)"),
         ("neighbours", "warren.neighbours('victim', 1::bigint)"),

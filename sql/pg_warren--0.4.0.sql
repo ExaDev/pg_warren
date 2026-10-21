@@ -487,6 +487,85 @@ END $$;
 /* </end connected objects> */
 
 /* <begin connected objects> */
+-- crates/pg_warren/src/compute_sql/library/mod.rs:41
+-- requires:
+--   extension::warren
+
+-- warren.label_propagation_majority (DESIGN.md §6.7): majority-vote label
+-- propagation, synchronous and deterministic. Labels start as vector `seed`
+-- (default: each node's dense id); each iteration every node takes the most
+-- frequent label among its own and its neighbours' (direction ignored, each
+-- neighbour once, over `rels`; a self-loop counts the node's own label once
+-- more; weights are not read), the smallest on a tie, until no label
+-- changes, or after max_iter iterations with a WARNING (a synchronous
+-- update can oscillate). NetworkX's label propagation is asynchronous
+-- (random order and ties) or semi-synchronous (by colouring), so neither
+-- matches step for step. Tier 2: each iteration is one `gather` (collect)
+-- whose received labels are counted by SQL, N + M rows through the
+-- executor. Writes vector `out` (f64) and returns the iterations run.
+CREATE FUNCTION warren.label_propagation_majority(graph text, "out" text, seed text DEFAULT NULL,
+                                                  max_iter int DEFAULT 100, rels text[] DEFAULT NULL,
+                                                  version bigint DEFAULT NULL)
+RETURNS int LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+  info jsonb := warren.info(graph);
+  v bigint := coalesce(version, (info ->> 'current_version')::bigint);
+  parts text[] := ARRAY['x', 'next'];
+  -- Each node's own label and its neighbours', counted; the most votes
+  -- win, then the smallest label.
+  votes text := format(
+    'SELECT DISTINCT ON (node_id) node_id, label
+     FROM (SELECT node_id, label, count(*) AS votes
+           FROM (SELECT g.node_id, unnest(g.value) AS label
+                 FROM warren.gather(%1$L, %2$L, NULL::%3$s, NULL::float8[], ''collect'', ''both'', %4$L::text[],
+                                    version := %5$s) g
+                 UNION ALL
+                 SELECT x.node_id, x.value FROM warren.vector_values(%1$L, %2$L, NULL::%3$s, %5$s) x) m
+           GROUP BY node_id, label) c
+     ORDER BY node_id, votes DESC, label',
+    graph, '_warren_label_propagation_majority_x', info ->> 'id_type', rels, v);
+  delta float8;
+  i int := 0;
+BEGIN
+  IF starts_with("out", '_warren_') OR starts_with(seed, '_warren_') THEN
+    RAISE EXCEPTION 'vector names beginning with _warren_ are reserved for the library''s intermediates'
+      USING ERRCODE = 'reserved_name';
+  END IF;
+  IF max_iter IS NULL OR max_iter < 1 THEN
+    RAISE EXCEPTION 'max_iter must be at least 1, not %', coalesce(max_iter::text, 'NULL')
+      USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+  BEGIN
+    IF seed IS NULL THEN
+      PERFORM warren.vector_dense_id(graph, '_warren_label_propagation_majority_x', 'f64', false, v);
+    ELSE
+      PERFORM warren.vector_map(graph, '_warren_label_propagation_majority_x', format('%I::float8', seed), false, v);
+    END IF;
+    WHILE i < max_iter LOOP
+      i := i + 1;
+      PERFORM warren.vector_from_query(graph, '_warren_label_propagation_majority_next', votes, 'f64',
+                                       persist := false, version := v);
+      delta := warren.vector_norm_diff(graph, '_warren_label_propagation_majority_next',
+                                       '_warren_label_propagation_majority_x', 'l1', v, v);
+      PERFORM warren.vector_map(graph, '_warren_label_propagation_majority_x',
+                                '_warren_label_propagation_majority_next', false, v);
+      EXIT WHEN delta = 0;
+    END LOOP;
+    IF delta <> 0 THEN
+      RAISE WARNING 'label_propagation_majority did not converge in % iterations', i;
+    END IF;
+    PERFORM warren.vector_map(graph, "out", '_warren_label_propagation_majority_x', true, v);
+  EXCEPTION WHEN OTHERS OR query_canceled THEN
+    PERFORM warren.drop_vector(graph, '_warren_label_propagation_majority_' || part, v, true)
+      FROM unnest(parts) part;
+    RAISE;
+  END;
+  PERFORM warren.drop_vector(graph, '_warren_label_propagation_majority_' || part, v, true) FROM unnest(parts) part;
+  RETURN i;
+END $$;
+/* </end connected objects> */
+
+/* <begin connected objects> */
 -- crates/pg_warren/src/traversal_sql/step.rs:24
 -- requires:
 --   extension::warren

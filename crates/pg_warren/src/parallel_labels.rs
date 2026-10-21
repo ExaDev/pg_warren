@@ -51,6 +51,7 @@ mod tests {
         ("info", "r"),
         ("katz_centrality", "u"),
         ("label_propagation", "u"),
+        ("label_propagation_majority", "u"),
         ("last_stats", "r"),
         ("matrix_rows", "r"),
         ("neighbours", "r"),
