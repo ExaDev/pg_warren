@@ -22,6 +22,7 @@ mod reduce;
 #[cfg(not(miri))]
 pub(crate) mod reference;
 mod semiring;
+mod strong_components;
 mod summary;
 mod symmetric;
 mod triangles;
@@ -46,6 +47,7 @@ pub use product::{spmm, spmv, Product};
 pub use ranking::top_k;
 pub use reduce::{norm_diff, reduce, reduce_live, Norm, Reduction};
 pub use semiring::{BinaryOp, Monoid, Semiring, SemiringElement};
+pub use strong_components::strong_components;
 pub use summary::{summarise, Summary};
 pub use triangles::triangles;
 pub use vector::{AnyVector, Vector};
