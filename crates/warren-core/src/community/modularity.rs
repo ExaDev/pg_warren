@@ -2,9 +2,10 @@
 //! inside its communities than a random graph with the same degrees would,
 //! `Q = Σ_c [ in_c / 2m − γ (K_c / 2m)² ]`, with `in_c` the sum of `B`
 //! over pairs of members of `c` (each undirected edge twice, a self-loop
-//! twice its weight), `K_c` the sum of its members' degrees and `γ` the
-//! resolution. It is NetworkX's `community.modularity` of the undirected
-//! graph `B` describes, and 0 for a graph without edges.
+//! as [`Undirected`] counts it), `K_c` the sum of its members' degrees and
+//! `γ` the resolution. It is 0 for a graph without edges, and NetworkX's
+//! `community.modularity` for a graph without self-loops (NetworkX counts
+//! an undirected self-loop twice, pg_warren once).
 
 use super::{CommunityError, Undirected};
 use crate::compute::{ComputeError, ComputeMemory};
@@ -98,12 +99,13 @@ mod tests {
     }
 
     #[test]
-    fn a_self_loop_and_an_edge_as_networkx_scores_them() {
-        // nx: a self-loop of weight 2 on 0 and an edge 0 – 1 of weight 1;
-        // {0}, {1} scores -1/18 and {0, 1} scores 0.
+    fn a_self_loop_counts_once_in_its_nodes_degree() {
+        // A self-loop of weight 2 on 0 and an edge 0 – 1 of weight 1:
+        // k = (3, 1), 2m = 4; {0}, {1} scores 2/4 − (3/4)² − (1/4)² and
+        // {0, 1} scores 0. (NetworkX counts the loop twice: −1/18.)
         let graph = undirected(2, &vec![(0, 0, 0, 2.0), (0, 0, 1, 1.0)]);
         let split = modularity(&ComputeMemory::new(u64::MAX), &graph, &[0, 1], 1.0).unwrap();
-        assert!((split - (-1.0 / 18.0)).abs() < 1e-15, "{split}");
+        assert!((split - (-0.125)).abs() < 1e-15, "{split}");
         assert_eq!(modularity(&ComputeMemory::new(u64::MAX), &graph, &[5, 5], 1.0).unwrap(), 0.0);
     }
 

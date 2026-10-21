@@ -1,14 +1,16 @@
 //! The undirected weighted graph that modularity is defined on (DESIGN.md
 //! §6.7): the symmetric matrix `B` whose entry `B[u][v]` is the weight
-//! joining `u` and `v` whatever the direction, with a self-loop counted
-//! twice, as NetworkX counts it in a node's degree. For a directed graph
-//! `B = A + Aᵀ` (an edge and its reverse add up); for an undirected graph,
-//! stored both ways with a self-loop once, `B = A + diag(A)`. Every
-//! relation's edges add up, as in the merged CSR. A node's degree `k` is
-//! its row sum and `2m` the sum of all of `B`.
+//! joining `u` and `v` whatever the direction. For a directed graph
+//! `B = A + Aᵀ` (an edge and its reverse add up, so a self-loop counts
+//! twice); an undirected graph is stored both ways with a self-loop once,
+//! and `B = A`: a self-loop counts once, as in pg_warren's degrees and
+//! `contract` (§6.6), where NetworkX counts it twice. Every relation's
+//! edges add up, as in the merged CSR. A node's degree `k` is its row sum
+//! and `2m` the sum of all of `B`.
 //!
 //! Both forms are closed under contraction (§6.6): the `B` of a quotient
-//! is `PᵀBP`, so modularity is the same on a graph and on its quotient.
+//! is `PᵀBP`, so a partition's modularity on a graph is that of the
+//! singletons on its quotient.
 
 use std::mem::size_of;
 
@@ -128,7 +130,8 @@ impl Undirected {
 
 /// Passes each entry of `B` to `entry` as (row, target, weight), in a
 /// fixed order: relation by relation, row by row; a directed edge `u → v`
-/// to rows `u` and `v`, a self-loop once with twice its weight.
+/// to rows `u` and `v` (a self-loop once, with twice its weight), an
+/// undirected graph's stored entries as they are.
 fn each_entry(
     graph: &GraphCsr,
     weighted: bool,
@@ -146,12 +149,12 @@ fn each_entry(
             for (at, target) in csr.neighbours(source).enumerate() {
                 let weight = weights.map_or(1.0, |weights| weights[at]);
                 match (source == target, directed) {
-                    (true, _) => entry(source, target, 2.0 * weight),
+                    (true, true) => entry(source, target, 2.0 * weight),
                     (false, true) => {
                         entry(source, target, weight);
                         entry(target, source, weight);
                     }
-                    (false, false) => entry(source, target, weight),
+                    (_, false) => entry(source, target, weight),
                 }
             }
         }
@@ -249,7 +252,7 @@ mod tests {
                         _ => 1.0,
                     };
                     b[u as usize][v as usize] += w;
-                    if directed || u == v {
+                    if directed {
                         b[v as usize][u as usize] += w;
                     }
                 }
@@ -273,13 +276,13 @@ mod tests {
     }
 
     #[test]
-    fn an_undirected_graph_is_already_symmetric_but_for_its_self_loops() {
+    fn an_undirected_graph_is_already_symmetric_and_a_self_loop_counts_once() {
         let edges: Edges = vec![(0, 0, 1, 2.0), (0, 1, 0, 2.0), (0, 1, 1, 3.0)];
         let graph = reference::graph(2, 1, &edges, true, false);
         let b = undirected(&graph, true, false);
         assert_eq!(b.row(0), [(1, 2.0)]);
-        assert_eq!(b.row(1), [(0, 2.0), (1, 6.0)]);
-        assert_eq!(b.total(), 10.0);
+        assert_eq!(b.row(1), [(0, 2.0), (1, 3.0)]);
+        assert_eq!(b.total(), 7.0);
     }
 
     #[test]

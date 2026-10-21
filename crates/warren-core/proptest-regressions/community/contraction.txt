@@ -6,3 +6,4 @@
 # everyone who runs the test benefits from these saved cases.
 cc b53c59576a69080c1c76880e04c5488d1d29f40e8beba65e7f5f3e1cc1451c3f # shrinks to (id_space, edges, communities) = (1, [(0, 0, 0, 0.0)], [Some(0)]), weighted = false, drop_self_loops = false, undirected = false
 cc c723ab95f01f205723e290ecd85f56b42abf14937a19d9ecbe90e2a63426dfa6 # shrinks to (id_space, edges, communities) = (2, [(0, 1, 0, 0.0)], [Some(1), Some(1)]), weighted = false, drop_self_loops = false, undirected = true
+cc a60f4a3e4eca09370108a3a33a5c9c28185cf5a215c50654c1c19c0d2598f349 # shrinks to (id_space, edges, communities) = (3, [(0, 0, 2, 1), (0, 0, 1, 1)], [0, 1, 0]), undirected = true, resolution = 0.5

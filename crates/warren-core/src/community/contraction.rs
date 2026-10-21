@@ -207,8 +207,9 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::community::{modularity, Undirected};
     use crate::compute::reference::{self, Edges};
-    use crate::compute::ComputeError;
+    use crate::compute::{ComputeError, ComputeMemory};
     use crate::graph::{DenseId, GraphCsr, GraphError};
     use crate::interrupts::{Cancelled, Uninterrupted};
 
@@ -427,6 +428,35 @@ mod tests {
                 let row: f64 = found.iter().filter(|((_, s, _), _)| *s == c).map(|(_, w)| w).sum();
                 prop_assert_eq!(row, members);
             }
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn a_partitions_modularity_is_its_quotients_singletons(
+            (id_space, edges, communities) in (1u64..20).prop_flat_map(|n| (
+                Just(n),
+                prop::collection::vec((0usize..2, 0..n, 0..n, 1..5u32), 0..60),
+                prop::collection::vec(0u64..4, n as usize),
+            )),
+            undirected in any::<bool>(),
+            resolution in prop::sample::select(vec![0.5, 1.0, 2.0]),
+        ) {
+            let edges: Edges =
+                edges.into_iter().map(|(r, s, t, w)| (r, s, t, f64::from(w))).collect();
+            let graph = parent(id_space, 2, &edges, undirected);
+            let p = membership(&communities.iter().map(|&c| Some(c)).collect::<Vec<_>>(), 4);
+            let found = quotient(&graph, &p, Contraction { undirected, ..DIRECTED }).unwrap();
+            let stored: Edges = found.iter().map(|(&(r, s, t), &w)| (r, s, t, w)).collect();
+            let level = reference::graph(4, 2, &stored, true, false);
+            let memory = ComputeMemory::new(u64::MAX);
+            let view = |graph: &GraphCsr| {
+                Undirected::new(&memory, &Cancellation::new(), graph, true, !undirected).unwrap()
+            };
+            let labels: Vec<i64> = communities.iter().map(|&c| c as i64).collect();
+            let before = modularity(&memory, &view(&graph), &labels, resolution).unwrap();
+            let after = modularity(&memory, &view(&level), &[0, 1, 2, 3], resolution).unwrap();
+            prop_assert!((before - after).abs() <= 1e-12, "{before} != {after}");
         }
     }
 

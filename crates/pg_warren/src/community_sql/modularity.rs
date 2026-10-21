@@ -14,11 +14,12 @@ use crate::source::with_id_type;
 
 /// `warren.modularity`: the modularity, at resolution `resolution`, of the
 /// partition that vector `labels` (integers, one per node) gives `graph`'s
-/// version `version` (NULL: the current one), as NetworkX's
-/// `community.modularity` scores it: directions ignored (an edge and its
-/// reverse add up), edges weighted if `weighted` (NULL: if the graph has
-/// weights), a self-loop counted twice in its node's degree; 0 for a
-/// graph without edges.
+/// version `version` (NULL: the current one): directions ignored (an
+/// edge and its reverse add up), edges weighted if `weighted` (NULL: if
+/// the graph has weights), an undirected self-loop counted once in its
+/// node's degree, as `contract` counts it, so a partition scores as the
+/// singletons of its quotient; 0 for a graph without edges. Without
+/// self-loops it is NetworkX's `community.modularity`.
 #[pg_extern(schema = "warren", stable, parallel_restricted)]
 fn modularity(
     graph: Option<&str>,
@@ -86,6 +87,23 @@ pub(super) mod tests {
             Spi::get_one::<f64>("SELECT warren.modularity('tt', 'halves', resolution := 0.5)")?
                 .unwrap_or_default();
         assert!((half - 2.0 * (3.0 / 7.0 - 0.125)).abs() < 1e-15, "{half}");
+        Ok(())
+    }
+
+    #[pg_test]
+    fn an_undirected_self_loop_counts_once() -> Result<(), Error> {
+        Spi::run(
+            "CREATE TABLE sl_nodes (id bigint); CREATE TABLE sl_edges (src bigint, dst bigint, w float8);
+             INSERT INTO sl_nodes VALUES (1), (2); INSERT INTO sl_edges VALUES (1, 1, 2), (1, 2, 1);
+             SELECT warren.create_graph('sl', 'SELECT id FROM sl_nodes',
+                                        'SELECT src, dst, w FROM sl_edges',
+                                        directed := false, weighted := true);
+             SELECT warren.refresh('sl');
+             SELECT warren.vector_from_query('sl', 'alone', 'SELECT id, id FROM sl_nodes')",
+        )?;
+        // k = (3, 1), 2m = 4: 2/4 − (3/4)² − (1/4)².
+        let q = Spi::get_one::<f64>("SELECT warren.modularity('sl', 'alone')")?;
+        assert_eq!(q, Some(-0.125));
         Ok(())
     }
 
