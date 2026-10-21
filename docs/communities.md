@@ -157,13 +157,13 @@ with `_warren_` are reserved for their levels (42939): `contract(graph,
 labels, NULL)` makes a new graph of the caller's named
 `_warren_level_<version id>`, after the id it returns.
 
-At 1M nodes and 5M undirected edges on 4 vCPUs, `louvain` takes 6.6 s and
-`leiden` 13.4 s; at 10M nodes, 95 s and 213 s ([limits.md](limits.md)).
+At 1M nodes and 5M undirected edges on 4 vCPUs, `louvain` takes 5.8 s and
+`leiden` 8.3 s; at 10M nodes, 93 s and 119 s ([limits.md](limits.md)).
 Each level writes its graph as a version (segments and WAL), and the rows
 of a level's graph dropped during the run are reclaimed only by `VACUUM`
 after its transaction ends, so a run needs free disk for every level: on
 that 1M-node graph, whose own segments take 75 MB, `louvain` wrote 166 MB
-of segments and about as much WAL, `leiden` (14 levels) 511 MB and 670 MB.
+of segments and about as much WAL, `leiden` (7 levels) 294 MB and 323 MB.
 A failed or cancelled run rolls its level graphs back, but their segment
 rows, already written, also stay as dead tuples until `VACUUM`.
 

@@ -16,182 +16,182 @@
  },
  "pg_warren": "0.4.0",
  "postgres": "16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
- "git": "ef97b4b",
+ "git": "ff90cfc",
  "cpus": 4,
  "machine": "x86_64",
- "recorded_at": "2026-10-21T12:03:43+00:00",
+ "recorded_at": "2026-10-21T13:33:45+00:00",
  "workloads": [
   {
    "name": "refresh",
    "sql": "SELECT warren.refresh('g')",
    "seconds": [
-    3.057706
+    3.03544
    ],
-   "median": 3.057706
+   "median": 3.03544
   },
   {
    "name": "prewarm",
    "sql": "SELECT warren.prewarm('g')",
    "seconds": [
-    0.138814,
-    0.136156,
-    0.159413
+    0.126733,
+    0.131789,
+    0.135753
    ],
-   "median": 0.138814
+   "median": 0.131789
   },
   {
    "name": "components_vector_in",
    "sql": "SELECT warren.components_vector('g', 'cc', rels := ARRAY['in'])",
    "seconds": [
-    0.544252
+    0.535675
    ],
-   "median": 0.544252
+   "median": 0.535675
   },
   {
    "name": "contract_by_components",
    "sql": "SELECT warren.contract('g', 'cc', 'q')",
    "seconds": [
-    0.336173,
-    0.345633,
-    0.356496
+    0.347008,
+    0.323685,
+    0.32365
    ],
-   "median": 0.345633
+   "median": 0.323685
   },
   {
    "name": "project_count",
    "sql": "SELECT warren.project('g', 'cc', 'q', 'members', 'count')",
    "seconds": [
-    0.17004,
-    0.170317,
-    0.168113
+    0.153362,
+    0.155916,
+    0.158276
    ],
-   "median": 0.17004
+   "median": 0.155916
   },
   {
    "name": "project_mean",
    "sql": "SELECT warren.project('g', 'cc', 'q', 'mean_label', 'mean', persist := false)",
    "seconds": [
-    0.166855,
-    0.167193,
-    0.164869
+    0.164898,
+    0.154277,
+    0.157858
    ],
-   "median": 0.166855
+   "median": 0.157858
   },
   {
    "name": "lift",
    "sql": "SELECT warren.lift('q', 'members', 'g', 'community_size', persist := false)",
    "seconds": [
-    0.158291,
-    0.159413,
-    0.162961
+    0.148007,
+    0.147324,
+    0.154906
    ],
-   "median": 0.159413
+   "median": 0.148007
   },
   {
    "name": "dense_ids",
    "sql": "SELECT warren.vector_dense_id('g', 'ids')",
    "seconds": [
-    0.180205
+    0.176176
    ],
-   "median": 0.180205
+   "median": 0.176176
   },
   {
    "name": "contract_by_dense_ids",
    "sql": "SELECT warren.contract('g', 'ids', 'identity')",
    "seconds": [
-    1.253201
+    1.189194
    ],
-   "median": 1.253201
+   "median": 1.189194
   },
   {
    "name": "modularity_of_blocks",
    "sql": "SELECT warren.modularity('g', 'cc')",
    "seconds": [
-    0.459752,
-    0.440214,
-    0.440095
+    0.470096,
+    0.411242,
+    0.395389
    ],
-   "median": 0.440214
+   "median": 0.411242
   },
   {
    "name": "louvain",
    "sql": "SELECT warren.louvain('g', 'louvain', levels_prefix := 'louvain')",
    "seconds": [
-    6.591256
+    5.764217
    ],
-   "median": 6.591256
+   "median": 5.764217
   },
   {
    "name": "leiden",
    "sql": "SELECT warren.leiden('g', 'leiden', levels_prefix := 'leiden')",
    "seconds": [
-    13.370989
+    8.272116
    ],
-   "median": 13.370989
+   "median": 8.272116
   },
   {
    "name": "modularity_louvain",
    "sql": "SELECT warren.modularity('g', 'louvain')",
    "seconds": [
-    0.510194
+    0.456193
    ],
-   "median": 0.510194
+   "median": 0.456193
   },
   {
    "name": "modularity_leiden",
    "sql": "SELECT warren.modularity('g', 'leiden')",
    "seconds": [
-    0.49555
+    0.451988
    ],
-   "median": 0.49555
+   "median": 0.451988
   },
   {
    "name": "louvain_max_levels_1",
    "sql": "SELECT warren.louvain('g', 'louvain_upto_1', max_levels := 1)",
    "seconds": [
-    2.703986
+    2.383593
    ],
-   "median": 2.703986
+   "median": 2.383593
   },
   {
    "name": "louvain_max_levels_2",
    "sql": "SELECT warren.louvain('g', 'louvain_upto_2', max_levels := 2)",
    "seconds": [
-    6.046799
+    5.200506
    ],
-   "median": 6.046799
+   "median": 5.200506
   },
   {
    "name": "louvain_max_levels_3",
    "sql": "SELECT warren.louvain('g', 'louvain_upto_3', max_levels := 3)",
    "seconds": [
-    6.259063
+    5.534483
    ],
-   "median": 6.259063
+   "median": 5.534483
   },
   {
    "name": "leiden_max_levels_1",
    "sql": "SELECT warren.leiden('g', 'leiden_upto_1', max_levels := 1)",
    "seconds": [
-    2.091957
+    2.250718
    ],
-   "median": 2.091957
+   "median": 2.250718
   },
   {
    "name": "leiden_max_levels_2",
    "sql": "SELECT warren.leiden('g', 'leiden_upto_2', max_levels := 2)",
    "seconds": [
-    6.117406
+    5.478565
    ],
-   "median": 6.117406
+   "median": 5.478565
   },
   {
    "name": "leiden_max_levels_3",
    "sql": "SELECT warren.leiden('g', 'leiden_upto_3', max_levels := 3)",
    "seconds": [
-    7.811854
+    7.349973
    ],
-   "median": 7.811854
+   "median": 7.349973
   }
  ]
 }

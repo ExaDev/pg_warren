@@ -169,7 +169,7 @@
   NetworkX's `louvain_communities` on stochastic block models
   (`test/sql/oracle_louvain*.sql`: modularity, NMI against the planted
   partition, connectedness). At 1M nodes and 5M edges on 4 vCPUs
-  `louvain` takes 6.6 s and `leiden` 13.4 s, at 10M nodes 95 s and 213 s
+  `louvain` takes 5.8 s and `leiden` 8.3 s, at 10M nodes 93 s and 119 s
   (docs/limits.md).
 
 ### Fixes

@@ -1,0 +1,101 @@
+{
+ "graph": "blocks-10m",
+ "generate": [
+  "random",
+  "--nodes",
+  "10000000",
+  "--edges",
+  "0",
+  "--seed",
+  "1"
+ ],
+ "nodes": 10000000,
+ "edges": 0,
+ "params": {
+  "nodes": "10000000"
+ },
+ "pg_warren": "0.4.0",
+ "postgres": "16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
+ "git": "ff90cfc",
+ "cpus": 4,
+ "machine": "x86_64",
+ "recorded_at": "2026-10-21T13:47:52+00:00",
+ "workloads": [
+  {
+   "name": "refresh",
+   "sql": "SELECT warren.refresh('g')",
+   "seconds": [
+    35.591823
+   ],
+   "median": 35.591823
+  },
+  {
+   "name": "prewarm",
+   "sql": "SELECT warren.prewarm('g')",
+   "seconds": [
+    1.581867,
+    1.618683,
+    1.533104
+   ],
+   "median": 1.581867
+  },
+  {
+   "name": "components_vector_in",
+   "sql": "SELECT warren.components_vector('g', 'cc', rels := ARRAY['in'])",
+   "seconds": [
+    6.766156
+   ],
+   "median": 6.766156
+  },
+  {
+   "name": "modularity_of_blocks",
+   "sql": "SELECT warren.modularity('g', 'cc')",
+   "seconds": [
+    5.018861,
+    5.057504,
+    4.979506
+   ],
+   "median": 5.018861
+  },
+  {
+   "name": "leiden",
+   "sql": "SELECT warren.leiden('g', 'leiden', levels_prefix := 'leiden')",
+   "seconds": [
+    119.08582
+   ],
+   "median": 119.08582
+  },
+  {
+   "name": "modularity_leiden",
+   "sql": "SELECT warren.modularity('g', 'leiden')",
+   "seconds": [
+    4.921112
+   ],
+   "median": 4.921112
+  },
+  {
+   "name": "leiden_max_levels_1",
+   "sql": "SELECT warren.leiden('g', 'leiden_upto_1', max_levels := 1)",
+   "seconds": [
+    29.408439
+   ],
+   "median": 29.408439
+  },
+  {
+   "name": "leiden_max_levels_2",
+   "sql": "SELECT warren.leiden('g', 'leiden_upto_2', max_levels := 2)",
+   "seconds": [
+    78.573988
+   ],
+   "median": 78.573988
+  },
+  {
+   "name": "leiden_max_levels_3",
+   "sql": "SELECT warren.leiden('g', 'leiden_upto_3', max_levels := 3)",
+   "seconds": [
+    100.900811
+   ],
+   "median": 100.900811
+  }
+ ]
+}

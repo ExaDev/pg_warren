@@ -438,15 +438,15 @@ with five undirected edges per node (10N stored), contracted by
 | `contract` by dense id (N communities, the worst case) | 1.7 s | 13.7 s |
 | `project` (`count`, `mean`), `lift` | 0.14–0.16 s | 1.9–2.0 s |
 | `modularity` of a partition | 0.44 s | 4.9 s |
-| `louvain` (3 levels) | 6.6 s | 95 s |
-| `leiden` (14 levels at 1M) | 13.4 s | 213 s |
+| `louvain` (3 levels at 1M, 5 at 10M) | 5.8 s | 93 s |
+| `leiden` (7 levels at 1M, 8 at 10M) | 8.3 s | 119 s |
 
 A level's time, as the difference of runs with `max_levels` 1, 2 and 3:
-Louvain 2.7, 3.3 and 0.2 s at 1M, and 37.7, 42.0 and 15.2 s at 10M;
-Leiden 2.1, 4.0 and 1.7 s at 1M (5.6 s for the other eleven), and 28.7 and
-56.0 s at 10M (128 s for the rest). The first level runs on the whole
+Louvain 2.4, 2.8 and 0.3 s at 1M, and 31.6, 49.5 and 11.8 s at 10M;
+Leiden 2.3, 3.2 and 1.9 s at 1M (0.9 s for the rest), and 29.4, 49.2 and
+22.3 s at 10M (18.2 s for the rest). The first level runs on the whole
 graph; every later one contracts the whole graph by the partition found so
-far, so Leiden's many small late levels cost a contraction each.
+far, so each small late level costs a contraction.
 
 ## Known limitations
 
@@ -534,9 +534,9 @@ vectors.
   the next is built, but its rows stay until `VACUUM` after the run's
   transaction ends, so the disk a run needs grows with its levels: on the
   1M-node block graph (75 MB of segments) `louvain` wrote 166 MB of
-  segments and about 190 MB of WAL, `leiden` 511 MB and 670 MB; at 10M
-  nodes `leiden` needs about ten times that, some 12–14 GB, at the limit
-  of the benchmark machine's free disk.
+  segments and about 190 MB of WAL, `leiden` 294 MB and 323 MB; at 10M
+  nodes, four runs of each in one database left it at 6.7 GB (`louvain`)
+  and 9.1 GB (`leiden`), the graph included, before `VACUUM`.
 - `contract` is linear: a counting sort of the nodes by community, then one
   pass over the stored edges, on one thread, plus a build of the quotient
   (its edges, at most the parent's). Its scratch, charged to

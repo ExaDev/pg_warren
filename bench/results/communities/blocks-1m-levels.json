@@ -2,52 +2,52 @@
  "louvain": {
   "modularity": 0.8365810696433721,
   "communities": 474,
-  "seconds": 6.591256,
+  "seconds": 5.764217,
   "level_count": 3,
   "levels": [
    {
     "max_levels": 1,
-    "seconds": 2.703986,
+    "seconds": 2.383593,
     "modularity": 0.12240220456959015,
     "communities": 436163
    },
    {
     "max_levels": 2,
-    "seconds": 6.046799,
+    "seconds": 5.200506,
     "modularity": 0.8219053678774785,
     "communities": 1078
    },
    {
     "max_levels": 3,
-    "seconds": 6.259063,
+    "seconds": 5.534483,
     "modularity": 0.8365810696433721,
     "communities": 474
    }
   ]
  },
  "leiden": {
-  "modularity": 0.8550573885484662,
-  "communities": 506,
-  "seconds": 13.370989,
-  "level_count": 14,
+  "modularity": 0.8366157515868657,
+  "communities": 482,
+  "seconds": 8.272116,
+  "level_count": 7,
   "levels": [
    {
     "max_levels": 1,
-    "seconds": 2.091957,
-    "modularity": 0.12240220456959015,
-    "communities": 436163
+    "seconds": 2.250718,
+    "modularity": 0.11981512853999902,
+    "communities": 441624
    },
    {
     "max_levels": 2,
-    "seconds": 6.117406,
-    "modularity": 0.8295023836482657,
-    "communities": 3681
+    "seconds": 5.478565,
+    "modularity": 0.20675272921366444,
+    "communities": 124587
    },
    {
     "max_levels": 3,
-    "seconds": 7.811854,
-    "modularity": 0.8383655970218731,
-    "communities": 1074
+    "seconds": 7.349973,
+    "modularity": 0.6021863526306036,
+    "communities": 9289
    }
   ]
  },

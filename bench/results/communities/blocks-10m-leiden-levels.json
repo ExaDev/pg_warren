@@ -1,0 +1,29 @@
+{
+ "leiden": {
+  "modularity": 0.8401261834621554,
+  "communities": 1446,
+  "seconds": 119.08582,
+  "level_count": 8,
+  "levels": [
+   {
+    "max_levels": 1,
+    "seconds": 29.408439,
+    "modularity": 0.11616198913326597,
+    "communities": 4566529
+   },
+   {
+    "max_levels": 2,
+    "seconds": 78.573988,
+    "modularity": 0.20360046013981647,
+    "communities": 1293365
+   },
+   {
+    "max_levels": 3,
+    "seconds": 100.900811,
+    "modularity": 0.6003840665950205,
+    "communities": 97099
+   }
+  ]
+ },
+ "blocks_modularity": 0.8995470496129391
+}
