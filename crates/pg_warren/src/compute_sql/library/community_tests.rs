@@ -131,4 +131,21 @@ mod tests {
         assert_eq!(values("o", "lp", 0)?.as_deref(), Some("0:0 1:0 2:1 3:2 4:2 5:1"));
         Ok(())
     }
+
+    /// A graph with no live nodes has no labels to propagate: no
+    /// iterations, and an `out` with no rows (NetworkX returns no
+    /// communities).
+    #[pg_test]
+    fn majority_label_propagation_of_no_nodes_runs_no_iterations() -> Result<(), Error> {
+        Spi::run(
+            "CREATE TABLE e_nodes (id bigint);
+             SELECT warren.create_graph('e', 'SELECT id FROM e_nodes', 'SELECT id, id FROM e_nodes');
+             SELECT warren.refresh('e')",
+        )?;
+        let iterations =
+            Spi::get_one::<i32>("SELECT warren.label_propagation_majority('e', 'lp')")?;
+        assert_eq!(iterations, Some(0));
+        assert_eq!(values("e", "lp", 0)?.as_deref(), Some(""));
+        Ok(())
+    }
 }

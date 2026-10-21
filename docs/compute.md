@@ -330,11 +330,18 @@ stop at the same iteration and agree to rounding (tested on random graphs).
 `weighted := false` here). Where NetworkX raises
 `PowerIterationFailedConvergence`, these write the last iterate and raise a
 `WARNING` (`… did not converge in 100 iterations`); the iterations returned
-are then `max_iter`. A graph with no live nodes is an error (22023), as is
-`tol < 0` or `max_iter < 1`. Katz diverges when `alpha` is at least 1 / the
-largest eigenvalue of the adjacency matrix (about 1 / average degree on a
-random graph): its default 0.1 is too large for a graph of average degree 10
-or more.
+are then `max_iter`. A run whose values stop being finite is an error
+(22003, `… diverged`) and writes nothing. Katz diverges when `alpha` is at
+least 1 / the largest eigenvalue of the adjacency matrix (about 1 / average
+degree on a random graph): its default 0.1 is too large for a graph of
+average degree 10 or more. Eigenvector centrality and HITS diverge only
+when products of edge weights overflow `double precision`.
+
+A NULL argument is an error (22004), as are `tol < 0` and `max_iter < 1`
+(22023). The three centralities refuse a graph with no live nodes (22023;
+NetworkX raises only for eigenvector centrality and returns nothing for the
+other two); `clustering` and `label_propagation_majority` write an empty
+`out` for it, the latter after 0 iterations.
 
 How they differ from NetworkX:
 
@@ -350,9 +357,10 @@ How they differ from NetworkX:
   each neighbour's (direction ignored, a self-loop counting its own label
   once more), to the most frequent, the smallest on a tie, until no label
   changes. Being synchronous, it can cycle between two labellings (six
-  nodes are enough); it then stops at `max_iter` with the `WARNING`. Edge weights are not read. It is a tier-2 program (`gather` with
-  `collect`, votes counted in SQL), so an iteration costs N + M rows through
-  the executor, seconds at a million nodes (see `docs/limits.md`).
+  nodes are enough); it then stops at `max_iter` with the `WARNING`. Edge
+  weights are not read. It is a tier-2 program (`gather` with `collect`,
+  votes counted in SQL), so an iteration costs N + M rows through the
+  executor, seconds at a million nodes (see `docs/limits.md`).
 
 ```sql
 SELECT warren.pagerank('roads', 'pr', weighted := false);

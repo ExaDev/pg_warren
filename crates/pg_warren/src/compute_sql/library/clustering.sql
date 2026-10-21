@@ -13,6 +13,9 @@ DECLARE
   v bigint := coalesce(version, (warren.info(graph) ->> 'current_version')::bigint);
   parts text[] := ARRAY['triangles', 'degree'];
 BEGIN
+  IF "out" IS NULL THEN
+    RAISE EXCEPTION 'out must not be NULL' USING ERRCODE = 'null_value_not_allowed';
+  END IF;
   IF starts_with("out", '_warren_') THEN
     RAISE EXCEPTION 'vector names beginning with _warren_ are reserved for the library''s intermediates'
       USING ERRCODE = 'reserved_name';

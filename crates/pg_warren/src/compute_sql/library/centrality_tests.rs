@@ -6,8 +6,8 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use super::super::tests::{compiled, values};
-    use crate::fixture::{refresh, ring, small};
+    use super::super::tests::{compiled, none_left, values};
+    use crate::fixture::{failure, refresh, ring, small};
 
     /// Graph `u`, undirected: a triangle 1–2–3 with a tail 3–4–5, and node
     /// 6 isolated.
@@ -126,6 +126,81 @@ mod tests {
         assert_eq!(
             values("t", "hub", 6)?.as_deref(),
             Some("1:0.500000 2:0.000000 3:0.500000 4:0.000000 5:0.000000 6:0.000000")
+        );
+        Ok(())
+    }
+
+    /// Graph `w`: `small`'s edges with every weight times `factor`.
+    fn small_scaled(factor: &str) -> Result<(), Error> {
+        small("t")?;
+        Spi::run(&format!(
+            "SELECT warren.create_graph('w', 'SELECT id FROM t_nodes',
+                                        'SELECT src, dst, w * {factor} FROM t_edges', weighted := true);
+             SELECT warren.refresh('w')"
+        ))
+    }
+
+    /// Runs `call`, which must fail with `expected`, and checks that it
+    /// wrote no `out` and left no intermediates.
+    fn refused_writing_nothing(
+        graph: &str,
+        algorithm: &str,
+        call: &str,
+        out: &str,
+        expected: &str,
+    ) -> Result<(), Error> {
+        let refused = failure(call)?.unwrap_or_default();
+        assert!(refused.starts_with(expected), "{call}: {refused}");
+        assert!(
+            failure(&format!("warren.explain_map('{graph}', '{out}')"))?.is_some(),
+            "{call} wrote {out}"
+        );
+        none_left(graph, algorithm)
+    }
+
+    /// Katz centrality diverges when alpha is at least 1 / the largest
+    /// eigenvalue (29 on the complete digraph of 30 nodes): NetworkX
+    /// raises, and so does katz_centrality, rather than writing NaN or
+    /// Infinity.
+    #[pg_test]
+    fn katz_centrality_refuses_to_diverge() -> Result<(), Error> {
+        Spi::run(
+            "CREATE TABLE k_nodes (id bigint); INSERT INTO k_nodes SELECT generate_series(1, 30);
+             SELECT warren.create_graph('k', 'SELECT id FROM k_nodes',
+                                        'SELECT a.id, b.id FROM k_nodes a, k_nodes b WHERE a.id <> b.id');
+             SELECT warren.refresh('k')",
+        )?;
+        let diverged = "22003: katz_centrality diverged";
+        for normalized in [true, false] {
+            let call = format!("warren.katz_centrality('k', 'katz', normalized := {normalized})");
+            refused_writing_nothing("k", "katz_centrality", &call, "katz", diverged)?;
+        }
+        Spi::run("SELECT warren.katz_centrality('k', 'katz', alpha := 0.01)")?;
+        Ok(())
+    }
+
+    /// Weights so large that the iterate's squares overflow: refused, not
+    /// written as zeros, NaN or Infinity.
+    #[pg_test]
+    fn centralities_refuse_values_that_overflow() -> Result<(), Error> {
+        small_scaled("1e200")?;
+        let overflow = "22003: eigenvector_centrality diverged";
+        let call = "warren.eigenvector_centrality('w', 'ev')";
+        refused_writing_nothing("w", "eigenvector_centrality", call, "ev", overflow)?;
+        let call = "warren.hits('w', 'hub', 'authority')";
+        refused_writing_nothing("w", "hits", call, "hub", "22003: hits diverged")?;
+        Ok(())
+    }
+
+    /// With weights of 1e-155, A·Aᵀ·h is subnormal; HITS still scales it
+    /// as NetworkX does, and the scores are those of the unscaled weights.
+    #[pg_test]
+    fn hits_scales_subnormal_values() -> Result<(), Error> {
+        small_scaled("1e-155")?;
+        Spi::run("SELECT warren.hits('w', 'hub', 'authority')")?;
+        assert_eq!(
+            values("w", "hub", 6)?.as_deref(),
+            Some("1:0.838516 2:0.000000 3:0.161484 4:0.000000 5:0.000000 6:0.000000")
         );
         Ok(())
     }
