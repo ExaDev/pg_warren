@@ -177,8 +177,13 @@ mod locality {
             }
             prop_assert_eq!(local.components(), by_id.components());
             // Integer weights and values: every sum is exact in any order.
-            for transpose in [false, true] {
-                prop_assert_eq!(local.product(transpose), by_id.product(transpose));
+            // Not under Miri: the compute pool's work stealing runs through
+            // crossbeam-epoch, which Miri's Stacked Borrows model rejects
+            // (as in `compute::workers`).
+            if !cfg!(miri) {
+                for transpose in [false, true] {
+                    prop_assert_eq!(local.product(transpose), by_id.product(transpose));
+                }
             }
         }
     }
