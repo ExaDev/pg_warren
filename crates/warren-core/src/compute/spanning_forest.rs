@@ -54,7 +54,9 @@ pub fn minimum_spanning_forest<I: Interrupts>(
 ) -> Result<SpanningForest, ComputeError> {
     let matrix = Matrix::new(graph, relations, false, weighted, memory)?;
     let id_space = graph.all_relations().forward().id_space();
-    let per_node = size_of::<DenseId>() + 2 * size_of::<ForestEdge>();
+    // A parent and a candidate per node, and the forest's buffer, which
+    // grows by doubling to at most twice its N − 1 edges.
+    let per_node = size_of::<DenseId>() + size_of::<Candidate>() + 2 * size_of::<ForestEdge>();
     memory.reclaim_for(id_space.saturating_mul(per_node as u64));
     workers.run(interrupts, |cancellation| {
         Boruvka::new(memory, cancellation, &matrix, id_space)?.run()
