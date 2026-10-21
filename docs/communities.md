@@ -164,6 +164,8 @@ of a level's graph dropped during the run are reclaimed only by `VACUUM`
 after its transaction ends, so a run needs free disk for every level: on
 that 1M-node graph, whose own segments take 75 MB, `louvain` wrote 166 MB
 of segments and about as much WAL, `leiden` (14 levels) 511 MB and 670 MB.
+A failed or cancelled run rolls its level graphs back, but their segment
+rows, already written, also stay as dead tuples until `VACUUM`.
 
 ## Lineage, retention and access
 
