@@ -8,7 +8,8 @@
 //! and its position in its rows. It reads the forward CSRs only (no
 //! reverse CSR is needed), on one thread of the pool, checking its
 //! cancellation flag every 65,536 nodes and edges. Besides the output it
-//! keeps one lowlink per node and the two stacks, charged as they grow.
+//! keeps one lowlink per node and the two stacks, charged as they grow (at
+//! most 56 bytes per node in all).
 
 use std::mem::size_of;
 
@@ -40,8 +41,10 @@ pub fn strong_components<I: Interrupts>(
     let mut labels = Vector::filled(memory, id_space, 1, 0i64)?;
     let values = labels.values_mut();
     // The lowlinks and the stacks are charged on the pool, which reclaims
-    // no held memory, so room for them at their largest is reclaimed here.
-    let per_node = size_of::<u64>() + size_of::<DenseId>() + size_of::<Call>();
+    // no held memory, so room for them at their largest is reclaimed here:
+    // each stack holds at most a node's entry per node, in a buffer that
+    // grows by doubling.
+    let per_node = size_of::<u64>() + 2 * (size_of::<DenseId>() + size_of::<Call>());
     memory.reclaim_for(id_space.saturating_mul(per_node as u64));
     workers.run(interrupts, |cancellation| label(memory, cancellation, &csrs, values))?;
     Ok(labels)
@@ -323,6 +326,20 @@ mod tests {
             RelationSelection::All,
         );
         assert_eq!(found.map(|found| found.values().to_vec()), Ok(vec![0, 0, 2]));
+    }
+
+    #[test]
+    fn held_memory_is_reclaimed_for_the_stacks_at_their_largest() {
+        // A path fills both stacks, whose buffers grow by doubling: 1,025
+        // entries take capacities of 2,048.
+        let n = 1025;
+        let path: Edges = (0..n - 1).map(|i| (0, i, i + 1, 1.0)).collect();
+        let graph = reference::graph(n, 1, &path, false, false);
+        let held = 1 << 20;
+        let memory = ComputeMemory::reclaiming(held, held, held, Box::new(Exact));
+        let all = RelationSelection::All;
+        let found = strong_components(workers(), &memory, &mut Uninterrupted, &graph, all);
+        assert_eq!(found.map(|found| found.values()[n as usize - 1]), Ok(n as i64 - 1));
     }
 
     type Scenario = (u64, usize, Edges, Option<Vec<usize>>, (bool, bool));
