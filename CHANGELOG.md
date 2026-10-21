@@ -47,7 +47,10 @@
   synchronous majority-vote label propagation (smallest label on a tie;
   NetworkX's is random or semi-synchronous, so it is checked against a
   Python reimplementation of its rule). Where NetworkX raises on
-  non-convergence, these write the last iterate with a `WARNING`. At 1M
+  non-convergence, these write the last iterate with a `WARNING`; a run
+  whose values stop being finite (Katz with `alpha` too large for the
+  graph) is an error, 22003, and writes nothing. NULL arguments are
+  refused with 22004. At 1M
   nodes and 10M undirected edges on 4 vCPUs the SpMV centralities take
   40–90 ms an iteration and `clustering` 4.5 s; majority-vote label
   propagation, a tier-2 program, ~20 s an iteration (docs/limits.md).
@@ -56,8 +59,8 @@
 
 - `pagerank` with a `seed` failed with "division by zero" on any version
   with a deleted node: it divided by a constant vector, which is 0 at
-  tombstoned rows, and `vector_map` evaluates those rows too. The library
-  now multiplies by reciprocals instead.
+  tombstoned rows, and `vector_map` evaluates those rows too. It now
+  multiplies by the reciprocal of the seed's sum.
 
 ### Behaviour changes
 
