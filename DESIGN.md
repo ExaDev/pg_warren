@@ -1262,6 +1262,8 @@ Test it by installing as a non-superuser in CI and running the suite. **Make the
 
 Renames are cheap before 1.0 and costly after. Also a written stability and deprecation policy: within 1.x, functions and their behaviour change only additively, and removals go through a deprecation release. Release candidates first.
 
+1.0.0 is signed off by the project owner, who first installs a release candidate outside CI and uses it in anger on a real corpus. What that turns up is fixed in further release candidates before 1.0.0 is tagged.
+
 **Left to 1.x**, documented as limits rather than blocking 1.0:
 - incremental maintenance (§10; a full rebuild per `refresh` is an honest model when staleness is documented);
 - the background compute worker (§6.9);
@@ -1326,7 +1328,7 @@ Renames are cheap before 1.0 and costly after. Also a written stability and depr
 
 24. **Should `pagerank` warn when it stops at `max_iter`?** (Open, 0.4.0.) The group 1 library warns (§6.7), as `eigen` does; `pagerank` (M5) returns `max_iter` silently, so its caller cannot tell a last-iteration convergence from a stop. Warning would change a released function's messages.
 
-25. **What does 1.0 require beyond v1's scope?** (Decided 2026-10-21, after M8.) §3 put the shared cache and text ids after v1. Measured against how Postgres is deployed, that leaves a 1.0 that breaks behind a connection pooler: a version is held once per backend. **Decided:** 1.0 includes the shared (DSM) cache (M9) and `text` ids (M10), and is gated on proof on real data and deployments (M11) and on a reviewed, frozen SQL surface (M12). Incremental maintenance, the compute worker, sparse algebra beyond SpMV, GPU and WASM stay in 1.x (§13).
+25. **What does 1.0 require beyond v1's scope?** (Decided 2026-10-21, after M8.) §3 put the shared cache and text ids after v1. Measured against how Postgres is deployed, that leaves a 1.0 that breaks behind a connection pooler: a version is held once per backend. **Decided:** 1.0 includes the shared (DSM) cache (M9) and `text` ids (M10), and is gated on proof on real data and deployments (M11), on a reviewed, frozen SQL surface (M12), and on the owner's sign-off after using a release candidate on a real corpus. Incremental maintenance, the compute worker, sparse algebra beyond SpMV, GPU and WASM stay in 1.x (§13).
 
 ## 15. Instructions to the implementing agent
 
