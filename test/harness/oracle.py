@@ -18,6 +18,7 @@ as a table the SQL test compares against.
 | hits | oracle_hits | node_id, hub, authority: `nx.hits` (power iteration, `max_iter` 1000; weighted when the edges have weights) |
 | label_propagation_majority | oracle_label_propagation_majority | node_id, label: `warren.label_propagation_majority`'s rule reimplemented, from each node's own id as its label (`--max-iter`, default 100) |
 | clustering | oracle_clustering | node_id, coefficient: `nx.clustering` of the undirected graph without self-loops |
+| louvain | oracle_louvain | node_id, community, modularity: `nx.community.louvain_communities` (`--seed`, default 1; `--resolution`, default 1; weighted when the edges have weights), each community labelled by its smallest node id, with the partition's `nx.community.modularity` on every row |
 | quotient | oracle_quotient | source, target, weight: the edges of `nx.quotient_graph` by the labels of `--labels-sql` (node, label), between labels, each edge's weight the sum of the weights of the edges it joins (the count with `--count`), and a label's self-loop the sum over the edges inside it; an undirected edge counts once and is given both ways (a self-loop once) |
 
 Edges are `--edges-sql`'s first two columns; a third column, if present, is
@@ -50,6 +51,7 @@ TABLES = {
     "label_propagation_majority": ("oracle_label_propagation_majority", "node_id bigint, label bigint"),
     "clustering": ("oracle_clustering", "node_id bigint, coefficient float8"),
     "quotient": ("oracle_quotient", "source bigint, target bigint, weight float8"),
+    "louvain": ("oracle_louvain", "node_id bigint, community bigint, modularity float8"),
 }
 
 
@@ -115,6 +117,8 @@ def compute(computation, graph, arguments):
         return [(node, i) for i, node in enumerate(nx.lexicographical_topological_sort(graph))]
     if computation == "dag_longest_path":
         return [(node, longest_path_into(graph, node)) for node in graph.nodes]
+    if computation == "louvain":
+        return louvain(graph, arguments)
     if computation == "spanning_forest":
         undirected = nx.Graph()
         undirected.add_nodes_from(graph.nodes)
@@ -123,6 +127,16 @@ def compute(computation, graph, arguments):
         return [(min(part), float(nx.minimum_spanning_tree(undirected.subgraph(part)).size(weight="weight")))
                 for part in nx.connected_components(undirected)]
     raise ValueError(f"unknown oracle computation {computation!r}; expected one of {sorted(TABLES)}")
+
+
+def louvain(graph, arguments):
+    options = argparse.ArgumentParser(prog="louvain")
+    options.add_argument("--seed", type=int, default=1)
+    options.add_argument("--resolution", type=float, default=1.0)
+    args = options.parse_args(arguments)
+    parts = nx.community.louvain_communities(graph, weight="weight", resolution=args.resolution, seed=args.seed)
+    q = nx.community.modularity(graph, parts, weight="weight", resolution=args.resolution)
+    return [(node, min(part), q) for part in parts for node in part]
 
 
 def quotient(graph, arguments, labels=None):

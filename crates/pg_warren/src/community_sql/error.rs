@@ -23,9 +23,14 @@ pub(crate) enum CommunitySqlError {
     /// An argument is out of its range.
     #[error("{0}")]
     InvalidArgument(String),
-    /// The label vector cannot label communities.
-    #[error("label vector: {0}")]
-    Labels(CommunityError),
+    /// A vector of labels or keys does not hold integers.
+    #[error("{what}: {error}")]
+    Integers {
+        /// The argument.
+        what: &'static str,
+        /// Why.
+        error: CommunityError,
+    },
     /// `warren.contract` adds versions only to a graph it derives.
     #[error(
         "graph \"{0}\" is built from queries, not derived by contraction: contract into a new \
@@ -113,7 +118,7 @@ impl SqlError for CommunitySqlError {
             Self::InvalidArgument(_) | Self::OtherParent { .. } => {
                 PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE
             }
-            Self::Labels(error) | Self::Community(error) => community_sqlstate(error),
+            Self::Integers { error, .. } | Self::Community(error) => community_sqlstate(error),
             Self::NotAContraction(_) | Self::NotDerived { .. } => {
                 PgSqlErrorCode::ERRCODE_WRONG_OBJECT_TYPE
             }
@@ -139,7 +144,8 @@ fn community_sqlstate(error: &CommunityError) -> PgSqlErrorCode {
         CommunityError::LabelDtype(_) => PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
         CommunityError::LabelWidth(_)
         | CommunityError::NotIntegral { .. }
-        | CommunityError::UnknownAggregate(_) => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+        | CommunityError::UnknownAggregate(_)
+        | CommunityError::NegativeWeight { .. } => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
         CommunityError::LabelLength { .. } | CommunityError::UnknownLabel { .. } => {
             PgSqlErrorCode::ERRCODE_INTERNAL_ERROR
         }

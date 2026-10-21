@@ -210,3 +210,11 @@ def test_a_directed_quotient_keeps_the_direction_of_each_edge():
     g = graph([(1, 3), (3, 2), (2, 1)], directed=True)
     rows = sorted(oracle.quotient(g, ["--count"], {1: 0, 2: 0, 3: 1}))
     assert rows == [(0, 0, 1.0), (0, 1, 1.0), (1, 0, 1.0)]
+
+
+def test_louvain_finds_two_cliques_and_scores_them():
+    g = graph([(a, b) for a in range(4) for b in range(a + 1, 4)]
+              + [(a, b) for a in range(4, 8) for b in range(a + 1, 8)] + [(3, 4)])
+    rows = sorted(oracle.compute("louvain", g, []))
+    assert [(node, community) for node, community, _ in rows] == [(n, 0 if n < 4 else 4) for n in range(8)]
+    assert rows[0][2] == pytest.approx(2 * (6 / 13 - (13 / 26) ** 2))
