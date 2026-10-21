@@ -15,15 +15,56 @@ pub(super) fn values(graph: &str, name: &str, digits: i32) -> Result<Option<Stri
     ))
 }
 
+/// Every library function written in PL/pgSQL and its intermediates,
+/// `_warren_<function>_<part>`.
+const PARTS: &[(&str, &[&str])] = &[
+    ("aggregate_neighbours", &["x", "degree"]),
+    ("clustering", &["triangles", "degree"]),
+    ("components_vector", &["x", "next"]),
+    ("eigenvector_centrality", &["one", "x", "y", "next", "scale"]),
+    ("hits", &["one", "x", "a", "next", "scale"]),
+    ("katz_centrality", &["one", "b", "alpha", "x", "y", "next", "scale"]),
+    ("label_propagation", &["x", "msg", "next"]),
+    ("label_propagation_majority", &["x", "next"]),
+    (
+        "pagerank",
+        &[
+            "one",
+            "out",
+            "x",
+            "p",
+            "total",
+            "damping",
+            "teleport",
+            "msg",
+            "dangling_x",
+            "dangling",
+            "y",
+            "next",
+        ],
+    ),
+    ("sssp_vector", &["x", "next", "fell"]),
+];
+
+/// Checks that no intermediate vector of `algorithm` is left on `graph`.
+pub(super) fn none_left(graph: &str, algorithm: &str) -> Result<(), Error> {
+    let parts = PARTS.iter().find(|(name, _)| *name == algorithm).map(|(_, parts)| *parts);
+    assert!(parts.is_some(), "{algorithm} has no entry in PARTS");
+    for part in parts.into_iter().flatten() {
+        let left =
+            failure(&format!("warren.explain_map('{graph}', '_warren_{algorithm}_{part}')"))?;
+        assert!(left.is_some(), "_warren_{algorithm}_{part} was left behind");
+    }
+    Ok(())
+}
+
 /// Runs `sql` and checks that every vector_map it made was compiled and
 /// that it left no intermediate vector of `algorithm` behind.
 pub(super) fn compiled(graph: &str, algorithm: &str, sql: &str) -> Result<(), Error> {
     let before = executor_maps();
     Spi::run(sql)?;
     assert_eq!(executor_maps(), before, "{algorithm}: a vector_map took the executor path");
-    let left = failure(&format!("warren.explain_map('{graph}', '_warren_{algorithm}_x')"))?;
-    assert!(left.is_some(), "{algorithm} left its intermediates");
-    Ok(())
+    none_left(graph, algorithm)
 }
 
 #[pgrx::pg_schema]
@@ -31,8 +72,8 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use super::{compiled, values};
-    use crate::fixture::{failure, refresh, ring, rows, small};
+    use super::{compiled, none_left, values};
+    use crate::fixture::{failure, refresh, ring, rows, small, warnings};
 
     #[pg_test]
     fn pagerank_is_uniform_on_a_ring_and_personalised_by_a_seed() -> Result<(), Error> {
@@ -250,27 +291,82 @@ mod tests {
         Ok(())
     }
 
-    #[pg_test]
-    fn bad_arguments_are_refused() -> Result<(), Error> {
-        small("t")?;
+    /// Graph `none`, which has no nodes.
+    fn no_nodes() -> Result<(), Error> {
         Spi::run(
             "CREATE TABLE none_nodes (id bigint);
              SELECT warren.create_graph('none', 'SELECT id FROM none_nodes', 'SELECT id, id FROM none_nodes');
              SELECT warren.refresh('none')",
-        )?;
+        )
+    }
+
+    #[pg_test]
+    fn bad_arguments_are_refused() -> Result<(), Error> {
+        small("t")?;
+        no_nodes()?;
+        let unknown = "42704: graph \"nope\" does not exist";
+        let negative_tol = "22023: tol must be at least 0, not -1";
+        let no_iterations = "22023: max_iter must be at least 1, not 0";
+        let empty = "22023: graph \"none\" has no live nodes";
         let calls = [
-            ("warren.eigenvector_centrality('nope', 'ev')", "42704: graph \"nope\" does not exist"),
+            ("warren.eigenvector_centrality('nope', 'ev')", unknown),
+            ("warren.eigenvector_centrality('t', NULL)", "22004: out must not be NULL"),
+            ("warren.eigenvector_centrality('t', 'ev', tol := -1)", negative_tol),
             (
-                "warren.eigenvector_centrality('t', 'ev', tol := -1)",
-                "22023: tol must be at least 0, not -1",
+                "warren.eigenvector_centrality('t', 'ev', tol := NULL)",
+                "22004: tol must not be NULL",
+            ),
+            ("warren.eigenvector_centrality('t', 'ev', max_iter := 0)", no_iterations),
+            (
+                "warren.eigenvector_centrality('t', 'ev', max_iter := NULL)",
+                "22004: max_iter must not be NULL",
+            ),
+            ("warren.eigenvector_centrality('none', 'ev')", empty),
+            ("warren.katz_centrality('nope', 'k')", unknown),
+            ("warren.katz_centrality('t', NULL)", "22004: out must not be NULL"),
+            ("warren.katz_centrality('t', 'k', alpha := NULL)", "22004: alpha must not be NULL"),
+            ("warren.katz_centrality('t', 'k', beta := NULL)", "22004: beta must not be NULL"),
+            (
+                "warren.katz_centrality('t', 'k', normalized := NULL)",
+                "22004: normalized must not be NULL",
+            ),
+            ("warren.katz_centrality('t', 'k', tol := -1)", negative_tol),
+            ("warren.katz_centrality('t', 'k', tol := NULL)", "22004: tol must not be NULL"),
+            ("warren.katz_centrality('t', 'k', max_iter := 0)", no_iterations),
+            (
+                "warren.katz_centrality('t', 'k', max_iter := NULL)",
+                "22004: max_iter must not be NULL",
             ),
             (
-                "warren.eigenvector_centrality('t', 'ev', max_iter := 0)",
-                "22023: max_iter must be at least 1, not 0",
+                "warren.katz_centrality('t', 'k', seed := 'nope')",
+                "42704: graph \"t\" has no vector \"nope\"",
+            ),
+            ("warren.katz_centrality('none', 'k')", empty),
+            ("warren.hits('nope', 'h', 'a')", unknown),
+            ("warren.hits('t', NULL, 'a')", "22004: hubs must not be NULL"),
+            ("warren.hits('t', 'h', NULL)", "22004: authorities must not be NULL"),
+            ("warren.hits('t', 'h', 'h')", "22023: hubs and authorities must be different vectors"),
+            (
+                "warren.hits('t', 'h', 'a', normalized := NULL)",
+                "22004: normalized must not be NULL",
+            ),
+            ("warren.hits('t', 'h', 'a', tol := -1)", negative_tol),
+            ("warren.hits('t', 'h', 'a', tol := NULL)", "22004: tol must not be NULL"),
+            ("warren.hits('t', 'h', 'a', max_iter := 0)", no_iterations),
+            ("warren.hits('t', 'h', 'a', max_iter := NULL)", "22004: max_iter must not be NULL"),
+            ("warren.hits('none', 'h', 'a')", empty),
+            ("warren.clustering('nope', 'c')", unknown),
+            ("warren.clustering('t', NULL)", "22004: out must not be NULL"),
+            ("warren.label_propagation_majority('nope', 'lp')", unknown),
+            ("warren.label_propagation_majority('t', NULL)", "22004: out must not be NULL"),
+            ("warren.label_propagation_majority('t', 'lp', max_iter := 0)", no_iterations),
+            (
+                "warren.label_propagation_majority('t', 'lp', max_iter := NULL)",
+                "22004: max_iter must not be NULL",
             ),
             (
-                "warren.eigenvector_centrality('none', 'ev')",
-                "22023: graph \"none\" has no live nodes",
+                "warren.label_propagation_majority('t', 'lp', seed := 'nope')",
+                "42704: graph \"t\" has no vector \"nope\"",
             ),
         ];
         for (call, expected) in calls {
@@ -280,25 +376,25 @@ mod tests {
         Ok(())
     }
 
-    /// Each function of DESIGN.md §6.7's group 1 and its intermediates.
-    const GROUP_ONE: &[(&str, &str, &[&str])] = &[
-        (
-            "eigenvector_centrality",
-            "warren.eigenvector_centrality('r', 'taken')",
-            &["one", "x", "y", "next", "scale"],
-        ),
-        (
-            "katz_centrality",
-            "warren.katz_centrality('r', 'taken')",
-            &["one", "b", "alpha", "x", "y", "next", "scale"],
-        ),
-        ("hits", "warren.hits('r', 'h', 'taken')", &["one", "x", "a", "next", "scale"]),
-        ("clustering", "warren.clustering('r', 'taken')", &["triangles", "degree"]),
-        (
-            "label_propagation_majority",
-            "warren.label_propagation_majority('r', 'taken')",
-            &["x", "next"],
-        ),
+    /// A run stopped by max_iter says so, once.
+    #[pg_test]
+    fn a_run_stopped_by_max_iter_warns() -> Result<(), Error> {
+        small("t")?;
+        let warned = warnings("SELECT warren.hits('t', 'h', 'a', tol := 0, max_iter := 3)")?;
+        assert_eq!(warned, ["hits did not converge in 3 iterations"]);
+        let quiet = warnings("SELECT warren.hits('t', 'h', 'a')")?;
+        assert_eq!(quiet, Vec::<String>::new());
+        Ok(())
+    }
+
+    /// A call of each function of DESIGN.md §6.7's group 1 that writes
+    /// vector `taken`.
+    const GROUP_ONE: &[(&str, &str)] = &[
+        ("eigenvector_centrality", "warren.eigenvector_centrality('r', 'taken')"),
+        ("katz_centrality", "warren.katz_centrality('r', 'taken')"),
+        ("hits", "warren.hits('r', 'h', 'taken')"),
+        ("clustering", "warren.clustering('r', 'taken')"),
+        ("label_propagation_majority", "warren.label_propagation_majority('r', 'taken')"),
     ];
 
     /// A reader may not replace the owner's vector, so writing `out` fails
@@ -314,14 +410,10 @@ mod tests {
              SELECT warren.vector_const('r', 'taken', 1);
              SET ROLE r_reader",
         )?;
-        for (algorithm, call, parts) in GROUP_ONE {
+        for (algorithm, call) in GROUP_ONE {
             let refused = failure(call)?.unwrap_or_default();
             assert!(refused.starts_with("42501: "), "{call}: {refused}");
-            for part in *parts {
-                let left =
-                    failure(&format!("warren.explain_map('r', '_warren_{algorithm}_{part}')"))?;
-                assert!(left.is_some(), "_warren_{algorithm}_{part} was left behind");
-            }
+            none_left("r", algorithm)?;
         }
         Spi::run("RESET ROLE")
     }
@@ -336,13 +428,19 @@ mod tests {
         refresh("r", true)?;
         Spi::run(
             "SELECT warren.vector_from_query('r', 'seed', 'SELECT id, id FROM r_nodes');
-             SELECT warren.pagerank('r', 'pr', seed := 'seed');
+             SELECT warren.pagerank('r', 'pr', seed := 'seed', tol := 1e-12);
              SELECT warren.eigenvector_centrality('r', 'ev');
              SELECT warren.katz_centrality('r', 'k', seed := 'seed');
              SELECT warren.hits('r', 'h', 'a');
              SELECT warren.clustering('r', 'cl');
              SELECT warren.label_propagation_majority('r', 'lpm', seed := 'seed')",
         )?;
+        // NetworkX's PageRank of the path 4 → 5 → 6 → 1 → 2, personalised
+        // by node id.
+        assert_eq!(
+            values("r", "pr", 6)?.as_deref(),
+            Some("1:0.243124 2:0.246613 4:0.079916 5:0.167823 6:0.262524")
+        );
         // The ring is now the path 4 → 5 → 6 → 1 → 2: every node with an
         // out-edge is an equal hub.
         assert_eq!(

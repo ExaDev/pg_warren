@@ -5,10 +5,13 @@
 -- the constant `beta`, or beta × vector `seed` (NetworkX's per-node beta).
 -- From 0, each iteration takes alpha · Aᵀx + β; it stops when the L1 change
 -- falls below (live nodes) × tol, or after max_iter iterations with a
--- WARNING (NetworkX raises; alpha at or above 1 / the largest eigenvalue
--- diverges). With normalized, the result is scaled to unit L2 norm. Writes
--- vector `out` (f64) and returns the iterations run. Constants enter
--- expressions as constant vectors.
+-- WARNING (NetworkX raises). Alpha at or above 1 / the largest eigenvalue
+-- diverges: once a value or the L2 norm is not finite the run is refused
+-- (22003), as NetworkX raises, and writes nothing. With normalized, the
+-- result is scaled to unit L2 norm. Writes vector `out` (f64) and returns
+-- the iterations run. Constants enter expressions as constant vectors; a
+-- constant vector is 0 at tombstoned rows, where vector_map evaluates too,
+-- so a division by one is guarded.
 CREATE FUNCTION warren.katz_centrality(graph text, "out" text, alpha float8 DEFAULT 0.1,
                                        beta float8 DEFAULT 1.0, seed text DEFAULT NULL,
                                        normalized boolean DEFAULT true, tol float8 DEFAULT 1e-6,
@@ -23,17 +26,21 @@ DECLARE
   delta float8;
   i int := 0;
 BEGIN
+  IF "out" IS NULL OR alpha IS NULL OR beta IS NULL OR normalized IS NULL OR tol IS NULL OR max_iter IS NULL THEN
+    RAISE EXCEPTION '% must not be NULL',
+      CASE WHEN "out" IS NULL THEN 'out' WHEN alpha IS NULL THEN 'alpha' WHEN beta IS NULL THEN 'beta'
+           WHEN normalized IS NULL THEN 'normalized' WHEN tol IS NULL THEN 'tol' ELSE 'max_iter' END
+      USING ERRCODE = 'null_value_not_allowed';
+  END IF;
   IF starts_with("out", '_warren_') OR starts_with(seed, '_warren_') THEN
     RAISE EXCEPTION 'vector names beginning with _warren_ are reserved for the library''s intermediates'
       USING ERRCODE = 'reserved_name';
   END IF;
-  IF tol IS NULL OR tol < 0 THEN
-    RAISE EXCEPTION 'tol must be at least 0, not %', coalesce(tol::text, 'NULL')
-      USING ERRCODE = 'invalid_parameter_value';
+  IF tol < 0 THEN
+    RAISE EXCEPTION 'tol must be at least 0, not %', tol USING ERRCODE = 'invalid_parameter_value';
   END IF;
-  IF max_iter IS NULL OR max_iter < 1 THEN
-    RAISE EXCEPTION 'max_iter must be at least 1, not %', coalesce(max_iter::text, 'NULL')
-      USING ERRCODE = 'invalid_parameter_value';
+  IF max_iter < 1 THEN
+    RAISE EXCEPTION 'max_iter must be at least 1, not %', max_iter USING ERRCODE = 'invalid_parameter_value';
   END IF;
   BEGIN
     PERFORM warren.vector_const(graph, '_warren_katz_centrality_one', 1, persist := false, version := v);
@@ -41,10 +48,16 @@ BEGIN
     IF nodes = 0 THEN
       RAISE EXCEPTION 'graph "%" has no live nodes', graph USING ERRCODE = 'invalid_parameter_value';
     END IF;
-    PERFORM warren.vector_const(graph, '_warren_katz_centrality_b', beta, persist := false, version := v);
-    IF seed IS NOT NULL THEN
+    IF seed IS NULL THEN
+      PERFORM warren.vector_const(graph, '_warren_katz_centrality_b', beta, persist := false, version := v);
+    ELSE
+      -- vector_reduce names a missing seed vector (42704); vector_map would
+      -- call it a missing column.
+      PERFORM warren.vector_reduce(graph, seed, 'nnz', v);
+      PERFORM warren.vector_map(graph, '_warren_katz_centrality_b', format('%I::float8', seed), false, v);
+      PERFORM warren.vector_const(graph, '_warren_katz_centrality_scale', beta, persist := false, version := v);
       PERFORM warren.vector_map(graph, '_warren_katz_centrality_b',
-                                format('_warren_katz_centrality_b * %I::float8', seed), false, v);
+                                '_warren_katz_centrality_scale * _warren_katz_centrality_b', false, v);
     END IF;
     PERFORM warren.vector_const(graph, '_warren_katz_centrality_alpha', alpha, persist := false, version := v);
     PERFORM warren.vector_const(graph, '_warren_katz_centrality_x', 0, persist := false, version := v);
@@ -56,6 +69,11 @@ BEGIN
         '_warren_katz_centrality_alpha * _warren_katz_centrality_y + _warren_katz_centrality_b', false, v);
       delta := warren.vector_norm_diff(graph, '_warren_katz_centrality_next', '_warren_katz_centrality_x',
                                        'l1', v, v);
+      IF NOT delta < 'Infinity' THEN
+        RAISE EXCEPTION 'katz_centrality diverged: its values are not finite after % iterations', i
+          USING ERRCODE = 'numeric_value_out_of_range',
+                HINT = 'alpha must be below 1 / the largest eigenvalue of the adjacency matrix.';
+      END IF;
       PERFORM warren.vector_map(graph, '_warren_katz_centrality_x', '_warren_katz_centrality_next', false, v);
       EXIT WHEN delta < nodes * tol;
     END LOOP;
@@ -64,9 +82,16 @@ BEGIN
     END IF;
     IF normalized THEN
       norm := warren.vector_reduce(graph, '_warren_katz_centrality_x', 'l2', v);
-      PERFORM warren.vector_const(graph, '_warren_katz_centrality_scale',
-                                  CASE WHEN norm = 0 THEN 1 ELSE 1.0 / norm END, persist := false, version := v);
-      PERFORM warren.vector_map(graph, "out", '_warren_katz_centrality_x * _warren_katz_centrality_scale', true, v);
+      IF NOT norm < 'Infinity' THEN
+        RAISE EXCEPTION 'katz_centrality diverged: its L2 norm overflows after % iterations', i
+          USING ERRCODE = 'numeric_value_out_of_range',
+                HINT = 'alpha must be below 1 / the largest eigenvalue of the adjacency matrix.';
+      END IF;
+      PERFORM warren.vector_const(graph, '_warren_katz_centrality_scale', CASE WHEN norm = 0 THEN 1 ELSE norm END,
+                                  persist := false, version := v);
+      PERFORM warren.vector_map(graph, "out",
+        'CASE WHEN _warren_katz_centrality_scale <> 0
+              THEN _warren_katz_centrality_x / _warren_katz_centrality_scale ELSE 0 END', true, v);
     ELSE
       PERFORM warren.vector_map(graph, "out", '_warren_katz_centrality_x', true, v);
     END IF;

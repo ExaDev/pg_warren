@@ -31,24 +31,33 @@ DECLARE
            GROUP BY node_id, label) c
      ORDER BY node_id, votes DESC, label',
     graph, '_warren_label_propagation_majority_x', info ->> 'id_type', rels, v);
+  nodes bigint;
   delta float8;
   i int := 0;
 BEGIN
+  IF "out" IS NULL OR max_iter IS NULL THEN
+    RAISE EXCEPTION '% must not be NULL', CASE WHEN "out" IS NULL THEN 'out' ELSE 'max_iter' END
+      USING ERRCODE = 'null_value_not_allowed';
+  END IF;
   IF starts_with("out", '_warren_') OR starts_with(seed, '_warren_') THEN
     RAISE EXCEPTION 'vector names beginning with _warren_ are reserved for the library''s intermediates'
       USING ERRCODE = 'reserved_name';
   END IF;
-  IF max_iter IS NULL OR max_iter < 1 THEN
-    RAISE EXCEPTION 'max_iter must be at least 1, not %', coalesce(max_iter::text, 'NULL')
-      USING ERRCODE = 'invalid_parameter_value';
+  IF max_iter < 1 THEN
+    RAISE EXCEPTION 'max_iter must be at least 1, not %', max_iter USING ERRCODE = 'invalid_parameter_value';
   END IF;
   BEGIN
     IF seed IS NULL THEN
       PERFORM warren.vector_dense_id(graph, '_warren_label_propagation_majority_x', 'f64', false, v);
     ELSE
+      -- vector_reduce names a missing seed vector (42704); vector_map would
+      -- call it a missing column.
+      PERFORM warren.vector_reduce(graph, seed, 'nnz', v);
       PERFORM warren.vector_map(graph, '_warren_label_propagation_majority_x', format('%I::float8', seed), false, v);
     END IF;
-    WHILE i < max_iter LOOP
+    -- No live nodes, no labels: no iterations (NetworkX finds no communities).
+    nodes := (warren.vector_stats(graph, '_warren_label_propagation_majority_x', v) ->> 'count')::bigint;
+    WHILE i < max_iter AND nodes > 0 LOOP
       i := i + 1;
       PERFORM warren.vector_from_query(graph, '_warren_label_propagation_majority_next', votes, 'f64',
                                        persist := false, version := v);

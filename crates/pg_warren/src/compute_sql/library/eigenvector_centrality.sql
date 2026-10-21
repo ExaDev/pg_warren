@@ -6,11 +6,11 @@
 -- x + Aᵀx (the shift by I keeps a periodic graph from oscillating) and
 -- scales it to unit L2 norm; it stops when the L1 change falls below
 -- (live nodes) × tol, or after max_iter iterations with a WARNING (NetworkX
--- raises). Writes vector `out` (f64, unit L2 norm) and returns the
--- iterations run. Constants enter expressions as constant vectors, and
--- scale by multiplying by a reciprocal: a constant vector is 0 at
--- tombstoned rows, where vector_map evaluates too, so dividing by one
--- would fail.
+-- raises). Values too large for double precision (an L2 norm past about
+-- 1e154) are refused (22003) and write nothing. Writes vector `out` (f64,
+-- unit L2 norm) and returns the iterations run. Constants enter
+-- expressions as constant vectors; a constant vector is 0 at tombstoned
+-- rows, where vector_map evaluates too, so a division by one is guarded.
 CREATE FUNCTION warren.eigenvector_centrality(graph text, "out" text, tol float8 DEFAULT 1e-6,
                                               max_iter int DEFAULT 100, rels text[] DEFAULT NULL,
                                               weighted boolean DEFAULT NULL, version bigint DEFAULT NULL)
@@ -23,17 +23,19 @@ DECLARE
   delta float8;
   i int := 0;
 BEGIN
+  IF "out" IS NULL OR tol IS NULL OR max_iter IS NULL THEN
+    RAISE EXCEPTION '% must not be NULL', CASE WHEN "out" IS NULL THEN 'out' WHEN tol IS NULL THEN 'tol' ELSE 'max_iter' END
+      USING ERRCODE = 'null_value_not_allowed';
+  END IF;
   IF starts_with("out", '_warren_') THEN
     RAISE EXCEPTION 'vector names beginning with _warren_ are reserved for the library''s intermediates'
       USING ERRCODE = 'reserved_name';
   END IF;
-  IF tol IS NULL OR tol < 0 THEN
-    RAISE EXCEPTION 'tol must be at least 0, not %', coalesce(tol::text, 'NULL')
-      USING ERRCODE = 'invalid_parameter_value';
+  IF tol < 0 THEN
+    RAISE EXCEPTION 'tol must be at least 0, not %', tol USING ERRCODE = 'invalid_parameter_value';
   END IF;
-  IF max_iter IS NULL OR max_iter < 1 THEN
-    RAISE EXCEPTION 'max_iter must be at least 1, not %', coalesce(max_iter::text, 'NULL')
-      USING ERRCODE = 'invalid_parameter_value';
+  IF max_iter < 1 THEN
+    RAISE EXCEPTION 'max_iter must be at least 1, not %', max_iter USING ERRCODE = 'invalid_parameter_value';
   END IF;
   BEGIN
     PERFORM warren.vector_const(graph, '_warren_eigenvector_centrality_one', 1, persist := false, version := v);
@@ -50,10 +52,16 @@ BEGIN
       PERFORM warren.vector_map(graph, '_warren_eigenvector_centrality_next',
         '_warren_eigenvector_centrality_x + _warren_eigenvector_centrality_y', false, v);
       norm := warren.vector_reduce(graph, '_warren_eigenvector_centrality_next', 'l2', v);
+      IF NOT norm < 'Infinity' THEN
+        RAISE EXCEPTION 'eigenvector_centrality diverged: its values are not finite after % iterations', i
+          USING ERRCODE = 'numeric_value_out_of_range',
+                HINT = 'The edge weights are too large: their squares overflow double precision.';
+      END IF;
       PERFORM warren.vector_const(graph, '_warren_eigenvector_centrality_scale',
-                                  CASE WHEN norm = 0 THEN 1 ELSE 1.0 / norm END, persist := false, version := v);
+                                  CASE WHEN norm = 0 THEN 1 ELSE norm END, persist := false, version := v);
       PERFORM warren.vector_map(graph, '_warren_eigenvector_centrality_next',
-        '_warren_eigenvector_centrality_next * _warren_eigenvector_centrality_scale', false, v);
+        'CASE WHEN _warren_eigenvector_centrality_scale <> 0
+              THEN _warren_eigenvector_centrality_next / _warren_eigenvector_centrality_scale ELSE 0 END', false, v);
       delta := warren.vector_norm_diff(graph, '_warren_eigenvector_centrality_next',
                                        '_warren_eigenvector_centrality_x', 'l1', v, v);
       PERFORM warren.vector_map(graph, '_warren_eigenvector_centrality_x', '_warren_eigenvector_centrality_next',
