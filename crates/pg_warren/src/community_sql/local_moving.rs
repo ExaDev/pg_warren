@@ -55,8 +55,10 @@ fn local_moving(
                     "max_sweeps must be at least 1, not {max_sweeps}"
                 ))
             })?;
-        if tolerance.is_nan() {
-            return Err(CommunitySqlError::InvalidArgument("tolerance must be a number".into()));
+        if tolerance.is_nan() || tolerance < 0.0 {
+            return Err(CommunitySqlError::InvalidArgument(format!(
+                "tolerance must be a number of at least 0, not {tolerance}"
+            )));
         }
         let options = LocalMoving { resolution, seed: seed as u64, max_sweeps, tolerance };
         let resolved = resolve(graph, version, "write vectors of")?;
@@ -206,6 +208,15 @@ mod tests {
             failure("warren.local_moving('tt', 'c', max_sweeps := 0)")?.as_deref(),
             Some("22023: max_sweeps must be at least 1, not 0")
         );
+        for tolerance in ["-1", "'NaN'"] {
+            assert_eq!(
+                failure(&format!("warren.local_moving('tt', 'c', tolerance := {tolerance})"))?,
+                Some(format!(
+                    "22023: tolerance must be a number of at least 0, not {}",
+                    if tolerance == "-1" { "-1" } else { "NaN" }
+                ))
+            );
+        }
         assert_eq!(
             failure("warren.leiden_refine('tt', 'halves', 'r', randomness := -1)")?.as_deref(),
             Some("22023: randomness must be a finite number of at least 0, not -1")
@@ -226,7 +237,7 @@ mod tests {
         )?;
         assert_eq!(
             failure("warren.local_moving('neg', 'c')")?.as_deref(),
-            Some("22023: the edge 0 → 1 weighs -1: modularity needs weights of at least 0")
+            Some("22023: the edge 1 → 2 weighs -1: modularity needs weights of at least 0")
         );
         Ok(())
     }

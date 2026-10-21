@@ -51,6 +51,10 @@ BEGIN
   IF max_levels < 1 THEN
     RAISE EXCEPTION 'max_levels must be at least 1, not %', max_levels USING ERRCODE = 'invalid_parameter_value';
   END IF;
+  IF tolerance = 'NaN'::float8 OR tolerance < 0 THEN
+    RAISE EXCEPTION 'tolerance must be a number of at least 0, not %', tolerance
+      USING ERRCODE = 'invalid_parameter_value';
+  END IF;
   BEGIN
     LOOP
       level := level + 1;

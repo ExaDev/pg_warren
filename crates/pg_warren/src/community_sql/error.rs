@@ -23,6 +23,17 @@ pub(crate) enum CommunitySqlError {
     /// An argument is out of its range.
     #[error("{0}")]
     InvalidArgument(String),
+    /// Modularity needs weights of at least 0: the edge between these
+    /// external ids is not.
+    #[error("the edge {from} → {to} weighs {weight}: modularity needs weights of at least 0")]
+    NegativeWeight {
+        /// The edge's source, as its external id.
+        from: String,
+        /// Its target.
+        to: String,
+        /// Its weight in the undirected view.
+        weight: f64,
+    },
     /// A vector of labels or keys does not hold integers.
     #[error("{what}: {error}")]
     Integers {
@@ -130,6 +141,7 @@ impl SqlError for CommunitySqlError {
             | Self::OtherParent { .. }
             | Self::NotContractedFrom { .. } => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
             Self::Integers { error, .. } | Self::Community(error) => community_sqlstate(error),
+            Self::NegativeWeight { .. } => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
             Self::NotAContraction(_) | Self::NotDerived { .. } => {
                 PgSqlErrorCode::ERRCODE_WRONG_OBJECT_TYPE
             }

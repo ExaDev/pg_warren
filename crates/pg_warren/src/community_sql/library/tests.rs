@@ -241,6 +241,15 @@ mod tests {
             failure("warren.leiden('rc', '_warren_c')")?.as_deref(),
             Some("42939: vector names beginning with _warren_ are reserved for the library's intermediates")
         );
+        for algorithm in ["louvain", "leiden"] {
+            for (tolerance, shown) in [("-1", "-1"), ("'NaN'", "NaN")] {
+                assert_eq!(
+                    failure(&format!("warren.{algorithm}('rc', 'c', tolerance := {tolerance})"))?,
+                    Some(format!("22023: tolerance must be a number of at least 0, not {shown}")),
+                    "{algorithm}"
+                );
+            }
+        }
         Ok(())
     }
 }
