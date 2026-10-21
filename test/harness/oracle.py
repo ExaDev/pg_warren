@@ -8,9 +8,18 @@ as a table the SQL test compares against.
 | pagerank | oracle_pagerank | node_id, score (sums to 1; `--damping`, default 0.85) |
 | spectrum | oracle_spectrum | i, eigenvalue: the `--k` eigenvalues of `--matrix` (adjacency, laplacian, normalized_laplacian) at the `--which` end (largest magnitude, or smallest), by a dense solver over the nodes with an edge (undirected), as `warren.eigen` defines them |
 | triangles | oracle_triangles | node_id, triangles: the node's triangles in the undirected graph without self-loops |
+| eigenvector | oracle_eigenvector | node_id, score: `nx.eigenvector_centrality` (weighted when the edges have weights) |
+| katz | oracle_katz | node_id, score: `nx.katz_centrality` (`--alpha`, `--beta`, `--no-normalized`; weighted when the edges have weights) |
+| hits | oracle_hits | node_id, hub, authority: `nx.hits` (power iteration; weighted when the edges have weights) |
+| label_propagation_majority | oracle_label_propagation_majority | node_id, label: `warren.label_propagation_majority`'s rule reimplemented, from each node's own id as its label (`--max-iter`, default 100) |
+| clustering | oracle_clustering | node_id, coefficient: `nx.clustering` of the undirected graph without self-loops |
+
+Edges are `--edges-sql`'s first two columns; a third column, if present, is
+the edge's `weight`.
 """
 
 import argparse
+from collections import Counter
 
 import networkx as nx
 import numpy as np
@@ -20,15 +29,22 @@ TABLES = {
     "pagerank": ("oracle_pagerank", "node_id bigint, score float8"),
     "spectrum": ("oracle_spectrum", "i int, eigenvalue float8"),
     "triangles": ("oracle_triangles", "node_id bigint, triangles bigint"),
+    "eigenvector": ("oracle_eigenvector", "node_id bigint, score float8"),
+    "katz": ("oracle_katz", "node_id bigint, score float8"),
+    "hits": ("oracle_hits", "node_id bigint, hub float8, authority float8"),
+    "label_propagation_majority": ("oracle_label_propagation_majority", "node_id bigint, label bigint"),
+    "clustering": ("oracle_clustering", "node_id bigint, coefficient float8"),
 }
 
 
 def export(database, nodes_sql, edges_sql, directed):
     """The graph whose nodes are `nodes_sql`'s first column and whose edges
-    are `edges_sql`'s first two columns."""
+    are `edges_sql`'s first two columns, weighted by its third if it has one."""
     graph = nx.DiGraph() if directed else nx.Graph()
     graph.add_nodes_from(int(row[0]) for row in database.query(nodes_sql))
-    graph.add_edges_from((int(row[0]), int(row[1])) for row in database.query(edges_sql))
+    for row in database.query(edges_sql):
+        weight = {"weight": float(row[2])} if len(row) > 2 else {}
+        graph.add_edge(int(row[0]), int(row[1]), **weight)
     return graph
 
 
@@ -44,10 +60,61 @@ def compute(computation, graph, arguments):
     if computation == "spectrum":
         return spectrum(graph, arguments)
     if computation == "triangles":
-        simple = nx.Graph(graph.to_undirected() if graph.is_directed() else graph)
-        simple.remove_edges_from(list(nx.selfloop_edges(simple)))
-        return list(nx.triangles(simple).items())
+        return list(nx.triangles(undirected_simple(graph)).items())
+    if computation == "eigenvector":
+        return list(nx.eigenvector_centrality(graph, weight="weight").items())
+    if computation == "katz":
+        return katz(graph, arguments)
+    if computation == "hits":
+        hubs, authorities = nx.hits(graph)
+        return [(node, hubs[node], authorities[node]) for node in graph]
+    if computation == "label_propagation_majority":
+        return label_propagation_majority(graph, arguments)
+    if computation == "clustering":
+        return list(nx.clustering(undirected_simple(graph)).items())
     raise ValueError(f"unknown oracle computation {computation!r}; expected one of {sorted(TABLES)}")
+
+
+def undirected_simple(graph):
+    simple = nx.Graph(graph.to_undirected() if graph.is_directed() else graph)
+    simple.remove_edges_from(list(nx.selfloop_edges(simple)))
+    return simple
+
+
+def katz(graph, arguments):
+    options = argparse.ArgumentParser(prog="katz")
+    options.add_argument("--alpha", type=float, default=0.1)
+    options.add_argument("--beta", type=float, default=1.0)
+    options.add_argument("--no-normalized", dest="normalized", action="store_false")
+    args = options.parse_args(arguments)
+    return list(nx.katz_centrality(graph, alpha=args.alpha, beta=args.beta, normalized=args.normalized,
+                                   weight="weight").items())
+
+
+def label_propagation_majority(graph, arguments):
+    """Synchronous majority-vote label propagation, as
+    `warren.label_propagation_majority` defines it: each step every node
+    takes the most frequent label among its own and its neighbours'
+    (direction ignored, each neighbour once), the smallest on a tie, until
+    no label changes or after `--max-iter` steps."""
+    options = argparse.ArgumentParser(prog="label_propagation_majority")
+    options.add_argument("--max-iter", type=int, default=100)
+    max_iter = options.parse_args(arguments).max_iter
+    undirected = graph.to_undirected() if graph.is_directed() else graph
+    labels = {node: node for node in undirected}
+    for _ in range(max_iter):
+        step = {node: majority([labels[node]] + [labels[m] for m in undirected.neighbors(node)])
+                for node in undirected}
+        if step == labels:
+            break
+        labels = step
+    return list(labels.items())
+
+
+def majority(labels):
+    counts = Counter(labels)
+    most = max(counts.values())
+    return min(label for label, count in counts.items() if count == most)
 
 
 def spectrum(graph, arguments):
