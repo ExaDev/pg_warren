@@ -16,9 +16,8 @@
 //! alone is `ΔH = 0`); it picks among them at random with probability
 //! proportional to `exp(ΔH / θ)`, `θ` the randomness. Nodes are taken in
 //! the seeded order, and the draw is a counter-based function of seed and
-//! node, so
-//! communities refine independently (in parallel) and the result is the
-//! same for any thread count.
+//! node, so communities refine independently (in parallel) and the result
+//! is the same for any thread count.
 
 use std::mem::size_of;
 
