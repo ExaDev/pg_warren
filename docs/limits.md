@@ -540,7 +540,10 @@ vectors.
   segments and about 190 MB of WAL, `leiden` 294 MB and 323 MB for one
   iteration (516 MB of segments for the default two); at 10M
   nodes, four runs of each in one database left it at 6.7 GB (`louvain`)
-  and 9.1 GB (`leiden`), the graph included, before `VACUUM`.
+  and 9.1 GB (`leiden`), the graph included, before `VACUUM`. A native
+  in-memory Louvain/Leiden kernel is deferred past 0.4.0: the planned fix
+  is for `contract` to keep a quotient in memory for the rest of the
+  statement, which helps every multilevel algorithm (DESIGN.md §6.7).
 - `contract` is linear: a counting sort of the nodes by community, then one
   pass over the stored edges, on one thread, plus a build of the quotient
   (its edges, at most the parent's). Its scratch, charged to
