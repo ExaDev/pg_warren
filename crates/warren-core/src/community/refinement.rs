@@ -27,7 +27,7 @@ use super::random::{priority, unit};
 use super::{CommunityError, Undirected};
 use crate::compute::{ComputeError, ComputeMemory, Vector, Workers};
 use crate::graph::{DenseId, Tombstones};
-use crate::interrupts::{Cancellation, Interrupts};
+use crate::interrupts::{Cancellation, Interrupts, Work};
 
 /// How a refinement runs.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -78,15 +78,39 @@ pub fn refine<I: Interrupts>(
         }
     }
     let mut labels = Vector::filled(memory, nodes, 1, 0i64)?;
-    // Grouping, places and each node's refined community; the groups' own
-    // state, at most one entry per node across the groups refined at once.
-    let per_node = 3 * size_of::<u64>() as u64 + Group::BYTES_PER_MEMBER;
-    let scratch = memory.charge(nodes.saturating_mul(per_node))?;
+    let longest = (0..nodes).map(|node| graph.row(node).len() as u64).max().unwrap_or(0);
+    let scratch = memory.charge(scratch_bytes(nodes, longest, workers.threads()))?;
     let count = workers.run(interrupts, |cancellation| {
         Ok(run(cancellation, graph, tombstones, communities, keys, options, labels.values_mut()))
     })??;
     drop(scratch);
     Ok(Refined { labels, communities: count })
+}
+
+/// What [`refine`] holds on the pool for `nodes` nodes, rows of at most
+/// `longest` entries and `threads` threads, all charged on the calling
+/// thread before it starts: per node its order, place and refined
+/// community (24 B) and, for the communities being refined, their state
+/// (24 B); per community, at most one a node, its start and its refined
+/// communities' list (32 B); per thread, a row's weights and candidates.
+fn scratch_bytes(nodes: u64, longest: u64, threads: usize) -> u64 {
+    let per_node = 3 * size_of::<u64>() as u64 + Group::BYTES_PER_MEMBER;
+    let per_community = (size_of::<usize>() + size_of::<Vec<usize>>()) as u64;
+    let per_entry = (size_of::<(usize, f64)>() + size_of::<(usize, f64, f64)>()) as u64;
+    nodes
+        .saturating_add(1)
+        .saturating_mul(per_node + per_community)
+        .saturating_add((threads as u64).saturating_mul(longest.saturating_add(1) * per_entry))
+}
+
+/// `len` copies of `value`, reserved fallibly; [`refine`] charged them.
+fn reserved<T: Clone>(len: usize, value: T) -> Result<Vec<T>, CommunityError> {
+    let mut buffer = Vec::new();
+    buffer
+        .try_reserve_exact(len)
+        .map_err(|_| ComputeError::OutOfMemory { bytes: (len * size_of::<T>()) as u64 })?;
+    buffer.resize(len, value);
+    Ok(buffer)
 }
 
 /// [`refine`]'s work on the pool: writes the labels and returns the
@@ -101,35 +125,52 @@ fn run(
     labels: &mut [i64],
 ) -> Result<u64, CommunityError> {
     let nodes = graph.id_space();
-    let mut members: Vec<DenseId> = (0..nodes).filter(|&node| !tombstones.contains(node)).collect();
-    members.sort_by_key(|&node| (communities[node as usize], priority(options.seed, node), node));
-    let mut starts = vec![0usize];
+    let mut members = reserved(nodes as usize, 0 as DenseId)?;
+    members.clear();
+    members.extend((0..nodes).filter(|&node| !tombstones.contains(node)));
+    members.sort_unstable_by_key(|&node| {
+        (communities[node as usize], priority(options.seed, node), node)
+    });
+    let mut starts = reserved(1, 0usize)?;
+    let distinct = 1
+        + (1..members.len())
+            .filter(|&at| {
+                communities[members[at - 1] as usize] != communities[members[at] as usize]
+            })
+            .count();
+    starts
+        .try_reserve_exact(distinct + 1)
+        .map_err(|_| ComputeError::OutOfMemory { bytes: (distinct * 8) as u64 })?;
     for at in 1..members.len() {
         if communities[members[at - 1] as usize] != communities[members[at] as usize] {
             starts.push(at);
         }
     }
     starts.push(members.len());
-    let mut place = vec![usize::MAX; nodes as usize];
+    let mut place = reserved(nodes as usize, usize::MAX)?;
     for range in starts.windows(2) {
         for (at, &node) in members[range[0]..range[1]].iter().enumerate() {
             place[node as usize] = at;
         }
     }
-    let groups: Vec<&[DenseId]> = starts.windows(2).map(|r| &members[r[0]..r[1]]).collect();
-    let refined: Vec<Vec<usize>> = groups
-        .par_iter()
-        .map(|members| {
-            if cancellation.is_cancelled() {
-                return Err(ComputeError::Cancelled.into());
-            }
-            Ok(Group::new(graph, members, &place).refine(options))
+    let refined: Vec<Vec<usize>> = starts
+        .par_windows(2)
+        .map(|range| {
+            let mut work = Work::new(cancellation);
+            work.check()?;
+            Group::new(graph, &members[range[0]..range[1]], &place)?.refine(options, &mut work)
         })
         .collect::<Result<_, CommunityError>>()?;
     let key = |node: DenseId| keys.map_or(node as i64, |keys| keys[node as usize]);
     let mut count = 0;
-    for (members, roots) in groups.iter().zip(&refined) {
-        let mut least = vec![i64::MAX; members.len()];
+    let mut least = Vec::new();
+    for (range, roots) in starts.windows(2).zip(&refined) {
+        let members = &members[range[0]..range[1]];
+        least.clear();
+        least
+            .try_reserve_exact(members.len())
+            .map_err(|_| ComputeError::OutOfMemory { bytes: (members.len() * 8) as u64 })?;
+        least.resize(members.len(), i64::MAX);
         for (at, &root) in roots.iter().enumerate() {
             least[root] = least[root].min(key(members[at]));
         }
@@ -159,17 +200,25 @@ impl<'a> Group<'a> {
     /// The bytes per member its state holds.
     const BYTES_PER_MEMBER: u64 = (3 * size_of::<f64>() + size_of::<usize>()) as u64;
 
-    fn new(graph: &'a Undirected, members: &'a [DenseId], place: &'a [usize]) -> Self {
+    fn new(
+        graph: &'a Undirected,
+        members: &'a [DenseId],
+        place: &'a [usize],
+    ) -> Result<Self, CommunityError> {
         let n = members.len();
-        Self {
+        let mut root = reserved(n, 0)?;
+        root.iter_mut().enumerate().for_each(|(at, root)| *root = at);
+        let mut sums = reserved(n, 0.0)?;
+        sums.iter_mut().zip(members).for_each(|(sum, &node)| *sum = graph.degree(node));
+        Ok(Self {
             graph,
             members,
             place,
-            root: (0..n).collect(),
-            sums: members.iter().map(|&node| graph.degree(node)).collect(),
-            outside: vec![0.0; n],
-            sizes: vec![1; n],
-        }
+            root,
+            sums,
+            outside: reserved(n, 0.0)?,
+            sizes: reserved(n, 1)?,
+        })
     }
 
     /// Whether `node` (a member) is in this group: its place points at it.
@@ -180,15 +229,20 @@ impl<'a> Group<'a> {
 
     /// Each member's refined community, as the place of the member
     /// standing for it.
-    fn refine(mut self, options: Refinement) -> Vec<usize> {
+    fn refine(
+        mut self,
+        options: Refinement,
+        work: &mut Work,
+    ) -> Result<Vec<usize>, CommunityError> {
         let total = self.graph.total();
         if total == 0.0 {
-            return self.root;
+            return Ok(self.root);
         }
         let scale = options.resolution / total;
         let group_sum: f64 = self.sums.iter().sum();
         for at in 0..self.members.len() {
             let node = self.members[at];
+            work.spend(1 + self.graph.row(node).len() as u64)?;
             self.outside[at] = self
                 .graph
                 .row(node)
@@ -199,22 +253,32 @@ impl<'a> Group<'a> {
                 .sum();
         }
         let mut weights: Vec<(usize, f64)> = Vec::new();
+        let mut candidates: Vec<(usize, f64, f64)> = Vec::new();
         for at in 0..self.members.len() {
             let node = self.members[at];
+            work.spend(1 + self.graph.row(node).len() as u64)?;
             let degree = self.graph.degree(node);
             let alone = self.root[at] == at && self.sizes[at] == 1;
             if !alone || self.outside[at] < scale * degree * (group_sum - degree) {
                 continue;
             }
+            let row = self.graph.row(node).len();
             weights.clear();
+            weights
+                .try_reserve(row)
+                .map_err(|_| ComputeError::OutOfMemory { bytes: row as u64 * 16 })?;
             for &(neighbour, weight) in self.graph.row(node) {
                 if let Some(other) = self.holds(neighbour).filter(|&other| other != at) {
                     weights.push((self.root[other], weight));
                 }
             }
-            weights.sort_by_key(|&(root, _)| root);
+            weights.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
             let to_self = self.outside[at];
-            let mut candidates: Vec<(usize, f64, f64)> = vec![(at, 0.0, 0.0)];
+            candidates.clear();
+            candidates
+                .try_reserve(row + 1)
+                .map_err(|_| ComputeError::OutOfMemory { bytes: (row as u64 + 1) * 24 })?;
+            candidates.push((at, 0.0, 0.0));
             let mut i = 0;
             while i < weights.len() {
                 let root = weights[i].0;
@@ -241,7 +305,7 @@ impl<'a> Group<'a> {
                 self.outside[root] += to_self - 2.0 * to;
             }
         }
-        self.root
+        Ok(self.root)
     }
 }
 
@@ -378,6 +442,23 @@ mod tests {
         };
         let (default, one) = (q(0.01), q(1.0));
         assert!(default > one + 0.01, "θ = 0.01: {default}, θ = 1: {one}");
+    }
+
+    #[test]
+    fn a_cancel_stops_the_refinement_of_one_large_community() {
+        // At resolution 0 a connected graph is one community: the
+        // refinement must poll inside it, not only between communities.
+        let n = 100_000u64;
+        let edges: Edges = (0..n - 1).map(|i| (0, i, i + 1, 1.0)).collect();
+        let graph = undirected(n, &edges);
+        let members: Vec<DenseId> = (0..n).collect();
+        let place: Vec<usize> = (0..n as usize).collect();
+        let cancellation = Cancellation::new();
+        cancellation.cancel();
+        let group = Group::new(&graph, &members, &place).unwrap();
+        let refined =
+            group.refine(Refinement { resolution: 0.0, ..OPTIONS }, &mut Work::new(&cancellation));
+        assert!(matches!(refined, Err(CommunityError::Compute(ComputeError::Cancelled))));
     }
 
     #[test]
