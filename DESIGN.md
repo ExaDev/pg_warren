@@ -62,7 +62,7 @@ The target users are teams building large, evolving knowledge systems on Postgre
 ### Out of scope (v1) — but keep the door open
 
 - Incremental/streaming updates to the CSR (§10).
-- Shared-memory (DSM) cache and a dedicated compute background worker (§10 — likely v1.1).
+- Shared-memory (DSM) cache (§10; brought into 1.0's scope as M9, §14 item 25) and a dedicated compute background worker (§6.9; 1.x).
 - Graph contraction / project / lift for community-stateful computation (§6.6 — done in 0.4.0; catalog shape fixed in v1).
 - User-defined vertex programs via WASM (§6.8 — v1.2+).
 - Node properties beyond vectors the user explicitly materialises.
@@ -1223,7 +1223,53 @@ Test it by installing as a non-superuser in CI and running the suite. **Make the
 - the §6.10 decision: native kernels, with GraphBLAS read rather than bound (§14 item 9). The kernel seam is defined there; making it code is follow-up work;
 - the user documentation (README, `docs/`).
 
-Post-v0.3: locality ordering of dense ids (§14 item 22) first; then the planned library's groups 1 (done in 0.4.0) and 2 (§6.7); then contraction/project/lift (§6.6, whose `PᵀAP` is the first SpGEMM; done in 0.4.0) and Louvain and Leiden over it (§6.7 group 3; done in 0.4.0), sparse matrix algebra (§6.11), DSM cache + compute worker, incremental maintenance, WASM programs, in roughly that order; a GPU backend when there is demand.
+**M8 — 0.4.0: locality and the library.** Locality ordering of dense ids (§14 item 22); the planned library's groups 1 and 2 (§6.7); contraction, project and lift (§6.6, whose `PᵀAP` is the first SpGEMM) and Louvain and Leiden over them (§6.7 group 3). The native in-memory Louvain/Leiden kernel is deferred past 0.4.0 (§6.7).
+
+**The road to 1.0** (decided 2026-10-21, §14 item 25). By the end of M8, everything §3 put in v1's scope has shipped, and more. What stands between it and 1.0 is what a 1.0 promises: a SQL surface that will not change, behaviour proven on real data and in real deployments, and working well where Postgres actually runs, behind poolers with many backends. Four milestones:
+
+**M9 — 0.5.0: one copy per cluster.** The shared cache (§10): a built version lives once in dynamic shared memory (`dsa`), mapped by every backend that reads it, instead of once per backend. Today 50 pooled connections reading a 1.2 GB version hold 60 GB. Measure pgGraph's sealed-`memfd` sharing against `dsa` first (§10). With it:
+- reads become `PARALLEL SAFE` where §9.3 holds them back only because of the per-backend cache;
+- cold loads happen once per cluster, not once per connection;
+- a graph larger than one backend's `warren.max_cache_memory` no longer reloads per statement.
+
+`warren.max_cache_memory` becomes a cluster-wide bound, or gains one; the accounting of §5.5 and §14 item 20 is restated for it. Versions are immutable, so sharing needs no invalidation beyond eviction. The background compute worker (§6.9) is not part of M9.
+
+**M10 — 0.6.0: identity, lifecycle and visibility.**
+- `text` node ids. Knowledge graphs key on strings (IRIs, slugs), and today they must be mapped to integers or `uuid` first.
+- Ownership transfer of a graph.
+- Cleanup of graphs and vectors whose owner role is dropped, as an optional superuser-installed event trigger, so a trusted install keeps working without it (§7).
+- Per-role quotas on readers' vectors.
+- Observability: what each backend, or the shared cache, holds and its bytes; cache hits, misses and evictions; and the progress of a long `refresh`, `eigen` or `louvain`, through a view or function a monitoring query can poll.
+
+**M11 — 0.7.0: proven on real graphs and real deployments.**
+- Benchmarks on real data, not only synthetic graphs:
+  - SNAP's LiveJournal, Orkut and road networks (§12);
+  - Appendix A's scale targets at 10M, which have not been run;
+  - a head-to-head with igraph and Neo4j (with and without GDS) on the same machine and graph, published with its caveats.
+- Robustness:
+  - a soak of several days behind a connection pooler, watching for memory growth;
+  - many backends refreshing and querying one graph at once;
+  - physical streaming replicas, which §5.1 claims and nothing tests;
+  - crash recovery during `refresh`;
+  - SQL-surface fuzzing (sqlsmith-style), beside the segment decoder fuzzing that exists.
+- Distribution: CI builds and tests on arm64 as well as x86_64 (most hosted Postgres runs on arm64), prebuilt packages for PG 15–18 on both, and a PGXN release.
+
+**M12 — 1.0.0: the stable surface.** A review of the whole SQL surface before it is frozen:
+- argument order, names and defaults (`persist` and `version` placement, the type witnesses such as `NULL::bigint`);
+- SQLSTATEs used consistently;
+- the GUCs.
+
+Renames are cheap before 1.0 and costly after. Also a written stability and deprecation policy: within 1.x, functions and their behaviour change only additively, and removals go through a deprecation release. Release candidates first.
+
+**Left to 1.x**, documented as limits rather than blocking 1.0:
+- incremental maintenance (§10; a full rebuild per `refresh` is an honest model when staleness is documented);
+- the background compute worker (§6.9);
+- sparse matrix algebra beyond SpMV (§6.11);
+- a GPU backend (§6.11) and WASM programs (§6.8);
+- the §12 rows still missed:
+  - BFS-vs-CTE and `reachable_set` are bounded by row emission; count, summary or vector output modes would close them;
+  - `eigen` on uniform random graphs, where shift-invert is the lever;
+  - parallel traversal.
 
 ## 14. Open decisions (make a call, record it in DESIGN.md, move on)
 
@@ -1278,6 +1324,8 @@ Post-v0.3: locality ordering of dense ids (§14 item 22) first; then the planned
 23. **Should `vector_map` skip tombstoned rows?** (Open, 0.4.0.) Tombstoned rows hold zero in every vector and `vector_map`'s result is zeroed there, yet it evaluates the expression at them, so `x / c` with `c` a constant vector fails on any version with a deleted node (§6.7 found it in `pagerank`). Skipping them would remove the trap for user programs as well as the library, but changes a primitive whose compiled and executor paths must agree (§6.3), and an expression's errors would then depend on which nodes are deleted.
 
 24. **Should `pagerank` warn when it stops at `max_iter`?** (Open, 0.4.0.) The group 1 library warns (§6.7), as `eigen` does; `pagerank` (M5) returns `max_iter` silently, so its caller cannot tell a last-iteration convergence from a stop. Warning would change a released function's messages.
+
+25. **What does 1.0 require beyond v1's scope?** (Decided 2026-10-21, after M8.) §3 put the shared cache and text ids after v1. Measured against how Postgres is deployed, that leaves a 1.0 that breaks behind a connection pooler: a version is held once per backend. **Decided:** 1.0 includes the shared (DSM) cache (M9) and `text` ids (M10), and is gated on proof on real data and deployments (M11) and on a reviewed, frozen SQL surface (M12). Incremental maintenance, the compute worker, sparse algebra beyond SpMV, GPU and WASM stay in 1.x (§13).
 
 ## 15. Instructions to the implementing agent
 
