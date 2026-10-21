@@ -1,0 +1,1146 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/soak.py",
+   "b-merged",
+   "--label=-040",
+   "--disk-floor",
+   "5368709120",
+   "--no-eigen-steps",
+   "--eigen-max-iter",
+   "200",
+   "--pg-config",
+   "/usr/bin/pg_config",
+   "--parent",
+   "/var/tmp",
+   "--extension-revision",
+   "5b0bf81",
+   "--extension-profile",
+   "release",
+   "--threads",
+   "4",
+   "--statement-timeout",
+   "20min"
+  ],
+  "harness": {
+   "revision": "e09819fafdb3a5da08a0d88034ddcb4b83e65445",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "5b0bf81",
+   "profile": "release",
+   "library": "/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "48c14e7ecab10d5fb1445d2573f0cc01908d816f6167b3c6b8869f90968f6f59"
+  }
+ },
+ "case": "b-merged",
+ "nodes": 10000000,
+ "edges": 100000000,
+ "weighted": true,
+ "relations": 5,
+ "store_merged": true,
+ "threads": 4,
+ "node_order": "id",
+ "eigen_max_iter": 200,
+ "statement_timeout": "20min",
+ "skip": [],
+ "planned_stages": [
+  "cold_load_probe",
+  "communities: leiden",
+  "communities: louvain",
+  "default: bfs depth 6",
+  "default: components",
+  "default: eigen",
+  "default: pagerank",
+  "default: prewarm",
+  "default: reachable_set",
+  "diff",
+  "library: betweenness_centrality",
+  "library: closeness_centrality",
+  "library: clustering",
+  "library: core_number",
+  "library: eigenvector_centrality",
+  "library: harmonic_centrality",
+  "library: hits",
+  "library: katz_centrality",
+  "library: minimum_spanning_forest",
+  "library: most_similar",
+  "library: similar_pairs",
+  "library: similarity",
+  "library: strong_components_vector",
+  "refresh"
+ ],
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v140",
+  "load_average": [
+   1.4248046875,
+   1.8203125,
+   1.9912109375
+  ]
+ },
+ "started_at": "2026-10-21T20:44:02+00:00",
+ "stages": {
+  "table 0: create": {
+   "sql": "CREATE UNLOGGED TABLE soak_removed ()",
+   "seconds": [
+    0.0004
+   ],
+   "median_seconds": 0.0004,
+   "rows": [],
+   "first_rows": [
+    null
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 5480448,
+   "peak_rss_anon": 5480448,
+   "vm_hwm": 34271232,
+   "rss_anon_after": 5480448
+  },
+  "create_graph": {
+   "sql": "SELECT warren.create_graph('soak', 'SELECT id FROM generate_series(1::bigint, 10000000) id', $q$SELECT src::bigint, dst::bigint, 'r' || ((src # dst) % 5), (1 + (src + 3 * dst) % 9)::float8 FROM (SELECT 1 + floor(random() * 10000000)::int4 AS src, 1 + floor(random() * 10000000)::int4 AS dst FROM (SELECT setseed(0.25) OFFSET 0) seeded CROSS JOIN generate_series(1, 100000000)) e WHERE src % 1000 <> 7 OR NOT EXISTS (SELECT FROM soak_removed)$q$, weighted := true, has_relations := true, store_merged := true, node_order := 'id')",
+   "seconds": [
+    0.0644
+   ],
+   "median_seconds": 0.0644,
+   "rows": [
+    ""
+   ],
+   "first_rows": [
+    ""
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 3198976,
+   "peak_rss_anon": 9859072,
+   "vm_hwm": 73068544,
+   "rss_anon_after": 9859072
+  },
+  "refresh": {
+   "sql": "SELECT warren.refresh('soak')",
+   "seconds": [
+    232.9427
+   ],
+   "median_seconds": 232.9427,
+   "rows": [
+    "1"
+   ],
+   "first_rows": [
+    "1"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 9859072,
+   "peak_rss_anon": 3260755968,
+   "vm_hwm": 4436193280,
+   "rss_anon_after": 37298176
+  },
+  "cold_load_probe": {
+   "sql": "SELECT warren.prewarm('soak')",
+   "seconds": [
+    27.1251
+   ],
+   "median_seconds": 27.1251,
+   "rows": [
+    "1"
+   ],
+   "first_rows": [
+    "1"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (65536 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3203072,
+   "peak_rss_anon": 7293648896,
+   "vm_hwm": 8402436096,
+   "rss_anon_after": 13537280
+  },
+  "default: prewarm": {
+   "sql": "WITH before AS MATERIALIZED (SELECT (SELECT pg_stat_get_xact_tuples_returned('warren.segments'::regclass) + pg_stat_get_xact_tuples_fetched('warren.segments'::regclass) + sum(pg_stat_get_xact_tuples_fetched(indexrelid))::bigint FROM pg_index WHERE indrelid = 'warren.segments'::regclass AND 1 IS NOT NULL) AS reads), run AS MATERIALIZED (SELECT warren.prewarm('soak') AS result FROM before WHERE before.reads IS NOT NULL), after AS MATERIALIZED (SELECT (SELECT pg_stat_get_xact_tuples_returned('warren.segments'::regclass) + pg_stat_get_xact_tuples_fetched('warren.segments'::regclass) + sum(pg_stat_get_xact_tuples_fetched(indexrelid))::bigint FROM pg_index WHERE indrelid = 'warren.segments'::regclass AND run.result IS NOT NULL) AS reads FROM run) SELECT after.reads - before.reads, run.result FROM before, run, after",
+   "seconds": [
+    22.427
+   ],
+   "median_seconds": 22.427,
+   "rows": [
+    "1460|1"
+   ],
+   "first_rows": [
+    "1460|1"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (4294967296 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3203072,
+   "peak_rss_anon": 7293972480,
+   "vm_hwm": 8402415616,
+   "rss_anon_after": 13860864
+  },
+  "default: bfs depth 6": {
+   "sql": "SELECT bench_seconds($soak$SELECT count(*) FROM warren.bfs('soak', ARRAY[1::bigint], 6)$soak$)",
+   "seconds": [
+    24.6594,
+    25.959,
+    25.1046
+   ],
+   "median_seconds": 25.1046,
+   "rows": [
+    "24.922091"
+   ],
+   "first_rows": [
+    "24.479705",
+    "25.785271",
+    "24.922091"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (4294967296 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 13955072,
+   "peak_rss_anon": 7297372160,
+   "vm_hwm": 8404447232,
+   "rss_anon_after": 17723392,
+   "server_seconds": [
+    24.479705,
+    25.785271,
+    24.922091
+   ],
+   "server_median_seconds": 24.922091
+  },
+  "default: bfs depth 6 count": {
+   "sql": "SELECT count(*) FROM warren.bfs('soak', ARRAY[1::bigint], 6)",
+   "seconds": [
+    24.5384
+   ],
+   "median_seconds": 24.5384,
+   "rows": [
+    "1468608"
+   ],
+   "first_rows": [
+    "1468608"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (4294967296 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 17723392,
+   "peak_rss_anon": 7297851392,
+   "vm_hwm": 8404815872,
+   "rss_anon_after": 17739776
+  },
+  "default: neighbours": {
+   "sql": "SELECT bench_seconds($soak$SELECT count(*) FROM warren.neighbours('soak', 1::bigint)$soak$)",
+   "seconds": [
+    22.0723,
+    22.3787,
+    19.1896
+   ],
+   "median_seconds": 22.0723,
+   "rows": [
+    "19.001848"
+   ],
+   "first_rows": [
+    "21.894009",
+    "22.20142",
+    "19.001848"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (4294967296 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 17739776,
+   "peak_rss_anon": 7297863680,
+   "vm_hwm": 8404840448,
+   "rss_anon_after": 17752064,
+   "server_seconds": [
+    21.894009,
+    22.20142,
+    19.001848
+   ],
+   "server_median_seconds": 21.894009
+  },
+  "default: reachable_set": {
+   "sql": "SELECT count(*) FROM warren.reachable_set('soak', ARRAY[1::bigint])",
+   "seconds": [
+    25.9177
+   ],
+   "median_seconds": 25.9177,
+   "rows": [
+    "9999584"
+   ],
+   "first_rows": [
+    "9999584"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (4294967296 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 17752064,
+   "peak_rss_anon": 7297863680,
+   "vm_hwm": 8399015936,
+   "rss_anon_after": 29491200
+  },
+  "default: reachable_set stats": {
+   "stats": [
+    "{\"graph\": \"soak\", \"version\": 1, \"function\": \"reachable_set\", \"truncated\": false, \"nodes_visited\": 9999584, \"edges_traversed\": 17885683}"
+   ]
+  },
+  "default: components": {
+   "sql": "SELECT count(*) FROM (SELECT component_id FROM warren.components('soak', NULL::bigint) GROUP BY 1) c",
+   "seconds": [
+    28.5802
+   ],
+   "median_seconds": 28.5802,
+   "rows": [
+    "1"
+   ],
+   "first_rows": [
+    "1"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (4294967296 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 29495296,
+   "peak_rss_anon": 7309606912,
+   "vm_hwm": 8412250112,
+   "rss_anon_after": 26144768
+  },
+  "default: pagerank": {
+   "sql": "WITH before AS MATERIALIZED (SELECT (SELECT pg_stat_get_xact_tuples_returned('warren.segments'::regclass) + pg_stat_get_xact_tuples_fetched('warren.segments'::regclass) + sum(pg_stat_get_xact_tuples_fetched(indexrelid))::bigint FROM pg_index WHERE indrelid = 'warren.segments'::regclass AND 1 IS NOT NULL) AS reads), run AS MATERIALIZED (SELECT warren.pagerank('soak', 'pr', tol := 0, max_iter := 20) AS result FROM before WHERE before.reads IS NOT NULL), after AS MATERIALIZED (SELECT (SELECT pg_stat_get_xact_tuples_returned('warren.segments'::regclass) + pg_stat_get_xact_tuples_fetched('warren.segments'::regclass) + sum(pg_stat_get_xact_tuples_fetched(indexrelid))::bigint FROM pg_index WHERE indrelid = 'warren.segments'::regclass AND run.result IS NOT NULL) AS reads FROM run) SELECT after.reads - before.reads, run.result FROM before, run, after",
+   "seconds": [
+    38.4443
+   ],
+   "median_seconds": 38.4443,
+   "rows": [
+    "1460|20"
+   ],
+   "first_rows": [
+    "1460|20"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (4294967296 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 26144768,
+   "peak_rss_anon": 7306301440,
+   "vm_hwm": 8409939968,
+   "rss_anon_after": 110424064
+  },
+  "default: pagerank from cold": {
+   "sql": "WITH before AS MATERIALIZED (SELECT (SELECT pg_stat_get_xact_tuples_returned('warren.segments'::regclass) + pg_stat_get_xact_tuples_fetched('warren.segments'::regclass) + sum(pg_stat_get_xact_tuples_fetched(indexrelid))::bigint FROM pg_index WHERE indrelid = 'warren.segments'::regclass AND 1 IS NOT NULL) AS reads), run AS MATERIALIZED (SELECT warren.pagerank('soak', 'pr', tol := 0, max_iter := 20) AS result FROM before WHERE before.reads IS NOT NULL), after AS MATERIALIZED (SELECT (SELECT pg_stat_get_xact_tuples_returned('warren.segments'::regclass) + pg_stat_get_xact_tuples_fetched('warren.segments'::regclass) + sum(pg_stat_get_xact_tuples_fetched(indexrelid))::bigint FROM pg_index WHERE indrelid = 'warren.segments'::regclass AND run.result IS NOT NULL) AS reads FROM run) SELECT after.reads - before.reads, run.result FROM before, run, after",
+   "seconds": [
+    39.8435
+   ],
+   "median_seconds": 39.8435,
+   "rows": [
+    "1460|20"
+   ],
+   "first_rows": [
+    "1460|20"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (4294967296 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 30425088,
+   "peak_rss_anon": 7310536704,
+   "vm_hwm": 8432988160,
+   "rss_anon_after": 110776320
+  },
+  "default: eigen": {
+   "sql": "SELECT count(*), max(residual) FROM warren.eigen('soak', 20, 'normalized_laplacian', 'smallest', tol := 1e-06, max_iter := 200)",
+   "seconds": [
+    21.198
+   ],
+   "median_seconds": 21.198,
+   "rows": [],
+   "first_rows": [
+    null
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (4294967296 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 110776320,
+   "peak_rss_anon": 7310901248,
+   "vm_hwm": 8433516544,
+   "rss_anon_after": 30789632,
+   "errors": [
+    "ERROR:  compute memory limit exceeded: the eigenproblem needs 3010452968 bytes, 1706281020 of 4294967296 in use beside it"
+   ]
+  },
+  "raised: prewarm": {
+   "sql": "WITH before AS MATERIALIZED (SELECT (SELECT pg_stat_get_xact_tuples_returned('warren.segments'::regclass) + pg_stat_get_xact_tuples_fetched('warren.segments'::regclass) + sum(pg_stat_get_xact_tuples_fetched(indexrelid))::bigint FROM pg_index WHERE indrelid = 'warren.segments'::regclass AND 1 IS NOT NULL) AS reads), run AS MATERIALIZED (SELECT warren.prewarm('soak') AS result FROM before WHERE before.reads IS NOT NULL), after AS MATERIALIZED (SELECT (SELECT pg_stat_get_xact_tuples_returned('warren.segments'::regclass) + pg_stat_get_xact_tuples_fetched('warren.segments'::regclass) + sum(pg_stat_get_xact_tuples_fetched(indexrelid))::bigint FROM pg_index WHERE indrelid = 'warren.segments'::regclass AND run.result IS NOT NULL) AS reads FROM run) SELECT after.reads - before.reads, run.result FROM before, run, after",
+   "seconds": [
+    22.7543
+   ],
+   "median_seconds": 22.7543,
+   "rows": [
+    "1460|1"
+   ],
+   "first_rows": [
+    "1460|1"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 3203072,
+   "peak_rss_anon": 7293972480,
+   "vm_hwm": 8400420864,
+   "rss_anon_after": 6013964288
+  },
+  "raised: bfs depth 6": {
+   "sql": "SELECT bench_seconds($soak$SELECT count(*) FROM warren.bfs('soak', ARRAY[1::bigint], 6)$soak$)",
+   "seconds": [
+    0.6925,
+    0.7272,
+    0.6983
+   ],
+   "median_seconds": 0.6983,
+   "rows": [
+    "0.697762"
+   ],
+   "first_rows": [
+    "0.690375",
+    "0.726591",
+    "0.697762"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 6014058496,
+   "peak_rss_anon": 6143258624,
+   "vm_hwm": 7251902464,
+   "rss_anon_after": 6017351680,
+   "server_seconds": [
+    0.690375,
+    0.726591,
+    0.697762
+   ],
+   "server_median_seconds": 0.697762
+  },
+  "raised: bfs depth 6 count": {
+   "sql": "SELECT count(*) FROM warren.bfs('soak', ARRAY[1::bigint], 6)",
+   "seconds": [
+    0.6675
+   ],
+   "median_seconds": 0.6675,
+   "rows": [
+    "1468608"
+   ],
+   "first_rows": [
+    "1468608"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 6017351680,
+   "peak_rss_anon": 6143262720,
+   "vm_hwm": 7251861504,
+   "rss_anon_after": 6017355776
+  },
+  "raised: neighbours": {
+   "sql": "SELECT bench_seconds($soak$SELECT count(*) FROM warren.neighbours('soak', 1::bigint)$soak$)",
+   "seconds": [
+    0.0013,
+    0.0004,
+    0.0003,
+    0.0003,
+    0.0003,
+    0.0003,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002
+   ],
+   "median_seconds": 0.0002,
+   "rows": [
+    "0.000118"
+   ],
+   "first_rows": [
+    "0.000993",
+    "0.000206",
+    "0.000173",
+    "0.000163",
+    "0.000147",
+    "0.000138",
+    "0.000135",
+    "0.000128",
+    "0.000124",
+    "0.00012",
+    "0.00012",
+    "0.000118",
+    "0.000118",
+    "0.000116",
+    "0.000117",
+    "0.000141",
+    "0.00013",
+    "0.00012",
+    "0.000127",
+    "0.000118"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 6017355776,
+   "peak_rss_anon": 6017376256,
+   "vm_hwm": 7126474752,
+   "rss_anon_after": 6017376256,
+   "server_seconds": [
+    0.000993,
+    0.000206,
+    0.000173,
+    0.000163,
+    0.000147,
+    0.000138,
+    0.000135,
+    0.000128,
+    0.000124,
+    0.00012,
+    0.00012,
+    0.000118,
+    0.000118,
+    0.000116,
+    0.000117,
+    0.000141,
+    0.00013,
+    0.00012,
+    0.000127,
+    0.000118
+   ],
+   "server_median_seconds": 0.0001275
+  },
+  "raised: reachable_set": {
+   "sql": "SELECT count(*) FROM warren.reachable_set('soak', ARRAY[1::bigint])",
+   "seconds": [
+    3.725
+   ],
+   "median_seconds": 3.725,
+   "rows": [
+    "9999584"
+   ],
+   "first_rows": [
+    "9999584"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 6017376256,
+   "peak_rss_anon": 6450163712,
+   "vm_hwm": 7561560064,
+   "rss_anon_after": 6075457536
+  },
+  "raised: reachable_set stats": {
+   "stats": [
+    "{\"graph\": \"soak\", \"version\": 1, \"function\": \"reachable_set\", \"truncated\": false, \"nodes_visited\": 9999584, \"edges_traversed\": 17885683}"
+   ]
+  },
+  "raised: components": {
+   "sql": "SELECT count(*) FROM (SELECT component_id FROM warren.components('soak', NULL::bigint) GROUP BY 1) c",
+   "seconds": [
+    5.7828
+   ],
+   "median_seconds": 5.7828,
+   "rows": [
+    "1"
+   ],
+   "first_rows": [
+    "1"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 6075461632,
+   "peak_rss_anon": 6391001088,
+   "vm_hwm": 7504277504,
+   "rss_anon_after": 6088859648
+  },
+  "raised: pagerank": {
+   "sql": "WITH before AS MATERIALIZED (SELECT (SELECT pg_stat_get_xact_tuples_returned('warren.segments'::regclass) + pg_stat_get_xact_tuples_fetched('warren.segments'::regclass) + sum(pg_stat_get_xact_tuples_fetched(indexrelid))::bigint FROM pg_index WHERE indrelid = 'warren.segments'::regclass AND 1 IS NOT NULL) AS reads), run AS MATERIALIZED (SELECT warren.pagerank('soak', 'pr', tol := 0, max_iter := 20) AS result FROM before WHERE before.reads IS NOT NULL), after AS MATERIALIZED (SELECT (SELECT pg_stat_get_xact_tuples_returned('warren.segments'::regclass) + pg_stat_get_xact_tuples_fetched('warren.segments'::regclass) + sum(pg_stat_get_xact_tuples_fetched(indexrelid))::bigint FROM pg_index WHERE indrelid = 'warren.segments'::regclass AND run.result IS NOT NULL) AS reads FROM run) SELECT after.reads - before.reads, run.result FROM before, run, after",
+   "seconds": [
+    14.3534
+   ],
+   "median_seconds": 14.3534,
+   "rows": [
+    "0|20"
+   ],
+   "first_rows": [
+    "0|20"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 6088859648,
+   "peak_rss_anon": 7068635136,
+   "vm_hwm": 8195784704,
+   "rss_anon_after": 6092808192
+  },
+  "raised: pagerank from cold": {
+   "sql": "WITH before AS MATERIALIZED (SELECT (SELECT pg_stat_get_xact_tuples_returned('warren.segments'::regclass) + pg_stat_get_xact_tuples_fetched('warren.segments'::regclass) + sum(pg_stat_get_xact_tuples_fetched(indexrelid))::bigint FROM pg_index WHERE indrelid = 'warren.segments'::regclass AND 1 IS NOT NULL) AS reads), run AS MATERIALIZED (SELECT warren.pagerank('soak', 'pr', tol := 0, max_iter := 20) AS result FROM before WHERE before.reads IS NOT NULL), after AS MATERIALIZED (SELECT (SELECT pg_stat_get_xact_tuples_returned('warren.segments'::regclass) + pg_stat_get_xact_tuples_fetched('warren.segments'::regclass) + sum(pg_stat_get_xact_tuples_fetched(indexrelid))::bigint FROM pg_index WHERE indrelid = 'warren.segments'::regclass AND run.result IS NOT NULL) AS reads FROM run) SELECT after.reads - before.reads, run.result FROM before, run, after",
+   "seconds": [
+    32.3357
+   ],
+   "median_seconds": 32.3357,
+   "rows": [
+    "1460|20"
+   ],
+   "first_rows": [
+    "1460|20"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 12705792,
+   "peak_rss_anon": 7303573504,
+   "vm_hwm": 8430206976,
+   "rss_anon_after": 6112088064
+  },
+  "library: eigenvector_centrality": {
+   "sql": "SELECT warren.eigenvector_centrality('soak', 'library', tol := 0, max_iter := 20)",
+   "seconds": [
+    32.0623
+   ],
+   "median_seconds": 32.0623,
+   "rows": [
+    "20"
+   ],
+   "first_rows": [
+    "20"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (4294967296 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [
+    "WARNING:  eigenvector_centrality did not converge in 20 iterations"
+   ],
+   "rss_anon_before": 3203072,
+   "peak_rss_anon": 7294390272,
+   "vm_hwm": 8402747392,
+   "rss_anon_after": 166715392
+  },
+  "library: katz_centrality": {
+   "sql": "SELECT warren.katz_centrality('soak', 'library', alpha := 0.01, tol := 0, max_iter := 20)",
+   "seconds": [
+    27.4252
+   ],
+   "median_seconds": 27.4252,
+   "rows": [
+    "20"
+   ],
+   "first_rows": [
+    "20"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (4294967296 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [
+    "WARNING:  katz_centrality did not converge in 20 iterations"
+   ],
+   "rss_anon_before": 86728704,
+   "peak_rss_anon": 7366848512,
+   "vm_hwm": 8492904448,
+   "rss_anon_after": 158433280
+  },
+  "library: hits": {
+   "sql": "SELECT warren.hits('soak', 'library_hubs', 'library_authorities', tol := 0, max_iter := 20)",
+   "seconds": [
+    40.7173
+   ],
+   "median_seconds": 40.7173,
+   "rows": [
+    "20"
+   ],
+   "first_rows": [
+    "20"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (4294967296 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [
+    "WARNING:  hits did not converge in 20 iterations"
+   ],
+   "rss_anon_before": 78430208,
+   "peak_rss_anon": 7358550016,
+   "vm_hwm": 8484872192,
+   "rss_anon_after": 238456832
+  },
+  "library: clustering": {
+   "sql": "SELECT warren.clustering('soak', 'library')",
+   "seconds": [
+    67.1163
+   ],
+   "median_seconds": 67.1163,
+   "rows": [
+    ""
+   ],
+   "first_rows": [
+    ""
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (4294967296 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 78450688,
+   "peak_rss_anon": 7838564352,
+   "vm_hwm": 8962658304,
+   "rss_anon_after": 158490624
+  },
+  "library: core_number": {
+   "sql": "SELECT warren.core_number('soak', 'library', persist := false)",
+   "seconds": [
+    40.9499
+   ],
+   "median_seconds": 40.9499,
+   "rows": [
+    "14"
+   ],
+   "first_rows": [
+    "14"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (4294967296 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 78487552,
+   "peak_rss_anon": 7998603264,
+   "vm_hwm": 9122525184,
+   "rss_anon_after": 158490624
+  },
+  "library: strong_components_vector": {
+   "sql": "SELECT warren.strong_components_vector('soak', 'library', persist := false)",
+   "seconds": [
+    31.8472
+   ],
+   "median_seconds": 31.8472,
+   "rows": [
+    "886"
+   ],
+   "first_rows": [
+    "886"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (4294967296 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 78487552,
+   "peak_rss_anon": 7358603264,
+   "vm_hwm": 8480862208,
+   "rss_anon_after": 157573120
+  },
+  "library: minimum_spanning_forest": {
+   "sql": "SELECT count(*) FROM warren.minimum_spanning_forest('soak', NULL::bigint)",
+   "seconds": [
+    73.6714
+   ],
+   "median_seconds": 73.6714,
+   "rows": [
+    "9999999"
+   ],
+   "first_rows": [
+    "9999999"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (4294967296 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 77570048,
+   "peak_rss_anon": 7357685760,
+   "vm_hwm": 8478715904,
+   "rss_anon_after": 83738624
+  },
+  "library: betweenness_centrality": {
+   "sql": "SELECT warren.betweenness_centrality('soak', 'library', k := 16, persist := false)",
+   "seconds": [
+    111.2266
+   ],
+   "median_seconds": 111.2266,
+   "rows": [
+    "16"
+   ],
+   "first_rows": [
+    "16"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (4294967296 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 83738624,
+   "peak_rss_anon": 7978270720,
+   "vm_hwm": 9099354112,
+   "rss_anon_after": 163749888
+  },
+  "library: closeness_centrality": {
+   "sql": "SELECT warren.closeness_centrality('soak', 'library', k := 16, persist := false)",
+   "seconds": [
+    96.1641
+   ],
+   "median_seconds": 96.1641,
+   "rows": [
+    "16"
+   ],
+   "first_rows": [
+    "16"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (4294967296 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 83746816,
+   "peak_rss_anon": 7418253312,
+   "vm_hwm": 8538607616,
+   "rss_anon_after": 163753984
+  },
+  "library: harmonic_centrality": {
+   "sql": "SELECT warren.harmonic_centrality('soak', 'library', k := 16, persist := false)",
+   "seconds": [
+    96.3366
+   ],
+   "median_seconds": 96.3366,
+   "rows": [
+    "16"
+   ],
+   "first_rows": [
+    "16"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (4294967296 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 83750912,
+   "peak_rss_anon": 7363866624,
+   "vm_hwm": 8484323328,
+   "rss_anon_after": 163758080
+  },
+  "library: most_similar": {
+   "sql": "SELECT count(*) FROM warren.most_similar('soak', 1::bigint)",
+   "seconds": [
+    17.139
+   ],
+   "median_seconds": 17.139,
+   "rows": [
+    "10"
+   ],
+   "first_rows": [
+    "10"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (4294967296 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 83755008,
+   "peak_rss_anon": 7363870720,
+   "vm_hwm": 8482422784,
+   "rss_anon_after": 83759104
+  },
+  "library: similarity": {
+   "sql": "SELECT count(*) FROM warren.similarity('soak', $p$SELECT (1 + (i * 7919) % 10000000)::bigint, (1 + (i * 104729) % 10000000)::bigint FROM generate_series(1::bigint, 100000) i$p$, NULL::bigint)",
+   "seconds": [
+    19.192
+   ],
+   "median_seconds": 19.192,
+   "rows": [
+    "100000"
+   ],
+   "first_rows": [
+    "100000"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (4294967296 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 83759104,
+   "peak_rss_anon": 7363874816,
+   "vm_hwm": 8483561472,
+   "rss_anon_after": 83775488
+  },
+  "library: similar_pairs": {
+   "sql": "SELECT count(*) FROM warren.similar_pairs('soak', NULL::bigint, nodes := 'library_mask')",
+   "seconds": [
+    25.882
+   ],
+   "median_seconds": 25.882,
+   "rows": [],
+   "first_rows": [
+    null
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (4294967296 bytes, 80000000 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 163782656,
+   "peak_rss_anon": 8283930624,
+   "vm_hwm": 9403486208,
+   "rss_anon_after": 163790848,
+   "errors": [
+    "ERROR:  compute memory limit exceeded: 80000000 bytes requested, 4266281588 of 4294967296 in use"
+   ]
+  },
+  "communities: louvain": {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    22.9911
+   ],
+   "median_seconds": 22.9911,
+   "rows": [],
+   "first_rows": [
+    null
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (4294967296 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3362816,
+   "peak_rss_anon": 7294484480,
+   "vm_hwm": 8400662528,
+   "rss_anon_after": 14483456,
+   "errors": [
+    "ERROR:  compute memory limit exceeded: 3199998400 bytes requested, 1946281028 of 4294967296 in use",
+    "CONTEXT:  PL/pgSQL function warren.louvain(text,text,double precision,bigint,integer,double precision,boolean,text,bigint) line 34 at assignment"
+   ]
+  },
+  "communities: louvain disk": {
+   "segments_written": 0,
+   "wal_written": 0,
+   "free_disk_before": 8379097088,
+   "free_disk_after_run": 8379076608,
+   "free_disk_after_vacuum": 8789323776
+  },
+  "communities: leiden": {
+   "sql": "SELECT warren.leiden('soak', 'leiden', levels_prefix := 'leiden')",
+   "seconds": [
+    22.0091
+   ],
+   "median_seconds": 22.0091,
+   "rows": [],
+   "first_rows": [
+    null
+   ],
+   "notices": [
+    "NOTICE:  version 1 (6001248494 bytes) cannot be kept within warren.max_cache_memory (4294967296 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3358720,
+   "peak_rss_anon": 7294689280,
+   "vm_hwm": 8402739200,
+   "rss_anon_after": 14696448,
+   "errors": [
+    "ERROR:  compute memory limit exceeded: 3199998400 bytes requested, 1786281028 of 4294967296 in use",
+    "CONTEXT:  PL/pgSQL function warren.leiden(text,text,double precision,bigint,integer,double precision,double precision,integer,boolean,text,bigint) line 59 at assignment"
+   ]
+  },
+  "communities: leiden disk": {
+   "segments_written": 0,
+   "wal_written": 1896,
+   "free_disk_before": 8789323776,
+   "free_disk_after_run": 8789286912,
+   "free_disk_after_vacuum": 8789286912
+  }
+ },
+ "skipped": {
+  "second_version": "disk: 8.82 GB free, a second version of 5.92 GB would leave less than the floor"
+ },
+ "pg_warren": "0.4.0",
+ "postgres": "16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
+ "version_1": {
+  "seq": 1,
+  "bytes": 5921248494,
+  "label": null,
+  "staged": false,
+  "current": true,
+  "vectors": 0,
+  "version": 1,
+  "built_at": "2026-10-21T20:44:02.933107+00:00",
+  "id_space": 10000000,
+  "built_lsn": "0/1CA2000",
+  "staleness": "00:03:52.952007",
+  "edge_count": 99999953,
+  "node_count": 10000000,
+  "label_vector": null,
+  "parent_graph": null,
+  "target_width": 4,
+  "dropped_edges": 0,
+  "compacted_from": null,
+  "parent_version": null,
+  "deduplicated_edges": 47
+ },
+ "cached_bytes": 6001248494,
+ "cache_memory_bytes": 4294967296,
+ "settings": {
+  "default": [
+   "fsync=off",
+   "full_page_writes=off",
+   "jit=on",
+   "maintenance_work_mem=1GB",
+   "max_parallel_workers_per_gather=2",
+   "max_wal_size=1GB",
+   "shared_buffers=1GB",
+   "statement_timeout=20min",
+   "synchronous_commit=off",
+   "wal_level=minimal",
+   "warren.max_build_memory=4GB",
+   "warren.max_cache_memory=4GB",
+   "warren.max_compute_memory=4GB",
+   "warren.threads=4",
+   "work_mem=64MB"
+  ],
+  "raised": [
+   "fsync=off",
+   "full_page_writes=off",
+   "jit=on",
+   "maintenance_work_mem=1GB",
+   "max_parallel_workers_per_gather=2",
+   "max_wal_size=1GB",
+   "shared_buffers=1GB",
+   "statement_timeout=20min",
+   "synchronous_commit=off",
+   "wal_level=minimal",
+   "warren.max_build_memory=4GB",
+   "warren.max_cache_memory=8GB",
+   "warren.max_compute_memory=4GB",
+   "warren.threads=4",
+   "work_mem=64MB"
+  ]
+ },
+ "library_version": 1,
+ "finished_at": "2026-10-21T21:07:56+00:00",
+ "free_disk_after": 15278768128,
+ "load_average_after": [
+  1.421875,
+  2.21435546875,
+  2.0078125
+ ],
+ "measured": {
+  "cores": 4,
+  "bfs_seconds": 24.922091,
+  "components_seconds": 28.5802,
+  "pagerank_seconds": 38.4443,
+  "eigen_seconds_failed": "ERROR:  compute memory limit exceeded: the eigenproblem needs 3010452968 bytes, 1706281020 of 4294967296 in use beside it",
+  "refresh_seconds": 232.9427,
+  "refresh_peak_bytes": 4436193280,
+  "cold_load_seconds": 22.427,
+  "load_segment_reads": 1460,
+  "pagerank_segment_reads": 1460,
+  "pagerank_loads": 1.0,
+  "pagerank_cold_segment_reads": 1460,
+  "pagerank_cold_seconds": 39.8435,
+  "pagerank_cold_loads": 1.0,
+  "reachable_row_entries_per_second": 690095.3016664287,
+  "reachable_edges_per_second": 3858365.248459547,
+  "cached_bytes": 6001248494,
+  "id_space": 10000000,
+  "max_cache_memory": 4294967296,
+  "library": {
+   "eigenvector_centrality": {
+    "seconds": 32.0623,
+    "peak_rss_anon": 7294390272
+   },
+   "katz_centrality": {
+    "seconds": 27.4252,
+    "peak_rss_anon": 7366848512
+   },
+   "hits": {
+    "seconds": 40.7173,
+    "peak_rss_anon": 7358550016
+   },
+   "clustering": {
+    "seconds": 67.1163,
+    "peak_rss_anon": 7838564352
+   },
+   "core_number": {
+    "seconds": 40.9499,
+    "peak_rss_anon": 7998603264
+   },
+   "strong_components_vector": {
+    "seconds": 31.8472,
+    "peak_rss_anon": 7358603264
+   },
+   "minimum_spanning_forest": {
+    "seconds": 73.6714,
+    "peak_rss_anon": 7357685760
+   },
+   "betweenness_centrality": {
+    "seconds": 111.2266,
+    "peak_rss_anon": 7978270720
+   },
+   "closeness_centrality": {
+    "seconds": 96.1641,
+    "peak_rss_anon": 7418253312
+   },
+   "harmonic_centrality": {
+    "seconds": 96.3366,
+    "peak_rss_anon": 7363866624
+   },
+   "most_similar": {
+    "seconds": 17.139,
+    "peak_rss_anon": 7363870720
+   },
+   "similarity": {
+    "seconds": 19.192,
+    "peak_rss_anon": 7363874816
+   },
+   "similar_pairs": {
+    "failed": "ERROR:  compute memory limit exceeded: 80000000 bytes requested, 4266281588 of 4294967296 in use"
+   }
+  },
+  "communities": {
+   "louvain": {
+    "failed": "ERROR:  compute memory limit exceeded: 3199998400 bytes requested, 1946281028 of 4294967296 in use"
+   },
+   "leiden": {
+    "failed": "ERROR:  compute memory limit exceeded: 3199998400 bytes requested, 1786281028 of 4294967296 in use"
+   }
+  }
+ },
+ "verdicts": [
+  {
+   "workload": "reachable_set, full component",
+   "target": "> 50M edges/s",
+   "measured": "4M edges/s",
+   "met": false
+  },
+  {
+   "workload": "components()",
+   "target": "< 10 s",
+   "measured": "28.6 s",
+   "met": false
+  },
+  {
+   "workload": "pagerank, 20 iterations",
+   "target": "< 30 s (8 threads)",
+   "measured": "38.4 s",
+   "met": false
+  },
+  {
+   "workload": "eigen, k = 20, normalised Laplacian",
+   "target": "< 10 min, converged",
+   "measured": "failed: ERROR:  compute memory limit exceeded: the eigenproblem needs 3010452968 bytes, 1706281020 of 4294967296 in use beside it",
+   "error": "ERROR:  compute memory limit exceeded: the eigenproblem needs 3010452968 bytes, 1706281020 of 4294967296 in use beside it",
+   "met": false
+  },
+  {
+   "workload": "refresh() incl. reverse CSR",
+   "target": "< 8 min, < 4 GiB RAM",
+   "measured": "232.9 s, peak 4.44 GB",
+   "met": false
+  },
+  {
+   "workload": "cold load into backend",
+   "target": "< 15 s",
+   "measured": "22.4 s",
+   "met": false
+  },
+  {
+   "workload": "memory: graph + pagerank scratch within max_cache_memory",
+   "target": "fits 4 GiB",
+   "measured": "6.00 GB + 880.00 MB scratch",
+   "met": false
+  }
+ ]
+}
