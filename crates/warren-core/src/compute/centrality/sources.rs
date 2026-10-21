@@ -6,13 +6,16 @@
 //! key, a seeded hash of its dense id, and the `k` smallest keys are taken.
 //! Every `k`-subset is equally likely, the sample depends only on the seed
 //! and the dense ids (never on the thread count), and a node keeps its key
-//! across graph versions, so a seed samples the same surviving nodes after
-//! a refresh. Sources are then taken in ascending dense id order.
+//! across graph versions while it keeps its dense id. So after a refresh a
+//! seed samples the same nodes only if no node joined with a smaller key
+//! (it displaces the sampled node with the largest) and none sampled was
+//! deleted; `compact` renumbers dense ids, and so re-keys every node.
+//! Sources are then taken in ascending dense id order.
 
 use std::collections::BinaryHeap;
 use std::mem::size_of;
 
-use super::super::random::mix;
+use super::super::random::{mix, GOLDEN};
 use super::super::{ComputeError, ComputeMemory, Mask, MemoryCharge};
 use crate::graph::{DenseId, Tombstones};
 use crate::interrupts::{Cancellation, Work};
@@ -118,7 +121,6 @@ fn sample(
 
 /// Node `node`'s key under `seed`: distinct nodes have distinct keys.
 fn key(seed: u64, node: DenseId) -> u64 {
-    const GOLDEN: u64 = 0x9e37_79b9_7f4a_7c15;
     mix(mix(seed) ^ node.wrapping_mul(GOLDEN))
 }
 

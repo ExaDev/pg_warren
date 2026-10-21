@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 597e3b0d2e60259f602c90d437d5b0957e9c11fe606c02a7326dc942119564f7 # shrinks to (id_space, relations, edges, selected, (wide, store_merged)) = (2, 1, [(0, 0, 1, 0.0)], None, (false, false))
+cc eeeeba637adff635794097d93fdf43043175908960c4366f87cf9b806ea34b75 # shrinks to (id_space, relations, edges, selected, (wide, store_merged)) = (2, 3, [(2, 1, 0, 0.0), (1, 1, 1, 0.0), (0, 1, 1, 0.0), (0, 1, 0, 0.0), (1, 1, 0, 0.0)], None, (false, false))

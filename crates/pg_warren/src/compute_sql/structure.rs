@@ -10,22 +10,15 @@ use std::mem::size_of;
 use pgrx::prelude::*;
 use pgrx::AnyElement;
 use warren_core::compute;
-use warren_core::graph::{RelationIndex, RelationSelection};
 
 use super::settings::workers;
 use super::vectors::Vectors;
-use super::{entry, ComputeSqlError};
+use super::{entry, selection, ComputeSqlError};
 use crate::cache::{cached, compute_memory, resolve, Resolved};
 use crate::external_ids::{check_type, external};
 use crate::interrupts::PostgresInterrupts;
 use crate::selection::relations;
 use crate::source::{with_id_type, IdDatum};
-
-/// The selection of the relations `rels` named (all if `None`), as
-/// `selection::relations` resolves them.
-pub(super) fn selection(selected: Option<&[RelationIndex]>) -> RelationSelection<'_> {
-    selected.map_or(RelationSelection::All, RelationSelection::Only)
-}
 
 /// `warren.core_number` (§6.7): vector `out` (`i64`) holding each node's
 /// core number in the undirected simple graph under the relations `rels`

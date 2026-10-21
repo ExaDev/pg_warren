@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use proptest::prelude::*;
 
 use super::*;
-use crate::compute::memory::Exact;
+use crate::compute::memory::{fully_held, Exact};
 use crate::compute::reference::{self, Edges};
 use crate::compute::{AnyVector, Mask};
 use crate::graph::{CsrLayout, EdgeList, RelationIndex};
@@ -404,4 +404,77 @@ proptest! {
             assert_close(&found, &harmonic);
         }
     }
+}
+
+#[test]
+fn every_search_fits_a_budget_that_is_all_held_memory() {
+    // Weighted and not, directed and not, one relation and two (a row
+    // scratch), from every source and a sample.
+    let edges: Edges = (0..40u64)
+        .flat_map(|i| [(0, i, (i * 7 + 1) % 40, 1.0 + (i % 3) as f64), (1, i, (i + 3) % 40, 2.0)])
+        .collect();
+    let none = no_tombstones(40);
+    for (weighted, relations) in [(false, 1), (true, 1), (true, 2)] {
+        let kept: Edges = edges.iter().copied().filter(|&(r, ..)| r < relations).collect();
+        let graph = reference::graph(40, relations, &kept, weighted, false);
+        for directed in [true, false] {
+            let paths = ShortestPaths {
+                graph: &graph,
+                relations: RelationSelection::All,
+                tombstones: &none,
+                directed,
+                weighted: None,
+            };
+            for sampling in [every_source(), Sampling { k: Some(5), seed: 1, population: None }] {
+                let scale = BetweennessScale { normalized: true, endpoints: true };
+                let memory = fully_held();
+                betweenness_centrality(
+                    workers(),
+                    &memory,
+                    &mut Uninterrupted,
+                    &paths,
+                    &sampling,
+                    scale,
+                )
+                .unwrap();
+                closeness_centrality(
+                    workers(),
+                    &fully_held(),
+                    &mut Uninterrupted,
+                    &paths,
+                    &sampling,
+                    true,
+                )
+                .unwrap();
+                harmonic_centrality(
+                    workers(),
+                    &fully_held(),
+                    &mut Uninterrupted,
+                    &paths,
+                    &sampling,
+                )
+                .unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn a_distance_that_overflows_is_refused() {
+    let edges: Edges = vec![(0, 0, 1, 1e308), (0, 1, 2, 1e308), (0, 0, 2, 1e308)];
+    let graph = reference::graph(3, 1, &edges, true, false);
+    let found = centrality(&graph, &no_tombstones(3), true, &every_source(), Kind::Harmonic);
+    assert_eq!(found, Err(ComputeError::NonPositiveWeight));
+}
+
+#[test]
+fn a_self_loop_s_weight_is_never_read() {
+    let edges: Edges = vec![(0, 0, 0, 0.0), (0, 0, 1, 2.0), (0, 1, 1, -1.0)];
+    let graph = reference::graph(2, 1, &edges, true, false);
+    let scale = BetweennessScale { normalized: false, endpoints: false };
+    let found =
+        centrality(&graph, &no_tombstones(2), true, &every_source(), Kind::Betweenness(scale));
+    assert_close(&found.unwrap(), &[0.0, 0.0]);
+    let found = centrality(&graph, &no_tombstones(2), true, &every_source(), Kind::Harmonic);
+    assert_close(&found.unwrap(), &[0.0, 0.5]);
 }

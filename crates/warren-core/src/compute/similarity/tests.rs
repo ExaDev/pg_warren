@@ -10,7 +10,7 @@ use proptest::prelude::*;
 use super::*;
 use crate::compute::reference::{self, Edges};
 use crate::compute::{AnyVector, ComputeMemory, Mask, Vector, Workers};
-use crate::graph::{CsrLayout, DenseId, EdgeList};
+use crate::graph::{CsrLayout, DenseId, EdgeList, Tombstones};
 use crate::interrupts::{Cancelled, Interrupts, Uninterrupted};
 
 const MEASURES: [Similarity; 3] =
@@ -21,8 +21,14 @@ fn workers() -> &'static Workers {
     WORKERS.get_or_init(|| Workers::new(3).unwrap())
 }
 
+/// No tombstones over `graph`'s id space, for the test's life.
+fn none(graph: &GraphCsr) -> &'static Tombstones {
+    let id_space = graph.all_relations().forward().id_space();
+    Box::leak(Box::new(Tombstones::new(id_space).unwrap()))
+}
+
 fn all(graph: &GraphCsr) -> Neighbourhood<'_, '_> {
-    Neighbourhood { graph, relations: RelationSelection::All }
+    Neighbourhood { graph, relations: RelationSelection::All, tombstones: none(graph) }
 }
 
 fn pairs(
@@ -245,7 +251,7 @@ proptest! {
         let graph = GraphCsr::build_as(list, relations, id_space, layout).unwrap();
         let named: Option<Vec<_>> = selected.as_ref().map(|s| s.iter().map(|&r| indexes[r]).collect());
         let relations = named.as_deref().map_or(RelationSelection::All, RelationSelection::Only);
-        let graph = Neighbourhood { graph: &graph, relations };
+        let graph = Neighbourhood { graph: &graph, relations, tombstones: none(&graph) };
         let sets = neighbours(id_space, &edges, selected.as_deref());
         let every: Vec<(DenseId, DenseId)> =
             (0..id_space).flat_map(|u| (0..id_space).map(move |v| (u, v))).collect();
@@ -276,4 +282,49 @@ fn k_may_exceed_the_id_space() {
     assert_eq!(top(&graph, Similarity::CommonNeighbours, 0, u64::MAX), vec![(3, 2.0)]);
     let found = each(&graph, Similarity::CommonNeighbours, u64::MAX, None);
     assert_eq!(found.len(), 8);
+}
+
+#[test]
+fn every_form_fits_a_budget_that_is_all_held_memory() {
+    use crate::compute::memory::fully_held;
+    for reverse in [true, false] {
+        let graph = small(reverse);
+        let graph = all(&graph);
+        for measure in MEASURES {
+            let asked = [(0, 3), (2, 4), (1, 1)];
+            similarity_of_pairs(
+                workers(),
+                &fully_held(),
+                &mut Uninterrupted,
+                &graph,
+                measure,
+                &asked,
+            )
+            .unwrap();
+            most_similar(workers(), &fully_held(), &mut Uninterrupted, &graph, measure, 4, 5)
+                .unwrap();
+            similar_pairs(workers(), &fully_held(), &mut Uninterrupted, &graph, measure, 5, None)
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+fn similar_pairs_charges_its_rows_as_they_grow() {
+    // A ring of 10,000: each node has two candidates, though k is 1,000.
+    let n = 10_000;
+    let edges: Edges = (0..n).map(|i| (0, i, (i + 1) % n, 1.0)).collect();
+    let graph = reference::graph(n, 1, &edges, false, false);
+    let memory = ComputeMemory::new(1 << 24);
+    let graph = all(&graph);
+    let found = similar_pairs(
+        workers(),
+        &memory,
+        &mut Uninterrupted,
+        &graph,
+        Similarity::Jaccard,
+        1000,
+        None,
+    );
+    assert_eq!(found.map(|pairs| pairs.tasks.into_iter().flatten().count()), Ok(2 * n as usize));
 }

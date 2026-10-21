@@ -104,6 +104,14 @@ impl<'g> Neighbourhoods<'g> {
         }
     }
 
+    /// Every node's degree, when built.
+    pub(super) fn degrees(&self) -> Option<&[u64]> {
+        match self {
+            Self::Built { degrees, .. } => Some(degrees),
+            Self::Local(_) => None,
+        }
+    }
+
     /// The number of `node`'s distinct neighbours, given its row.
     pub(super) fn degree_of_row(&self, node: DenseId, row: &[DenseId]) -> u64 {
         match self {

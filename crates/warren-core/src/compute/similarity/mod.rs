@@ -33,7 +33,7 @@ pub use pairs::{similarity_of_pairs, Scores};
 pub use ranking::{most_similar, similar_pairs, Similar, SimilarPairs};
 
 use super::ComputeError;
-use crate::graph::{GraphCsr, RelationSelection};
+use crate::graph::{GraphCsr, RelationSelection, Tombstones};
 
 /// A neighbourhood similarity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +67,8 @@ pub struct Neighbourhood<'a, 'g> {
     pub graph: &'g GraphCsr,
     /// The relations whose edges join neighbours.
     pub relations: RelationSelection<'a>,
+    /// The version's tombstones: tombstoned nodes have no neighbours.
+    pub tombstones: &'a Tombstones,
 }
 
 /// What two nodes share: their common neighbours, and the sum of one over

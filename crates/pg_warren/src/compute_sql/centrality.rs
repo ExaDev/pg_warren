@@ -14,7 +14,7 @@ use pgrx::prelude::*;
 
 use super::settings::workers;
 use super::vectors::Vectors;
-use super::{entry, ComputeSqlError};
+use super::{entry, selection, ComputeSqlError};
 use crate::cache::resolve;
 use crate::interrupts::PostgresInterrupts;
 use crate::selection::relations;
@@ -65,7 +65,7 @@ fn centrality(
         let selected = relations(&loaded.relations, arguments.rels.as_deref());
         let paths = ShortestPaths {
             graph: &loaded.graph,
-            relations: super::structure::selection(selected.as_deref()),
+            relations: selection(selected.as_deref()),
             tombstones: loaded.id_map.tombstones(),
             directed,
             weighted: arguments.weighted,

@@ -4,12 +4,12 @@
 //! node's distance and, for betweenness, its number of shortest paths
 //! (Brandes 2001) and its dependency on the source.
 //!
-//! The scratch is a dense array per quantity over the id space; a search
-//! touches and resets only the nodes it reaches, so a source costs
-//! `O(N_s + M_s)` (times `log N_s` weighted) over what it reaches.
+//! The scratch is a dense array per quantity over the id space (and, for
+//! Dijkstra, an indexed heap of at most one entry per node), all allocated
+//! before the search, so nothing grows on the pool; a search touches and
+//! resets only the nodes it reaches, so a source costs `O(N_s + M_s)`
+//! (times `log N_s` weighted) over what it reaches.
 
-use std::cmp::{Ordering, Reverse};
-use std::collections::BinaryHeap;
 use std::mem::size_of;
 
 use super::super::product::RowScratch;
@@ -30,37 +30,18 @@ pub(super) struct Paths {
     dependency: Vec<f64>,
     /// The nodes reached, by distance from the source.
     order: Vec<DenseId>,
-    /// Dijkstra's queue of tentative distances, grown (and charged) on the
-    /// pool.
+    /// Dijkstra's queue of reached, unsettled nodes (weighted only: else
+    /// empty).
     queue: Queue,
-    queue_charge: MemoryCharge,
     scratch: RowScratch,
     _charge: MemoryCharge,
 }
 
-/// A tentative distance, ordered by `f64::total_cmp`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Tentative(f64);
-
-impl Eq for Tentative {}
-
-impl PartialOrd for Tentative {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Tentative {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.0.total_cmp(&other.0)
-    }
-}
-
 impl Paths {
     /// The bytes [`Self::new`] charges for an id space, counting paths
-    /// and dependencies if `counted`.
-    pub(super) fn bytes(id_space: u64, counted: bool) -> u64 {
-        let arrays = if counted { 4 } else { 2 };
+    /// and dependencies if `counted`, with Dijkstra's queue if `weighted`.
+    pub(super) fn bytes(id_space: u64, counted: bool, weighted: bool) -> u64 {
+        let arrays = 2 + 2 * u64::from(counted) + 2 * u64::from(weighted);
         id_space.saturating_mul(arrays * size_of::<f64>() as u64)
     }
 
@@ -69,29 +50,36 @@ impl Paths {
         memory: &ComputeMemory,
         id_space: u64,
         counted: bool,
+        weighted: bool,
     ) -> Result<Self, ComputeError> {
-        let charge = memory.charge(Self::bytes(id_space, counted))?;
-        let filled = |len: u64, value| {
+        let charge = memory.charge(Self::bytes(id_space, counted, weighted))?;
+        fn filled<T: Clone>(len: u64, value: T, bytes: u64) -> Result<Vec<T>, ComputeError> {
             let mut buffer = Vec::new();
             buffer
                 .try_reserve_exact(len as usize)
-                .map_err(|_| ComputeError::OutOfMemory { bytes: charge.bytes() })?;
+                .map_err(|_| ComputeError::OutOfMemory { bytes })?;
             buffer.resize(len as usize, value);
-            Ok::<_, ComputeError>(buffer)
-        };
+            Ok(buffer)
+        }
+        let bytes = charge.bytes();
         let counted_len = if counted { id_space } else { 0 };
-        let mut order = Vec::new();
-        order
-            .try_reserve_exact(id_space as usize)
-            .map_err(|_| ComputeError::OutOfMemory { bytes: charge.bytes() })?;
+        let reserved = |len: u64| -> Result<Vec<DenseId>, ComputeError> {
+            let mut buffer = Vec::new();
+            buffer
+                .try_reserve_exact(len as usize)
+                .map_err(|_| ComputeError::OutOfMemory { bytes })?;
+            Ok(buffer)
+        };
+        let queued_len = if weighted { id_space } else { 0 };
+        let queue =
+            Queue { heap: reserved(queued_len)?, at: filled(queued_len, NOT_QUEUED, bytes)? };
         Ok(Self {
             source: 0,
-            distance: filled(id_space, f64::INFINITY)?,
-            counts: filled(counted_len, 0.0)?,
-            dependency: filled(counted_len, 0.0)?,
-            order,
-            queue: BinaryHeap::new(),
-            queue_charge: memory.charge(0)?,
+            distance: filled(id_space, f64::INFINITY, bytes)?,
+            counts: filled(counted_len, 0.0, bytes)?,
+            dependency: filled(counted_len, 0.0, bytes)?,
+            order: reserved(id_space)?,
+            queue,
             scratch: RowScratch::new(memory)?,
             _charge: charge,
         })
@@ -183,28 +171,31 @@ impl Paths {
         adjacency: &Adjacency<'_>,
         work: &mut Work<'_>,
     ) -> Result<(), ComputeError> {
-        self.queue.clear();
-        push(&mut self.queue, &mut self.queue_charge, 0.0, self.source)?;
-        while let Some(Reverse((Tentative(at), node))) = self.queue.pop() {
+        self.queue.push(&self.distance, self.source);
+        while let Some(node) = self.queue.pop(&self.distance) {
             work.spend(1)?;
-            if at > self.distance[node as usize] {
-                continue;
-            }
             self.order.push(node);
-            let (distance, counts) = (&mut self.distance, &mut self.counts);
-            let (queue, queue_charge) = (&mut self.queue, &mut self.queue_charge);
+            let at = self.distance[node as usize];
+            let (distance, counts, queue) = (&mut self.distance, &mut self.counts, &mut self.queue);
             adjacency.for_each(node, &mut self.scratch, work, |target, weight| {
-                if !(weight > 0.0 && weight.is_finite()) {
-                    return Err(ComputeError::NonPositiveWeight);
+                if target == node {
+                    return Ok(());
                 }
                 let through = at + weight;
+                if !(weight > 0.0 && through.is_finite()) {
+                    return Err(ComputeError::NonPositiveWeight);
+                }
                 let t = target as usize;
                 if through < distance[t] {
+                    let reached = distance[t].is_finite();
                     distance[t] = through;
                     if !counts.is_empty() {
                         counts[t] = counts[node as usize];
                     }
-                    push(queue, queue_charge, through, target)?;
+                    match reached {
+                        true => queue.decrease(distance, target),
+                        false => queue.push(distance, target),
+                    }
                 } else if through == distance[t] && !counts.is_empty() {
                     counts[t] += counts[node as usize];
                 }
@@ -230,7 +221,7 @@ impl Paths {
             let mut gained = 0.0;
             adjacency.for_each(node, &mut self.scratch, work, |target, weight| {
                 let w = target as usize;
-                if distance[v] + weight == distance[w] {
+                if w != v && distance[v] + weight == distance[w] {
                     gained += counts[v] / counts[w] * (1.0 + dependency[w]);
                 }
                 Ok(())
@@ -241,25 +232,82 @@ impl Paths {
     }
 }
 
-/// Dijkstra's queue.
-type Queue = BinaryHeap<Reverse<(Tentative, DenseId)>>;
+/// The position of a node not in the queue.
+const NOT_QUEUED: usize = usize::MAX;
 
-/// Queues `node` at tentative distance `at`, charging the queue's growth.
-fn push(
-    queue: &mut Queue,
-    charge: &mut MemoryCharge,
-    at: f64,
-    node: DenseId,
-) -> Result<(), ComputeError> {
-    if queue.len() == queue.capacity() {
-        let more = queue.capacity().max(64);
-        let bytes = (more * size_of::<Reverse<(Tentative, DenseId)>>()) as u64;
-        charge.grow(bytes)?;
-        queue.try_reserve_exact(more).map_err(|_| {
-            charge.shrink(bytes);
-            ComputeError::OutOfMemory { bytes }
-        })?;
+/// An indexed binary min-heap of nodes keyed by their tentative distance
+/// (then dense id), with each node's position so a node is queued at most
+/// once and its key can decrease in place.
+struct Queue {
+    heap: Vec<DenseId>,
+    /// Each node's position in `heap`, or [`NOT_QUEUED`].
+    at: Vec<usize>,
+}
+
+impl Queue {
+    /// Whether `a` comes before `b`.
+    fn before(distance: &[f64], a: DenseId, b: DenseId) -> bool {
+        let (da, db) = (distance[a as usize], distance[b as usize]);
+        da.total_cmp(&db).then(a.cmp(&b)).is_lt()
     }
-    queue.push(Reverse((Tentative(at), node)));
-    Ok(())
+
+    fn place(&mut self, position: usize, node: DenseId) {
+        self.heap[position] = node;
+        self.at[node as usize] = position;
+    }
+
+    /// Queues `node`, which is not queued; the heap has room for every node.
+    fn push(&mut self, distance: &[f64], node: DenseId) {
+        self.heap.push(node);
+        self.at[node as usize] = self.heap.len() - 1;
+        self.decrease(distance, node);
+    }
+
+    /// Restores the order after `node`'s distance fell.
+    fn decrease(&mut self, distance: &[f64], node: DenseId) {
+        let mut position = self.at[node as usize];
+        while position > 0 {
+            let parent = (position - 1) / 2;
+            let above = self.heap[parent];
+            if !Self::before(distance, node, above) {
+                break;
+            }
+            self.place(position, above);
+            position = parent;
+        }
+        self.place(position, node);
+    }
+
+    /// Takes the nearest node.
+    fn pop(&mut self, distance: &[f64]) -> Option<DenseId> {
+        let first = *self.heap.first()?;
+        self.at[first as usize] = NOT_QUEUED;
+        let Some(last) = self.heap.pop() else {
+            return Some(first);
+        };
+        if self.heap.is_empty() {
+            return Some(first);
+        }
+        let mut position = 0;
+        loop {
+            let left = 2 * position + 1;
+            if left >= self.heap.len() {
+                break;
+            }
+            let right = left + 1;
+            let child = match right < self.heap.len()
+                && Self::before(distance, self.heap[right], self.heap[left])
+            {
+                true => right,
+                false => left,
+            };
+            if !Self::before(distance, self.heap[child], last) {
+                break;
+            }
+            self.place(position, self.heap[child]);
+            position = child;
+        }
+        self.place(position, last);
+        Some(first)
+    }
 }

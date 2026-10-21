@@ -116,13 +116,16 @@ fn run<M: Measure, I: Interrupts>(
     let id_space = tombstones.id_space();
     let live = id_space - tombstones.count();
     let matrix = Adjacency::matrix(paths, memory)?;
+    let weighted = matrix.is_weighted();
     let sources_at_most = sampling.k.map_or(live, |k| k.min(live)).max(1);
     let slots = (workers.threads() as u64).min(sources_at_most) as usize;
     let mut totals = measure.totals(memory, id_space)?;
     let mut scratch = (0..slots)
-        .map(|_| Paths::new(memory, id_space, M::COUNTED))
+        .map(|_| Paths::new(memory, id_space, M::COUNTED, weighted))
         .collect::<Result<Vec<_>, _>>()?;
-    // What the pool builds is charged there, where nothing is reclaimed.
+    // What the pool builds is charged there, where nothing is reclaimed:
+    // the adjacency and the sample (the searches' scratch is charged
+    // above; only a multi-relation row scratch grows there unbounded).
     memory.reclaim_for(
         Adjacency::bytes(paths, &matrix).saturating_add(Sources::bytes(sampling, tombstones)),
     );

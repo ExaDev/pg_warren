@@ -52,3 +52,11 @@ pub(crate) use drop::drop_named;
 pub(crate) use error::{compute_sqlstate, entry, ComputeSqlError};
 pub(crate) use settings::{define_compute_settings, workers};
 pub(crate) use vectors::{vector_bytes, Vectors};
+
+use warren_core::graph::{RelationIndex, RelationSelection};
+
+/// The selection of the relations `rels` named (all if `None`), as
+/// `selection::relations` resolves them.
+fn selection(selected: Option<&[RelationIndex]>) -> RelationSelection<'_> {
+    selected.map_or(RelationSelection::All, RelationSelection::Only)
+}

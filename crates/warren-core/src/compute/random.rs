@@ -1,10 +1,14 @@
 //! Seeded pseudo-random values: the spectral kernels' random vectors and
-//! the centralities' sampled sources. Each value is a function of the
-//! seed, a stream number and a dense id alone (a counter-based generator),
-//! so it is the same for every thread count (DESIGN.md Appendix A.2:
-//! identical results across runs).
+//! the centralities' sampling keys. Each value is a function of the seed,
+//! a dense id and, for a vector, its stream number, alone (a counter-based
+//! generator), so it is the same for every thread count (DESIGN.md
+//! Appendix A.2: identical results across runs).
 
 use crate::graph::DenseId;
+
+/// The 64-bit golden ratio, an odd constant that spreads consecutive
+/// integers over the 64 bits when multiplied by them (a bijection).
+pub(crate) const GOLDEN: u64 = 0x9e37_79b9_7f4a_7c15;
 
 /// The SplitMix64 finaliser: a bijective mix of 64 bits.
 pub(crate) fn mix(mut z: u64) -> u64 {
@@ -15,7 +19,6 @@ pub(crate) fn mix(mut z: u64) -> u64 {
 
 /// A uniform value in `[-1, 1)` for element `node` of stream `stream`.
 pub(crate) fn uniform(seed: u64, stream: u64, node: DenseId) -> f64 {
-    const GOLDEN: u64 = 0x9e37_79b9_7f4a_7c15;
     let bits = mix(mix(seed ^ mix(stream.wrapping_mul(GOLDEN))) ^ node.wrapping_mul(GOLDEN));
     // The top 53 bits as a fraction in [0, 1), then mapped to [-1, 1).
     (bits >> 11) as f64 / (1u64 << 52) as f64 - 1.0

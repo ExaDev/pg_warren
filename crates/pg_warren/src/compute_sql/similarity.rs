@@ -17,9 +17,8 @@ use warren_core::graph::DenseId;
 
 use super::from_query::{check_id_column, id_type_name};
 use super::settings::workers;
-use super::structure::selection;
 use super::vectors::Vectors;
-use super::{entry, ComputeSqlError};
+use super::{entry, selection, ComputeSqlError};
 use crate::access::{with_read_only, with_search_path, Caller};
 use crate::cache::{cached, compute_memory, resolve, LoadedVersion};
 use crate::external_ids::{check_type, element, external};
@@ -80,7 +79,11 @@ fn similarity(
             let (asked, _charge) = read_pairs(caller, pairs, &loaded, &memory)?;
             let selected = relations(&loaded.relations, rels.as_deref());
             let neighbourhood =
-                Neighbourhood { graph: &loaded.graph, relations: selection(selected.as_deref()) };
+                Neighbourhood {
+                    graph: &loaded.graph,
+                    relations: selection(selected.as_deref()),
+                    tombstones: loaded.id_map.tombstones(),
+                };
             let scores = compute::similarity_of_pairs(
                 &*workers()?,
                 &memory,
@@ -205,7 +208,11 @@ fn most_similar(
                 Some(dense) => {
                     let selected = relations(&loaded.relations, rels.as_deref());
                     let neighbourhood =
-                        Neighbourhood { graph: &loaded.graph, relations: selection(selected.as_deref()) };
+                        Neighbourhood {
+                    graph: &loaded.graph,
+                    relations: selection(selected.as_deref()),
+                    tombstones: loaded.id_map.tombstones(),
+                };
                     let similar = compute::most_similar(
                         &*workers()?,
                         &compute_memory(),
@@ -267,7 +274,11 @@ fn similar_pairs(
             let loaded = Arc::clone(&vectors.loaded);
             let selected = relations(&loaded.relations, rels.as_deref());
             let neighbourhood =
-                Neighbourhood { graph: &loaded.graph, relations: selection(selected.as_deref()) };
+                Neighbourhood {
+                    graph: &loaded.graph,
+                    relations: selection(selected.as_deref()),
+                    tombstones: loaded.id_map.tombstones(),
+                };
             let mask = selected_nodes.as_deref().map(|vector| Mask { vector, complement: false });
             let found = compute::similar_pairs(
                 &*workers()?,

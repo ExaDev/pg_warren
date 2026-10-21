@@ -37,9 +37,10 @@ pub(crate) struct RowScratch {
 }
 
 impl RowScratch {
-    /// An empty scratch, its capacity charged to `memory` as it grows.
+    /// An empty scratch, its capacity charged to `memory` as it grows: on
+    /// the pool, beyond any bound reclaimed for ahead (DESIGN.md §5.5).
     pub(crate) fn new(memory: &ComputeMemory) -> Result<Self, ComputeError> {
-        Ok(Self { entries: Vec::new(), charge: memory.charge(0)? })
+        Ok(Self { entries: Vec::new(), charge: memory.charge(0)?.unbounded() })
     }
 
     /// Empties the buffer and makes room for `len` entries.
