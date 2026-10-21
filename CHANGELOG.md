@@ -106,8 +106,10 @@
     quotient was contracted from.
   - A parent version a quotient version derives from is kept beyond
     `retain_versions` (with a `NOTICE`); dropping it unlinks the quotient
-    (`project`/`lift` then fail with 55000). `warren.info` reports each
-    version's `parent_version`, `parent_graph` and `label_vector`.
+    (`project`/`lift` then fail with 55000). `warren.info` reports the
+    graph's new `source` key (`query` or `contraction`) and each version's
+    `parent_version`, `parent_graph` and `label_vector` (NULL to a caller
+    who cannot read the parent graph).
   - Checked against NetworkX's `quotient_graph` and SQL `GROUP BY`/joins
     (`test/sql/oracle_contraction*.sql`).
 

@@ -454,7 +454,8 @@ reads ([memory model](#memory-model)), within `warren.max_cache_memory`.
 
 **Not yet supported:** `text` node ids; incremental maintenance (every
 `refresh` is a full rebuild); `refresh` or `compact` of a graph derived by
-contraction (contract again); edge properties beyond one weight; ownership transfer;
+contraction (contract again); Louvain and Leiden (DESIGN.md §6.7, group
+3); edge properties beyond one weight; ownership transfer;
 cleanup of graphs and vectors when their owner role is dropped (a superuser
 can still `drop_graph`); per-role quotas on readers' vectors.
 
@@ -473,9 +474,9 @@ can still `drop_graph`); per-role quotas on readers' vectors.
 - `contract` is linear: a counting sort of the nodes by community, then one
   pass over the stored edges, on one thread, plus a build of the quotient
   (its edges, at most the parent's). Its scratch, charged to
-  `warren.max_build_memory`, is 8 bytes per node and about 17 bytes per
-  community, beside the parent version (cached) and the label vector
-  (charged to `warren.max_compute_memory`). `project` and `lift` are one
+  `warren.max_build_memory`, is about 24 bytes per node at its peak and
+  about 33 bytes per community, beside the parent version (cached) and the
+  label vector (charged to `warren.max_compute_memory`). `project` and `lift` are one
   pass over the nodes and read the 8-byte-per-node membership.
 - A persisted vector write costs WAL (8 bytes × id_space per `f64` column)
   on every call; keep iterative scratch transient (`persist := false`).
