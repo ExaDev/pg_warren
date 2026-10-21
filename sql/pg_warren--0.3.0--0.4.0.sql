@@ -638,6 +638,8 @@ ALTER TABLE warren.versions DROP CONSTRAINT versions_parent_version_fkey,
         REFERENCES warren.versions ON DELETE SET NULL;
 CREATE INDEX versions_label_vector ON warren.versions (label_vector)
     WHERE label_vector IS NOT NULL;
+CREATE INDEX versions_parent_version ON warren.versions (parent_version)
+    WHERE parent_version IS NOT NULL;
 CREATE FUNCTION warren.label_vector_is_forgotten() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 BEGIN

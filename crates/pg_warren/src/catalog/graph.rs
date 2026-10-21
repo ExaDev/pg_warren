@@ -151,8 +151,9 @@ impl GraphDefinition {
                     .and_then(IdType::from_oid)
                     .ok_or_else(|| CatalogError::UnknownIdType(name.to_owned()))?;
                 let source = match row.get::<String>(17)?.as_deref() {
+                    Some("query") => GraphSource::Query,
                     Some("contraction") => GraphSource::Contraction,
-                    _ => GraphSource::Query,
+                    _ => return Err(CatalogError::UnknownSource(name.to_owned())),
                 };
                 Ok(Self {
                     id_type,
