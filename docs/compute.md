@@ -303,9 +303,46 @@ intermediates transient, and persists only `out`.
 | `degree_vector(graph, out, direction := 'out', rels)` | distinct-neighbour degree | vector id |
 | `aggregate_neighbours(graph, x, out, agg := 'mean', hops := 1, rels, direction := 'out')` | `mean`, `sum` or `max` of neighbours' rows of matrix `x` (a "one-layer GNN") | void |
 | `triangles(graph, out, rels := NULL, persist := true)` | per-node triangle count in the undirected simple graph | vector id |
+| `eigenvector_centrality(graph, out, tol := 1e-6, max_iter := 100, rels, weighted)` | eigenvector centrality as NetworkX computes it (in-edges, unit L2 norm) | iterations |
+| `katz_centrality(graph, out, alpha := 0.1, beta := 1.0, seed := NULL, normalized := true, tol := 1e-6, max_iter := 1000, rels, weighted)` | Katz centrality as NetworkX computes it; `seed` (a vector) makes β per node: `beta × seed` | iterations |
+| `hits(graph, hubs, authorities, tol := 1e-8, max_iter := 100, normalized := true, rels, weighted)` | HITS hub and authority scores as NetworkX computes them, into two vectors | iterations |
+| `clustering(graph, out, rels)` | local clustering coefficient of the undirected unweighted graph, as `nx.clustering` | void |
+| `label_propagation_majority(graph, out, seed := NULL, max_iter := 100, rels)` | majority-vote label propagation: synchronous, smallest label on a tie | iterations |
 
 All take `version := …`. `label_propagation` is deterministic min-label
-propagation, not majority-vote LPA.
+propagation; `label_propagation_majority` is the majority vote.
+
+The centralities follow NetworkX exactly: the same start, iteration,
+normalisation and stopping rule, so with the same `tol` and `max_iter` they
+stop at the same iteration and agree to rounding (tested on random graphs).
+`weighted` follows `spmv`: NULL reads the weights if the graph has them
+(NetworkX's `weight=None` default for eigenvector and Katz centrality is
+`weighted := false` here). Where NetworkX raises
+`PowerIterationFailedConvergence`, these write the last iterate and raise a
+`WARNING` (`… did not converge in 100 iterations`); the iterations returned
+are then `max_iter`. A graph with no live nodes is an error (22023), as is
+`tol < 0` or `max_iter < 1`. Katz diverges when `alpha` is at least 1 / the
+largest eigenvalue of the adjacency matrix (about 1 / average degree on a
+random graph): its default 0.1 is too large for a graph of average degree 10
+or more.
+
+How they differ from NetworkX:
+
+- `clustering` counts a node with a self-loop among its own neighbours
+  (`vector_degree` does), where NetworkX leaves the self-loop out, so such a
+  node in a triangle scores lower. It has no `weighted`: NetworkX's weighted
+  coefficient needs each triangle's edge weights, which `triangles` does not
+  read.
+- `label_propagation_majority` has no NetworkX equivalent. NetworkX's
+  `asynchronous_label_propagation` visits nodes in random order and breaks
+  ties at random; `label_propagation_communities` is semi-synchronous over a
+  graph colouring. Here every node updates at once, from its own label and
+  each neighbour's (direction ignored, a self-loop counting its own label
+  once more), to the most frequent, the smallest on a tie, until no label
+  changes. Being synchronous, it can cycle between two labellings (six
+  nodes are enough); it then stops at `max_iter` with the `WARNING`. Edge weights are not read. It is a tier-2 program (`gather` with
+  `collect`, votes counted in SQL), so an iteration costs N + M rows through
+  the executor, seconds at a million nodes (see `docs/limits.md`).
 
 ```sql
 SELECT warren.pagerank('roads', 'pr', weighted := false);

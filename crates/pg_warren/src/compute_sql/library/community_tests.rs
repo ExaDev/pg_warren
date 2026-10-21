@@ -109,4 +109,26 @@ mod tests {
         assert_eq!(values("t", "lp", 0)?.as_deref(), Some("1:0 2:1 3:0 4:0 5:4 6:5"));
         Ok(())
     }
+
+    /// A synchronous update can cycle: on this graph the labels alternate
+    /// between two labellings from the second step on.
+    #[pg_test]
+    fn majority_label_propagation_stops_a_cycle_at_max_iter() -> Result<(), Error> {
+        Spi::run(
+            "CREATE TABLE o_nodes (id bigint); INSERT INTO o_nodes SELECT generate_series(0, 5);
+             CREATE TABLE o_edges (src bigint, dst bigint);
+             INSERT INTO o_edges VALUES (0, 1), (1, 2), (1, 5), (2, 3), (2, 4), (3, 5), (4, 5);
+             SELECT warren.create_graph('o', 'SELECT id FROM o_nodes', 'SELECT src, dst FROM o_edges',
+                                        directed := false);
+             SELECT warren.refresh('o')",
+        )?;
+        let iterations = Spi::get_one::<i32>(
+            "SELECT warren.label_propagation_majority('o', 'lp', max_iter := 10)",
+        )?;
+        assert_eq!(iterations, Some(10));
+        assert_eq!(values("o", "lp", 0)?.as_deref(), Some("0:0 1:0 2:2 3:1 4:1 5:2"));
+        Spi::run("SELECT warren.label_propagation_majority('o', 'lp', max_iter := 11)")?;
+        assert_eq!(values("o", "lp", 0)?.as_deref(), Some("0:0 1:0 2:1 3:2 4:2 5:1"));
+        Ok(())
+    }
 }
