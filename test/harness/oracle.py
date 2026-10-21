@@ -18,6 +18,7 @@ as a table the SQL test compares against.
 | hits | oracle_hits | node_id, hub, authority: `nx.hits` (power iteration, `max_iter` 1000; weighted when the edges have weights) |
 | label_propagation_majority | oracle_label_propagation_majority | node_id, label: `warren.label_propagation_majority`'s rule reimplemented, from each node's own id as its label (`--max-iter`, default 100) |
 | clustering | oracle_clustering | node_id, coefficient: `nx.clustering` of the undirected graph without self-loops |
+| modularity | oracle_modularity | modularity: `nx.community.modularity` (`--resolution`, default 1; weighted when the edges have weights) of the partition `--labels-sql` (node, label) gives the undirected graph, each self-loop's weight halved: pg_warren counts a self-loop once in its node's degree and NetworkX twice, and halving it makes NetworkX's count, and its share of the edges inside a community, pg_warren's |
 | louvain | oracle_louvain | node_id, community, modularity: `nx.community.louvain_communities` (`--seed`, default 1; `--resolution`, default 1; weighted when the edges have weights), each community labelled by its smallest node id, with the partition's `nx.community.modularity` on every row |
 | betweenness | oracle_betweenness | node_id, score: `nx.betweenness_centrality` (`--no-normalized`, `--endpoints`), from `--sources-sql`'s nodes as the sample if given, else exact |
 | closeness | oracle_closeness | node_id, score: `nx.closeness_centrality` (`--no-wf-improved`); from `--sources-sql`'s nodes, `warren.closeness_centrality`'s estimator over NetworkX's distances |
@@ -66,6 +67,7 @@ TABLES = {
                    "source bigint, target bigint, jaccard float8, adamic_adar float8, common float8"),
     "quotient": ("oracle_quotient", "source bigint, target bigint, weight float8"),
     "louvain": ("oracle_louvain", "node_id bigint, community bigint, modularity float8"),
+    "modularity": ("oracle_modularity", "modularity float8"),
 }
 
 
@@ -155,6 +157,25 @@ def louvain(graph, arguments):
     parts = nx.community.louvain_communities(graph, weight="weight", resolution=args.resolution, seed=args.seed)
     q = nx.community.modularity(graph, parts, weight="weight", resolution=args.resolution)
     return [(node, min(part), q) for part in parts for node in part]
+
+
+def modularity(graph, arguments, labels):
+    """`nx.community.modularity` of the partition `labels` (node → label)
+    gives undirected `graph`, each self-loop's weight halved (see the table
+    above)."""
+    if graph.is_directed():
+        raise ValueError("modularity: pg_warren's is of the undirected view; export the graph undirected")
+    options = argparse.ArgumentParser(prog="modularity")
+    options.add_argument("--resolution", type=float, default=1.0)
+    options.add_argument("--labels-sql")
+    resolution = options.parse_args(arguments).resolution
+    halved = graph.copy()
+    for node, _, data in nx.selfloop_edges(halved, data=True):
+        data["weight"] = data.get("weight", 1.0) / 2
+    blocks = {}
+    for node, label in labels.items():
+        blocks.setdefault(label, set()).add(node)
+    return [(nx.community.modularity(halved, blocks.values(), weight="weight", resolution=resolution),)]
 
 
 def quotient(graph, arguments, labels=None):
@@ -370,9 +391,9 @@ def run(database, computation, arguments):
     if graph.sources_sql:
         sources = sorted(int(row[0]) for row in database.query(graph.sources_sql))
         rest += ["--sources", ",".join(map(str, sources))]
-    if computation == "quotient":
+    if computation in ("quotient", "modularity"):
         labels = {int(node): int(label) for node, label in database.query(graph.labels_sql)}
-        rows = quotient(exported, rest, labels)
+        rows = (quotient if computation == "quotient" else modularity)(exported, rest, labels)
     else:
         rows = compute(computation, exported, rest)
     write(database, computation, rows)

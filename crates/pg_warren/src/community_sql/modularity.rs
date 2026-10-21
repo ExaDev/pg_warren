@@ -18,8 +18,11 @@ use crate::source::with_id_type;
 /// edge and its reverse add up), edges weighted if `weighted` (NULL: if
 /// the graph has weights), an undirected self-loop counted once in its
 /// node's degree, as `contract` counts it, so a partition scores as the
-/// singletons of its quotient; 0 for a graph without edges. Without
-/// self-loops it is NetworkX's `community.modularity`.
+/// singletons of its quotient; 0 for a graph without edges. On an
+/// undirected graph it is NetworkX's `community.modularity` with each
+/// self-loop's weight halved (equal without self-loops); on a directed
+/// graph, NetworkX's of `nx.MultiGraph(G)`, not of `G`, which NetworkX
+/// scores with Leicht and Newman's directed formula.
 #[pg_extern(schema = "warren", stable, parallel_restricted)]
 fn modularity(
     graph: Option<&str>,

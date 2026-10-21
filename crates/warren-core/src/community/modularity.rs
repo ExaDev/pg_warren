@@ -3,9 +3,13 @@
 //! `Q = Σ_c [ in_c / 2m − γ (K_c / 2m)² ]`, with `in_c` the sum of `B`
 //! over pairs of members of `c` (each undirected edge twice, a self-loop
 //! as [`Undirected`] counts it), `K_c` the sum of its members' degrees and
-//! `γ` the resolution. It is 0 for a graph without edges, and NetworkX's
-//! `community.modularity` for a graph without self-loops (NetworkX counts
-//! an undirected self-loop twice, pg_warren once).
+//! `γ` the resolution. It is 0 for a graph without edges. On an undirected
+//! graph it is NetworkX's `community.modularity` of the same graph with
+//! each self-loop's weight halved (NetworkX counts a self-loop twice in its
+//! node's degree, pg_warren once), so the two agree without self-loops. On
+//! a directed graph it is NetworkX's modularity of the undirected
+//! multigraph of its edges (`nx.MultiGraph(G)`), not of `G`: NetworkX
+//! scores a directed graph with Leicht and Newman's directed formula.
 
 use super::{CommunityError, Undirected};
 use crate::compute::{ComputeError, ComputeMemory};

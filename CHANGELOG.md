@@ -161,8 +161,11 @@
   deterministic: the same result for any thread count and a given seed)
   and `leiden_refine` (Traag et al.'s refinement). `modularity(graph,
   labels, resolution, weighted, version)` scores any partition; it counts
-  an undirected self-loop once, as `contract` does, and equals NetworkX's
-  `community.modularity` on graphs without self-loops. Checked against
+  an undirected self-loop once, as `contract` does: on an undirected graph
+  it equals NetworkX's `community.modularity` with each self-loop's weight
+  halved (`test/sql/oracle_modularity.sql`), and on a directed graph it
+  scores the undirected view (an edge and its reverse add up), not
+  NetworkX's directed (Leicht–Newman) modularity. Checked against
   NetworkX's `louvain_communities` on stochastic block models
   (`test/sql/oracle_louvain*.sql`: modularity, NMI against the planted
   partition, connectedness). At 1M nodes and 5M edges on 4 vCPUs

@@ -139,8 +139,11 @@ The result is the same for any number of threads (`warren.threads`), and
 for a given `seed`. Different seeds give different, comparably good
 partitions. Modularity counts an undirected self-loop once in its node's
 degree, as `contract` does, so a partition scores the same on a graph and,
-as singletons, on its quotient. NetworkX counts it twice, so the two agree
-on graphs without self-loops.
+as singletons, on its quotient. NetworkX counts it twice, so on an
+undirected graph pg_warren's is NetworkX's with each self-loop's weight
+halved, and the two agree without self-loops. On a directed graph it is
+the modularity of the undirected view, not NetworkX's directed (Leicht and
+Newman) one.
 
 The steps are SQL functions too, for programs of your own:
 `local_moving(graph, out, initial, keys, resolution, seed, max_sweeps,
