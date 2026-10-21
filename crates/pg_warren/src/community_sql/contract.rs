@@ -53,6 +53,7 @@ fn contract(
             )));
         }
         let parent = resolve(graph, version, "contract")?;
+        parent.graph.share(parent.version)?;
         let built = with_id_type!(parent.graph.id_type, E => {
             let mut vectors = Vectors::<E>::open(parent)?;
             let labels = vectors.get(label_vector)?;
@@ -127,6 +128,14 @@ fn quotient_graph(
     require_owner(existing.owner, &existing.name, "contract into")?;
     if existing.source != GraphSource::Contraction {
         return Err(CommunitySqlError::NotAContraction(existing.name));
+    }
+    // Versions from another parent would carry its topology into this
+    // graph's readers' view and mix two label spaces.
+    if existing.parent_graph()?.is_some_and(|graph| graph != parent.graph_id) {
+        return Err(CommunitySqlError::InvalidArgument(format!(
+            "graph \"{}\" is contracted from another graph than \"{}\": contract into a new graph",
+            existing.name, parent.name
+        )));
     }
     if (existing.directed, existing.has_relations) != (parent.directed, parent.has_relations) {
         return Err(CommunitySqlError::InvalidArgument(format!(
@@ -310,6 +319,24 @@ mod tests {
             Some(
                 "42809: cannot compact graph \"q\": it is derived by contraction; \
                  warren.contract makes its versions"
+            )
+        );
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_quotient_takes_versions_from_one_parent_graph_only() -> Result<(), Error> {
+        labelled()?;
+        small("secret")?;
+        Spi::run(
+            "SELECT warren.vector_const('secret', 'l', 1, 'i64');
+             SELECT warren.contract('t', 'l', 'q')",
+        )?;
+        assert_eq!(
+            failure("warren.contract('secret', 'l', 'q')")?.as_deref(),
+            Some(
+                "22023: graph \"q\" is contracted from another graph than \"secret\": \
+                 contract into a new graph"
             )
         );
         Ok(())
