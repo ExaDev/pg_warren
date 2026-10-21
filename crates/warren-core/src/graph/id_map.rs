@@ -204,18 +204,28 @@ impl<E: ExternalId> IdMap<E> {
 
     /// Renumbers every dense id, tombstones included, by `permutation`,
     /// which must permute this id map's id space; else changes nothing.
-    pub fn renumber(&mut self, permutation: &Permutation) -> Result<(), GraphError> {
+    /// The renumbered tombstones, if there are any, are charged to `memory`
+    /// while they are built.
+    pub fn renumber(
+        &mut self,
+        permutation: &Permutation,
+        memory: &BuildMemory,
+    ) -> Result<(), GraphError> {
         if permutation.id_space() != self.id_space() {
             return Err(GraphError::IdSpaceMismatch {
                 expected: self.id_space(),
                 found: permutation.id_space(),
             });
         }
-        let mut tombstones = Tombstones::new(self.id_space())?;
-        for old in (0..self.id_space()).filter(|&old| self.tombstones.contains(old)) {
-            tombstones.insert(permutation.new_dense_id(old));
+        if self.tombstones.count() > 0 {
+            // Built beside the old bitmap, which it then replaces.
+            let _charge = memory.charge(Tombstones::bytes_for(self.id_space()))?;
+            let mut tombstones = Tombstones::new(self.id_space())?;
+            for old in (0..self.id_space()).filter(|&old| self.tombstones.contains(old)) {
+                tombstones.insert(permutation.new_dense_id(old));
+            }
+            self.tombstones = tombstones;
         }
-        self.tombstones = tombstones;
         for (external, dense) in &mut self.by_external {
             *dense = permutation.new_dense_id(*dense);
             self.by_dense[*dense as usize] = *external;
@@ -328,7 +338,7 @@ mod tests {
     fn renumbering_moves_both_directions_and_the_tombstones() {
         // 10 → 0, 20 → 1 (tombstoned), 30 → 2.
         let mut id_map = first_build(vec![10, 20, 30]).rebuild(vec![10, 30]).unwrap();
-        id_map.renumber(&path_permutation()).unwrap();
+        id_map.renumber(&path_permutation(), &BuildMemory::unlimited()).unwrap();
         assert_eq!(id_map.dense_id(&10), Some(2));
         assert_eq!(id_map.dense_id(&30), Some(1));
         assert_eq!(id_map.dense_id(&20), None);
@@ -342,11 +352,33 @@ mod tests {
         assert!(id_map.pairs().windows(2).all(|pair| pair[0].0 < pair[1].0));
     }
 
+    /// The renumbered tombstones are a new bitmap, charged while it is
+    /// built beside the old one; without tombstones nothing is allocated.
+    #[test]
+    fn renumbering_charges_the_new_tombstones() {
+        let tombstoned = first_build(vec![10, 20, 30]).rebuild(vec![10, 30]).unwrap();
+        let none = BuildMemory::new(0);
+        let mut id_map = tombstoned.clone();
+        assert!(matches!(
+            id_map.renumber(&path_permutation(), &none),
+            Err(GraphError::BuildMemoryLimit { .. })
+        ));
+        assert_eq!(id_map, tombstoned, "nothing is renumbered");
+        let memory = BuildMemory::unlimited();
+        id_map.renumber(&path_permutation(), &memory).unwrap();
+        assert_eq!(memory.peak(), Tombstones::bytes_for(3));
+        assert_eq!(memory.in_use(), 0);
+
+        let mut live = first_build(vec![10, 20, 30]);
+        live.renumber(&path_permutation(), &none).unwrap();
+        assert_eq!(live.dense_id(&10), Some(2));
+    }
+
     #[test]
     fn renumbering_refuses_a_permutation_of_another_id_space() {
         let mut id_map = first_build(vec![10, 20]);
         assert_eq!(
-            id_map.renumber(&path_permutation()),
+            id_map.renumber(&path_permutation(), &BuildMemory::unlimited()),
             Err(GraphError::IdSpaceMismatch { expected: 2, found: 3 })
         );
         assert_eq!(id_map, first_build(vec![10, 20]));

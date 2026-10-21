@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 
 use warren_core::graph::{
     BuildBuffer, BuildCharge, BuildMemory, BuildPlan, BuiltCsr, CsrLayout, CsrPart, CsrSink,
-    EdgeIntake, GraphError, IdMap, RelationDictionary,
+    EdgeIntake, GraphError, IdMap, Permutation, RelationDictionary,
 };
 
 /// The system allocator, counting the bytes live now and at the peak.
@@ -76,13 +76,16 @@ struct Case {
     /// The build starts from a version over the same nodes and as many
     /// again that have since disappeared (tombstoned).
     base: bool,
+    /// The first build orders its ids for locality (DESIGN.md §14 item
+    /// 22) before its CSRs are planned.
+    locality: bool,
 }
 
 impl Case {
     fn new(nodes: u64, edges: u64, relations: usize, weighted: bool, store_merged: bool) -> Self {
         let layout = CsrLayout { build_reverse: true, store_merged };
-        let (undirected, reserve, base) = (false, true, false);
-        Self { nodes, edges, relations, weighted, layout, undirected, reserve, base }
+        let (undirected, reserve, base, locality) = (false, true, false, false);
+        Self { nodes, edges, relations, weighted, layout, undirected, reserve, base, locality }
     }
 }
 
@@ -176,7 +179,7 @@ fn measure(case: &Case) -> Outcome<Measured> {
     for id in 0..case.nodes as i64 {
         node_ids.push(id * 3)?;
     }
-    let (id_map, _id_map_charge) = base.rebuild_within(node_ids)?;
+    let (mut id_map, _id_map_charge) = base.rebuild_within(node_ids)?;
     drop((base, base_charge));
     let mut relations = RelationDictionary::new();
     let mut relations_charge = BuildCharge::none(&memory);
@@ -192,7 +195,12 @@ fn measure(case: &Case) -> Outcome<Measured> {
         let relation = relations.intern_within(&names[relation], &mut relations_charge)?;
         intake.push(relation, Some(&source), Some(&target), weight)?;
     }
-    let (edges, _) = intake.finish();
+    let (mut edges, _) = intake.finish();
+    if case.locality {
+        let permutation = Permutation::locality(&edges, id_map.id_space(), &memory)?;
+        edges.renumber(&permutation)?;
+        id_map.renumber(&permutation, &memory)?;
+    }
     let chunk = (CHUNK_SIZE + 8) as u64;
     let id_space = id_map.id_space();
     let plan = BuildPlan::new(&edges, relations.len(), id_space, case.layout, &memory, chunk)?;

@@ -88,7 +88,7 @@ pub fn compact<E: ExternalId>(
     if order == NodeOrder::Locality {
         let permutation = Permutation::locality(&edges, renumbering.new_id_space(), memory)?;
         edges.renumber(&permutation)?;
-        id_map.renumber(&permutation)?;
+        id_map.renumber(&permutation, memory)?;
         renumbering.permute(&permutation)?;
     }
     let graph = version.graph();
@@ -223,7 +223,7 @@ mod tests {
         let permutation =
             Permutation::locality(&edges, id_map.id_space(), &BuildMemory::unlimited()).unwrap();
         edges.renumber(&permutation).unwrap();
-        id_map.renumber(&permutation).unwrap();
+        id_map.renumber(&permutation, &BuildMemory::unlimited()).unwrap();
         let graph = GraphCsr::build(edges, 1, id_map.id_space(), true).unwrap();
         Build { id_map, relations, graph }
     }

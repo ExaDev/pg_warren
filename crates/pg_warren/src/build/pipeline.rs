@@ -85,7 +85,7 @@ pub(crate) fn build<E: ExternalId>(
         // A first build: its ids are provisional until ordered (§14 item 22).
         let permutation = Permutation::locality(&edges, id_map.id_space(), &memory)?;
         edges.renumber(&permutation)?;
-        id_map.renumber(&permutation)?;
+        id_map.renumber(&permutation, &memory)?;
     }
     let Relations { dictionary: relations, charge: _relations_charge, .. } = relations;
     let beside = writer_memory(request.chunk_size);

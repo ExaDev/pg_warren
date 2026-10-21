@@ -55,7 +55,7 @@ mod locality {
             let permutation =
                 Permutation::locality(&edges, id_space, &BuildMemory::unlimited()).unwrap();
             edges.renumber(&permutation).unwrap();
-            id_map.renumber(&permutation).unwrap();
+            id_map.renumber(&permutation, &BuildMemory::unlimited()).unwrap();
         }
         let graph = GraphCsr::build_as(edges, relations.len(), id_space, shape.layout).unwrap();
         Built { id_map, graph }
