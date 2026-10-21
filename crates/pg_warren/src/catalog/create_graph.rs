@@ -3,7 +3,7 @@
 
 use pgrx::prelude::*;
 
-use super::{parse_node_order, CatalogError, GraphSource, NewGraph};
+use super::{parse_node_order, require_unreserved, CatalogError, GraphSource, NewGraph};
 use crate::access::{current_user, entry, with_search_path};
 use crate::read_only::read_one;
 use crate::source::{check_edge_columns, check_node_columns, source_columns};
@@ -72,6 +72,7 @@ fn create_graph(
 }
 
 fn record(graph: &NewGraph<'_>) -> Result<(), CatalogError> {
+    require_unreserved(graph.name)?;
     if graph.retain_versions < 1 {
         return Err(CatalogError::RetainVersions(graph.retain_versions));
     }

@@ -49,6 +49,11 @@ pub(crate) enum CatalogError {
     /// A graph with this name exists already.
     #[error("graph \"{0}\" already exists")]
     GraphExists(String),
+    /// Names beginning with `_warren_` belong to the library's level graphs.
+    #[error(
+        "graph names beginning with _warren_ are reserved for the library's level graphs: \"{0}\""
+    )]
+    ReservedGraphName(String),
     /// `retain_versions` must keep at least the current version.
     #[error("retain_versions must be at least 1, not {0}")]
     RetainVersions(i32),
@@ -107,6 +112,7 @@ impl SqlError for CatalogError {
                 PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE
             }
             Self::GraphExists(_) => PgSqlErrorCode::ERRCODE_DUPLICATE_OBJECT,
+            Self::ReservedGraphName(_) => PgSqlErrorCode::ERRCODE_RESERVED_NAME,
             Self::RetainVersions(_) => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
             Self::UnknownIdType(_) | Self::UnknownSource(_) => {
                 PgSqlErrorCode::ERRCODE_DATA_CORRUPTED

@@ -43,7 +43,7 @@ pub(crate) fn contract_version<E: ExternalId>(
 ) -> Result<VersionId, CommunitySqlError> {
     let memory = BuildMemory::new(request.write.memory_budget);
     let labels = Labels::read(labels, parent.id_map.tombstones(), &memory)
-        .map_err(CommunitySqlError::Labels)?;
+        .map_err(|error| CommunitySqlError::Integers { what: "label vector", error })?;
     let Identity { id_map: base, id_map_charge, relations, mut relations_charge } =
         match quotient.current_version {
             Some(version) => load_identity(segments, version, &memory)?,
@@ -243,7 +243,7 @@ mod tests {
     fn a_label_that_is_not_an_integer_is_refused_before_anything_is_written() {
         let mut world = World::new();
         let refused = world.contract(&labels([7.0, 0.5, 0.0, 7.0]));
-        assert!(matches!(refused, Err(CommunitySqlError::Labels(_))), "{refused:?}");
+        assert!(matches!(refused, Err(CommunitySqlError::Integers { .. })), "{refused:?}");
         assert!(world.catalog.versions.is_empty());
         assert!(world.store.chunks.is_empty());
     }

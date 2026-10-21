@@ -32,7 +32,8 @@ before changing code. Commands, toolchain setup and environment gotchas are in
    - `warren-core/src/`: `graph/` (csr, id_map, tombstones, relation
      selection), `interrupts` (the cancellation poll shared by traversal and
      compute), `traversal/`, `compute/` (semiring, kernels, message),
-     `community/` (labels, contraction, projection), `spectral/`,
+     `community/` (labels, contraction, projection, modularity, local
+     moving, refinement), `spectral/`,
      `version/` (diff, compaction across versions).
    - `pg_warren/src/`: `extension` (schema + `warren.version()`, SQL
      errors), `access/` (identity switches, privilege checks), `source/`
@@ -43,7 +44,8 @@ before changing code. Commands, toolchain setup and environment gotchas are in
      `external_ids/` (id arguments ↔ dense ids), `selection/` (direction and
      relations), `traversal_sql/`, `vector/` (persistence and cache of named
      vectors), `compute_sql/`, `spectral_sql/` (eigen, distance),
-     `community_sql/` (contract, project, lift).
+     `community_sql/` (contract, project, lift, modularity, local moving,
+     and the Louvain/Leiden library).
      Feature dependencies form a DAG: `access`, `source` → `catalog` →
      `segment` → `vector` → `cache` → `build` → `version_sql`; `cache` →
      `external_ids`, `selection`; and `external_ids`, `selection`,
@@ -58,7 +60,8 @@ before changing code. Commands, toolchain setup and environment gotchas are in
    (offsets / targets / weights, forward / reverse / merged), frontier, step,
    walk, vector, matrix, semiring, message, combiner, gather, label,
    dropped edges, deduplicated edges, community, quotient, membership,
-   parent version, label vector.* *Merged* means only the all-relations
+   parent version, label vector, level, modularity, local moving,
+   refinement.* *Merged* means only the all-relations
    CSR; parallel edges folded at build time are *deduplicated*. A
    *community label* is a node's value in a label vector; a version's
    *label* is its `versions.label` text: say which. Don't invent

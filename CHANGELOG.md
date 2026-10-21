@@ -15,7 +15,8 @@
   contraction it adds a `CHECK` on `warren.graphs.source`, makes
   `warren.versions.parent_version` `ON DELETE SET NULL`, adds the trigger
   that clears `warren.versions.label_vector` and its index, and creates
-  `contract`, `project` and `lift`.
+  `contract`, `project` and `lift`; for communities, `louvain`, `leiden`,
+  `modularity`, `local_moving` and `leiden_refine`.
 - `create_graph` and `compact` are dropped and re-created by the update
   (each gains an argument). Unlike 0.3.0's update, this one grants again
   every privilege that was set on them, so a `GRANT` or `REVOKE` you made
@@ -146,6 +147,30 @@
     who cannot read the parent graph).
   - Checked against NetworkX's `quotient_graph` and SQL `GROUP BY`/joins
     (`test/sql/oracle_contraction*.sql`).
+- **Louvain and Leiden** (DESIGN.md §6.7 group 3,
+  [docs/communities.md](docs/communities.md)): `louvain(graph, out,
+  resolution, seed, max_levels, tolerance, weighted, levels_prefix,
+  version)` and `leiden(…, randomness, …)` write a label vector of
+  communities that maximise modularity and return its modularity;
+  `levels_prefix` keeps each level's partition. Leiden's communities are
+  always connected. Graph names beginning with `_warren_` are now
+  reserved for their level graphs: `create_graph` and `contract` refuse
+  them (42939), and `contract(graph, labels, NULL)` creates a new level
+  graph named after its version. Both are PL/pgSQL over `contract`, `project`, `lift`
+  and two new kernels, `local_moving` (a level's moving, parallel and
+  deterministic: the same result for any thread count and a given seed)
+  and `leiden_refine` (Traag et al.'s refinement). `modularity(graph,
+  labels, resolution, weighted, version)` scores any partition; it counts
+  an undirected self-loop once, as `contract` does: on an undirected graph
+  it equals NetworkX's `community.modularity` with each self-loop's weight
+  halved (`test/sql/oracle_modularity.sql`), and on a directed graph it
+  scores the undirected view (an edge and its reverse add up), not
+  NetworkX's directed (Leicht–Newman) modularity. Checked against
+  NetworkX's `louvain_communities` on stochastic block models
+  (`test/sql/oracle_louvain*.sql`: modularity, NMI against the planted
+  partition, connectedness). At 1M nodes and 5M edges on 4 vCPUs
+  `louvain` takes 5.8 s and `leiden` 8.3 s, at 10M nodes 93 s and 119 s
+  (docs/limits.md).
 
 ### Fixes
 

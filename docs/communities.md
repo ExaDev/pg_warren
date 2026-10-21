@@ -12,6 +12,7 @@ levels (DESIGN.md §6.6).
 | `contract(graph, label_vector, out_graph)` | a new version of graph `out_graph`: one node per distinct label, the edges between communities aggregated |
 | `project(graph, x, out_graph, y, agg := 'sum')` | `y` on the quotient: each community's `sum`, `mean`, `max`, `min` or `count` of `x` over its members (`Pᵀ·x`) |
 | `lift(out_graph, y, graph, x)` | `x` on the graph: each node gets its community's row of `y` (`P·y`) |
+| `louvain(graph, out)`, `leiden(graph, out)` | a label vector of communities that maximise modularity ([below](#finding-communities-louvain-and-leiden)) |
 
 The examples continue those of [compute.md](compute.md), on the `roads`
 graph; they run as written in `test/sql/docs_examples.sql`.
@@ -93,6 +94,78 @@ On a matrix it works column by column, so `agg := 'mean'` of an embedding
 matrix gives each community's centroid. `lift` keeps `y`'s type and width.
 Both take `persist := false` for a transient result, and `version :=` to
 use an older version of the quotient.
+
+## Finding communities: Louvain and Leiden
+
+`louvain` and `leiden` find communities that maximise **modularity**: how
+much more edge weight a partition keeps inside its communities than a
+random graph with the same degrees would. Each writes a label vector, so
+`contract` and `project` take its result directly.
+
+| Call | What it does |
+|---|---|
+| `louvain(graph, out, resolution := 1, seed := 0, max_levels := 100, tolerance := 1e-7, weighted, levels_prefix, version)` | Louvain (Blondel et al. 2008); returns the partition's modularity |
+| `leiden(graph, out, resolution := 1, seed := 0, max_levels := 100, tolerance := 1e-7, randomness := 0.01, weighted, levels_prefix, version)` | Leiden (Traag et al. 2019): every community it finds is connected |
+| `modularity(graph, labels, resolution := 1, weighted, version)` | the modularity of any label vector's partition |
+
+```sql
+SELECT warren.louvain('roads', 'community');            -- 0.0397: the modularity
+SELECT node_id, value FROM warren.vector_values('roads', 'community', NULL::int);
+-- ash, dale and elm: 0; birch and cedar: 1
+SELECT warren.modularity('roads', 'region');            -- the hand-made regions: -0.142
+```
+
+Both treat the graph as undirected (an edge and its reverse add up) and
+use edge weights if `weighted` (NULL: if the graph has them). A community
+is labelled by the smallest dense id among its members, so labels are
+stable for a given graph version and seed. `resolution` above 1 favours
+smaller communities, below 1 larger ones.
+
+Both work in levels. A level moves nodes to the neighbouring community
+that most raises modularity, revisiting the neighbours of each node that
+moved until none moves (Traag et al.'s fast local moving), then contracts the level's graph by the communities found, so the next
+level moves whole communities. Louvain stops when a level raises
+modularity by no more than `tolerance`, as NetworkX's `threshold` does.
+Leiden refines each community into well-connected parts before it
+contracts, so no community it returns is split in two, or held together
+only through another community. It continues while the refinement still
+merges nodes, as Traag et al.'s does; `tolerance` ends each level's moving
+instead. `randomness` is θ of the refinement's random merges (0: always
+the best merge). `levels_prefix := 'lv'` also keeps each level's
+partition, as vectors `lv_1`, `lv_2`, …, coarsest last: a hierarchy of
+communities.
+
+The result is the same for any number of threads (`warren.threads`), and
+for a given `seed`. Different seeds give different, comparably good
+partitions. Modularity counts an undirected self-loop once in its node's
+degree, as `contract` does, so a partition scores the same on a graph and,
+as singletons, on its quotient. NetworkX counts it twice, so on an
+undirected graph pg_warren's is NetworkX's with each self-loop's weight
+halved, and the two agree without self-loops. On a directed graph it is
+the modularity of the undirected view, not NetworkX's directed (Leicht and
+Newman) one.
+
+The steps are SQL functions too, for programs of your own:
+`local_moving(graph, out, initial, keys, resolution, seed, max_sweeps,
+tolerance, weighted, persist, version)` (one level's moving, from the
+partition `initial` or from each node alone; returns the number of
+communities) and `leiden_refine(graph, communities, out, keys, resolution,
+seed, randomness, weighted, persist, version)`. `louvain` and `leiden` are
+PL/pgSQL over them, `contract`, `project` and `lift`
+(`crates/pg_warren/src/community_sql/library/`). Graph names beginning
+with `_warren_` are reserved for their levels (42939): `contract(graph,
+labels, NULL)` makes a new graph of the caller's named
+`_warren_level_<version id>`, after the id it returns.
+
+At 1M nodes and 5M undirected edges on 4 vCPUs, `louvain` takes 5.8 s and
+`leiden` 8.3 s; at 10M nodes, 93 s and 119 s ([limits.md](limits.md)).
+Each level writes its graph as a version (segments and WAL), and the rows
+of a level's graph dropped during the run are reclaimed only by `VACUUM`
+after its transaction ends, so a run needs free disk for every level: on
+that 1M-node graph, whose own segments take 75 MB, `louvain` wrote 166 MB
+of segments and about as much WAL, `leiden` (7 levels) 294 MB and 323 MB.
+A failed or cancelled run rolls its level graphs back, but their segment
+rows, already written, also stay as dead tuples until `VACUUM`.
 
 ## Lineage, retention and access
 

@@ -1,0 +1,29 @@
+{
+ "louvain": {
+  "modularity": 0.8401031596173099,
+  "communities": 1425,
+  "seconds": 92.854199,
+  "level_count": 5,
+  "levels": [
+   {
+    "max_levels": 1,
+    "seconds": 31.633319,
+    "modularity": 0.11775783069766897,
+    "communities": 4535476
+   },
+   {
+    "max_levels": 2,
+    "seconds": 81.141177,
+    "modularity": 0.8178171376986761,
+    "communities": 11037
+   },
+   {
+    "max_levels": 3,
+    "seconds": 92.972254,
+    "modularity": 0.8399340377819123,
+    "communities": 2625
+   }
+  ]
+ },
+ "blocks_modularity": 0.8995470496129391
+}

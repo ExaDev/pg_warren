@@ -1,0 +1,101 @@
+{
+ "graph": "blocks-10m",
+ "generate": [
+  "random",
+  "--nodes",
+  "10000000",
+  "--edges",
+  "0",
+  "--seed",
+  "1"
+ ],
+ "nodes": 10000000,
+ "edges": 0,
+ "params": {
+  "nodes": "10000000"
+ },
+ "pg_warren": "0.4.0",
+ "postgres": "16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
+ "git": "ff90cfc",
+ "cpus": 4,
+ "machine": "x86_64",
+ "recorded_at": "2026-10-21T13:40:11+00:00",
+ "workloads": [
+  {
+   "name": "refresh",
+   "sql": "SELECT warren.refresh('g')",
+   "seconds": [
+    37.623499
+   ],
+   "median": 37.623499
+  },
+  {
+   "name": "prewarm",
+   "sql": "SELECT warren.prewarm('g')",
+   "seconds": [
+    1.452246,
+    1.481059,
+    1.461578
+   ],
+   "median": 1.461578
+  },
+  {
+   "name": "components_vector_in",
+   "sql": "SELECT warren.components_vector('g', 'cc', rels := ARRAY['in'])",
+   "seconds": [
+    6.831436
+   ],
+   "median": 6.831436
+  },
+  {
+   "name": "modularity_of_blocks",
+   "sql": "SELECT warren.modularity('g', 'cc')",
+   "seconds": [
+    5.035735,
+    5.151912,
+    5.098053
+   ],
+   "median": 5.098053
+  },
+  {
+   "name": "louvain",
+   "sql": "SELECT warren.louvain('g', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    92.854199
+   ],
+   "median": 92.854199
+  },
+  {
+   "name": "modularity_louvain",
+   "sql": "SELECT warren.modularity('g', 'louvain')",
+   "seconds": [
+    4.93346
+   ],
+   "median": 4.93346
+  },
+  {
+   "name": "louvain_max_levels_1",
+   "sql": "SELECT warren.louvain('g', 'louvain_upto_1', max_levels := 1)",
+   "seconds": [
+    31.633319
+   ],
+   "median": 31.633319
+  },
+  {
+   "name": "louvain_max_levels_2",
+   "sql": "SELECT warren.louvain('g', 'louvain_upto_2', max_levels := 2)",
+   "seconds": [
+    81.141177
+   ],
+   "median": 81.141177
+  },
+  {
+   "name": "louvain_max_levels_3",
+   "sql": "SELECT warren.louvain('g', 'louvain_upto_3', max_levels := 3)",
+   "seconds": [
+    92.972254
+   ],
+   "median": 92.972254
+  }
+ ]
+}

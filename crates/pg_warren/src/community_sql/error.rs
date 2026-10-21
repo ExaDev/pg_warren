@@ -23,9 +23,25 @@ pub(crate) enum CommunitySqlError {
     /// An argument is out of its range.
     #[error("{0}")]
     InvalidArgument(String),
-    /// The label vector cannot label communities.
-    #[error("label vector: {0}")]
-    Labels(CommunityError),
+    /// Modularity needs weights of at least 0: the edge between these
+    /// external ids is not.
+    #[error("the edge {from} → {to} weighs {weight}: modularity needs weights of at least 0")]
+    NegativeWeight {
+        /// The edge's source, as its external id.
+        from: String,
+        /// Its target.
+        to: String,
+        /// Its weight in the undirected view.
+        weight: f64,
+    },
+    /// A vector of labels or keys does not hold integers.
+    #[error("{what}: {error}")]
+    Integers {
+        /// The argument.
+        what: &'static str,
+        /// Why.
+        error: CommunityError,
+    },
     /// `warren.contract` adds versions only to a graph it derives.
     #[error(
         "graph \"{0}\" is built from queries, not derived by contraction: contract into a new \
@@ -124,7 +140,8 @@ impl SqlError for CommunitySqlError {
             Self::InvalidArgument(_)
             | Self::OtherParent { .. }
             | Self::NotContractedFrom { .. } => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
-            Self::Labels(error) | Self::Community(error) => community_sqlstate(error),
+            Self::Integers { error, .. } | Self::Community(error) => community_sqlstate(error),
+            Self::NegativeWeight { .. } => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
             Self::NotAContraction(_) | Self::NotDerived { .. } => {
                 PgSqlErrorCode::ERRCODE_WRONG_OBJECT_TYPE
             }
@@ -150,7 +167,8 @@ fn community_sqlstate(error: &CommunityError) -> PgSqlErrorCode {
         CommunityError::LabelDtype(_) => PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
         CommunityError::LabelWidth(_)
         | CommunityError::NotIntegral { .. }
-        | CommunityError::UnknownAggregate(_) => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+        | CommunityError::UnknownAggregate(_)
+        | CommunityError::NegativeWeight { .. } => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
         CommunityError::LabelLength { .. } | CommunityError::UnknownLabel { .. } => {
             PgSqlErrorCode::ERRCODE_INTERNAL_ERROR
         }

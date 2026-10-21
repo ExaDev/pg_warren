@@ -248,3 +248,21 @@ def test_a_directed_quotient_keeps_the_direction_of_each_edge():
     g = graph([(1, 3), (3, 2), (2, 1)], directed=True)
     rows = sorted(oracle.quotient(g, ["--count"], {1: 0, 2: 0, 3: 1}))
     assert rows == [(0, 0, 1.0), (0, 1, 1.0), (1, 0, 1.0)]
+
+
+def test_louvain_finds_two_cliques_and_scores_them():
+    g = graph([(a, b) for a in range(4) for b in range(a + 1, 4)]
+              + [(a, b) for a in range(4, 8) for b in range(a + 1, 8)] + [(3, 4)])
+    rows = sorted(oracle.compute("louvain", g, []))
+    assert [(node, community) for node, community, _ in rows] == [(n, 0 if n < 4 else 4) for n in range(8)]
+    assert rows[0][2] == pytest.approx(2 * (6 / 13 - (13 / 26) ** 2))
+
+
+def test_modularity_counts_a_self_loop_once_as_pg_warren_does():
+    # A self-loop of weight 2 on 0 and an edge 0 – 1 of weight 1: with the
+    # loop once in 0's degree, k = (3, 1) and 2m = 4, so {0}, {1} scores
+    # 2/4 − (3/4)² − (1/4)²; NetworkX's own count gives −1/18.
+    g = graph([(0, 0), (0, 1)])
+    g[0][0]["weight"], g[0][1]["weight"] = 2.0, 1.0
+    assert oracle.modularity(g, [], {0: 0, 1: 1}) == [(pytest.approx(-0.125),)]
+    assert oracle.modularity(g, ["--resolution", "0"], {0: 0, 1: 1}) == [(pytest.approx(0.5),)]

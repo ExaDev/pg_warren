@@ -83,6 +83,11 @@ impl Labels {
         Ok((Membership::from_stored(communities, quotient.id_space())?, charge))
     }
 
+    /// Every node's label by dense id, 0 for a tombstoned node.
+    pub fn values(&self) -> &[i64] {
+        &self.labels
+    }
+
     /// The label of `node`, if it is live.
     pub fn label(&self, node: DenseId) -> Option<i64> {
         let label = *self.labels.get(usize::try_from(node).ok()?)?;
@@ -160,6 +165,7 @@ mod tests {
         let tombstones = live(3, &[1]);
         let labels = read(AnyVector::F64(vector(vec![4.0, f64::NAN, 4.0])), &tombstones).unwrap();
         assert_eq!([0, 1, 2].map(|n| labels.label(n)), [Some(4), None, Some(4)]);
+        assert_eq!(labels.values(), [4, 0, 4]);
     }
 
     #[test]
