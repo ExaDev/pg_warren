@@ -120,6 +120,71 @@ mod tests {
         Ok(())
     }
 
+    /// Every community Leiden returns is connected, whichever way it stops:
+    /// after one level (`max_levels`), it returns the refined partition,
+    /// which is connected, not the moved one, which need not be.
+    #[pg_test]
+    fn leiden_communities_are_connected_however_it_stops() -> Result<(), Error> {
+        Spi::run(
+            "CREATE TABLE sp_nodes AS SELECT generate_series(1, 3000)::bigint AS id;
+             CREATE TABLE sp_edges AS
+             SELECT n.id AS src, (1 + abs(hashint8(n.id * 4 + k)) % 3000)::bigint AS dst
+             FROM sp_nodes n, generate_series(1, 2) k;
+             SELECT warren.create_graph('sp', 'SELECT id FROM sp_nodes', 'SELECT src, dst FROM sp_edges',
+                                        directed := false);
+             SELECT warren.refresh('sp')",
+        )?;
+        // After one level it is the refinement of that level's moving.
+        Spi::run(
+            "SELECT warren.leiden('sp', 'one_level', max_levels := 1);
+             SELECT warren.local_moving('sp', 'moved');
+             SELECT warren.leiden_refine('sp', 'moved', 'refined')",
+        )?;
+        let differ = Spi::get_one::<i64>(
+            "SELECT count(*) FROM warren.vector_values('sp', 'one_level', NULL::bigint) a
+             JOIN warren.vector_values('sp', 'refined', NULL::bigint) b USING (node_id)
+             WHERE a.value <> b.value",
+        )?;
+        assert_eq!(differ, Some(0), "max_levels := 1 returns the refined partition");
+        for (call, out) in [
+            ("max_levels := 1", "one"),
+            ("max_levels := 2", "two"),
+            ("seed := 3, max_levels := 1", "three"),
+            ("resolution := 0.2, max_levels := 1", "coarse"),
+            ("", "all"),
+        ] {
+            let sep = if call.is_empty() { "" } else { ", " };
+            Spi::run(&format!("SELECT warren.leiden('sp', '{out}'{sep}{call})"))?;
+            let split = Spi::get_one::<i64>(&format!(
+                "WITH l AS (SELECT node_id, value FROM warren.vector_values('sp', '{out}', NULL::bigint)),
+                      inside AS (SELECT e.src, e.dst FROM sp_edges e JOIN l a ON a.node_id = e.src
+                                 JOIN l b ON b.node_id = e.dst WHERE a.value = b.value)
+                 SELECT count(*) FROM l WHERE node_id NOT IN (SELECT src FROM inside UNION SELECT dst FROM inside)
+                   AND (SELECT count(*) FROM l l2 WHERE l2.value = l.value) > 1"
+            ))?;
+            assert_eq!(split, Some(0), "{call}: members with no edge inside their community");
+            Spi::run(&format!(
+                "DROP TABLE IF EXISTS inside_{out};
+                 CREATE TABLE inside_{out} AS
+                 SELECT e.src, e.dst FROM sp_edges e
+                 JOIN warren.vector_values('sp', '{out}', NULL::bigint) a ON a.node_id = e.src
+                 JOIN warren.vector_values('sp', '{out}', NULL::bigint) b ON b.node_id = e.dst
+                 WHERE a.value = b.value;
+                 SELECT warren.create_graph('inside_{out}', 'SELECT id FROM sp_nodes',
+                                            'SELECT src, dst FROM inside_{out}', directed := false);
+                 SELECT warren.refresh('inside_{out}')"
+            ))?;
+            let components = Spi::get_one::<i64>(&format!(
+                "SELECT count(DISTINCT component_id) FROM warren.components('inside_{out}', NULL::bigint)"
+            ))?;
+            let communities = Spi::get_one::<i64>(&format!(
+                "SELECT count(DISTINCT value) FROM warren.vector_values('sp', '{out}', NULL::bigint)"
+            ))?;
+            assert_eq!(components, communities, "{call}: every community is connected");
+        }
+        Ok(())
+    }
+
     #[pg_test]
     fn each_levels_partition_can_be_kept() -> Result<(), Error> {
         ring_of_cliques()?;

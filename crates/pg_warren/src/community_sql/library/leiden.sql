@@ -11,9 +11,10 @@
 -- Traag et al.'s, it goes on while there is something to aggregate: it
 -- stops when a level's local moving leaves every node alone, when the
 -- refinement leaves every node alone (the next level's graph would be this
--- one), or after `max_levels`. A level's local moving stops when a sweep
--- raises modularity by no more than `tolerance`. Arguments and output as
--- warren.louvain's; `randomness` is θ of the refinement. The level's
+-- one), or after `max_levels`; in the last two cases it returns the
+-- refined partition, so every exit returns a connected one. A level's
+-- local moving stops when a sweep raises modularity by no more than
+-- `tolerance`. Arguments and output as warren.louvain's; `randomness` is θ of the refinement. The level's
 -- graph, a level graph of warren.contract's (`_warren_level_<version>`),
 -- is dropped at the end.
 CREATE FUNCTION warren.leiden(graph text, "out" text, resolution float8 DEFAULT 1.0,
@@ -73,22 +74,30 @@ BEGIN
         PERFORM warren.lift(g, '_warren_leiden_moved', graph, '_warren_leiden_down',
                             persist := false, version := gv);
       END IF;
+      -- Every node alone: the partition is this level's nodes, the refined
+      -- partition of the level below, which is connected.
+      IF found < nodes THEN
+        refined := warren.leiden_refine(g, '_warren_leiden_moved', '_warren_leiden_refined',
+                                        keys := CASE WHEN level > 1 THEN '_warren_leiden_keys' END,
+                                        resolution := resolution, seed := seed, randomness := randomness,
+                                        weighted := CASE WHEN level = 1 THEN weighted ELSE true END,
+                                        persist := false, version := gv);
+        IF level = 1 THEN
+          PERFORM warren.vector_map(graph, '_warren_leiden_refined_down', '_warren_leiden_refined', false, v);
+        ELSE
+          PERFORM warren.lift(g, '_warren_leiden_refined', graph, '_warren_leiden_refined_down',
+                              persist := false, version := gv);
+        END IF;
+        -- Stopping here, return the refined partition, which is connected,
+        -- as Traag et al.'s is; the moved one need not be.
+        IF level >= max_levels OR refined = nodes THEN
+          PERFORM warren.vector_map(graph, '_warren_leiden_down', '_warren_leiden_refined_down', false, v);
+        END IF;
+      END IF;
       IF levels_prefix IS NOT NULL THEN
         PERFORM warren.vector_map(graph, format('%s_%s', levels_prefix, level), '_warren_leiden_down', true, v);
       END IF;
-      EXIT WHEN found = nodes OR level >= max_levels;
-      refined := warren.leiden_refine(g, '_warren_leiden_moved', '_warren_leiden_refined',
-                                      keys := CASE WHEN level > 1 THEN '_warren_leiden_keys' END,
-                                      resolution := resolution, seed := seed, randomness := randomness,
-                                      weighted := CASE WHEN level = 1 THEN weighted ELSE true END,
-                                      persist := false, version := gv);
-      EXIT WHEN refined = nodes;
-      IF level = 1 THEN
-        PERFORM warren.vector_map(graph, '_warren_leiden_refined_down', '_warren_leiden_refined', false, v);
-      ELSE
-        PERFORM warren.lift(g, '_warren_leiden_refined', graph, '_warren_leiden_refined_down',
-                            persist := false, version := gv);
-      END IF;
+      EXIT WHEN found = nodes OR level >= max_levels OR refined = nodes;
       -- A level graph of its own, named after its version, a name no
       -- graph can have had.
       next_v := warren.contract(graph, '_warren_leiden_refined_down', NULL,
