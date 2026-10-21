@@ -1010,7 +1010,7 @@ Implementation notes:
 Toolchain discipline (adopted from pgGraph's working setup):
 - `pgrx` and `cargo-pgrx` are pinned to the same exact version (`=0.19.3`) and upgraded together in their own change. The Rust toolchain is pinned in `rust-toolchain.toml`.
 - Per-major features are `pg15`…`pg18`, built with `--no-default-features --features pgNN`. `panic = "unwind"` is set in every profile.
-- Lints: `unsafe_op_in_unsafe_fn = "deny"` and `clippy::undocumented_unsafe_blocks = "deny"`. `unwrap`/`expect`/`panic` are denied outside `cfg(test)`. Every `unsafe` block carries a `// SAFETY:` proof, and `warren-core`'s unsafe slice code runs under Miri in CI.
+- Lints: `unsafe_op_in_unsafe_fn = "deny"` and `clippy::undocumented_unsafe_blocks = "deny"`. `unwrap`/`expect`/`panic` are denied outside `cfg(test)`. Every `unsafe` block carries a `// SAFETY:` proof, and `warren-core`'s tests run under Miri in CI on every push to main (not on pull requests: `warren-core` has no `unsafe` today, so Miri checks only its dependencies' unsafe code along the tested paths, at 20+ minutes a run).
 
 Workspace split, non-negotiable:
 
@@ -1115,7 +1115,7 @@ pg_warren/
 ├── bench/                  ← generate.py, run.sh, results/
 ├── test/                   ← integration tests not expressible in cargo pgrx test
 ├── docker/                 ← one Dockerfile, parameterised by a PG_MAJOR build arg
-└── .github/workflows/      ← fmt, clippy, unit, Miri (warren-core), pgrx tests PG 15–18 on PGDG packages
+└── .github/workflows/      ← fmt, clippy, unit, Miri (warren-core, on main), pgrx tests PG 15–18 on PGDG packages
                                (cargo pgrx init --pgNN=<pg_config>), schema-drift check (added in M2); upgrade-path check from the first release (v0.1.0) on (`test/upgrade.py`, added for 0.2.0); bench targets compile+run once in core tests
 ```
 
