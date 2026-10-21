@@ -396,7 +396,7 @@ mod tests {
             (rows, len, kept) in (1usize..40, 1usize..7).prop_flat_map(|(r, l)| (Just(r), Just(l), 1..=l)),
             seed in any::<u64>(),
         ) {
-            let value = |i: u64| crate::spectral::random::uniform(seed, 0, i);
+            let value = |i: u64| crate::compute::random::uniform(seed, 0, i);
             let vectors: Vec<Vec<f64>> =
                 (0..len).map(|j| (0..rows).map(|r| value((j * rows + r) as u64)).collect()).collect();
             let combinations =

@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 72267d34de61e6d444abce8f9075d6c6fcd6df5046164b8b7f8522b2dd876a46 # shrinks to (id_space, relations, raw, selected, acyclic, (wide, store_merged, weighted)) = (1, 1, [(0, 0, 0, 0.0)], None, false, (false, false, false))
+cc cfac5af0d209b58a28fe43e71019d45bc71ae89678facd830f5ec9dd0d45df04 # shrinks to (id_space, relations, raw, selected, acyclic, (wide, store_merged, weighted)) = (1, 2, [(0, 0, 0, 0.0)], None, false, (false, false, false))

@@ -19,7 +19,15 @@ as a table the SQL test compares against.
 | label_propagation_majority | oracle_label_propagation_majority | node_id, label: `warren.label_propagation_majority`'s rule reimplemented, from each node's own id as its label (`--max-iter`, default 100) |
 | clustering | oracle_clustering | node_id, coefficient: `nx.clustering` of the undirected graph without self-loops |
 | louvain | oracle_louvain | node_id, community, modularity: `nx.community.louvain_communities` (`--seed`, default 1; `--resolution`, default 1; weighted when the edges have weights), each community labelled by its smallest node id, with the partition's `nx.community.modularity` on every row |
+| betweenness | oracle_betweenness | node_id, score: `nx.betweenness_centrality` (`--no-normalized`, `--endpoints`), from `--sources-sql`'s nodes as the sample if given, else exact |
+| closeness | oracle_closeness | node_id, score: `nx.closeness_centrality` (`--no-wf-improved`); from `--sources-sql`'s nodes, `warren.closeness_centrality`'s estimator over NetworkX's distances |
+| harmonic | oracle_harmonic | node_id, score: `nx.harmonic_centrality`; from `--sources-sql`'s nodes, `sources=` scaled by (n − 1) / k_u |
+| similarity | oracle_similarity | source, target, jaccard, adamic_adar, common: `nx.jaccard_coefficient`, `nx.adamic_adar_index` and `len(nx.common_neighbors)` of every ordered pair of distinct nodes of the undirected graph without self-loops |
 | quotient | oracle_quotient | source, target, weight: the edges of `nx.quotient_graph` by the labels of `--labels-sql` (node, label), between labels, each edge's weight the sum of the weights of the edges it joins (the count with `--count`), and a label's self-loop the sum over the edges inside it; undirected, an edge between labels is given both ways and an edge inside a label counts twice in its self-loop (a self-loop once), as the stored matrix's `PᵀAP` |
+
+The three centralities take `--weighted` (Dijkstra over the `weight`) and
+`--undirected` (the undirected graph without self-loops, a pair's lighter
+weight; export with `--directed`).
 
 Edges are `--edges-sql`'s first two columns; a third column, if present, is
 the edge's `weight`. A pair given more than once (the same ordered pair if
@@ -30,6 +38,7 @@ the lighter, as `warren.minimum_spanning_forest` reads them.
 """
 
 import argparse
+import random
 from collections import Counter
 
 import networkx as nx
@@ -50,6 +59,11 @@ TABLES = {
     "hits": ("oracle_hits", "node_id bigint, hub float8, authority float8"),
     "label_propagation_majority": ("oracle_label_propagation_majority", "node_id bigint, label bigint"),
     "clustering": ("oracle_clustering", "node_id bigint, coefficient float8"),
+    "betweenness": ("oracle_betweenness", "node_id bigint, score float8"),
+    "closeness": ("oracle_closeness", "node_id bigint, score float8"),
+    "harmonic": ("oracle_harmonic", "node_id bigint, score float8"),
+    "similarity": ("oracle_similarity",
+                   "source bigint, target bigint, jaccard float8, adamic_adar float8, common float8"),
     "quotient": ("oracle_quotient", "source bigint, target bigint, weight float8"),
     "louvain": ("oracle_louvain", "node_id bigint, community bigint, modularity float8"),
 }
@@ -119,6 +133,10 @@ def compute(computation, graph, arguments):
         return [(node, longest_path_into(graph, node)) for node in graph.nodes]
     if computation == "louvain":
         return louvain(graph, arguments)
+    if computation in ("betweenness", "closeness", "harmonic"):
+        return centrality(computation, graph, arguments)
+    if computation == "similarity":
+        return similarity(graph)
     if computation == "spanning_forest":
         undirected = nx.Graph()
         undirected.add_nodes_from(graph.nodes)
@@ -189,6 +207,80 @@ def longest_path_into(dag, node):
     end = max(dag.nodes) + 1
     paths.add_edge(node, end, weight=heavy)
     return float(nx.dag_longest_path_length(paths) - heavy)
+
+
+class FixedSample(random.Random):
+    """A random source whose `sample` returns the given nodes: NetworkX's
+    `betweenness_centrality` then samples exactly the sources the SQL test
+    gives `warren.betweenness_centrality`."""
+
+    def __init__(self, nodes):
+        super().__init__(0)
+        self.nodes = nodes
+
+    def sample(self, population, k, **_):
+        assert k == len(self.nodes)
+        return list(self.nodes)
+
+
+def centrality(computation, graph, arguments):
+    """`betweenness`, `closeness` or `harmonic`, exact or from the
+    `--sources` the harness resolved from `--sources-sql`."""
+    options = argparse.ArgumentParser(prog=computation)
+    options.add_argument("--no-normalized", dest="normalized", action="store_false")
+    options.add_argument("--endpoints", action="store_true")
+    options.add_argument("--no-wf-improved", dest="wf_improved", action="store_false")
+    options.add_argument("--weighted", action="store_true")
+    options.add_argument("--undirected", action="store_true")
+    options.add_argument("--sources", type=lambda text: [int(s) for s in text.split(",") if s], default=None)
+    args = options.parse_args(arguments)
+    if args.undirected:
+        undirected = nx.Graph()
+        undirected.add_nodes_from(graph.nodes)
+        for source, target, data in graph.edges(data=True):
+            if source != target:
+                lighter_edge(undirected, source, target, data.get("weight"))
+        graph = undirected
+    weight = "weight" if args.weighted else None
+    sources = args.sources
+    if computation == "betweenness":
+        k = None if sources is None else len(sources)
+        return list(nx.betweenness_centrality(graph, k=k, normalized=args.normalized, weight=weight,
+                                              endpoints=args.endpoints, seed=FixedSample(sources or [])).items())
+    if sources is None:
+        if computation == "closeness":
+            return list(nx.closeness_centrality(graph, distance=weight, wf_improved=args.wf_improved).items())
+        return list(nx.harmonic_centrality(graph, distance=weight).items())
+    n = len(graph)
+    distances = {s: nx.single_source_dijkstra_path_length(graph, s, weight=weight or (lambda u, v, d: 1))
+                 for s in sources}
+    rows = []
+    for u in graph:
+        others = [s for s in sources if s != u]
+        reaching = [distances[s][u] for s in others if u in distances[s]]
+        if computation == "harmonic":
+            total = sum(1 / d for d in reaching)
+            rows.append((u, total * ((n - 1) / len(others)) if others else 0.0))
+            continue
+        m, total = float(len(reaching)), float(sum(reaching))
+        score = 0.0
+        if total > 0 and n > 1:
+            score = m / total
+            if args.wf_improved:
+                score *= m / len(others)
+        rows.append((u, score))
+    return rows
+
+
+def similarity(graph):
+    """Jaccard, Adamic-Adar and common neighbours of every ordered pair of
+    distinct nodes, as NetworkX scores them."""
+    simple = undirected_simple(graph)
+    pairs = [(u, v) for u in simple for v in simple if u != v]
+    jaccard = {(u, v): p for u, v, p in nx.jaccard_coefficient(simple, pairs)}
+    adamic_adar = {(u, v): p for u, v, p in nx.adamic_adar_index(simple, pairs)}
+    return [(u, v, float(jaccard[u, v]), float(adamic_adar[u, v]), float(len(nx.common_neighbors(simple, u, v))))
+            for u, v in pairs]
 
 
 def undirected_simple(graph):
@@ -265,14 +357,19 @@ def run(database, computation, arguments):
     """Exports the graph named by `arguments`' `--nodes-sql`, `--edges-sql`
     and `--directed` (default: undirected `nodes (id)` / `edges (src, dst)`),
     computes `computation` and writes its table; the rest of `arguments`
-    goes to the computation."""
+    goes to the computation, with `--sources-sql`'s first column as
+    `--sources`."""
     graph_options = argparse.ArgumentParser(prog=computation)
     graph_options.add_argument("--nodes-sql", default="SELECT id FROM nodes")
     graph_options.add_argument("--edges-sql", default="SELECT src, dst FROM edges")
     graph_options.add_argument("--directed", action="store_true")
+    graph_options.add_argument("--sources-sql")
     graph_options.add_argument("--labels-sql")
     graph, rest = graph_options.parse_known_args(arguments)
     exported = export(database, graph.nodes_sql, graph.edges_sql, graph.directed)
+    if graph.sources_sql:
+        sources = sorted(int(row[0]) for row in database.query(graph.sources_sql))
+        rest += ["--sources", ",".join(map(str, sources))]
     if computation == "quotient":
         labels = {int(node): int(label) for node, label in database.query(graph.labels_sql)}
         rows = quotient(exported, rest, labels)

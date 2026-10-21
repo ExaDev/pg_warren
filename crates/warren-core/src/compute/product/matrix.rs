@@ -37,6 +37,12 @@ pub(crate) struct RowScratch {
 }
 
 impl RowScratch {
+    /// An empty scratch, its capacity charged to `memory` as it grows: on
+    /// the pool, beyond any bound reclaimed for ahead (DESIGN.md §5.5).
+    pub(crate) fn new(memory: &ComputeMemory) -> Result<Self, ComputeError> {
+        Ok(Self { entries: Vec::new(), charge: memory.charge(0)?.unbounded() })
+    }
+
     /// Empties the buffer and makes room for `len` entries.
     fn clear_for(&mut self, len: usize) -> Result<&mut Vec<(DenseId, f64)>, ComputeError> {
         self.entries.clear();
@@ -84,7 +90,12 @@ impl<'g> Matrix<'g> {
 
     /// A row scratch for [`Self::for_each_entry`], charged to the budget.
     pub(crate) fn scratch(&self) -> Result<RowScratch, ComputeError> {
-        Ok(RowScratch { entries: Vec::new(), charge: self.memory.charge(0)? })
+        RowScratch::new(&self.memory)
+    }
+
+    /// Whether entries carry the edges' weights (else every weight is 1).
+    pub(crate) fn is_weighted(&self) -> bool {
+        self.weighted
     }
 
     /// How the product walks the CSRs.

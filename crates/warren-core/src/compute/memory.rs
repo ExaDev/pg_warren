@@ -38,6 +38,8 @@ struct Budget {
     reclaimable: AtomicU64,
     /// The hook, and the thread it may run on.
     reclaim: Option<(ThreadId, Box<dyn Reclaim>)>,
+    #[cfg(test)]
+    audit: audit::Audit,
 }
 
 impl ComputeMemory {
@@ -76,6 +78,8 @@ impl ComputeMemory {
             in_use: AtomicU64::new(held),
             reclaimable: AtomicU64::new(reclaimable),
             reclaim,
+            #[cfg(test)]
+            audit: audit::Audit::new(),
         }))
     }
 
@@ -92,7 +96,19 @@ impl ComputeMemory {
     /// Charges `bytes` to the budget until the returned charge is dropped.
     pub fn charge(&self, bytes: u64) -> Result<MemoryCharge, ComputeError> {
         self.reserve(bytes)?;
-        Ok(MemoryCharge { memory: self.clone(), bytes })
+        let charge = MemoryCharge {
+            memory: self.clone(),
+            bytes,
+            #[cfg(test)]
+            audit: audit::Pooled::default(),
+        };
+        #[cfg(test)]
+        let charge = {
+            let mut charge = charge;
+            charge.audit.add(&self.0.audit, bytes);
+            charge
+        };
+        Ok(charge)
     }
 
     /// Reclaims held memory until `bytes` more would fit, or all of it if
@@ -100,6 +116,8 @@ impl ComputeMemory {
     /// will be made on other threads, where nothing is reclaimed. Does
     /// nothing off the budget's thread, or if they fit already.
     pub fn reclaim_for(&self, bytes: u64) {
+        #[cfg(test)]
+        self.0.audit.ahead(bytes);
         let short = self.in_use().saturating_add(bytes).saturating_sub(self.0.limit);
         self.reclaim(short.min(self.0.reclaimable.load(Ordering::Relaxed)));
     }
@@ -188,6 +206,8 @@ impl ComputeMemory {
 pub struct MemoryCharge {
     memory: ComputeMemory,
     bytes: u64,
+    #[cfg(test)]
+    audit: audit::Pooled,
 }
 
 impl MemoryCharge {
@@ -202,7 +222,26 @@ impl MemoryCharge {
     pub(crate) fn grow(&mut self, bytes: u64) -> Result<(), ComputeError> {
         self.memory.reserve(bytes)?;
         self.bytes += bytes;
+        #[cfg(test)]
+        self.audit.add(&self.memory.0.audit, bytes);
         Ok(())
+    }
+
+    /// Marks this charge as one that may grow on the pool beyond what was
+    /// reclaimed for ahead: the documented exceptions (DESIGN.md §5.5), a
+    /// multi-relation row scratch and `gather`'s parts.
+    #[cfg(not(test))]
+    pub(crate) fn unbounded(self) -> Self {
+        self
+    }
+
+    /// Marks this charge as one that may grow on the pool beyond what was
+    /// reclaimed for ahead: the documented exceptions (DESIGN.md §5.5), a
+    /// multi-relation row scratch and `gather`'s parts.
+    #[cfg(test)]
+    pub(crate) fn unbounded(mut self) -> Self {
+        self.audit.exempt(&self.memory.0.audit);
+        self
     }
 
     /// Room for one more element in `buffer`: the capacity it grows by is
@@ -222,6 +261,8 @@ impl MemoryCharge {
         let bytes = bytes.min(self.bytes);
         self.memory.release(bytes);
         self.bytes -= bytes;
+        #[cfg(test)]
+        self.audit.remove(&self.memory.0.audit, bytes);
     }
 }
 
@@ -240,9 +281,10 @@ pub(crate) struct Allowance {
 }
 
 impl Allowance {
-    /// Nothing used or reserved yet.
-    pub(crate) fn new(memory: &ComputeMemory) -> Result<Self, ComputeError> {
-        Ok(Self { charge: memory.charge(0)?, used: 0 })
+    /// Nothing used or reserved yet, for a buffer that grows on the pool
+    /// with no bound reclaimed for ahead ([`MemoryCharge::unbounded`]).
+    pub(crate) fn unbounded(memory: &ComputeMemory) -> Result<Self, ComputeError> {
+        Ok(Self { charge: memory.charge(0)?.unbounded(), used: 0 })
     }
 
     /// The bytes taken.
@@ -285,6 +327,78 @@ impl Allowance {
 impl Drop for MemoryCharge {
     fn drop(&mut self) {
         self.memory.release(self.bytes);
+        #[cfg(test)]
+        self.audit.remove(&self.memory.0.audit, self.bytes);
+    }
+}
+
+/// Under test, every budget checks that what is charged on the pool's
+/// threads stays within what was reclaimed for ahead
+/// ([`ComputeMemory::reclaim_for`]): a charge off the thread that made the
+/// budget is never reclaimed for (§5.5), so a kernel that charges more
+/// there than it reclaimed for would fail beside held memory that could
+/// have been freed. A missing or short bound panics in every kernel test,
+/// whatever its budget.
+#[cfg(test)]
+mod audit {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::thread::{self, ThreadId};
+
+    /// A budget's thread, the bytes reclaimed for ahead, and the bytes
+    /// charged on other threads and not yet released.
+    #[derive(Debug)]
+    pub(super) struct Audit {
+        owner: ThreadId,
+        ahead: AtomicU64,
+        pooled: AtomicU64,
+    }
+
+    impl Audit {
+        pub(super) fn new() -> Self {
+            let owner = thread::current().id();
+            Self { owner, ahead: AtomicU64::new(0), pooled: AtomicU64::new(0) }
+        }
+
+        pub(super) fn ahead(&self, bytes: u64) {
+            self.ahead.fetch_add(bytes, Ordering::Relaxed);
+        }
+    }
+
+    /// The part of one charge made on the pool, and whether it is exempt.
+    #[derive(Debug, Default)]
+    pub(super) struct Pooled {
+        bytes: u64,
+        exempt: bool,
+    }
+
+    impl Pooled {
+        /// Records `bytes` charged now, on this thread.
+        pub(super) fn add(&mut self, audit: &Audit, bytes: u64) {
+            if self.exempt || thread::current().id() == audit.owner {
+                return;
+            }
+            self.bytes += bytes;
+            let pooled = audit.pooled.fetch_add(bytes, Ordering::Relaxed) + bytes;
+            let ahead = audit.ahead.load(Ordering::Relaxed);
+            assert!(
+                pooled <= ahead,
+                "{pooled} bytes charged on the pool, but only {ahead} were reclaimed for ahead"
+            );
+        }
+
+        /// Records `bytes` of the charge released.
+        pub(super) fn remove(&mut self, audit: &Audit, bytes: u64) {
+            let pooled = bytes.min(self.bytes);
+            self.bytes -= pooled;
+            audit.pooled.fetch_sub(pooled, Ordering::Relaxed);
+        }
+
+        /// Exempts the charge from the check, forgetting what it recorded.
+        pub(super) fn exempt(&mut self, audit: &Audit) {
+            audit.pooled.fetch_sub(self.bytes, Ordering::Relaxed);
+            self.bytes = 0;
+            self.exempt = true;
+        }
     }
 }
 
@@ -300,6 +414,15 @@ impl Reclaim for Exact {
     fn reclaim(&self, bytes: u64) -> u64 {
         bytes
     }
+}
+
+/// A budget all of whose 16 MiB is held, and all of it reclaimable: a
+/// kernel succeeds within it only if every charge it makes is on the
+/// caller's thread or within what it reclaimed for ahead.
+#[cfg(all(test, not(miri)))]
+pub(crate) fn fully_held() -> ComputeMemory {
+    let held = 1 << 24;
+    ComputeMemory::reclaiming(held, held, held, Box::new(Exact))
 }
 
 #[cfg(test)]
@@ -486,7 +609,7 @@ mod tests {
     #[test]
     fn an_allowance_reserves_ahead_in_blocks_and_settles_to_what_it_used() {
         let memory = ComputeMemory::new(1 << 20);
-        let mut allowance = Allowance::new(&memory).unwrap();
+        let mut allowance = Allowance::unbounded(&memory).unwrap();
         allowance.take(8).unwrap();
         let reserved = memory.in_use();
         assert!(reserved >= 4096);
@@ -510,7 +633,7 @@ mod tests {
     #[test]
     fn an_allowance_takes_the_exact_bytes_near_the_limit() {
         let memory = ComputeMemory::new(20);
-        let mut allowance = Allowance::new(&memory).unwrap();
+        let mut allowance = Allowance::unbounded(&memory).unwrap();
         allowance.take(8).unwrap();
         allowance.take(8).unwrap();
         assert!(matches!(allowance.take(8), Err(ComputeError::MemoryLimit { .. })));

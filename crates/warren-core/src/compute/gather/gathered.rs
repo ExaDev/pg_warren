@@ -151,7 +151,7 @@ impl<M: Combine> Part<M> {
             counts: Vec::new(),
             ends: Vec::new(),
             messages: M::Storage::default(),
-            allowance: Allowance::new(memory)?,
+            allowance: Allowance::unbounded(memory)?,
         })
     }
 

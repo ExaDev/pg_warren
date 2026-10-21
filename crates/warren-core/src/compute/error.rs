@@ -103,6 +103,9 @@ pub enum ComputeError {
          bool_or or bool_and"
     )]
     UnknownCombiner(String),
+    /// A similarity name is not one of the neighbourhood similarities.
+    #[error("unknown similarity \"{0}\": expected jaccard, adamic_adar or common_neighbours")]
+    UnknownSimilarity(String),
     /// A combiner does not accept the messages' kind.
     #[error("combine := {combiner} does not accept {message} messages")]
     CombinerType {
@@ -156,6 +159,10 @@ pub enum ComputeError {
         /// The live nodes Kahn's algorithm could not order.
         unordered: u64,
     },
+    /// A weighted shortest path met an edge whose weight is not positive
+    /// and finite (DESIGN.md §6.7).
+    #[error("weighted shortest paths need positive, finite edge weights")]
+    NonPositiveWeight,
     /// The caller's interrupts asked the kernel to stop.
     #[error("compute cancelled")]
     Cancelled,

@@ -66,29 +66,46 @@ impl Interrupts for Cancellation {
     }
 }
 
-/// The work done since the last check of a cancellation flag, in units
-/// such as row entries visited: it checks every [`WORK_PER_CHECK`] units,
-/// so a long row (a hub's) cannot outlast a cancel (DESIGN.md §6.9).
+/// The work done since the last check of a cancellation flag (or, on the
+/// caller's own thread, of its interrupts), in units such as row entries
+/// visited: it checks every [`WORK_PER_CHECK`] units, so a long row (a
+/// hub's) cannot outlast a cancel (DESIGN.md §6.9).
 pub(crate) struct Work<'c> {
-    cancellation: &'c Cancellation,
+    poll: Poll<'c>,
     since_check: u64,
+}
+
+/// What [`Work`] checks.
+enum Poll<'c> {
+    /// A flag raised by the thread that waits for the pool.
+    Flag(&'c Cancellation),
+    /// The interrupts of the calling thread, for work it does itself.
+    Interrupts(&'c mut dyn Interrupts),
 }
 
 /// Units of work between cancellation checks.
 const WORK_PER_CHECK: u64 = 1 << 16;
 
 impl<'c> Work<'c> {
-    /// No work done yet.
+    /// No work done yet, on a pool thread watching `cancellation`.
     pub(crate) fn new(cancellation: &'c Cancellation) -> Self {
-        Self { cancellation, since_check: 0 }
+        Self { poll: Poll::Flag(cancellation), since_check: 0 }
     }
 
-    /// Checks the flag now.
+    /// No work done yet, on the calling thread, polling `interrupts`.
+    pub(crate) fn polling(interrupts: &'c mut dyn Interrupts) -> Self {
+        Self { poll: Poll::Interrupts(interrupts), since_check: 0 }
+    }
+
+    /// Checks the flag (or polls the interrupts) now.
     pub(crate) fn check(&mut self) -> Result<(), Cancelled> {
         self.since_check = 0;
-        match self.cancellation.is_cancelled() {
-            true => Err(Cancelled),
-            false => Ok(()),
+        match &mut self.poll {
+            Poll::Flag(cancellation) => match cancellation.is_cancelled() {
+                true => Err(Cancelled),
+                false => Ok(()),
+            },
+            Poll::Interrupts(interrupts) => interrupts.check(),
         }
     }
 
@@ -126,6 +143,20 @@ mod tests {
     #[test]
     fn uninterrupted_never_interrupts() {
         assert_eq!(Uninterrupted.check(), Ok(()));
+    }
+
+    #[test]
+    fn work_on_the_calling_thread_polls_its_interrupts() {
+        struct Stop;
+        impl Interrupts for Stop {
+            fn check(&mut self) -> Result<(), Cancelled> {
+                Err(Cancelled)
+            }
+        }
+        let mut stop = Stop;
+        let mut work = Work::polling(&mut stop);
+        assert_eq!(work.spend(WORK_PER_CHECK - 1), Ok(()));
+        assert_eq!(work.spend(1), Err(Cancelled));
     }
 
     #[test]

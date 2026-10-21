@@ -689,6 +689,78 @@ VOLATILE PARALLEL UNSAFE
 LANGUAGE c
 AS 'MODULE_PATHNAME', 'lift_wrapper';
 
+-- Shortest-path centralities and neighbourhood similarity (planned library
+-- group 2, DESIGN.md §6.7).
+
+CREATE FUNCTION warren."betweenness_centrality"(
+	"graph" TEXT,
+	"out" TEXT,
+	"k" bigint DEFAULT NULL,
+	"seed" bigint DEFAULT 0,
+	"normalized" bool DEFAULT true,
+	"endpoints" bool DEFAULT false,
+	"directed" bool DEFAULT true,
+	"sources" TEXT DEFAULT NULL,
+	"rels" TEXT[] DEFAULT NULL,
+	"weighted" bool DEFAULT NULL,
+	"persist" bool DEFAULT true,
+	"version" bigint DEFAULT NULL
+) RETURNS bigint
+VOLATILE PARALLEL UNSAFE
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'betweenness_centrality_wrapper';
+
+CREATE FUNCTION warren."closeness_centrality"(
+	"graph" TEXT,
+	"out" TEXT,
+	"k" bigint DEFAULT NULL,
+	"seed" bigint DEFAULT 0,
+	"wf_improved" bool DEFAULT true,
+	"directed" bool DEFAULT true,
+	"sources" TEXT DEFAULT NULL,
+	"rels" TEXT[] DEFAULT NULL,
+	"weighted" bool DEFAULT NULL,
+	"persist" bool DEFAULT true,
+	"version" bigint DEFAULT NULL
+) RETURNS bigint
+VOLATILE PARALLEL UNSAFE
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'closeness_centrality_wrapper';
+
+CREATE FUNCTION warren."harmonic_centrality"(
+	"graph" TEXT,
+	"out" TEXT,
+	"k" bigint DEFAULT NULL,
+	"seed" bigint DEFAULT 0,
+	"directed" bool DEFAULT true,
+	"sources" TEXT DEFAULT NULL,
+	"rels" TEXT[] DEFAULT NULL,
+	"weighted" bool DEFAULT NULL,
+	"persist" bool DEFAULT true,
+	"version" bigint DEFAULT NULL
+) RETURNS bigint
+VOLATILE PARALLEL UNSAFE
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'harmonic_centrality_wrapper';
+
+CREATE FUNCTION warren.similarity(graph text, pairs text, id_type anyelement,
+                                  measure text DEFAULT 'jaccard', rels text[] DEFAULT NULL,
+                                  version bigint DEFAULT NULL)
+RETURNS TABLE (source anyelement, target anyelement, score float8)
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'similarity_wrapper';
+
+CREATE FUNCTION warren.most_similar(graph text, node anyelement, k bigint DEFAULT 10,
+                                    measure text DEFAULT 'jaccard', rels text[] DEFAULT NULL,
+                                    version bigint DEFAULT NULL)
+RETURNS TABLE (node_id anyelement, score float8)
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'most_similar_wrapper';
+
+CREATE FUNCTION warren.similar_pairs(graph text, id_type anyelement, k bigint DEFAULT 10,
+                                     measure text DEFAULT 'jaccard', nodes text DEFAULT NULL,
+                                     rels text[] DEFAULT NULL, version bigint DEFAULT NULL)
+RETURNS TABLE (source anyelement, target anyelement, score float8)
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'similar_pairs_wrapper';
+
 -- Community detection (DESIGN.md §6.7, group 3): the partition primitives
 -- over a version's undirected weighted view, and Louvain and Leiden over
 -- them, contract, project and lift.
