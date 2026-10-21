@@ -9,8 +9,8 @@
   `warren.*` function. 0.4.0 changes the schema: the update adds the column
   `warren.graphs.node_order` (existing graphs are backfilled `'id'`, the
   order they were built in) and the `node_order` arguments of
-  `create_graph` and `compact`, creates the new library functions below,
-  and replaces `pagerank` (a fix below).
+  `create_graph` and `compact`, creates the new library functions and
+  structural kernels below, and replaces `pagerank` (a fix below).
 - `create_graph` and `compact` are dropped and re-created by the update
   (each gains an argument). Unlike 0.3.0's update, this one grants again
   every privilege that was set on them, so a `GRANT` or `REVOKE` you made
@@ -54,6 +54,31 @@
   nodes and 10M undirected edges on 4 vCPUs the SpMV centralities take
   40–90 ms an iteration and `clustering` 4.5 s; majority-vote label
   propagation, a tier-2 program, ~20 s an iteration (docs/limits.md).
+- **Structural kernels** (DESIGN.md §6.7, planned library group 2), each
+  checked against NetworkX on a random graph with self-loops, parallel
+  edges in one relation and across two, a deleted node and, for the DAG,
+  negative weights (`test/sql/oracle_structure.sql`):
+  - `core_number(graph, out, rels, persist, version)`: each node's k-core
+    number in the undirected simple graph (Batagelj–Zaversnik peeling);
+    returns the degeneracy.
+  - `strong_components_vector(graph, out, rels, persist, version)`: each
+    node's strongly connected component, labelled by its smallest dense id
+    as `components_vector` labels weak ones (iterative Tarjan, so long
+    paths need no recursion); returns the component count.
+  - `topological_order(graph, out, rels, persist, version)`: each node's
+    position in the topological order that takes the smallest ready dense
+    id first (Kahn), NetworkX's `lexicographical_topological_sort`;
+    returns the vector id.
+  - `dag_longest_path(graph, out, rels, weighted, persist, version)`: the
+    longest path ending at each node, as `nx.dag_longest_path`; returns the
+    longest. Both DAG functions raise 22023 on a cycle.
+  - `minimum_spanning_forest(graph, id_type, rels, weighted, version)`:
+    rows `(source, target, weight)` of a minimum spanning tree of each
+    component, directions ignored (Borůvka).
+
+  They run on one compute thread, charge their scratch to
+  `warren.max_compute_memory` and can be cancelled. Timings at 1M and 10M
+  nodes are in docs/limits.md.
 
 ### Fixes
 

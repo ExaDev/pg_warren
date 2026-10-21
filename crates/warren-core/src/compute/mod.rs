@@ -6,6 +6,8 @@
 //! budget, the domain side of the `warren.max_compute_memory` GUC.
 
 mod cast;
+mod core_number;
+mod dag;
 mod dtype;
 mod encoding;
 mod error;
@@ -21,11 +23,16 @@ mod reduce;
 #[cfg(not(miri))]
 pub(crate) mod reference;
 mod semiring;
+mod spanning_forest;
+mod strong_components;
 mod summary;
+mod symmetric;
 mod triangles;
 mod vector;
 mod workers;
 
+pub use core_number::{core_number, CoreNumbers};
+pub use dag::{dag_longest_path, topological_order, LongestPaths};
 pub use dtype::{Dtype, Element};
 pub use encoding::{encode, Decoder};
 pub use error::{ArithmeticError, ComputeError};
@@ -43,6 +50,8 @@ pub use product::{spmm, spmv, Product};
 pub use ranking::top_k;
 pub use reduce::{norm_diff, reduce, reduce_live, Norm, Reduction};
 pub use semiring::{BinaryOp, Monoid, Semiring, SemiringElement};
+pub use spanning_forest::{minimum_spanning_forest, ForestEdge, SpanningForest};
+pub use strong_components::strong_components;
 pub use summary::{summarise, Summary};
 pub use triangles::triangles;
 pub use vector::{AnyVector, Vector};

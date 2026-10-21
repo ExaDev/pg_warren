@@ -3,8 +3,10 @@
 //! `vector_dense_id`, `triangles`, `vector_values`, `matrix_rows`,
 //! `vector_topk`, `vector_stats`, `id_map`, `drop_vector`), semiring
 //! products (`spmv`, `spmm`), `vector_map` with `explain_map`,
-//! `vector_reduce` and `vector_norm_diff`, `gather`, the PL/pgSQL
-//! algorithm library, and the compute GUCs.
+//! `vector_reduce` and `vector_norm_diff`, `gather`, the structural kernels
+//! (`core_number`, `strong_components_vector`, `topological_order`,
+//! `dag_longest_path`, `minimum_spanning_forest`), the PL/pgSQL algorithm
+//! library, and the compute GUCs.
 //!
 //! Each call opens a version through `cache` (reader check, current version
 //! re-read), reads and writes the vectors bound to it through `vector`,
@@ -37,6 +39,7 @@ mod product;
 mod read;
 mod reduce;
 mod settings;
+mod structure;
 mod summary;
 #[cfg(any(test, feature = "pg_test"))]
 #[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.

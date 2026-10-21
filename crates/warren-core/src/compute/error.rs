@@ -147,6 +147,15 @@ pub enum ComputeError {
     /// Arithmetic failed as the same SQL arithmetic would.
     #[error(transparent)]
     Arithmetic(#[from] ArithmeticError),
+    /// The graph has a cycle, so no topological order (DESIGN.md §6.7).
+    #[error(
+        "the graph has a cycle: {unordered} nodes are on a cycle or after one, so it has no \
+         topological order"
+    )]
+    Cycle {
+        /// The live nodes Kahn's algorithm could not order.
+        unordered: u64,
+    },
     /// The caller's interrupts asked the kernel to stop.
     #[error("compute cancelled")]
     Cancelled,

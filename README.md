@@ -162,7 +162,7 @@ reads the graph, an optional `version` (default: the current version).
 | Walk steps | `s` and `steps` (jsonb), which build the composite type `warren.step`; the cast `jsonb::warren.step[]` |
 | Vectors | `vector_from_query`, `vector_const`, `vector_degree`, `vector_dense_id`, `vector_values`, `matrix_rows`, `vector_topk`, `vector_stats`, `id_map`, `drop_vector` |
 | Compute | `spmv`, `spmm`, `vector_map`, `explain_map`, `vector_reduce`, `vector_norm_diff`, `gather` |
-| Library | `pagerank`, `eigenvector_centrality`, `katz_centrality`, `hits`, `components_vector`, `label_propagation`, `label_propagation_majority`, `sssp_vector`, `degree_vector`, `aggregate_neighbours`, `triangles`, `clustering` |
+| Library | `pagerank`, `eigenvector_centrality`, `katz_centrality`, `hits`, `components_vector`, `label_propagation`, `label_propagation_majority`, `sssp_vector`, `degree_vector`, `aggregate_neighbours`, `triangles`, `clustering`, `core_number`, `strong_components_vector`, `topological_order`, `dag_longest_path`, `minimum_spanning_forest` |
 | Spectral | `eigen`, `distance` |
 | Extension | `version` |
 

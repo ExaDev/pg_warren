@@ -304,6 +304,29 @@ SELECT assert.equal((SELECT row FROM warren.matrix_rows('roads', 'emb_nbr', NULL
                     ARRAY[80, 20]::float8[], 'mean of neighbour rows');
 SELECT assert.equal((SELECT count(DISTINCT value) FROM warren.vector_values('roads', 'comp', NULL::int)),
                     1::bigint, 'one component');
+-- compute.md "Structural kernels"
+SELECT assert.equal(warren.core_number('roads', 'core'), 2::bigint, 'roads has degeneracy 2');
+SELECT assert.equal((SELECT array_agg(value ORDER BY node_id) FROM warren.vector_values('roads', 'core', NULL::int)),
+                    ARRAY[2, 2, 2, 2, 1]::float8[], 'the cycle is the 2-core');
+SELECT * FROM warren.minimum_spanning_forest('roads', NULL::int);
+SELECT assert.equal((SELECT array_agg(source || '-' || target || ':' || weight ORDER BY source)
+                     FROM warren.minimum_spanning_forest('roads', NULL::int)),
+                    ARRAY['1-2:10', '2-3:4', '3-4:7', '4-5:2'], 'all roads but ash-dale');
+CREATE TABLE course (id int PRIMARY KEY);
+CREATE TABLE prereq (first int, next int, hours float8);
+INSERT INTO course VALUES (1), (2), (3), (4), (5);
+INSERT INTO prereq VALUES (4, 1, 2), (3, 1, 1), (1, 2, 3), (3, 5, 4);
+SELECT warren.create_graph('plan', 'SELECT id FROM course', 'SELECT first, next, hours FROM prereq',
+                           weighted := true);
+SELECT warren.refresh('plan');
+SELECT warren.topological_order('plan', 'step');
+SELECT assert.equal((SELECT array_agg(node_id ORDER BY value) FROM warren.vector_values('plan', 'step', NULL::int)),
+                    ARRAY[3, 4, 1, 2, 5], 'the order of the courses');
+SELECT assert.equal(warren.dag_longest_path('plan', 'hours'), 5::float8, 'the longest chain takes 5 hours');
+SELECT assert.equal((SELECT array_agg(value ORDER BY node_id) FROM warren.vector_values('plan', 'hours', NULL::int)),
+                    ARRAY[2, 5, 0, 0, 4]::float8[], 'hours before each course ends');
+SELECT assert.equal(warren.strong_components_vector('plan', 'scc'), 5::bigint, 'no cycles');
+SELECT assert.raises($$SELECT warren.topological_order('roads', 'o')$$, 'an undirected graph has cycles', '22023');
 -- compute.md: intermediates are dropped; the _warren_ prefix is reserved
 SELECT assert.raises($$SELECT warren.vector_values('roads', '_warren_pagerank_one', NULL::int)$$,
                      'no intermediate left behind', '42704');

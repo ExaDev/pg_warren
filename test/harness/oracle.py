@@ -5,8 +5,13 @@ as a table the SQL test compares against.
 | computation | table | columns |
 |---|---|---|
 | components | oracle_components | node_id, component: the component's smallest node id (weakly connected if directed) |
+| core_number | oracle_core_number | node_id, core: the node's core number in the undirected graph without self-loops |
+| dag_longest_path | oracle_dag_longest_path | node_id, length: the longest path ending at the node (`--directed`, acyclic; weights from a third column, else 1), as `dag_longest_path_length` of the paths ending there (at least 0: NetworkX restarts after a negative prefix) |
 | pagerank | oracle_pagerank | node_id, score (sums to 1; `--damping`, default 0.85) |
+| spanning_forest | oracle_spanning_forest | component, weight: each component's smallest node id and the weight of its minimum spanning tree (directions ignored, the lighter of a pair's two; weights from a third column, else 1) |
 | spectrum | oracle_spectrum | i, eigenvalue: the `--k` eigenvalues of `--matrix` (adjacency, laplacian, normalized_laplacian) at the `--which` end (largest magnitude, or smallest), by a dense solver over the nodes with an edge (undirected), as `warren.eigen` defines them |
+| strong_components | oracle_strong_components | node_id, component: the smallest node id of its strongly connected component (`--directed`) |
+| topological_order | oracle_topological_order | node_id, position: its place, from 0, in the lexicographically smallest topological order (`--directed`) |
 | triangles | oracle_triangles | node_id, triangles: the node's triangles in the undirected graph without self-loops |
 | eigenvector | oracle_eigenvector | node_id, score: `nx.eigenvector_centrality` (weighted when the edges have weights) |
 | katz | oracle_katz | node_id, score: `nx.katz_centrality` (`--alpha`, `--beta`, `--no-normalized`; weighted when the edges have weights) |
@@ -15,7 +20,11 @@ as a table the SQL test compares against.
 | clustering | oracle_clustering | node_id, coefficient: `nx.clustering` of the undirected graph without self-loops |
 
 Edges are `--edges-sql`'s first two columns; a third column, if present, is
-the edge's `weight`.
+the edge's `weight`. A pair given more than once (the same ordered pair if
+`--directed`, either order if not) is one edge whose weight is the sum, as
+a build deduplicates parallel edges (DESIGN.md §14 item 4).
+`spanning_forest` then joins the two directions of a directed pair keeping
+the lighter, as `warren.minimum_spanning_forest` reads them.
 """
 
 import argparse
@@ -26,8 +35,13 @@ import numpy as np
 
 TABLES = {
     "components": ("oracle_components", "node_id bigint, component bigint"),
+    "core_number": ("oracle_core_number", "node_id bigint, core bigint"),
+    "dag_longest_path": ("oracle_dag_longest_path", "node_id bigint, length float8"),
     "pagerank": ("oracle_pagerank", "node_id bigint, score float8"),
+    "spanning_forest": ("oracle_spanning_forest", "component bigint, weight float8"),
     "spectrum": ("oracle_spectrum", "i int, eigenvalue float8"),
+    "strong_components": ("oracle_strong_components", "node_id bigint, component bigint"),
+    "topological_order": ("oracle_topological_order", "node_id bigint, position bigint"),
     "triangles": ("oracle_triangles", "node_id bigint, triangles bigint"),
     "eigenvector": ("oracle_eigenvector", "node_id bigint, score float8"),
     "katz": ("oracle_katz", "node_id bigint, score float8"),
@@ -43,9 +57,28 @@ def export(database, nodes_sql, edges_sql, directed):
     graph = nx.DiGraph() if directed else nx.Graph()
     graph.add_nodes_from(int(row[0]) for row in database.query(nodes_sql))
     for row in database.query(edges_sql):
-        weight = {"weight": float(row[2])} if len(row) > 2 else {}
-        graph.add_edge(int(row[0]), int(row[1]), **weight)
+        add_edge(graph, int(row[0]), int(row[1]), float(row[2]) if len(row) > 2 else None)
     return graph
+
+
+def add_edge(graph, source, target, weight):
+    """Adds `source → target`, summing the weights of a pair given again, as
+    a build deduplicates parallel edges."""
+    if weight is None:
+        graph.add_edge(source, target)
+    elif graph.has_edge(source, target):
+        graph[source][target]["weight"] += weight
+    else:
+        graph.add_edge(source, target, weight=weight)
+
+
+def lighter_edge(graph, source, target, weight):
+    """Adds `source – target` to an undirected graph; a pair already present
+    keeps the lighter weight."""
+    if weight is None:
+        graph.add_edge(source, target)
+    elif not graph.has_edge(source, target) or weight < graph[source][target]["weight"]:
+        graph.add_edge(source, target, weight=weight)
 
 
 def compute(computation, graph, arguments):
@@ -72,7 +105,34 @@ def compute(computation, graph, arguments):
         return label_propagation_majority(graph, arguments)
     if computation == "clustering":
         return list(nx.clustering(undirected_simple(graph)).items())
+    if computation == "core_number":
+        return list(nx.core_number(undirected_simple(graph)).items())
+    if computation == "strong_components":
+        return [(node, min(part)) for part in nx.strongly_connected_components(graph) for node in part]
+    if computation == "topological_order":
+        return [(node, i) for i, node in enumerate(nx.lexicographical_topological_sort(graph))]
+    if computation == "dag_longest_path":
+        return [(node, longest_path_into(graph, node)) for node in graph.nodes]
+    if computation == "spanning_forest":
+        undirected = nx.Graph()
+        undirected.add_nodes_from(graph.nodes)
+        for source, target, data in graph.edges(data=True):
+            lighter_edge(undirected, source, target, data.get("weight"))
+        return [(min(part), float(nx.minimum_spanning_tree(undirected.subgraph(part)).size(weight="weight")))
+                for part in nx.connected_components(undirected)]
     raise ValueError(f"unknown oracle computation {computation!r}; expected one of {sorted(TABLES)}")
+
+
+def longest_path_into(dag, node):
+    """`nx.dag_longest_path_length` of the paths ending at `node`: its
+    ancestors with one more edge out of it, heavier than any path, so the
+    longest path ends with that edge, then less that edge. NetworkX restarts
+    a path rather than carry a negative prefix, so this is at least 0."""
+    heavy = 1 + sum(abs(data.get("weight", 1)) for _, _, data in dag.edges(data=True))
+    paths = nx.DiGraph(dag.subgraph(nx.ancestors(dag, node) | {node}))
+    end = max(dag.nodes) + 1
+    paths.add_edge(node, end, weight=heavy)
+    return float(nx.dag_longest_path_length(paths) - heavy)
 
 
 def undirected_simple(graph):
@@ -155,5 +215,5 @@ def run(database, computation, arguments):
     graph_options.add_argument("--edges-sql", default="SELECT src, dst FROM edges")
     graph_options.add_argument("--directed", action="store_true")
     graph, rest = graph_options.parse_known_args(arguments)
-    write(database, computation, compute(computation, export(database, graph.nodes_sql, graph.edges_sql,
-                                                            graph.directed), rest))
+    exported = export(database, graph.nodes_sql, graph.edges_sql, graph.directed)
+    write(database, computation, compute(computation, exported, rest))

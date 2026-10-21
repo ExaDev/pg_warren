@@ -569,3 +569,56 @@ BEGIN
   PERFORM warren.drop_vector(graph, '_warren_label_propagation_majority_' || part, v, true) FROM unnest(parts) part;
   RETURN i;
 END $$;
+
+-- Structural kernels of the algorithm library (DESIGN.md §6.7, planned
+-- library group 2).
+
+CREATE FUNCTION warren."core_number"(
+	"graph" TEXT,
+	"out" TEXT,
+	"rels" TEXT[] DEFAULT NULL,
+	"persist" bool DEFAULT true,
+	"version" bigint DEFAULT NULL
+) RETURNS bigint
+VOLATILE PARALLEL UNSAFE
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'core_number_wrapper';
+
+CREATE FUNCTION warren."strong_components_vector"(
+	"graph" TEXT,
+	"out" TEXT,
+	"rels" TEXT[] DEFAULT NULL,
+	"persist" bool DEFAULT true,
+	"version" bigint DEFAULT NULL
+) RETURNS bigint
+VOLATILE PARALLEL UNSAFE
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'strong_components_vector_wrapper';
+
+CREATE FUNCTION warren."topological_order"(
+	"graph" TEXT,
+	"out" TEXT,
+	"rels" TEXT[] DEFAULT NULL,
+	"persist" bool DEFAULT true,
+	"version" bigint DEFAULT NULL
+) RETURNS bigint
+VOLATILE PARALLEL UNSAFE
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'topological_order_wrapper';
+
+CREATE FUNCTION warren."dag_longest_path"(
+	"graph" TEXT,
+	"out" TEXT,
+	"rels" TEXT[] DEFAULT NULL,
+	"weighted" bool DEFAULT NULL,
+	"persist" bool DEFAULT true,
+	"version" bigint DEFAULT NULL
+) RETURNS double precision
+VOLATILE PARALLEL UNSAFE
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'dag_longest_path_wrapper';
+
+CREATE FUNCTION warren.minimum_spanning_forest(graph text, id_type anyelement, rels text[] DEFAULT NULL,
+                                               weighted bool DEFAULT NULL, version bigint DEFAULT NULL)
+RETURNS TABLE (source anyelement, target anyelement, weight float8)
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'minimum_spanning_forest_wrapper';

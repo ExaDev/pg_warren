@@ -19,7 +19,7 @@ pub(super) enum Form {
 
 /// The CSRs a product reads.
 #[derive(Debug)]
-pub(super) struct Matrix<'g> {
+pub(crate) struct Matrix<'g> {
     csrs: Vec<&'g AnyCsr>,
     weighted: bool,
     form: Form,
@@ -31,7 +31,7 @@ pub(super) struct Matrix<'g> {
 /// reused across rows, its capacity charged to the compute budget before
 /// it is reserved.
 #[derive(Debug)]
-pub(super) struct RowScratch {
+pub(crate) struct RowScratch {
     entries: Vec<(DenseId, f64)>,
     charge: MemoryCharge,
 }
@@ -57,7 +57,7 @@ impl<'g> Matrix<'g> {
     /// The CSRs of `relations` for `y = A ⊗ x`, or `y = Aᵀ ⊗ x` if
     /// `transpose`: the forward CSRs pulled, or for `Aᵀ` the reverse CSRs
     /// pulled, else the forward CSRs pushed.
-    pub(super) fn new(
+    pub(crate) fn new(
         graph: &'g GraphCsr,
         relations: RelationSelection<'_>,
         transpose: bool,
@@ -83,7 +83,7 @@ impl<'g> Matrix<'g> {
     }
 
     /// A row scratch for [`Self::for_each_entry`], charged to the budget.
-    pub(super) fn scratch(&self) -> Result<RowScratch, ComputeError> {
+    pub(crate) fn scratch(&self) -> Result<RowScratch, ComputeError> {
         Ok(RowScratch { entries: Vec::new(), charge: self.memory.charge(0)? })
     }
 
@@ -96,7 +96,7 @@ impl<'g> Matrix<'g> {
     /// column order: an edge in several selected relations is one entry
     /// whose weight is their sum, and every weight is 1 when unweighted.
     /// `scratch` is reused across rows.
-    pub(super) fn for_each_entry(
+    pub(crate) fn for_each_entry(
         &self,
         row: DenseId,
         scratch: &mut RowScratch,
