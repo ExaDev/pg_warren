@@ -31,6 +31,11 @@ pgrx::extension_sql_file!(
     name = "eigenvector_centrality",
     requires = [extension::warren]
 );
+pgrx::extension_sql_file!(
+    "katz_centrality.sql",
+    name = "katz_centrality",
+    requires = [extension::warren]
+);
 
 #[cfg(any(test, feature = "pg_test"))]
 #[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.

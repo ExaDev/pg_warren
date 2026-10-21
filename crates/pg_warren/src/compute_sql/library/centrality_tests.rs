@@ -55,4 +55,38 @@ mod tests {
         assert_eq!(iterations, Some(100));
         Ok(())
     }
+
+    #[pg_test]
+    fn katz_centrality_is_networkxs() -> Result<(), Error> {
+        small("t")?;
+        compiled("t", "katz_centrality", "SELECT warren.katz_centrality('t', 'k')")?;
+        assert_eq!(
+            values("t", "k", 6)?.as_deref(),
+            Some("1:0.383727 2:0.366458 3:0.364731 4:0.556422 5:0.410107 6:0.328085")
+        );
+        let iterations = Spi::get_one::<i32>("SELECT warren.katz_centrality('t', 'k')")?;
+        assert_eq!(iterations, Some(11), "as many iterations as NetworkX needs");
+        Spi::run(
+            "SELECT warren.katz_centrality('t', 'k', alpha := 0.2, beta := 0.5, normalized := false)",
+        )?;
+        assert_eq!(
+            values("t", "k", 6)?.as_deref(),
+            Some("1:0.781562 2:0.656312 3:0.631262 4:1.407812 5:0.833333 6:0.500000")
+        );
+        Spi::run("SELECT warren.katz_centrality('t', 'k', rels := ARRAY['a'], weighted := false)")?;
+        assert_eq!(
+            values("t", "k", 6)?.as_deref(),
+            Some("1:0.425717 2:0.429587 3:0.429974 4:0.387015 5:0.387015 6:0.387015")
+        );
+        // A per-node beta (NetworkX's dict beta) is beta × seed.
+        Spi::run(
+            "SELECT warren.vector_from_query('t', 'ids', 'SELECT id, id FROM t_nodes', 'i64');
+             SELECT warren.katz_centrality('t', 'k', beta := 2, seed := 'ids')",
+        )?;
+        assert_eq!(
+            values("t", "k", 6)?.as_deref(),
+            Some("1:0.138746 2:0.197946 3:0.295902 4:0.467106 5:0.575223 6:0.552214")
+        );
+        Ok(())
+    }
 }

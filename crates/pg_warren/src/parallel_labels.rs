@@ -47,6 +47,7 @@ mod tests {
         ("has_edge", "r"),
         ("id_map", "r"),
         ("info", "r"),
+        ("katz_centrality", "u"),
         ("label_propagation", "u"),
         ("last_stats", "r"),
         ("matrix_rows", "r"),

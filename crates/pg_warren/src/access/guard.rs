@@ -263,6 +263,7 @@ mod tests {
         ("has_edge", "warren.has_edge('victim', 1::bigint, 2::bigint)"),
         ("id_map", "warren.id_map('victim', NULL::bigint)"),
         ("info", "warren.info('victim')"),
+        ("katz_centrality", "warren.katz_centrality('victim', 'k')"),
         ("label_propagation", "warren.label_propagation('victim', 'lp')"),
         ("last_stats", "warren.last_stats()"),
         ("matrix_rows", "warren.matrix_rows('victim', 'c', NULL::bigint)"),

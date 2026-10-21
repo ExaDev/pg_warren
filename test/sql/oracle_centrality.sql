@@ -4,6 +4,7 @@
 -- run with the same defaults (tol, max_iter, normalisation).
 -- fixture: random --nodes 400 --edges 1200 --directed --seed 5
 -- oracle: eigenvector --directed --edges-sql 'SELECT src, dst, (1 + (src * dst) % 5)::float8 FROM edges'
+-- oracle: katz --directed --edges-sql 'SELECT src, dst, (1 + (src * dst) % 5)::float8 FROM edges'
 SELECT warren.create_graph('g', 'SELECT id FROM nodes', 'SELECT src, dst, (1 + (src * dst) % 5)::float8 FROM edges',
                            weighted := true);
 SELECT warren.refresh('g');
@@ -14,3 +15,10 @@ SELECT assert.that((SELECT max(abs(e.value - o.score))
                    'eigenvector_centrality agrees with NetworkX');
 SELECT assert.equal((SELECT count(*) FROM warren.vector_values('g', 'ev', NULL::bigint) e
                      JOIN oracle_eigenvector o USING (node_id)), 400::bigint, 'every node is scored');
+
+SELECT assert.that(warren.katz_centrality('g', 'katz') < 1000, 'katz_centrality converges');
+SELECT assert.that((SELECT max(abs(k.value - o.score))
+                    FROM warren.vector_values('g', 'katz', NULL::bigint) k JOIN oracle_katz o USING (node_id)) < 1e-9,
+                   'katz_centrality agrees with NetworkX');
+SELECT assert.equal((SELECT count(*) FROM warren.vector_values('g', 'katz', NULL::bigint) k
+                     JOIN oracle_katz o USING (node_id)), 400::bigint, 'every node is scored');

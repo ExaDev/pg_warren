@@ -104,6 +104,8 @@ mod tests {
             "warren.aggregate_neighbours('t', '_warren_x', 'a')",
             "warren.aggregate_neighbours('t', 'e', '_warren_a')",
             "warren.eigenvector_centrality('t', '_warren_ev')",
+            "warren.katz_centrality('t', '_warren_k')",
+            "warren.katz_centrality('t', 'k', seed := '_warren_s')",
         ];
         for call in calls {
             let refused = failure(call)?.unwrap_or_default();
@@ -274,11 +276,18 @@ mod tests {
     }
 
     /// Each function of DESIGN.md §6.7's group 1 and its intermediates.
-    const GROUP_ONE: &[(&str, &str, &[&str])] = &[(
-        "eigenvector_centrality",
-        "warren.eigenvector_centrality('r', 'taken')",
-        &["one", "x", "y", "next", "norm"],
-    )];
+    const GROUP_ONE: &[(&str, &str, &[&str])] = &[
+        (
+            "eigenvector_centrality",
+            "warren.eigenvector_centrality('r', 'taken')",
+            &["one", "x", "y", "next", "norm"],
+        ),
+        (
+            "katz_centrality",
+            "warren.katz_centrality('r', 'taken')",
+            &["one", "b", "alpha", "x", "y", "next", "scale"],
+        ),
+    ];
 
     /// A reader may not replace the owner's vector, so writing `out` fails
     /// after every intermediate exists: the run drops them all.
