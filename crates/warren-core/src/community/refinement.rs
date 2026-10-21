@@ -11,10 +11,12 @@
 //! connected, `E(v, S − v) ≥ γ k_v (K_S − k_v) / 2m`, and is still alone;
 //! it may join a refined community `C ⊆ S` that is well connected,
 //! `E(C, S − C) ≥ γ K_C (K_S − K_C) / 2m`, and whose modularity change
-//! `ΔH = (E(v, C) − γ k_v K_C / 2m) / m` is at least 0 (staying alone is
-//! `ΔH = 0`); it picks among them at random with probability proportional
-//! to `exp(ΔH / θ)`, `θ` the randomness. Nodes are taken in the seeded
-//! order, and the draw is a counter-based function of seed and node, so
+//! `ΔH = E(v, C) − γ k_v K_C / 2m` (in units of edge weight, as Traag et
+//! al.'s and igraph's: modularity's change times m) is at least 0 (staying
+//! alone is `ΔH = 0`); it picks among them at random with probability
+//! proportional to `exp(ΔH / θ)`, `θ` the randomness. Nodes are taken in
+//! the seeded order, and the draw is a counter-based function of seed and
+//! node, so
 //! communities refine independently (in parallel) and the result is the
 //! same for any thread count.
 
@@ -224,7 +226,8 @@ impl<'a> Group<'a> {
                 }
                 let sum = self.sums[root];
                 let well_connected = self.outside[root] >= scale * sum * (group_sum - sum);
-                let change = 2.0 * (to - scale * degree * sum) / total;
+                // ΔH in units of edge weight, as Traag et al.'s θ is.
+                let change = to - scale * degree * sum;
                 if well_connected && change >= 0.0 {
                     candidates.push((root, to, change));
                 }
@@ -274,6 +277,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::community::modularity;
     use crate::compute::reference::{self, Edges};
     use crate::interrupts::Uninterrupted;
 
@@ -343,6 +347,38 @@ mod tests {
         assert!(labels[..3].iter().all(|label| !labels[3..].contains(label)), "{labels:?}");
         assert!(connected(&graph, labels));
         assert!(found.communities < 6, "nodes merge: {labels:?}");
+    }
+
+    /// Twenty planted blocks of 30 nodes, about 8 edges a node inside its
+    /// block and one in ten to another block.
+    fn planted() -> Undirected {
+        let mix = |x: u64| {
+            let z = x.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+            (z ^ (z >> 31)).wrapping_mul(0xbf58_476d_1ce4_e5b9) >> 17
+        };
+        let mut edges = Edges::new();
+        for node in 0..600u64 {
+            for k in 0..4 {
+                let x = mix(node * 8 + k);
+                let other = if x % 10 < 9 { node / 30 * 30 + mix(!x) % 30 } else { mix(!x) % 600 };
+                edges.push((0, node, other, 1.0));
+            }
+        }
+        undirected(600, &edges)
+    }
+
+    #[test]
+    fn the_default_randomness_beats_a_randomness_of_one() {
+        // θ is in units of edge weight, as in Traag et al.'s and igraph's
+        // refinement: at 0.01 the draw nearly always takes the best merge.
+        let graph = planted();
+        let memory = ComputeMemory::new(u64::MAX);
+        let q = |randomness: f64| {
+            let found = refined(&graph, &[0; 600], workers(), Refinement { randomness, ..OPTIONS });
+            modularity(&memory, &graph, found.labels.values(), 1.0).unwrap()
+        };
+        let (default, one) = (q(0.01), q(1.0));
+        assert!(default > one + 0.01, "θ = 0.01: {default}, θ = 1: {one}");
     }
 
     #[test]
