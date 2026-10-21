@@ -10,6 +10,7 @@ use crate::compute::memory::{fully_held, Exact};
 use crate::compute::reference::{self, Edges};
 use crate::compute::{AnyVector, Mask};
 use crate::graph::{CsrLayout, EdgeList, RelationIndex};
+use crate::interrupts::Cancelled;
 use crate::interrupts::Uninterrupted;
 
 fn workers() -> &'static Workers {

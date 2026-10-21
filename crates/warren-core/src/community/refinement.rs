@@ -81,7 +81,7 @@ pub fn refine<I: Interrupts>(
     let longest = (0..nodes).map(|node| graph.row(node).len() as u64).max().unwrap_or(0);
     let scratch = memory.charge(scratch_bytes(nodes, longest, workers.threads()))?;
     let count = workers.run(interrupts, |cancellation| {
-        Ok(run(cancellation, graph, tombstones, communities, keys, options, labels.values_mut()))
+        Ok(run(cancellation, graph, tombstones, communities, keys, options, labels.values_mut()?))
     })??;
     drop(scratch);
     Ok(Refined { labels, communities: count })

@@ -275,7 +275,7 @@ where
             Some(value) => value,
             None => Self::null()?,
         };
-        self.values(vectors, 1)?.values_mut()[node] = value;
+        self.values(vectors, 1)?.values_mut()?[node] = value;
         Ok(())
     }
 
@@ -301,14 +301,14 @@ where
         let Some(elements) = elements else {
             let width = self.values.as_ref().map_or(1, Vector::width);
             let null = Self::null()?;
-            self.values(vectors, width)?.values_mut()[node * width..][..width].fill(null);
+            self.values(vectors, width)?.values_mut()?[node * width..][..width].fill(null);
             return Ok(());
         };
         let width = elements.len();
         if width == 0 {
             return Err(ComputeError::ZeroWidth.into());
         }
-        let target = &mut self.values(vectors, width)?.values_mut()[node * width..][..width];
+        let target = &mut self.values(vectors, width)?.values_mut()?[node * width..][..width];
         for (target, element) in target.iter_mut().zip(elements.iter()) {
             *target = match element {
                 Some(value) => value,

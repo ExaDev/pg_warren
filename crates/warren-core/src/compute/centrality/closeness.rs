@@ -95,9 +95,9 @@ impl Measure for Closeness {
         totals: &mut Reach,
         round: &[Paths],
         cancellation: &Cancellation,
-    ) -> Result<(), Cancelled> {
-        let distances = totals.distances.values_mut().par_chunks_mut(NODES_PER_TASK);
-        distances.zip(totals.reached.par_chunks_mut(NODES_PER_TASK)).enumerate().try_for_each(
+    ) -> Result<(), ComputeError> {
+        let distances = totals.distances.values_mut()?.par_chunks_mut(NODES_PER_TASK);
+        Ok(distances.zip(totals.reached.par_chunks_mut(NODES_PER_TASK)).enumerate().try_for_each(
             |(task, (distances, reached))| {
                 if cancellation.is_cancelled() {
                     return Err(Cancelled);
@@ -108,7 +108,7 @@ impl Measure for Closeness {
                 });
                 Ok(())
             },
-        )
+        )?)
     }
 
     fn finish(
@@ -118,7 +118,7 @@ impl Measure for Closeness {
         live: u64,
     ) -> Result<Vector<f64>, ComputeError> {
         let Reach { mut distances, reached, .. } = totals;
-        for ((node, total), &reached) in (0..).zip(distances.values_mut()).zip(&reached) {
+        for ((node, total), &reached) in (0..).zip(distances.values_mut()?).zip(&reached) {
             let r = reached as f64;
             *total = match *total > 0.0 && live > 1 {
                 true if self.wf_improved => {
@@ -147,8 +147,8 @@ impl Measure for Harmonic {
         totals: &mut Vector<f64>,
         round: &[Paths],
         cancellation: &Cancellation,
-    ) -> Result<(), Cancelled> {
-        totals.values_mut().par_chunks_mut(NODES_PER_TASK).enumerate().try_for_each(
+    ) -> Result<(), ComputeError> {
+        Ok(totals.values_mut()?.par_chunks_mut(NODES_PER_TASK).enumerate().try_for_each(
             |(task, totals)| {
                 if cancellation.is_cancelled() {
                     return Err(Cancelled);
@@ -158,7 +158,7 @@ impl Measure for Harmonic {
                 });
                 Ok(())
             },
-        )
+        )?)
     }
 
     fn finish(
@@ -168,7 +168,7 @@ impl Measure for Harmonic {
         live: u64,
     ) -> Result<Vector<f64>, ComputeError> {
         if !sources.every_live_node() {
-            for (node, total) in (0..).zip(totals.values_mut()) {
+            for (node, total) in (0..).zip(totals.values_mut()?) {
                 let others = other_sources(sources.nodes(), node);
                 *total = match others {
                     0 => 0.0,

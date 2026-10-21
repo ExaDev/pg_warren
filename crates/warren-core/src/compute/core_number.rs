@@ -40,7 +40,7 @@ pub fn core_number<I: Interrupts>(
     let forward = selected_rows(graph, relations)?;
     let id_space = graph.all_relations().forward().id_space();
     let mut cores = Vector::filled(memory, id_space, 1, 0i64)?;
-    let degrees = cores.values_mut();
+    let degrees = cores.values_mut()?;
     // The adjacency and the peeling's three arrays are charged on the pool,
     // which reclaims no held memory, so room is reclaimed here first.
     let peeling = id_space.saturating_mul(3).saturating_add(1);

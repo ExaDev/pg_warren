@@ -76,8 +76,8 @@ impl Measure for Betweenness {
         totals: &mut Vector<f64>,
         round: &[Paths],
         cancellation: &Cancellation,
-    ) -> Result<(), Cancelled> {
-        totals.values_mut().par_chunks_mut(NODES_PER_TASK).enumerate().try_for_each(
+    ) -> Result<(), ComputeError> {
+        Ok(totals.values_mut()?.par_chunks_mut(NODES_PER_TASK).enumerate().try_for_each(
             |(task, totals)| {
                 if cancellation.is_cancelled() {
                     return Err(Cancelled);
@@ -89,7 +89,7 @@ impl Measure for Betweenness {
                 }
                 Ok(())
             },
-        )
+        )?)
     }
 
     fn finish(
@@ -105,7 +105,7 @@ impl Measure for Betweenness {
         let k = (!sources.every_live_node()).then_some(sampled.len());
         let (source, other) = rescale(live, self.scale, self.directed, k);
         let mut sampled = sampled.iter().peekable();
-        for (node, value) in (0..).zip(totals.values_mut()) {
+        for (node, value) in (0..).zip(totals.values_mut()?) {
             let is_source = sampled.next_if(|&&s| s == node).is_some();
             *value *= if is_source { source } else { other };
         }

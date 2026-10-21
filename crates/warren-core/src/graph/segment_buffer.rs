@@ -40,6 +40,11 @@ impl<T> SegmentBuffer<T> {
         }
     }
 
+    /// Whether it is a shared view rather than an owned buffer.
+    pub(crate) fn is_shared(&self) -> bool {
+        self.shared.is_some()
+    }
+
     /// The bytes it holds: an owned buffer's capacity, or the bytes a
     /// shared view views (the region's owner accounts for the region).
     pub fn bytes(&self) -> u64 {

@@ -44,7 +44,7 @@ fn moved<E: Element>(
 ) -> Result<Vector<E>, SpectralError> {
     let width = vector.width();
     let mut aligned = Vector::filled(memory, id_space, width, E::default())?;
-    let values = aligned.values_mut();
+    let values = aligned.values_mut()?;
     for (source, &target) in (0..).zip(mapping) {
         let start = target as usize * width;
         values[start..start + width].copy_from_slice(vector.row(source));

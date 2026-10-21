@@ -430,10 +430,11 @@ fn values(vector: &AnyVector) -> &[f64] {
     }
 }
 
-/// The values of one of the operator's own vectors, mutably.
+/// The values of one of the operator's own vectors, mutably. They are
+/// owned, so no copy is ever made that could fail.
 fn values_mut(vector: &mut AnyVector) -> &mut [f64] {
     match vector {
-        AnyVector::F64(vector) => vector.values_mut(),
+        AnyVector::F64(vector) => vector.values_mut().unwrap_or_default(),
         _ => &mut [],
     }
 }

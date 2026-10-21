@@ -36,7 +36,7 @@ pub fn topological_order<I: Interrupts>(
     let matrix = Matrix::new(graph, relations, false, Some(false), memory)?;
     let id_space = graph.all_relations().forward().id_space();
     let mut positions = Vector::filled(memory, id_space, 1, 0i64)?;
-    let mut order = Positions { positions: positions.values_mut(), next: 0 };
+    let mut order = Positions { positions: positions.values_mut()?, next: 0 };
     memory.reclaim_for(Kahn::bytes(id_space));
     workers.run(interrupts, |cancellation| {
         Kahn::new(memory, cancellation, &matrix, tombstones)?.run(&mut order)
@@ -73,7 +73,7 @@ pub fn dag_longest_path<I: Interrupts>(
     let matrix = Matrix::new(graph, relations, false, weighted, memory)?;
     let id_space = graph.all_relations().forward().id_space();
     let mut lengths = Vector::filled(memory, id_space, 1, 0f64)?;
-    let mut longest = Lengths { lengths: lengths.values_mut() };
+    let mut longest = Lengths { lengths: lengths.values_mut()? };
     memory.reclaim_for(Kahn::bytes(id_space));
     workers.run(interrupts, |cancellation| {
         Kahn::new(memory, cancellation, &matrix, tombstones)?.run(&mut longest)

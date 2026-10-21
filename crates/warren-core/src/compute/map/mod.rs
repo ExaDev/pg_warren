@@ -95,7 +95,7 @@ impl<I: Interrupts> Task<'_, I> {
         let mut output = Vector::filled(self.memory, self.id_space, self.width, T::default())?;
         let (operands, width) = (self.operands, self.width);
         let first_failure = AtomicUsize::new(usize::MAX);
-        let values = output.values_mut();
+        let values = output.values_mut()?;
         self.workers.run(self.interrupts, |cancellation| {
             let failures: Vec<Failure> = values
                 .par_chunks_mut(CHUNK)

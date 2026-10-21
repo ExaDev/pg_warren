@@ -22,7 +22,7 @@ pub(crate) fn gather(
     ) -> Result<Vector<T>, ComputeError> {
         let width = vector.width();
         let mut out = Vector::filled(memory, rows.len() as u64, width, T::default())?;
-        for (target, &old) in out.values_mut().chunks_exact_mut(width).zip(rows) {
+        for (target, &old) in out.values_mut()?.chunks_exact_mut(width).zip(rows) {
             let start = usize::try_from(old).unwrap_or(usize::MAX).saturating_mul(width);
             if let Some(source) = vector.values().get(start..start.saturating_add(width)) {
                 target.copy_from_slice(source);

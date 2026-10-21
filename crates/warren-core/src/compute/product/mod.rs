@@ -158,7 +158,7 @@ impl<I: Interrupts> Run<'_, '_, I> {
             .ok_or(ComputeError::DtypeMismatch { expected: E::DTYPE, found: x.dtype() })?;
         let (matrix, semiring) = (self.matrix, self.product.semiring);
         let write = Write::new(self.product);
-        let y = y.values_mut();
+        let y = y.values_mut()?;
         match matrix.form() {
             Form::Pull => self.workers.run(self.interrupts, |cancellation| {
                 kernel::pull(semiring, cancellation, matrix, x, y, &write)

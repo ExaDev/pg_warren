@@ -114,7 +114,7 @@ fn vector_degree(
                 adjacency(&loaded.graph, &loaded.relations, direction, rels.as_deref())?;
             let id_space = vectors.id_space();
             let mut degrees = Vector::filled(&vectors.memory, id_space, 1, 0i64)?;
-            for (node, degree) in (0..).zip(degrees.values_mut()) {
+            for (node, degree) in (0..).zip(degrees.values_mut()?) {
                 if node % POLL_NODES == 0 {
                     check_for_interrupts!();
                 }
@@ -146,7 +146,7 @@ fn vector_dense_id(
         with_id_type!(resolved.graph.id_type, E => {
             let mut vectors = Vectors::<E>::open(resolved)?;
             let mut ids = Vector::filled(&vectors.memory, vectors.id_space(), 1, 0i64)?;
-            for (node, id) in (0..).zip(ids.values_mut()) {
+            for (node, id) in (0..).zip(ids.values_mut()?) {
                 *id = node;
             }
             let ids = cast(&vectors, ids.into(), dtype)?;

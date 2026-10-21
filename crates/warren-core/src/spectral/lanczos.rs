@@ -489,7 +489,7 @@ where
             }
             let x = self.operator.input_mut();
             let mut vector = Vector::filled(resources.memory, x.len() as u64, 1, E::default())?;
-            for (stored, &value) in vector.values_mut().iter_mut().zip(x.iter()) {
+            for (stored, &value) in vector.values_mut()?.iter_mut().zip(x.iter()) {
                 *stored = E::from_f64(value);
             }
             pairs.push(Eigenpair { value, residual, vector: vector.into() });
