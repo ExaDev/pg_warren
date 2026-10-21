@@ -238,3 +238,46 @@ pub(crate) fn stray_current_failure(name: &str, version: i64) -> String {
          versions (a restored or edited catalog row); promote one of its versions"
     )
 }
+
+thread_local! {
+    /// The WARNINGs `warnings` has captured.
+    static WARNINGS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// An `emit_log_hook` that keeps each WARNING's message.
+#[pg_guard]
+unsafe extern "C-unwind" fn keep_warnings(data: *mut pg_sys::ErrorData) {
+    // SAFETY: Postgres passes the report it is emitting, valid for the call,
+    // and its message, when set, is a NUL-terminated string.
+    let message = unsafe {
+        let data = &*data;
+        (data.elevel == pg_sys::WARNING as i32 && !data.message.is_null())
+            .then(|| std::ffi::CStr::from_ptr(data.message).to_string_lossy().into_owned())
+    };
+    WARNINGS.with(|kept| kept.borrow_mut().extend(message));
+}
+
+/// Puts back the `emit_log_hook` that `warnings` replaced, however the
+/// statement ends.
+struct Restore(pg_sys::emit_log_hook_type);
+
+impl Drop for Restore {
+    fn drop(&mut self) {
+        // SAFETY: the hook is backend-global state that only the main
+        // thread, which runs the test, touches.
+        unsafe { pg_sys::emit_log_hook = self.0 };
+    }
+}
+
+/// Runs `sql` and returns the messages of the WARNINGs it raised.
+pub(crate) fn warnings(sql: &str) -> Result<Vec<String>, Error> {
+    WARNINGS.with(|kept| kept.borrow_mut().clear());
+    // SAFETY: as in `Restore::drop`; the guard puts the old hook back.
+    let _restore = unsafe {
+        let restore = Restore(pg_sys::emit_log_hook);
+        pg_sys::emit_log_hook = Some(keep_warnings);
+        restore
+    };
+    Spi::run(&format!("SET LOCAL log_min_messages = warning; {sql}"))?;
+    Ok(WARNINGS.with(|kept| kept.take()))
+}

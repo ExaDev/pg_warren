@@ -2,7 +2,8 @@
 -- sparse directed random graph with edge weights 1–5, which has dangling
 -- nodes and several components: every score within 1e-9 of NetworkX's,
 -- run with the same defaults (tol, max_iter, normalisation), except that
--- HITS may take 1000 iterations on both sides: it needs 100 here.
+-- HITS runs with max_iter 1000 on both sides: on this graph NetworkX meets
+-- tol at exactly its default limit of 100 iterations, too close to call.
 -- fixture: random --nodes 400 --edges 1200 --directed --seed 5
 -- oracle: eigenvector --directed --edges-sql 'SELECT src, dst, (1 + (src * dst) % 5)::float8 FROM edges'
 -- oracle: katz --directed --edges-sql 'SELECT src, dst, (1 + (src * dst) % 5)::float8 FROM edges'
