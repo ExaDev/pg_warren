@@ -1,19 +1,22 @@
 -- warren.louvain (DESIGN.md §6.7): Louvain community detection (Blondel
 -- et al. 2008) as a library over the primitives. Each level moves nodes
--- between communities (warren.local_moving, from each node alone), then
--- contracts the level's graph by the communities found (warren.contract)
--- into the next level's graph, whose nodes are the communities. It stops
--- when a level merges no node, when a level raises modularity by no more
--- than `tolerance` (NetworkX's `threshold`), or after `max_levels`. The
--- graph is undirected for this (an edge and its reverse add up; edges
--- weighted if `weighted`, NULL: if the graph has weights). Communities are
--- labelled by the smallest dense id of their members: each level labels
--- its communities by the least label of their members, which are those
--- dense ids. Writes vector `out` (i64, on version `version`, NULL: the
--- current one), with each level's partition as `<levels_prefix>_<level>`
--- if `levels_prefix` is given, and returns the partition's modularity.
--- The levels' graphs, named `_warren_louvain_<backend pid>_<level>`, and
--- the intermediate vectors are dropped at the end.
+-- between communities (warren.local_moving, from each node alone) on the
+-- level's graph, lifts the partition found to `graph` (warren.lift), and
+-- contracts `graph` by it (warren.contract) into the next level's graph,
+-- whose nodes are the communities: contracting `graph` by the composed
+-- partition gives the graph that contracting the level's graph would, so
+-- every level's graph is a quotient of `graph`, one lift away, and only
+-- one exists at a time. It stops when a level merges no node, when a
+-- level raises modularity by no more than `tolerance` (NetworkX's
+-- `threshold`), or after `max_levels`. The graph is undirected for this
+-- (an edge and its reverse add up; edges weighted if `weighted`, NULL: if
+-- the graph has weights). Communities are labelled by the smallest dense
+-- id of their members: a level's nodes are keyed by those dense ids. Writes
+-- vector `out` (i64, on version `version`, NULL: the current one), with
+-- each level's partition as `<levels_prefix>_<level>` if `levels_prefix`
+-- is given, and returns the partition's modularity. The level's graph,
+-- named `_warren_louvain_<backend pid>_<level>`, and the intermediate
+-- vectors are dropped at the end.
 CREATE FUNCTION warren.louvain(graph text, "out" text, resolution float8 DEFAULT 1.0,
                                seed bigint DEFAULT 0, max_levels int DEFAULT 100,
                                tolerance float8 DEFAULT 1e-7, weighted boolean DEFAULT NULL,
@@ -22,16 +25,15 @@ RETURNS float8 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   v bigint := coalesce(version, (warren.info(graph) ->> 'current_version')::bigint);
   parts text[] := ARRAY['single', 'labels', 'keys', 'down'];
-  levels text[] := ARRAY[graph];
-  versions bigint[] := ARRAY[v];
   g text := graph;
   gv bigint := v;
+  next_g text;
+  next_v bigint;
   level int := 0;
   nodes bigint;
   found bigint;
   q float8;
   q_next float8;
-  i int;
 BEGIN
   IF "out" IS NULL OR resolution IS NULL OR seed IS NULL OR max_levels IS NULL OR tolerance IS NULL THEN
     RAISE EXCEPTION '% must not be NULL',
@@ -54,8 +56,8 @@ BEGIN
       nodes := (SELECT (e ->> 'node_count')::bigint FROM jsonb_array_elements(warren.info(g) -> 'versions') e
                 WHERE (e ->> 'version')::bigint = gv);
       IF level > 1 THEN
-        -- A level's nodes are the communities of the level below, whose
-        -- ids are the least dense id of their members in `graph`.
+        -- A level's nodes are the communities found below it, keyed by
+        -- the least dense id of their members in `graph`.
         PERFORM warren.vector_from_query(g, '_warren_louvain_keys',
           format('SELECT node_id, node_id FROM warren.id_map(%L, NULL::bigint, %s)', g, gv), 'i64',
           persist := false, version := gv);
@@ -68,23 +70,27 @@ BEGIN
       EXIT WHEN level > 1 AND found = nodes;
       q_next := warren.modularity(g, '_warren_louvain_labels', resolution,
                                   CASE WHEN level = 1 THEN weighted ELSE true END, gv);
-      -- This level's partition, lifted down to `graph`.
-      PERFORM warren.vector_map(g, '_warren_louvain_down', '_warren_louvain_labels', false, gv);
-      FOR i IN REVERSE level - 1 .. 1 LOOP
-        PERFORM warren.lift(levels[i + 1], '_warren_louvain_down', levels[i], '_warren_louvain_down',
-                            persist := false, version := versions[i + 1]);
-      END LOOP;
+      -- This level's partition, on `graph`.
+      IF level = 1 THEN
+        PERFORM warren.vector_map(graph, '_warren_louvain_down', '_warren_louvain_labels', false, v);
+      ELSE
+        PERFORM warren.lift(g, '_warren_louvain_labels', graph, '_warren_louvain_down',
+                            persist := false, version := gv);
+      END IF;
       IF levels_prefix IS NOT NULL THEN
         PERFORM warren.vector_map(graph, format('%s_%s', levels_prefix, level), '_warren_louvain_down', true, v);
       END IF;
       EXIT WHEN found = nodes OR level >= max_levels OR q_next - q <= tolerance;
       q := q_next;
-      levels := levels || format('_warren_louvain_%s_%s', pg_backend_pid(), level);
-      versions := versions || warren.contract(g, '_warren_louvain_labels', levels[level + 1],
-                                              weighted := CASE WHEN level = 1 THEN coalesce(weighted, true) ELSE true END,
-                                              version := gv);
-      g := levels[level + 1];
-      gv := versions[level + 1];
+      next_g := format('_warren_louvain_%s_%s', pg_backend_pid(), level);
+      next_v := warren.contract(graph, '_warren_louvain_down', next_g,
+                                weighted := coalesce(weighted, true), version := v);
+      IF g <> graph THEN
+        PERFORM warren.drop_vector(g, '_warren_louvain_' || part, gv, true) FROM unnest(parts) part;
+        PERFORM warren.drop_graph(g);
+      END IF;
+      g := next_g;
+      gv := next_v;
     END LOOP;
     PERFORM warren.vector_map(graph, "out", '_warren_louvain_down', true, v);
     q := warren.modularity(graph, "out", resolution, weighted, v);
@@ -92,9 +98,10 @@ BEGIN
     PERFORM warren.drop_vector(graph, '_warren_louvain_' || part, v, true) FROM unnest(parts) part;
     RAISE;
   END;
-  FOR i IN 1 .. array_length(levels, 1) LOOP
-    PERFORM warren.drop_vector(levels[i], '_warren_louvain_' || part, versions[i], true) FROM unnest(parts) part;
-  END LOOP;
-  PERFORM warren.drop_graph(l) FROM unnest(levels[2:]) l;
+  PERFORM warren.drop_vector(graph, '_warren_louvain_' || part, v, true) FROM unnest(parts) part;
+  IF g <> graph THEN
+    PERFORM warren.drop_vector(g, '_warren_louvain_' || part, gv, true) FROM unnest(parts) part;
+    PERFORM warren.drop_graph(g);
+  END IF;
   RETURN q;
 END $$;
