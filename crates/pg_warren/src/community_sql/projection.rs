@@ -9,7 +9,7 @@ use warren_core::compute::{ComputeMemory, MemoryCharge};
 use warren_core::graph::Membership;
 
 use super::CommunitySqlError;
-use crate::access::entry;
+use crate::access::{entry, is_reader};
 use crate::cache::{cached, compute_memory, resolve, Resolved};
 use crate::catalog::{parent_of, GraphDefinition, GraphSource};
 use crate::compute_sql::Vectors;
@@ -123,6 +123,15 @@ impl Pair {
         };
         let named = GraphDefinition::find(graph)?;
         if named.graph_id != parent.graph_id {
+            // Name the parent only to a caller who may read it.
+            let actual = GraphDefinition::find(&parent.graph)?;
+            if !is_reader(actual.owner, &actual.readers)? {
+                return Err(CommunitySqlError::NotContractedFrom {
+                    quotient: quotient.graph.name,
+                    version: quotient.version,
+                    graph: named.name,
+                });
+            }
             return Err(CommunitySqlError::OtherParent {
                 quotient: quotient.graph.name,
                 version: quotient.version,
@@ -307,6 +316,40 @@ mod tests {
                  since been dropped"
             ))
         );
+        Ok(())
+    }
+
+    /// A quotient's reader who cannot read its parent learns nothing of
+    /// it: not from info, not from the error naming the graph it is not
+    /// contracted from.
+    #[pg_test]
+    fn a_parent_the_caller_cannot_read_is_not_named() -> Result<(), Error> {
+        contracted()?;
+        small("other")?;
+        Spi::run(
+            "CREATE ROLE q_only; SELECT warren.grant('q', 'q_only'); SELECT warren.grant('other', 'q_only');
+             SET ROLE q_only",
+        )?;
+        let info = Spi::get_one::<String>(
+            "SELECT format('%s|%s|%s', i #>> '{versions,0,parent_graph}', i #>> '{versions,0,parent_version}',
+                           i #>> '{versions,0,label_vector}')
+             FROM warren.info('q') i",
+        );
+        let refused = failure("warren.project('other', 'x', 'q', 'y')");
+        Spi::run("RESET ROLE")?;
+        assert_eq!(info?.as_deref(), Some("||"));
+        let quotient =
+            Spi::get_one::<i64>("SELECT current_version FROM warren.graphs WHERE name = 'q'")?
+                .unwrap_or_default();
+        assert_eq!(
+            refused?,
+            Some(format!(
+                "22023: version {quotient} of graph \"q\" was not contracted from graph \"other\""
+            ))
+        );
+        let shown =
+            Spi::get_one::<String>("SELECT warren.info('q') #>> '{versions,0,parent_graph}'")?;
+        assert_eq!(shown.as_deref(), Some("t"), "the parent's reader sees it");
         Ok(())
     }
 

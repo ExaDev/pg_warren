@@ -68,6 +68,17 @@ pub(crate) enum CommunitySqlError {
         /// The graph named instead.
         graph: String,
     },
+    /// A quotient version was contracted from another graph's version,
+    /// which the caller may not read, so it is not named.
+    #[error("version {version} of graph \"{quotient}\" was not contracted from graph \"{graph}\"")]
+    NotContractedFrom {
+        /// The quotient graph.
+        quotient: String,
+        /// Its version.
+        version: VersionId,
+        /// The graph named.
+        graph: String,
+    },
     /// A community kernel failed.
     #[error(transparent)]
     Community(#[from] CommunityError),
@@ -110,9 +121,9 @@ impl SqlError for CommunitySqlError {
     fn sqlstate(&self) -> PgSqlErrorCode {
         match self {
             Self::NullArgument(_) => PgSqlErrorCode::ERRCODE_NULL_VALUE_NOT_ALLOWED,
-            Self::InvalidArgument(_) | Self::OtherParent { .. } => {
-                PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE
-            }
+            Self::InvalidArgument(_)
+            | Self::OtherParent { .. }
+            | Self::NotContractedFrom { .. } => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
             Self::Labels(error) | Self::Community(error) => community_sqlstate(error),
             Self::NotAContraction(_) | Self::NotDerived { .. } => {
                 PgSqlErrorCode::ERRCODE_WRONG_OBJECT_TYPE

@@ -42,6 +42,13 @@ pub(crate) fn require_reader(
     }
 }
 
+/// Whether the caller is a member of `owner` or of one of `readers`; not
+/// if the owner role was dropped.
+pub(crate) fn is_reader(owner: pg_sys::Oid, readers: &[pg_sys::Oid]) -> Result<bool, AccessError> {
+    let (name, member) = membership(owner, readers)?;
+    Ok(name.is_some() && member)
+}
+
 /// Checks that the caller may replace or drop persisted vector `vector`
 /// of graph `graph`, written by role `creator`: as a member of `creator`
 /// or of `owner`, the graph's owner role (DESIGN.md §7).
