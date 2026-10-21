@@ -43,7 +43,7 @@ the server headers (`postgresql-server-dev-NN`), `clang`/`libclang-dev`, and
 cargo-pgrx at exactly the version the extension uses:
 
 ```sh
-git checkout v0.3.0   # the latest release; main is the version in development
+git checkout v0.4.0   # the latest release; main is the version in development
 cargo install cargo-pgrx --version 0.19.3 --locked
 cargo pgrx init --pg16 "$(command -v pg_config)"
 cd crates/pg_warren
@@ -218,23 +218,40 @@ Every SQL example in the README and `docs/` runs in CI, in
   10 minutes on a uniform random graph of that size
   ([docs/limits.md](docs/limits.md)).
 
-- **0.4.0** (in development): locality ordering of dense ids
+- **0.4.0**: locality, the library and communities, milestone M8.
+  Dense ids can be ordered for locality
   (`create_graph(…, node_order := 'locality')`, `compact(…, node_order)`;
-  DESIGN.md §14 item 22); the planned library's group 1 (§6.7:
-  eigenvector and Katz centrality, HITS, clustering, majority-vote label
-  propagation), then its group 2 (k-core, strong components, DAG order and
-  longest path, minimum spanning forest); contraction, projection and
-  lifting (`contract`, `project`, `lift`: community-level graphs and the
-  vectors between the levels, DESIGN.md §6.6), and over them Louvain and
-  Leiden community detection (`louvain`, `leiden`, `modularity`, §6.7
-  group 3; [docs/communities.md](docs/communities.md)).
+  DESIGN.md §14 item 22). The library gains eigenvector and Katz
+  centrality, HITS, clustering and majority-vote label propagation; k-cores,
+  strong components, topological order and longest paths on DAGs, and
+  minimum spanning forests; betweenness, closeness and harmonic centrality,
+  exact or from sampled sources; and neighbourhood similarity for link
+  prediction (DESIGN.md §6.7). Contraction builds community-level graphs
+  (`contract`, with `project` and `lift` between the levels, DESIGN.md
+  §6.6), and Louvain and Leiden community detection are written over it
+  (`louvain`, `leiden`, `modularity`;
+  [docs/communities.md](docs/communities.md)). Upgrading needs
+  `ALTER EXTENSION pg_warren UPDATE` (see the changelog).
+
+  The 100M-edge soak, re-run, moved no §12 row beyond run-to-run spread.
+  At 10M nodes `louvain` and `leiden` find the communities of a block
+  graph in 115 s and 247 s, but on a graph with little community structure
+  `leiden` is refused (53400) at the default `warren.max_compute_memory`
+  and `louvain` writes level graphs faster than they shrink (the soak
+  stopped it for disk after 7.5 GB); a statement that runs `contract`, as both do, is bounded by
+  the cache, compute and build limits together
+  ([docs/limits.md](docs/limits.md)).
 
 See [CHANGELOG.md](CHANGELOG.md). This is pre-1.0 software: the SQL surface
 may still change between minor versions, with an upgrade script each time.
 
-Not there yet: a shared-memory cache across backends, incremental
-maintenance, general sparse matrix algebra (contraction's `PᵀAP` is the one
-sparse product), and text ids
+Not there yet: the road to 1.0 (DESIGN.md §13) is a shared cache, one
+copy of a version per cluster (M9, 0.5.0); text ids, ownership transfer,
+cleanup when an owner role is dropped, quotas and observability (M10);
+benchmarks and robustness on real graphs and deployments, and packages
+(M11); and a reviewed, frozen SQL surface (M12, 1.0.0). Incremental
+maintenance, general sparse matrix algebra (contraction's `PᵀAP` is the
+one sparse product) and a GPU backend are left to 1.x
 ([docs/limits.md](docs/limits.md)).
 
 ## Positioning vs prior art
