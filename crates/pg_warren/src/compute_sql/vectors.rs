@@ -126,7 +126,7 @@ impl<E: IdDatum> Vectors<E> {
 
     /// `resolved`'s version, `loaded`, and its vectors, charging what the
     /// call reads to `memory`.
-    fn with_loaded(
+    pub(crate) fn with_loaded(
         resolved: Resolved,
         loaded: Arc<LoadedVersion<E>>,
         memory: &ComputeMemory,
@@ -160,6 +160,16 @@ impl<E: IdDatum> Vectors<E> {
     /// The record of persisted vector `name`, if bound.
     fn record(&self, name: &str) -> Option<&VectorRecord> {
         self.records.iter().find(|record| record.name == name)
+    }
+
+    /// The id of persisted vector `name`, if that is the one a read of
+    /// `name` sees: bound, and not shadowed by a transient vector of the
+    /// session.
+    pub(crate) fn persisted_id(&self, name: &str) -> Option<VectorId> {
+        match transient(self.graph.graph_id, self.version, name) {
+            Some(_) => None,
+            None => self.record(name).map(|record| record.vector),
+        }
     }
 
     /// Vector `name`, which must be bound to the version.

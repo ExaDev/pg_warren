@@ -243,6 +243,7 @@ mod tests {
         ("compact", "warren.compact('victim', 'locality')"),
         ("components", "warren.components('victim', NULL::bigint)"),
         ("components_vector", "warren.components_vector('victim', 'cc')"),
+        ("contract", "warren.contract('victim', 'c', 'eves_q')"),
         ("core_number", "warren.core_number('victim', 'k')"),
         (
             "create_graph",
@@ -271,11 +272,13 @@ mod tests {
         ("label_propagation", "warren.label_propagation('victim', 'lp')"),
         ("label_propagation_majority", "warren.label_propagation_majority('victim', 'lpm')"),
         ("last_stats", "warren.last_stats()"),
+        ("lift", "warren.lift('victim_q', 'c', 'victim', 'l')"),
         ("matrix_rows", "warren.matrix_rows('victim', 'c', NULL::bigint)"),
         ("minimum_spanning_forest", "warren.minimum_spanning_forest('victim', NULL::bigint)"),
         ("neighbours", "warren.neighbours('victim', 1::bigint)"),
         ("pagerank", "warren.pagerank('victim', 'pr')"),
         ("prewarm", "warren.prewarm('victim')"),
+        ("project", "warren.project('victim', 'c', 'victim_q', 'p')"),
         ("promote", "warren.promote('victim', {v})"),
         ("reachable", "warren.reachable('victim', 1::bigint, 2::bigint)"),
         ("reachable_set", "warren.reachable_set('victim', ARRAY[1::bigint])"),
@@ -345,7 +348,15 @@ mod tests {
         let older = refresh("victim", true)?;
         let version = refresh("victim", true)?;
         hostile_eve()?;
-        Spi::run("SELECT warren.grant('victim', 'eve')")?;
+        // Label vector `c` and quotient `victim_q`, which eve reads, so
+        // that contract, project and lift run all the way as eve.
+        Spi::run(
+            "SELECT warren.grant('victim', 'eve');
+             SELECT warren.vector_const('victim', 'c', 1);
+             SELECT warren.contract('victim', 'c', 'victim_q');
+             SELECT warren.vector_const('victim_q', 'c', 1);
+             SELECT warren.grant('victim_q', 'eve')",
+        )?;
         for (_, call) in CALLS {
             // Leave only the older version cached, so that a call reading
             // the current one misses and prunes the cache (SPI over
@@ -356,6 +367,12 @@ mod tests {
             as_eve(&call.replace("{v}", &version.to_string()))?;
         }
         assert_eq!(probes()?, Some(0), "the hostile operator ran");
+        let ran = Spi::get_one::<String>(
+            "SELECT (SELECT string_agg(name, ' ' ORDER BY name) FROM warren.graphs WHERE name = 'eves_q')
+                    || ' ' || (SELECT string_agg(name, ' ' ORDER BY name) FROM warren.vectors
+                               WHERE name IN ('p', 'l'))",
+        )?;
+        assert_eq!(ran.as_deref(), Some("eves_q l p"), "contract, project and lift ran as eve");
         let intact = Spi::get_one::<bool>(
             "SELECT EXISTS (SELECT 1 FROM warren.graphs
                             WHERE name = 'victim' AND readers = '{eve}'::regrole[])",

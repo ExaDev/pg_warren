@@ -8,6 +8,7 @@ mod access;
 mod build;
 mod cache;
 mod catalog;
+mod community_sql;
 mod compute_sql;
 mod extension;
 mod external_ids;

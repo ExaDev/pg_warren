@@ -18,6 +18,7 @@
 
 mod csr;
 mod id_map;
+mod membership;
 mod relation;
 mod tombstones;
 
@@ -46,6 +47,9 @@ pub(crate) enum SegmentKind {
     Tombstones = 5,
     /// `rel_dict`: relation names, each a `u32` byte length then UTF-8.
     RelationDictionary = 6,
+    /// `membership`: each parent node's community in a quotient version
+    /// (`u64`, `u64::MAX` for none; DESIGN.md §6.6).
+    Membership = 7,
 }
 
 /// A decoded segment header.

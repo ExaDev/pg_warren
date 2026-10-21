@@ -3,7 +3,7 @@
 
 use pgrx::prelude::*;
 
-use super::{parse_node_order, CatalogError, NewGraph};
+use super::{parse_node_order, CatalogError, GraphSource, NewGraph};
 use crate::access::{current_user, entry, with_search_path};
 use crate::read_only::read_one;
 use crate::source::{check_edge_columns, check_node_columns, source_columns};
@@ -55,10 +55,11 @@ fn create_graph(
         record(&NewGraph {
             node_order: parse_node_order(node_order)?,
             name,
+            source: GraphSource::Query,
             owner: current_user(),
             search_path: caller.search_path(),
-            node_query,
-            edge_query,
+            node_query: Some(node_query),
+            edge_query: Some(edge_query),
             id_type: pg_sys::Oid::INVALID,
             directed,
             weighted,
@@ -77,8 +78,8 @@ fn record(graph: &NewGraph<'_>) -> Result<(), CatalogError> {
     // The queries are the caller's own SQL: check them under its search_path.
     let (node_columns, edge_columns) = with_search_path(graph.search_path, || {
         Ok::<_, CatalogError>((
-            source_columns::<CatalogError>("node_query", graph.node_query)?,
-            source_columns::<CatalogError>("edge_query", graph.edge_query)?,
+            source_columns::<CatalogError>("node_query", graph.node_query.unwrap_or_default())?,
+            source_columns::<CatalogError>("edge_query", graph.edge_query.unwrap_or_default())?,
         ))
     })?;
     let id_type = check_node_columns(&node_columns)?;

@@ -10,6 +10,7 @@
 #[cfg(not(target_pointer_width = "64"))]
 compile_error!("warren-core requires a 64-bit target");
 
+pub mod community;
 pub mod compute;
 pub mod graph;
 pub mod interrupts;

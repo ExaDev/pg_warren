@@ -8,6 +8,8 @@ pub(crate) const ID_MAP: &str = "id_map";
 pub(crate) const TOMBSTONES: &str = "tombstones";
 /// The `rel_dict` segment.
 pub(crate) const RELATION_DICTIONARY: &str = "rel_dict";
+/// The `membership` segment of a contraction's version (DESIGN.md §6.6).
+pub(crate) const MEMBERSHIP: &str = "membership";
 
 /// The name of one segment of one CSR, e.g. `rev_targets:2` or
 /// `offsets:merged`.

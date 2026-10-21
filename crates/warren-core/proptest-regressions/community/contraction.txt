@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc b53c59576a69080c1c76880e04c5488d1d29f40e8beba65e7f5f3e1cc1451c3f # shrinks to (id_space, edges, communities) = (1, [(0, 0, 0, 0.0)], [Some(0)]), weighted = false, drop_self_loops = false, undirected = false
+cc c723ab95f01f205723e290ecd85f56b42abf14937a19d9ecbe90e2a63426dfa6 # shrinks to (id_space, edges, communities) = (2, [(0, 1, 0, 0.0)], [Some(1), Some(1)]), weighted = false, drop_self_loops = false, undirected = true

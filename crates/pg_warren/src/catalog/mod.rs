@@ -18,9 +18,10 @@ mod retention;
 mod version;
 
 pub(crate) use error::CatalogError;
-use graph::NewGraph;
-pub(crate) use graph::{parse_node_order, GraphDefinition};
+pub(crate) use graph::NewGraph;
+pub(crate) use graph::{parse_node_order, GraphDefinition, GraphSource};
 pub(crate) use version::{
-    compaction_between, current_wal_lsn, insert_version, promote_version, record_contents,
-    require_current_id_space, require_version, version_record, NewVersion, VersionId, VersionStats,
+    compaction_between, current_wal_lsn, insert_version, parent_of, promote_version,
+    record_contents, require_current_id_space, require_version, version_record, Lineage,
+    NewVersion, VersionId, VersionStats,
 };

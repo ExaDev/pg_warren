@@ -31,6 +31,7 @@ fn compact_graph(name: &str, node_order: Option<&str>) -> Result<VersionId, Vers
     let node_order = node_order.map(parse_node_order).transpose()?;
     let mut graph = GraphDefinition::find(name)?;
     require_owner(graph.owner, &graph.name, "compact")?;
+    graph.require_query_source("compact")?;
     graph.lock()?;
     graph.require_sound_current_version()?;
     if let Some(order) = node_order.filter(|&order| order != graph.node_order) {
@@ -105,6 +106,7 @@ pub(crate) fn compact_version<E: ExternalId>(
         stats,
         label: None,
         compacted_from: Some(source),
+        lineage: None,
     })?;
     let bytes = write_version(
         *segments,
@@ -138,6 +140,7 @@ mod unit {
         GraphDefinition {
             graph_id: 1,
             name: "g".to_owned(),
+            source: crate::catalog::GraphSource::Query,
             owner: pg_sys::Oid::INVALID,
             readers: Vec::new(),
             id_type: crate::source::IdType::Int8,
@@ -210,7 +213,13 @@ mod unit {
     fn catalog_version(catalog: &mut MemoryCatalog, stats: VersionStats) -> i64 {
         use crate::build::Catalog;
         catalog
-            .insert_version(&NewVersion { graph_id: 1, stats, label: None, compacted_from: None })
+            .insert_version(&NewVersion {
+                graph_id: 1,
+                stats,
+                label: None,
+                compacted_from: None,
+                lineage: None,
+            })
             .unwrap()
     }
 }
