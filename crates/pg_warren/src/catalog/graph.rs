@@ -247,9 +247,9 @@ impl GraphDefinition {
     pub(crate) fn parent_graph(&self) -> Result<Option<i32>, CatalogError> {
         as_catalog_owner(|| {
             Ok(read_one::<i32>(
-                "SELECT p.graph_id FROM warren.versions v
-                 JOIN warren.versions p ON p.version_id = v.parent_version
-                 WHERE v.graph_id = $1 ORDER BY v.seq DESC LIMIT 1",
+                "SELECT (SELECT p.graph_id FROM warren.versions v
+                         JOIN warren.versions p ON p.version_id = v.parent_version
+                         WHERE v.graph_id = $1 ORDER BY v.seq DESC LIMIT 1)",
                 &[self.graph_id.into()],
             )?)
         })

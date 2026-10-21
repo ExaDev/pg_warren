@@ -59,8 +59,14 @@ versions of the quotient compare by label. `warren.refresh` and
 ever seen (labels that disappear are tombstoned) and cannot be compacted:
 when labels change wholesale, as a fresh labelling's usually do, contract
 into a new graph instead. Only versions of one parent graph can go into a
-quotient. A quotient can itself be contracted, which gives a
-hierarchy of communities.
+quotient, and only while one of its versions is still linked to that
+graph: once the parent graph or every linked version is dropped, the
+quotient takes no new versions (22023), so contract into a new graph.
+Two crossed contractions in concurrent transactions (`q1` into `q2` and
+`q2` into `q1`), or a `contract` and a `refresh` of the same parent in two
+concurrent transactions, can deadlock (40P01): retry the one Postgres
+cancels. A quotient can itself be contracted, which gives a hierarchy of
+communities.
 
 Labels must be integers: a NaN, an infinity or a fraction is refused
 (22023), as is a `bool` vector (42804). Deleted (tombstoned) nodes belong

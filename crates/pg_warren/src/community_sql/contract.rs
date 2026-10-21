@@ -131,9 +131,9 @@ fn quotient_graph(
     }
     // Versions from another parent would carry its topology into this
     // graph's readers' view and mix two label spaces.
-    if existing.parent_graph()?.is_some_and(|graph| graph != parent.graph_id) {
+    if existing.parent_graph()? != Some(parent.graph_id) {
         return Err(CommunitySqlError::InvalidArgument(format!(
-            "graph \"{}\" is contracted from another graph than \"{}\": contract into a new graph",
+            "graph \"{}\" has no version contracted from graph \"{}\": contract into a new graph",
             existing.name, parent.name
         )));
     }
@@ -335,10 +335,51 @@ mod tests {
         assert_eq!(
             failure("warren.contract('secret', 'l', 'q')")?.as_deref(),
             Some(
-                "22023: graph \"q\" is contracted from another graph than \"secret\": \
+                "22023: graph \"q\" has no version contracted from graph \"secret\": \
                  contract into a new graph"
             )
         );
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_quotient_whose_parent_graph_is_gone_takes_no_new_versions() -> Result<(), Error> {
+        labelled()?;
+        small("secret")?;
+        Spi::run(
+            "SELECT warren.vector_const('secret', 'l', 1, 'i64');
+             SELECT warren.contract('t', 'l', 'q');
+             SELECT warren.drop_graph('t')",
+        )?;
+        assert_eq!(
+            failure("warren.contract('secret', 'l', 'q')")?.as_deref(),
+            Some(
+                "22023: graph \"q\" has no version contracted from graph \"secret\": \
+                 contract into a new graph"
+            )
+        );
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_quotient_without_versions_takes_no_new_versions() -> Result<(), Error> {
+        labelled()?;
+        small("secret")?;
+        let staged = contract("warren.contract('t', 'l', 'q', promote := false)")?;
+        Spi::run(&format!(
+            "SELECT warren.vector_const('secret', 'l', 1, 'i64');
+             SELECT warren.drop_version('q', {staged})"
+        ))?;
+        assert_eq!(versions("q")?.as_deref(), Some(""));
+        for parent in ["secret", "t"] {
+            assert_eq!(
+                failure(&format!("warren.contract('{parent}', 'l', 'q')"))?,
+                Some(format!(
+                    "22023: graph \"q\" has no version contracted from graph \"{parent}\": \
+                     contract into a new graph"
+                ))
+            );
+        }
         Ok(())
     }
 
