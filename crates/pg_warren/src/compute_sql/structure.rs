@@ -23,7 +23,7 @@ use crate::source::{with_id_type, IdDatum};
 
 /// The selection of the relations `rels` named (all if `None`), as
 /// `selection::relations` resolves them.
-fn selection(selected: Option<&[RelationIndex]>) -> RelationSelection<'_> {
+pub(super) fn selection(selected: Option<&[RelationIndex]>) -> RelationSelection<'_> {
     selected.map_or(RelationSelection::All, RelationSelection::Only)
 }
 

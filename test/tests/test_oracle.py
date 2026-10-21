@@ -192,3 +192,40 @@ def test_longest_paths_restart_after_a_negative_prefix():
     dag = weighted([(1, 2, -3.0), (2, 3, 2.0), (1, 3, 1.0), (3, 4, -1.0)], directed=True)
     rows = oracle.compute("dag_longest_path", dag, [])
     assert sorted(rows) == [(1, 0), (2, 0), (3, 2), (4, 1)]
+
+
+def small_digraph():
+    return graph([(0, 1), (1, 2), (2, 3), (0, 2), (3, 0), (1, 3)], nodes=[4], directed=True)
+
+
+def test_betweenness_from_given_sources_is_networkxs_sample_of_them():
+    rows = dict(oracle.compute("betweenness", small_digraph(), ["--no-normalized", "--sources", "0,2"]))
+    assert rows == pytest.approx({0: 4.0, 1: 1.0, 2: 2.0, 3: 4.0, 4: 0.0})
+    exact = dict(oracle.compute("betweenness", small_digraph(), ["--endpoints"]))
+    assert exact == pytest.approx({0: 0.45, 1: 0.325, 2: 0.325, 3: 0.45, 4: 0.0})
+
+
+def test_undirected_centralities_keep_a_pairs_lighter_weight():
+    g = weighted([(1, 2, 5.0), (2, 1, 1.0), (2, 3, 1.0), (1, 3, 3.0), (3, 3, 1.0)], directed=True)
+    rows = dict(oracle.compute("betweenness", g, ["--undirected", "--weighted", "--no-normalized"]))
+    # 1 – 2 weighs 1, so 1 – 2 – 3 (2) beats 1 – 3 (3).
+    assert rows == pytest.approx({1: 0.0, 2: 1.0, 3: 0.0})
+
+
+def test_closeness_and_harmonic_from_every_node_as_sources_are_exact():
+    g = small_digraph()
+    for computation in ("closeness", "harmonic"):
+        exact = dict(oracle.compute(computation, g, []))
+        sampled = dict(oracle.compute(computation, g, ["--sources", "0,1,2,3,4"]))
+        assert sampled == pytest.approx(exact)
+    harmonic = dict(oracle.compute("harmonic", g, ["--sources", "0,2"]))
+    assert harmonic == pytest.approx({0: 2.0, 1: 8 / 3, 2: 4.0, 3: 3.0, 4: 0.0})
+
+
+def test_similarity_scores_every_ordered_pair_of_the_undirected_simple_graph():
+    g = graph([(0, 1), (0, 2), (1, 2), (2, 3), (3, 4), (1, 3), (4, 5), (5, 5)], directed=True)
+    rows = {(u, v): scores for u, v, *scores in oracle.compute("similarity", g, [])}
+    assert len(rows) == 30
+    assert rows[0, 3] == pytest.approx([2 / 3, 1.8204784532536746, 2.0])
+    assert rows[3, 0] == rows[0, 3]
+    assert rows[0, 4] == [0.0, 0.0, 0.0]

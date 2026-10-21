@@ -16,6 +16,7 @@
 //! `interrupts`, `selection`, `source` and `vector`; `spectral_sql` uses its
 //! vectors, compute pool and memory budget.
 
+mod centrality;
 mod constructors;
 mod drop;
 mod error;
@@ -39,6 +40,7 @@ mod product;
 mod read;
 mod reduce;
 mod settings;
+mod similarity;
 mod structure;
 mod summary;
 #[cfg(any(test, feature = "pg_test"))]

@@ -81,6 +81,10 @@ mod tests {
             ("SELECT warren.hits('{g}', 'h', 'a', max_iter := 20)", "a"),
             ("SELECT warren.clustering('{g}', 'cl')", "cl"),
             ("SELECT warren.label_propagation_majority('{g}', 'lpm')", "lpm"),
+            ("SELECT warren.betweenness_centrality('{g}', 'bc', k := 20)", "bc"),
+            ("SELECT warren.betweenness_centrality('{g}', 'bu', directed := false)", "bu"),
+            ("SELECT warren.closeness_centrality('{g}', 'cl', weighted := false)", "cl"),
+            ("SELECT warren.harmonic_centrality('{g}', 'hc', k := 10, directed := false)", "hc"),
         ] {
             same_after(setup, "vector_values", name)?;
         }
@@ -90,6 +94,18 @@ mod tests {
             "SELECT format('%s %s %s', source, target, weight)
              FROM warren.minimum_spanning_forest('{g}', NULL::bigint)",
         )?;
+        for measure in ["jaccard", "adamic_adar", "common_neighbours"] {
+            same(&format!(
+                "SELECT format('%s %s %s', source, target, score)
+                 FROM warren.similar_pairs('{{g}}', NULL::bigint, k := 3, measure := '{measure}')"
+            ))?;
+            same(&format!(
+                "SELECT format('%s %s %s', source, target, score)
+                 FROM warren.similarity('{{g}}', 'SELECT a, b FROM generate_series(1, 30) a,
+                                                  generate_series(1, 30) b', NULL::bigint,
+                                        '{measure}')"
+            ))?;
+        }
         for kernel in ["topological_order", "dag_longest_path"] {
             let refused = same_failure("cm", &format!("warren.{kernel}('{{g}}', 'o')"))?;
             assert!(
