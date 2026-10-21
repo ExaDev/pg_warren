@@ -105,7 +105,7 @@ random graph with the same degrees would. Each writes a label vector, so
 | Call | What it does |
 |---|---|
 | `louvain(graph, out, resolution := 1, seed := 0, max_levels := 100, tolerance := 1e-7, weighted, levels_prefix, version)` | Louvain (Blondel et al. 2008); returns the partition's modularity |
-| `leiden(graph, out, resolution := 1, seed := 0, max_levels := 100, tolerance := 1e-7, randomness := 0.01, weighted, levels_prefix, version)` | Leiden (Traag et al. 2019): every community it finds is connected |
+| `leiden(graph, out, resolution := 1, seed := 0, max_levels := 100, tolerance := 1e-7, randomness := 0.01, iterations := 2, weighted, levels_prefix, version)` | Leiden (Traag et al. 2019): every community it finds is connected |
 | `modularity(graph, labels, resolution := 1, weighted, version)` | the modularity of any label vector's partition |
 
 ```sql
@@ -135,6 +135,18 @@ the best merge). `levels_prefix := 'lv'` also keeps each level's
 partition, as vectors `lv_1`, `lv_2`, …, coarsest last: a hierarchy of
 communities.
 
+Leiden runs its levels `iterations` times (2 by default, as igraph's
+`community_leiden`): each pass after the first starts its first level's
+moving from the partition the pass before found rather than from each
+node alone, so it can still move nodes the first pass's coarse levels
+left in the wrong community. On 20 planted blocks of 1,000 nodes one pass
+scores 0.794 and two find the planted blocks (0.855). The run stops early
+after a pass that changes nothing, since the same start and seed would
+give the same pass again; a negative `iterations` runs until then (at
+most 100 passes, with a `WARNING` if it is still changing), and 0 is
+refused. With `levels_prefix`, every pass's levels are kept in turn, so
+`lv_1` is the first pass's finest and the last one is `out`.
+
 The result is the same for any number of threads (`warren.threads`), and
 for a given `seed`. Different seeds give different, comparably good
 partitions. Modularity counts an undirected self-loop once in its node's
@@ -158,12 +170,15 @@ labels, NULL)` makes a new graph of the caller's named
 `_warren_level_<version id>`, after the id it returns.
 
 At 1M nodes and 5M undirected edges on 4 vCPUs, `louvain` takes 5.8 s and
-`leiden` 8.3 s; at 10M nodes, 93 s and 119 s ([limits.md](limits.md)).
+`leiden` 8.3 s for one iteration; at 10M nodes, 93 s and 119 s. The default
+two iterations take about twice one (20.9 s at 1M, measured on a slower
+day) and raise modularity there from 0.837 to 0.898 ([limits.md](limits.md)).
 Each level writes its graph as a version (segments and WAL), and the rows
 of a level's graph dropped during the run are reclaimed only by `VACUUM`
 after its transaction ends, so a run needs free disk for every level: on
 that 1M-node graph, whose own segments take 75 MB, `louvain` wrote 166 MB
-of segments and about as much WAL, `leiden` (7 levels) 294 MB and 323 MB.
+of segments and about as much WAL, `leiden` (one iteration, 7 levels) 294 MB and 323 MB, and its second iteration
+about as much again.
 A failed or cancelled run rolls its level graphs back, but their segment
 rows, already written, also stay as dead tuples until `VACUUM`.
 

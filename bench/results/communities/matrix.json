@@ -22,13 +22,14 @@
     {"name": "modularity_of_blocks", "requires": ["warren.modularity"], "sql": "SELECT warren.modularity('g', 'cc')"},
     {"name": "louvain", "requires": ["warren.louvain"], "sql": "SELECT warren.louvain('g', 'louvain', levels_prefix := 'louvain')", "repeat": 1},
     {"name": "leiden", "requires": ["warren.leiden"], "sql": "SELECT warren.leiden('g', 'leiden', levels_prefix := 'leiden')", "repeat": 1},
+    {"name": "leiden_iterations_1", "requires": ["warren.leiden"], "sql": "SELECT warren.leiden('g', 'leiden_once', iterations := 1)", "repeat": 1},
     {"name": "modularity_louvain", "requires": ["warren.louvain"], "sql": "SELECT warren.modularity('g', 'louvain')", "repeat": 1},
     {"name": "modularity_leiden", "requires": ["warren.leiden"], "sql": "SELECT warren.modularity('g', 'leiden')", "repeat": 1},
     {"name": "louvain_max_levels_1", "requires": ["warren.louvain"], "sql": "SELECT warren.louvain('g', 'louvain_upto_1', max_levels := 1)", "repeat": 1},
     {"name": "louvain_max_levels_2", "requires": ["warren.louvain"], "sql": "SELECT warren.louvain('g', 'louvain_upto_2', max_levels := 2)", "repeat": 1},
     {"name": "louvain_max_levels_3", "requires": ["warren.louvain"], "sql": "SELECT warren.louvain('g', 'louvain_upto_3', max_levels := 3)", "repeat": 1},
-    {"name": "leiden_max_levels_1", "requires": ["warren.leiden"], "sql": "SELECT warren.leiden('g', 'leiden_upto_1', max_levels := 1)", "repeat": 1},
-    {"name": "leiden_max_levels_2", "requires": ["warren.leiden"], "sql": "SELECT warren.leiden('g', 'leiden_upto_2', max_levels := 2)", "repeat": 1},
-    {"name": "leiden_max_levels_3", "requires": ["warren.leiden"], "sql": "SELECT warren.leiden('g', 'leiden_upto_3', max_levels := 3)", "repeat": 1}
+    {"name": "leiden_max_levels_1", "requires": ["warren.leiden"], "sql": "SELECT warren.leiden('g', 'leiden_upto_1', max_levels := 1, iterations := 1)", "repeat": 1},
+    {"name": "leiden_max_levels_2", "requires": ["warren.leiden"], "sql": "SELECT warren.leiden('g', 'leiden_upto_2', max_levels := 2, iterations := 1)", "repeat": 1},
+    {"name": "leiden_max_levels_3", "requires": ["warren.leiden"], "sql": "SELECT warren.leiden('g', 'leiden_upto_3', max_levels := 3, iterations := 1)", "repeat": 1}
   ]
 }
