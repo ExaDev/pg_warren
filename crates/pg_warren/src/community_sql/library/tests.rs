@@ -185,6 +185,86 @@ mod tests {
         Ok(())
     }
 
+    /// The library's intermediates on `rc`, and its level graphs.
+    fn leftovers() -> Result<Option<String>, Error> {
+        rows(
+            "SELECT name FROM warren.graphs WHERE name LIKE '\\_warren\\_%'
+             UNION ALL SELECT name FROM warren.vectors WHERE name LIKE '\\_warren\\_%'",
+        )
+    }
+
+    /// A reader may not replace the owner's vector, so writing `out` fails
+    /// after every level has run: the run leaves no intermediate and no
+    /// level graph.
+    #[pg_test]
+    fn a_failed_run_leaves_nothing_behind() -> Result<(), Error> {
+        ring_of_cliques()?;
+        Spi::run(
+            "CREATE ROLE rc_reader;
+             SELECT warren.grant('rc', 'rc_reader');
+             SELECT warren.vector_const('rc', 'taken', 1)",
+        )?;
+        for algorithm in ["louvain", "leiden"] {
+            Spi::run("DROP TABLE IF EXISTS failure; SET ROLE rc_reader")?;
+            let refused =
+                failure(&format!("warren.{algorithm}('rc', 'taken')"))?.unwrap_or_default();
+            assert!(refused.starts_with("42501: "), "{algorithm}: {refused}");
+            for part in
+                ["single", "labels", "keys", "down", "moved", "refined", "initial", "refined_down"]
+            {
+                let left =
+                    failure(&format!("warren.explain_map('rc', '_warren_{algorithm}_{part}')"))?;
+                assert!(left.is_some(), "_warren_{algorithm}_{part} was left behind");
+            }
+            Spi::run("DROP TABLE IF EXISTS failure; RESET ROLE")?;
+        }
+        assert_eq!(leftovers()?.as_deref(), Some(""));
+        Ok(())
+    }
+
+    /// A reader runs the library on a graph it may read: its level graphs
+    /// are its own, and dropped.
+    #[pg_test]
+    fn a_reader_finds_communities_of_a_graph_it_reads() -> Result<(), Error> {
+        ring_of_cliques()?;
+        Spi::run(
+            "CREATE ROLE rc_reader; SELECT warren.grant('rc', 'rc_reader'); SET ROLE rc_reader",
+        )?;
+        for algorithm in ["louvain", "leiden"] {
+            Spi::run(&format!("SELECT warren.{algorithm}('rc', '{algorithm}')"))?;
+            assert_eq!(communities(algorithm)?.as_deref(), Some(CLIQUES), "{algorithm}");
+        }
+        Spi::run("RESET ROLE")?;
+        assert_eq!(leftovers()?.as_deref(), Some(""));
+        Ok(())
+    }
+
+    /// On a version with a deleted node, the node has no community and the
+    /// rest are found as before.
+    #[pg_test]
+    fn communities_are_found_on_a_version_with_tombstones() -> Result<(), Error> {
+        ring_of_cliques()?;
+        Spi::run("DELETE FROM rc_nodes WHERE id = 3; DELETE FROM rc_edges WHERE 3 IN (src, dst)")?;
+        Spi::run("SELECT warren.refresh('rc')")?;
+        let tombstoned = Spi::get_one::<bool>(
+            "SELECT NOT live FROM warren.id_map('rc', NULL::bigint) WHERE node_id = 3",
+        )?;
+        assert_eq!(tombstoned, Some(true));
+        for algorithm in ["louvain", "leiden"] {
+            let q =
+                Spi::get_one::<f64>(&format!("SELECT warren.{algorithm}('rc', '{algorithm}')"))?;
+            let scored =
+                Spi::get_one::<f64>(&format!("SELECT warren.modularity('rc', '{algorithm}')"))?;
+            assert_eq!(q, scored, "{algorithm}");
+            assert_eq!(
+                communities(algorithm)?.as_deref(),
+                Some(CLIQUES.replacen("1,2,3,4,5", "1,2,4,5", 1).as_str()),
+                "{algorithm}"
+            );
+        }
+        Ok(())
+    }
+
     #[pg_test]
     fn each_levels_partition_can_be_kept() -> Result<(), Error> {
         ring_of_cliques()?;
