@@ -7,6 +7,7 @@
 
 mod cast;
 mod core_number;
+mod dag;
 mod dtype;
 mod encoding;
 mod error;
@@ -30,6 +31,7 @@ mod vector;
 mod workers;
 
 pub use core_number::{core_number, CoreNumbers};
+pub use dag::{dag_longest_path, topological_order, LongestPaths};
 pub use dtype::{Dtype, Element};
 pub use encoding::{encode, Decoder};
 pub use error::{ArithmeticError, ComputeError};
