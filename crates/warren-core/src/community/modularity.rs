@@ -107,7 +107,10 @@ impl Communities {
     }
 }
 
+// Not under Miri: the compute pool's work stealing runs through
+// crossbeam-epoch, which Miri's Stacked Borrows model rejects.
 #[cfg(test)]
+#[cfg(not(miri))]
 mod tests {
     use super::*;
     use crate::compute::reference::{self, Edges};
