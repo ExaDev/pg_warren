@@ -134,7 +134,7 @@ impl EdgeList {
     }
 
     /// Releases the capacity beyond the edges held.
-    fn shrink_to_fit(&mut self) {
+    pub(crate) fn shrink_to_fit(&mut self) {
         self.relations.shrink_to_fit();
         match &mut self.endpoints {
             Endpoints::U32 { sources, targets } => {
