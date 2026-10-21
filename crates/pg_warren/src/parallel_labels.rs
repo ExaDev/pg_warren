@@ -39,6 +39,7 @@ mod tests {
         ("drop_vector", "u"),
         ("drop_version", "u"),
         ("eigen", "u"),
+        ("eigenvector_centrality", "u"),
         ("evict", "r"),
         ("explain_map", "r"),
         ("gather", "u"),

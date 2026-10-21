@@ -255,6 +255,7 @@ mod tests {
         ("drop_vector", "warren.drop_vector('victim', 'c')"),
         ("drop_version", "warren.drop_version('victim', {v})"),
         ("eigen", "warren.eigen('victim', 1)"),
+        ("eigenvector_centrality", "warren.eigenvector_centrality('victim', 'ev')"),
         ("evict", "warren.evict('victim')"),
         ("explain_map", "warren.explain_map('victim', 'c + 1')"),
         ("gather", "warren.gather('victim', 'SELECT 1::bigint, 1', NULL::bigint, NULL::int[])"),
