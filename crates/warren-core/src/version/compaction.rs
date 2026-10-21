@@ -3,8 +3,8 @@
 
 use super::{GraphVersion, VersionError};
 use crate::graph::{
-    memory, BuildMemory, DenseId, EdgeList, ExternalId, GraphCsr, GraphError, IdMap, NodeOrder,
-    Permutation, Tombstones,
+    memory, BuildMemory, DenseId, EdgeList, ExternalId, GraphCsr, GraphError, IdMap, IdPair,
+    NodeOrder, Permutation, Tombstones,
 };
 
 /// The old → new dense-id mapping of a compaction.
@@ -105,14 +105,14 @@ fn renumbered<E: ExternalId>(id_map: &IdMap<E>) -> Result<(IdMap<E>, Renumbering
     let mut new_by_old = memory::filled(id_map.id_space() as usize, None)?;
     let mut old_by_new = memory::with_capacity(live)?;
     let mut pairs = memory::with_capacity(live)?;
-    for &(external, old) in id_map.pairs() {
+    for &IdPair { external, dense: old } in id_map.pairs() {
         if id_map.tombstones().contains(old) {
             continue;
         }
         let new = old_by_new.len() as DenseId;
         new_by_old[old as usize] = Some(new);
         old_by_new.push(old);
-        pairs.push((external, new));
+        pairs.push(IdPair { external, dense: new });
     }
     let id_map = IdMap::from_parts(pairs, Tombstones::new(live as u64)?)?;
     Ok((id_map, Renumbering { new_by_old, old_by_new }))

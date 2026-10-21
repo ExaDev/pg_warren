@@ -32,7 +32,7 @@ pub use csr::{
 pub use direction::Direction;
 pub use edge_list::{EdgeIntake, EdgeList};
 pub use error::GraphError;
-pub use id_map::{ExternalId, IdMap};
+pub use id_map::{ExternalId, IdMap, IdPair};
 pub use membership::Membership;
 pub(crate) use membership::NO_COMMUNITY;
 pub use node_order::{NodeOrder, Permutation};
