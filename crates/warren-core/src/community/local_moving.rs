@@ -19,6 +19,17 @@
 //! any thread count: decisions are a function of the state, and the order
 //! of application is fixed. The seed orders the nodes for the colouring
 //! (a counter-based hash of seed and node), and so the sweep.
+//!
+//! After the first sweep, a sweep decides only for the nodes a move has
+//! woken, the neighbours of a moved node outside the community it joined,
+//! as Traag et al.'s fast local moving queues them, so the long tail of
+//! sweeps that move a few nodes costs about those nodes' rows rather than
+//! the whole graph. The moving ends when no node is woken. A move also
+//! changes the gains of nodes that are not its neighbours (through their
+//! communities' degree sums), which no wake covers, so a node may end
+//! with a move that would still raise modularity, as in Traag et al.'s;
+//! sweeping every node until none moves found partitions of about the
+//! same modularity at many times the cost (DESIGN.md §6.7).
 
 use std::mem::size_of;
 
@@ -34,6 +45,10 @@ use crate::interrupts::{Cancellation, Interrupts};
 /// A colour with at least this many nodes decides in parallel tasks of
 /// this many nodes; a smaller one on the calling thread. Small under test.
 const NODES_PER_TASK: usize = if cfg!(test) { 2 } else { 2048 };
+
+/// The nodes of a colour decided at once, against one state: small under
+/// test, so tests cross blocks.
+const NODES_PER_BLOCK: usize = if cfg!(test) { 5 } else { 1 << 16 };
 
 /// How a local moving runs.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -124,30 +139,82 @@ fn run(
     let mut state = State::new(memory, graph, initial)?;
     let mut q = state.modularity(memory, graph, options.resolution)?;
     let classes = Colouring::new(memory, cancellation, graph, options.seed)?;
+    let mut sweep = Sweep::new(memory, graph.id_space() as usize)?;
     let (mut sweeps, mut moves) = (0, 0);
     while sweeps < options.max_sweeps {
         sweeps += 1;
         let before = q;
         let mut moved = 0;
         for class in classes.each() {
-            if cancellation.is_cancelled() {
-                return Err(ComputeError::Cancelled.into());
-            }
-            let decisions = state.decide(graph, class, options.resolution);
-            for decision in decisions.into_iter().flatten() {
-                if let Some(gain) = state.apply(graph, decision, options.resolution) {
-                    q += gain;
-                    moved += 1;
+            for block in class.chunks(NODES_PER_BLOCK) {
+                if cancellation.is_cancelled() {
+                    return Err(ComputeError::Cancelled.into());
+                }
+                let pending = sweep.take(block);
+                for decision in
+                    state.decide(graph, pending, options.resolution).into_iter().flatten()
+                {
+                    if let Some(gain) = state.apply(graph, decision, options.resolution) {
+                        q += gain;
+                        moved += 1;
+                        sweep.wake_neighbours(graph, &state, decision);
+                    }
                 }
             }
         }
         moves += moved;
+        // A sweep that moves none leaves no node woken.
         if moved == 0 || q - before <= options.tolerance {
             break;
         }
     }
+    drop(sweep);
     let communities = state.label(tombstones, keys, labels, memory)?;
     Ok((communities, sweeps, moves, q))
+}
+
+/// Which nodes a sweep decides for. The first sweep takes every node;
+/// later ones only the nodes woken since they last decided: the
+/// neighbours of a node that moved, outside the community it joined (the
+/// queue of Traag et al.'s fast local moving).
+struct Sweep {
+    woken: Vec<bool>,
+    pending: Vec<DenseId>,
+    _charges: [MemoryCharge; 2],
+}
+
+impl Sweep {
+    /// The bytes it holds per node.
+    const BYTES_PER_NODE: u64 = (size_of::<bool>() + size_of::<DenseId>()) as u64;
+
+    fn new(memory: &ComputeMemory, nodes: usize) -> Result<Self, CommunityError> {
+        let (woken, woken_charge) = memory.filled(nodes, true)?;
+        let (pending, pending_charge) = memory.filled(NODES_PER_BLOCK.min(nodes), 0 as DenseId)?;
+        Ok(Self { woken, pending, _charges: [woken_charge, pending_charge] })
+    }
+
+    /// The woken nodes of `block`, each put back to sleep. Every node
+    /// starts woken.
+    fn take(&mut self, block: &[DenseId]) -> &[DenseId] {
+        self.pending.clear();
+        for &node in block {
+            if self.woken[node as usize] {
+                self.woken[node as usize] = false;
+                self.pending.push(node);
+            }
+        }
+        &self.pending
+    }
+
+    /// Wakes the neighbours of `decision`'s node outside the community it
+    /// joined.
+    fn wake_neighbours(&mut self, graph: &Undirected, state: &State, decision: Decision) {
+        for &(neighbour, _) in graph.row(decision.node) {
+            if state.community[neighbour as usize] != decision.target {
+                self.woken[neighbour as usize] = true;
+            }
+        }
+    }
 }
 
 /// A node's best move: to `target`, with its weights to that community
@@ -172,14 +239,15 @@ impl State {
     /// The most [`local_moving`] charges at once on the pool for `nodes`
     /// nodes, with the decisions' scratch at its largest: the state (16 B
     /// a node) beside the starting modularity's labels and grouping (40 B,
-    /// before the colouring exists), or beside the colouring and then the
-    /// labelling's least keys (24 + 16 B).
+    /// before the colouring exists), or beside the colouring (24 B) and
+    /// either the sweeps' [`Sweep`] (at most 9 B) or, once that is gone,
+    /// the labelling's least keys (16 B).
     fn bytes(nodes: u64, graph: &Undirected) -> u64 {
         let longest = (0..nodes).map(|node| graph.row(node).len() as u64).max().unwrap_or(0);
         let state = (size_of::<DenseId>() + size_of::<f64>()) as u64;
-        let per_node = state
-            + (size_of::<i64>() as u64 + GROUPING_BYTES_PER_NODE)
-                .max(Colouring::BYTES_PER_NODE + 16);
+        let modularity = size_of::<i64>() as u64 + GROUPING_BYTES_PER_NODE;
+        let sweeps = Colouring::BYTES_PER_NODE + Sweep::BYTES_PER_NODE.max(16);
+        let per_node = state + modularity.max(sweeps);
         nodes.saturating_mul(per_node).saturating_add(longest.saturating_mul(16 * 64))
     }
 
@@ -411,6 +479,8 @@ impl Colouring {
 mod tests {
     use std::sync::OnceLock;
 
+    use proptest::prelude::*;
+
     use super::*;
     use crate::compute::reference::{self, Edges};
     use crate::interrupts::Uninterrupted;
@@ -503,6 +573,44 @@ mod tests {
         assert!(after > before);
         assert!((found.modularity - after).abs() < 1e-12);
         assert!(found.moves > 0);
+    }
+
+    proptest! {
+        /// The modularity it reports is its partition's, and no less than
+        /// the singletons'.
+        #[test]
+        fn its_modularity_is_its_partitions_and_never_falls(
+            (n, edges) in (2u64..16).prop_flat_map(|n| (
+                Just(n),
+                prop::collection::vec((0..n, 0..n, 1..4u32), 0..50),
+            )),
+            seed in any::<u64>(),
+        ) {
+            let edges: Edges = edges.into_iter().map(|(s, t, w)| (0, s, t, f64::from(w))).collect();
+            let graph = undirected(n, &edges);
+            let found = moved(&graph, workers(), None, LocalMoving { seed, ..OPTIONS });
+            let memory = ComputeMemory::new(u64::MAX);
+            let q = modularity(&memory, &graph, found.labels.values(), 1.0).unwrap();
+            let singletons: Vec<i64> = (0..n as i64).collect();
+            let start = modularity(&memory, &graph, &singletons, 1.0).unwrap();
+            prop_assert!((found.modularity - q).abs() < 1e-12, "{} != {q}", found.modularity);
+            prop_assert!(q >= start - 1e-12, "{q} < {start}");
+        }
+    }
+
+    #[test]
+    fn a_later_sweep_decides_only_for_the_woken() {
+        // A path 0 – 1 – 2 – 3: node 1 joins 2's community.
+        let graph = undirected(4, &vec![(0, 0, 1, 1.0), (0, 1, 2, 1.0), (0, 2, 3, 1.0)]);
+        let memory = ComputeMemory::new(u64::MAX);
+        let mut state = State::new(&memory, &graph, None).unwrap();
+        let mut sweep = Sweep::new(&memory, 4).unwrap();
+        assert_eq!(sweep.take(&[0, 1, 2, 3]), [0, 1, 2, 3], "every node starts woken");
+        assert!(sweep.take(&[0, 1, 2, 3]).is_empty());
+        state.community[1] = 2;
+        let decision = Decision { node: 1, target: 2, to_target: 1.0, to_own: 0.0 };
+        sweep.wake_neighbours(&graph, &state, decision);
+        assert_eq!(sweep.take(&[0, 1, 2, 3]), [0], "2 is in the community 1 joined");
     }
 
     #[test]
