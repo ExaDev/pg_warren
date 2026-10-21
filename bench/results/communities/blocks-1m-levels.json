@@ -1,0 +1,55 @@
+{
+ "louvain": {
+  "modularity": 0.8365810696433721,
+  "communities": 474,
+  "seconds": 6.591256,
+  "level_count": 3,
+  "levels": [
+   {
+    "max_levels": 1,
+    "seconds": 2.703986,
+    "modularity": 0.12240220456959015,
+    "communities": 436163
+   },
+   {
+    "max_levels": 2,
+    "seconds": 6.046799,
+    "modularity": 0.8219053678774785,
+    "communities": 1078
+   },
+   {
+    "max_levels": 3,
+    "seconds": 6.259063,
+    "modularity": 0.8365810696433721,
+    "communities": 474
+   }
+  ]
+ },
+ "leiden": {
+  "modularity": 0.8550573885484662,
+  "communities": 506,
+  "seconds": 13.370989,
+  "level_count": 14,
+  "levels": [
+   {
+    "max_levels": 1,
+    "seconds": 2.091957,
+    "modularity": 0.12240220456959015,
+    "communities": 436163
+   },
+   {
+    "max_levels": 2,
+    "seconds": 6.117406,
+    "modularity": 0.8295023836482657,
+    "communities": 3681
+   },
+   {
+    "max_levels": 3,
+    "seconds": 7.811854,
+    "modularity": 0.8383655970218731,
+    "communities": 1074
+   }
+  ]
+ },
+ "blocks_modularity": 0.898614129543034
+}

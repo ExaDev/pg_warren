@@ -1,0 +1,197 @@
+{
+ "graph": "blocks-1m",
+ "generate": [
+  "random",
+  "--nodes",
+  "1000000",
+  "--edges",
+  "0",
+  "--seed",
+  "1"
+ ],
+ "nodes": 1000000,
+ "edges": 0,
+ "params": {
+  "nodes": "1000000"
+ },
+ "pg_warren": "0.4.0",
+ "postgres": "16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
+ "git": "ef97b4b",
+ "cpus": 4,
+ "machine": "x86_64",
+ "recorded_at": "2026-10-21T12:03:43+00:00",
+ "workloads": [
+  {
+   "name": "refresh",
+   "sql": "SELECT warren.refresh('g')",
+   "seconds": [
+    3.057706
+   ],
+   "median": 3.057706
+  },
+  {
+   "name": "prewarm",
+   "sql": "SELECT warren.prewarm('g')",
+   "seconds": [
+    0.138814,
+    0.136156,
+    0.159413
+   ],
+   "median": 0.138814
+  },
+  {
+   "name": "components_vector_in",
+   "sql": "SELECT warren.components_vector('g', 'cc', rels := ARRAY['in'])",
+   "seconds": [
+    0.544252
+   ],
+   "median": 0.544252
+  },
+  {
+   "name": "contract_by_components",
+   "sql": "SELECT warren.contract('g', 'cc', 'q')",
+   "seconds": [
+    0.336173,
+    0.345633,
+    0.356496
+   ],
+   "median": 0.345633
+  },
+  {
+   "name": "project_count",
+   "sql": "SELECT warren.project('g', 'cc', 'q', 'members', 'count')",
+   "seconds": [
+    0.17004,
+    0.170317,
+    0.168113
+   ],
+   "median": 0.17004
+  },
+  {
+   "name": "project_mean",
+   "sql": "SELECT warren.project('g', 'cc', 'q', 'mean_label', 'mean', persist := false)",
+   "seconds": [
+    0.166855,
+    0.167193,
+    0.164869
+   ],
+   "median": 0.166855
+  },
+  {
+   "name": "lift",
+   "sql": "SELECT warren.lift('q', 'members', 'g', 'community_size', persist := false)",
+   "seconds": [
+    0.158291,
+    0.159413,
+    0.162961
+   ],
+   "median": 0.159413
+  },
+  {
+   "name": "dense_ids",
+   "sql": "SELECT warren.vector_dense_id('g', 'ids')",
+   "seconds": [
+    0.180205
+   ],
+   "median": 0.180205
+  },
+  {
+   "name": "contract_by_dense_ids",
+   "sql": "SELECT warren.contract('g', 'ids', 'identity')",
+   "seconds": [
+    1.253201
+   ],
+   "median": 1.253201
+  },
+  {
+   "name": "modularity_of_blocks",
+   "sql": "SELECT warren.modularity('g', 'cc')",
+   "seconds": [
+    0.459752,
+    0.440214,
+    0.440095
+   ],
+   "median": 0.440214
+  },
+  {
+   "name": "louvain",
+   "sql": "SELECT warren.louvain('g', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    6.591256
+   ],
+   "median": 6.591256
+  },
+  {
+   "name": "leiden",
+   "sql": "SELECT warren.leiden('g', 'leiden', levels_prefix := 'leiden')",
+   "seconds": [
+    13.370989
+   ],
+   "median": 13.370989
+  },
+  {
+   "name": "modularity_louvain",
+   "sql": "SELECT warren.modularity('g', 'louvain')",
+   "seconds": [
+    0.510194
+   ],
+   "median": 0.510194
+  },
+  {
+   "name": "modularity_leiden",
+   "sql": "SELECT warren.modularity('g', 'leiden')",
+   "seconds": [
+    0.49555
+   ],
+   "median": 0.49555
+  },
+  {
+   "name": "louvain_max_levels_1",
+   "sql": "SELECT warren.louvain('g', 'louvain_upto_1', max_levels := 1)",
+   "seconds": [
+    2.703986
+   ],
+   "median": 2.703986
+  },
+  {
+   "name": "louvain_max_levels_2",
+   "sql": "SELECT warren.louvain('g', 'louvain_upto_2', max_levels := 2)",
+   "seconds": [
+    6.046799
+   ],
+   "median": 6.046799
+  },
+  {
+   "name": "louvain_max_levels_3",
+   "sql": "SELECT warren.louvain('g', 'louvain_upto_3', max_levels := 3)",
+   "seconds": [
+    6.259063
+   ],
+   "median": 6.259063
+  },
+  {
+   "name": "leiden_max_levels_1",
+   "sql": "SELECT warren.leiden('g', 'leiden_upto_1', max_levels := 1)",
+   "seconds": [
+    2.091957
+   ],
+   "median": 2.091957
+  },
+  {
+   "name": "leiden_max_levels_2",
+   "sql": "SELECT warren.leiden('g', 'leiden_upto_2', max_levels := 2)",
+   "seconds": [
+    6.117406
+   ],
+   "median": 6.117406
+  },
+  {
+   "name": "leiden_max_levels_3",
+   "sql": "SELECT warren.leiden('g', 'leiden_upto_3', max_levels := 3)",
+   "seconds": [
+    7.811854
+   ],
+   "median": 7.811854
+  }
+ ]
+}

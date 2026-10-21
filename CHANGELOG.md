@@ -15,7 +15,8 @@
   contraction it adds a `CHECK` on `warren.graphs.source`, makes
   `warren.versions.parent_version` `ON DELETE SET NULL`, adds the trigger
   that clears `warren.versions.label_vector` and its index, and creates
-  `contract`, `project` and `lift`.
+  `contract`, `project` and `lift`; for communities, `louvain`, `leiden`,
+  `modularity`, `local_moving` and `leiden_refine`.
 - `create_graph` and `compact` are dropped and re-created by the update
   (each gains an argument). Unlike 0.3.0's update, this one grants again
   every privilege that was set on them, so a `GRANT` or `REVOKE` you made
@@ -146,6 +147,24 @@
     who cannot read the parent graph).
   - Checked against NetworkX's `quotient_graph` and SQL `GROUP BY`/joins
     (`test/sql/oracle_contraction*.sql`).
+- **Louvain and Leiden** (DESIGN.md §6.7 group 3,
+  [docs/communities.md](docs/communities.md)): `louvain(graph, out,
+  resolution, seed, max_levels, tolerance, weighted, levels_prefix,
+  version)` and `leiden(…, randomness, …)` write a label vector of
+  communities that maximise modularity and return its modularity;
+  `levels_prefix` keeps each level's partition. Leiden's communities are
+  always connected. Both are PL/pgSQL over `contract`, `project`, `lift`
+  and two new kernels, `local_moving` (a level's moving, parallel and
+  deterministic: the same result for any thread count and a given seed)
+  and `leiden_refine` (Traag et al.'s refinement). `modularity(graph,
+  labels, resolution, weighted, version)` scores any partition; it counts
+  an undirected self-loop once, as `contract` does, and equals NetworkX's
+  `community.modularity` on graphs without self-loops. Checked against
+  NetworkX's `louvain_communities` on stochastic block models
+  (`test/sql/oracle_louvain*.sql`: modularity, NMI against the planted
+  partition, connectedness). At 1M nodes and 5M edges on 4 vCPUs
+  `louvain` takes 6.6 s and `leiden` 13.4 s, at 10M nodes 95 s and 213 s
+  (docs/limits.md).
 
 ### Fixes
 

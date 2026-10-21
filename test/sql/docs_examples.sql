@@ -633,3 +633,13 @@ SELECT assert.equal((SELECT array_agg(node_id || ':' || value ORDER BY node_id)
 SELECT assert.equal((SELECT array_agg(value ORDER BY node_id) FROM warren.vector_values('regions', 'largest', NULL::bigint)),
                     ARRAY[100, 80]::float8[], 'communities.md max');
 SELECT assert.equal(warren.info('regions') ->> 'source', 'contraction', 'communities.md info');
+-- "Finding communities: Louvain and Leiden"
+SELECT warren.louvain('roads', 'community') AS q \gset
+SELECT node_id, value FROM warren.vector_values('roads', 'community', NULL::int);
+SELECT assert.that(abs(:q - 0.03969384122463507) < 1e-12, format('communities.md louvain %s', :q));
+SELECT assert.equal((SELECT array_agg(node_id || ':' || value ORDER BY node_id)
+                     FROM warren.vector_values('roads', 'community', NULL::int)),
+                    ARRAY['1:0', '2:1', '3:1', '4:0', '5:0'], 'communities.md louvain labels');
+SELECT assert.that(abs(warren.modularity('roads', 'region') - (-0.14168743325026703)) < 1e-12,
+                   'communities.md modularity of the regions');
+SELECT assert.that(abs(warren.leiden('roads', 'community_leiden') - :q) < 1e-12, 'communities.md leiden');

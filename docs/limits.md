@@ -437,6 +437,16 @@ with five undirected edges per node (10N stored), contracted by
 | `contract` into N / 1,000 communities | 0.35 s | 4.2 s |
 | `contract` by dense id (N communities, the worst case) | 1.7 s | 13.7 s |
 | `project` (`count`, `mean`), `lift` | 0.14–0.16 s | 1.9–2.0 s |
+| `modularity` of a partition | 0.44 s | 4.9 s |
+| `louvain` (3 levels) | 6.6 s | 95 s |
+| `leiden` (14 levels at 1M) | 13.4 s | 213 s |
+
+A level's time, as the difference of runs with `max_levels` 1, 2 and 3:
+Louvain 2.7, 3.3 and 0.2 s at 1M, and 37.7, 42.0 and 15.2 s at 10M;
+Leiden 2.1, 4.0 and 1.7 s at 1M (5.6 s for the other eleven), and 28.7 and
+56.0 s at 10M (128 s for the rest). The first level runs on the whole
+graph; every later one contracts the whole graph by the partition found so
+far, so Leiden's many small late levels cost a contraction each.
 
 ## Known limitations
 
@@ -497,10 +507,10 @@ reads ([memory model](#memory-model)), within `warren.max_cache_memory`.
 
 **Not yet supported:** `text` node ids; incremental maintenance (every
 `refresh` is a full rebuild); `refresh` or `compact` of a graph derived by
-contraction (contract again); Louvain and Leiden (DESIGN.md §6.7, group
-3); edge properties beyond one weight; ownership transfer;
-cleanup of graphs and vectors when their owner role is dropped (a superuser
-can still `drop_graph`); per-role quotas on readers' vectors.
+contraction (contract again); edge properties beyond one weight;
+ownership transfer; cleanup of graphs and vectors when their owner role is
+dropped (a superuser can still `drop_graph`); per-role quotas on readers'
+vectors.
 
 **Cost shapes to know.**
 
@@ -514,6 +524,19 @@ can still `drop_graph`); per-role quotas on readers' vectors.
 - `gather(…, 'collect')` of growing sets costs memory O(N × neighbourhood);
   it suits local neighbourhoods, not community-wide state; contract to a
   quotient graph for that ([communities.md](communities.md)).
+- `louvain` and `leiden` cost a pass over the stored edges per sweep of
+  local moving (after the first sweep, only over the rows of nodes whose
+  neighbours moved) and a contraction of the whole graph per level. Their
+  scratch is charged to `warren.max_compute_memory`: the undirected view
+  (16 bytes per stored edge, both directions of a directed graph, and per
+  node) and up to 56 bytes per node while moving. Each level writes its
+  graph's version (segments and WAL); the level's graph is dropped when
+  the next is built, but its rows stay until `VACUUM` after the run's
+  transaction ends, so the disk a run needs grows with its levels: on the
+  1M-node block graph (75 MB of segments) `louvain` wrote 166 MB of
+  segments and about 190 MB of WAL, `leiden` 511 MB and 670 MB; at 10M
+  nodes `leiden` needs about ten times that, some 12–14 GB, at the limit
+  of the benchmark machine's free disk.
 - `contract` is linear: a counting sort of the nodes by community, then one
   pass over the stored edges, on one thread, plus a build of the quotient
   (its edges, at most the parent's). Its scratch, charged to
