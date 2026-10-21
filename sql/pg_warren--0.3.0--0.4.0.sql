@@ -622,3 +622,67 @@ CREATE FUNCTION warren.minimum_spanning_forest(graph text, id_type anyelement, r
                                                weighted bool DEFAULT NULL, version bigint DEFAULT NULL)
 RETURNS TABLE (source anyelement, target anyelement, weight float8)
 STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'minimum_spanning_forest_wrapper';
+
+-- Contraction (DESIGN.md §6.6): a graph's versions may be derived from
+-- another graph's versions by warren.contract. graphs.source says which;
+-- versions.parent_version names the version a contraction was contracted
+-- from, and is cleared when that version is dropped; versions.label_vector
+-- names the vector it was contracted on, and is cleared by a trigger when
+-- that vector is deleted (it cannot be a foreign key: with
+-- vectors.version_id it would make a cycle, which pg_dump cannot order).
+-- Every row is a query graph's, with no parent, before the update.
+ALTER TABLE warren.graphs ADD CONSTRAINT graphs_source_check
+    CHECK (source IN ('query'::pg_catalog.text, 'contraction'::pg_catalog.text));
+ALTER TABLE warren.versions DROP CONSTRAINT versions_parent_version_fkey,
+    ADD CONSTRAINT versions_parent_version_fkey FOREIGN KEY (parent_version)
+        REFERENCES warren.versions ON DELETE SET NULL;
+CREATE INDEX versions_label_vector ON warren.versions (label_vector)
+    WHERE label_vector IS NOT NULL;
+CREATE FUNCTION warren.label_vector_is_forgotten() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+    UPDATE warren.versions SET label_vector = NULL
+    WHERE label_vector OPERATOR(pg_catalog.=) OLD.vector_id;
+    RETURN OLD;
+END $$;
+CREATE TRIGGER label_vector_is_forgotten AFTER DELETE ON warren.vectors
+    FOR EACH ROW EXECUTE FUNCTION warren.label_vector_is_forgotten();
+REVOKE EXECUTE ON FUNCTION warren.label_vector_is_forgotten() FROM PUBLIC;
+
+CREATE FUNCTION warren."contract"(
+	"graph" TEXT,
+	"label_vector" TEXT,
+	"out_graph" TEXT,
+	"weighted" bool DEFAULT true,
+	"drop_self_loops" bool DEFAULT false,
+	"promote" bool DEFAULT true,
+	"version" bigint DEFAULT NULL
+) RETURNS bigint
+VOLATILE PARALLEL UNSAFE
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'contract_wrapper';
+
+CREATE FUNCTION warren."project"(
+	"graph" TEXT,
+	"x" TEXT,
+	"out_graph" TEXT,
+	"y" TEXT,
+	"agg" TEXT DEFAULT 'sum',
+	"persist" bool DEFAULT true,
+	"version" bigint DEFAULT NULL
+) RETURNS void
+VOLATILE PARALLEL UNSAFE
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'project_wrapper';
+
+CREATE FUNCTION warren."lift"(
+	"out_graph" TEXT,
+	"y" TEXT,
+	"graph" TEXT,
+	"x" TEXT,
+	"persist" bool DEFAULT true,
+	"version" bigint DEFAULT NULL
+) RETURNS void
+VOLATILE PARALLEL UNSAFE
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'lift_wrapper';

@@ -29,6 +29,7 @@ fn refresh(
 fn refresh_graph(name: &str, promote: bool, label: Option<&str>) -> Result<VersionId, BuildError> {
     let mut graph = GraphDefinition::find(name)?;
     require_owner(graph.owner, &graph.name, "refresh")?;
+    graph.require_query_source("refresh")?;
     graph.lock()?;
     graph.require_sound_current_version()?;
     if let Some(base) = graph.current_version {

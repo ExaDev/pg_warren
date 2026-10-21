@@ -79,6 +79,15 @@ pub(crate) enum CatalogError {
     /// A node order other than 'id' or 'locality' (DESIGN.md §14 item 22).
     #[error(transparent)]
     NodeOrder(GraphError),
+    /// A graph derived by contraction gets new versions only from
+    /// `warren.contract` (DESIGN.md §6.6).
+    #[error("cannot {action} graph \"{graph}\": it is derived by contraction; warren.contract makes its versions")]
+    DerivedByContraction {
+        /// The graph.
+        graph: String,
+        /// What was refused.
+        action: &'static str,
+    },
     /// An SPI call failed.
     #[error(transparent)]
     Spi(#[from] pgrx::spi::Error),
@@ -101,6 +110,7 @@ impl SqlError for CatalogError {
             Self::Access(error) => error.sqlstate(),
             Self::Source(error) => error.sqlstate(),
             Self::NodeOrder(error) => graph_sqlstate(error),
+            Self::DerivedByContraction { .. } => PgSqlErrorCode::ERRCODE_WRONG_OBJECT_TYPE,
             Self::Spi(_) => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
         }
     }

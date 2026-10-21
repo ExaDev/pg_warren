@@ -192,3 +192,21 @@ def test_longest_paths_restart_after_a_negative_prefix():
     dag = weighted([(1, 2, -3.0), (2, 3, 2.0), (1, 3, 1.0), (3, 4, -1.0)], directed=True)
     rows = oracle.compute("dag_longest_path", dag, [])
     assert sorted(rows) == [(1, 0), (2, 0), (3, 2), (4, 1)]
+
+
+def test_a_quotient_sums_the_edges_between_and_inside_each_label():
+    # Labels 0: {1, 2}, 1: {3}; edges 1 – 2 (inside 0), 2 – 3, 1 – 3, 3 – 3.
+    g = graph([(1, 2), (2, 3), (1, 3), (3, 3)])
+    for u, v in g.edges:
+        g[u][v]["weight"] = u + v
+    labels = {1: 0, 2: 0, 3: 1}
+    rows = sorted(oracle.quotient(g, [], labels))
+    assert rows == [(0, 0, 3.0), (0, 1, 9.0), (1, 0, 9.0), (1, 1, 6.0)]
+    counted = sorted(oracle.quotient(g, ["--count"], labels))
+    assert counted == [(0, 0, 1.0), (0, 1, 2.0), (1, 0, 2.0), (1, 1, 1.0)]
+
+
+def test_a_directed_quotient_keeps_the_direction_of_each_edge():
+    g = graph([(1, 3), (3, 2), (2, 1)], directed=True)
+    rows = sorted(oracle.quotient(g, ["--count"], {1: 0, 2: 0, 3: 1}))
+    assert rows == [(0, 0, 1.0), (0, 1, 1.0), (1, 0, 1.0)]

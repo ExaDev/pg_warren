@@ -32,7 +32,8 @@ before changing code. Commands, toolchain setup and environment gotchas are in
    - `warren-core/src/`: `graph/` (csr, id_map, tombstones, relation
      selection), `interrupts` (the cancellation poll shared by traversal and
      compute), `traversal/`, `compute/` (semiring, kernels, message),
-     `spectral/`, `version/` (diff, compaction across versions).
+     `community/` (labels, contraction, projection), `spectral/`,
+     `version/` (diff, compaction across versions).
    - `pg_warren/src/`: `extension` (schema + `warren.version()`, SQL
      errors), `access/` (identity switches, privilege checks), `source/`
      (node/edge query columns and read-only cursors), `catalog/`,
@@ -41,12 +42,14 @@ before changing code. Commands, toolchain setup and environment gotchas are in
      `read_only` (single-row SPI reads that assign no transaction id),
      `external_ids/` (id arguments ↔ dense ids), `selection/` (direction and
      relations), `traversal_sql/`, `vector/` (persistence and cache of named
-     vectors), `compute_sql/`, `spectral_sql/` (eigen, distance).
+     vectors), `compute_sql/`, `spectral_sql/` (eigen, distance),
+     `community_sql/` (contract, project, lift).
      Feature dependencies form a DAG: `access`, `source` → `catalog` →
      `segment` → `vector` → `cache` → `build` → `version_sql`; `cache` →
      `external_ids`, `selection`; and `external_ids`, `selection`,
      `interrupts` → `traversal_sql`, `compute_sql` (siblings: neither depends
-     on the other); `compute_sql` → `spectral_sql`; never the reverse.
+     on the other); `compute_sql` → `spectral_sql`; `build`, `compute_sql`
+     → `community_sql`; never the reverse.
    - Each module's `mod.rs` doc comment states its responsibility. Add a
      submodule when the code exists, not before.
 4. **Ubiquitous language (from DESIGN.md).** Use these terms exactly, in code,

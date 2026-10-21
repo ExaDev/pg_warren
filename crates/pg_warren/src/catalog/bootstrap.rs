@@ -11,7 +11,8 @@ CREATE TABLE warren.graphs (
     name             text UNIQUE NOT NULL,
     owner            regrole NOT NULL,
     readers          regrole[] NOT NULL DEFAULT '{}',
-    source           text NOT NULL DEFAULT 'query',
+    source           text NOT NULL DEFAULT 'query'
+                     CHECK (source IN ('query'::pg_catalog.text, 'contraction'::pg_catalog.text)),
     node_query       text,
     edge_query       text,
     search_path      text NOT NULL,
@@ -43,7 +44,7 @@ CREATE TABLE warren.versions (
     compacted_from bigint REFERENCES warren.versions ON DELETE SET NULL,
     bytes        bigint NOT NULL,
     label        text,
-    parent_version bigint REFERENCES warren.versions,
+    parent_version bigint REFERENCES warren.versions ON DELETE SET NULL,
     label_vector   bigint,
     UNIQUE (graph_id, seq)
 );
@@ -87,8 +88,8 @@ ALTER TABLE warren.vector_chunks ALTER COLUMN data SET STORAGE EXTERNAL;
 -- deleted while it is current. They are not equivalent to a key: inserts
 -- are not checked (a restore only inserts; cache::open checks what it
 -- reads), and they lock only the rows their queries lock. (versions.
--- label_vector, for contraction in v1.1, has no foreign key for the same
--- reason.)
+-- label_vector has no foreign key for the same reason; a trigger below
+-- clears it instead.)
 CREATE FUNCTION warren.current_version_is_the_graphs() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
@@ -126,8 +127,24 @@ BEGIN
 END $$;
 CREATE TRIGGER current_version_is_kept BEFORE DELETE ON warren.versions
     FOR EACH ROW EXECUTE FUNCTION warren.current_version_is_kept();
+-- versions.label_vector names the vector a contraction was contracted on
+-- (DESIGN.md §6.6). It cannot be a foreign key: with vectors.version_id it
+-- would make a cycle. When that vector is deleted, the versions contracted
+-- on it forget it, so the link never dangles.
+CREATE INDEX versions_label_vector ON warren.versions (label_vector)
+    WHERE label_vector IS NOT NULL;
+CREATE FUNCTION warren.label_vector_is_forgotten() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+    UPDATE warren.versions SET label_vector = NULL
+    WHERE label_vector OPERATOR(pg_catalog.=) OLD.vector_id;
+    RETURN OLD;
+END $$;
+CREATE TRIGGER label_vector_is_forgotten AFTER DELETE ON warren.vectors
+    FOR EACH ROW EXECUTE FUNCTION warren.label_vector_is_forgotten();
 -- Trigger functions cannot be called directly; nobody needs EXECUTE on them.
-REVOKE EXECUTE ON FUNCTION warren.current_version_is_the_graphs(), warren.current_version_is_kept()
+REVOKE EXECUTE ON FUNCTION warren.current_version_is_the_graphs(), warren.current_version_is_kept(),
+    warren.label_vector_is_forgotten()
     FROM PUBLIC;
 
 -- Only warren.* functions touch these, as the catalog owner (§7).

@@ -19,7 +19,7 @@ pub(crate) use chunk::{
 pub(crate) use error::SegmentError;
 pub(crate) use layout::{write_version, writer_memory, SegmentWriter};
 pub(crate) use name::{
-    csr_segment, CsrPart, CsrScope, Direction, ID_MAP, RELATION_DICTIONARY, TOMBSTONES,
+    csr_segment, CsrPart, CsrScope, Direction, ID_MAP, MEMBERSHIP, RELATION_DICTIONARY, TOMBSTONES,
 };
 pub(crate) use spi::{each_chunk, SpiSegmentStore};
 

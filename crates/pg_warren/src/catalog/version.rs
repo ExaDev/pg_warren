@@ -5,7 +5,7 @@
 use pgrx::prelude::*;
 use warren_core::graph::{ExternalId, GraphCsr, IdMap, TargetWidth};
 
-use super::retention::{retention, VersionSummary};
+use super::retention::{retention, Kept, VersionSummary};
 use super::{CatalogError, GraphDefinition};
 use crate::access::as_catalog_owner;
 use crate::read_only::read_one;
@@ -80,6 +80,19 @@ pub(crate) struct NewVersion<'a> {
     pub(crate) label: Option<&'a str>,
     /// The version it was compacted from, which starts a new id space.
     pub(crate) compacted_from: Option<VersionId>,
+    /// The version it was contracted from, for a contraction.
+    pub(crate) lineage: Option<Lineage>,
+}
+
+/// What a version derived by contraction was contracted from (DESIGN.md
+/// §6.6): `versions.parent_version` and `versions.label_vector`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Lineage {
+    /// The parent version.
+    pub(crate) parent_version: VersionId,
+    /// The persisted label vector it was contracted on (`None` for a
+    /// transient one).
+    pub(crate) label_vector: Option<i64>,
 }
 
 /// The current WAL position, as `pg_lsn` text, for `versions.built_lsn`.
@@ -101,9 +114,10 @@ pub(crate) fn insert_version(
                     .update(
                         "INSERT INTO warren.versions (graph_id, seq, built_at, built_lsn,
                              node_count, id_space, edge_count, dropped_edges,
-                             deduplicated_edges, target_width, bytes, label, compacted_from)
+                             deduplicated_edges, target_width, bytes, label, compacted_from,
+                             parent_version, label_vector)
                          SELECT $1, coalesce(max(seq), 0) + 1, now(), $2::pg_lsn, $3, $4,
-                                $5, $6, $7, $8, 0, $9, $10
+                                $5, $6, $7, $8, 0, $9, $10, $11, $12
                          FROM warren.versions WHERE graph_id = $1
                          RETURNING version_id",
                         None,
@@ -118,6 +132,8 @@ pub(crate) fn insert_version(
                             stats.target_width.into(),
                             new.label.into(),
                             new.compacted_from.into(),
+                            new.lineage.map(|l| l.parent_version).into(),
+                            new.lineage.and_then(|l| l.label_vector).into(),
                         ],
                     )?
                     .first()
@@ -180,7 +196,9 @@ pub(crate) fn promote_version(
                 .select(
                     "SELECT v.version_id, v.seq, v.staged,
                             (SELECT count(*) FROM warren.vectors x
-                             WHERE x.version_id = v.version_id)
+                             WHERE x.version_id = v.version_id),
+                            (SELECT count(*) FROM warren.versions d
+                             WHERE d.parent_version = v.version_id)
                      FROM warren.versions v WHERE v.graph_id = $1",
                     None,
                     &[graph.graph_id.into()],
@@ -191,6 +209,7 @@ pub(crate) fn promote_version(
                         seq: row.get(2)?.unwrap_or_default(),
                         staged: row.get(3)?.unwrap_or_default(),
                         bound_vectors: row.get(4)?.unwrap_or_default(),
+                        derived_versions: row.get(5)?.unwrap_or_default(),
                     })
                 })
                 .collect::<Result<Vec<_>, pgrx::spi::Error>>()?;
@@ -203,25 +222,34 @@ pub(crate) fn promote_version(
             Ok::<_, CatalogError>(outcome)
         })
     })?;
-    for (kept, vectors) in outcome.kept_for_vectors {
+    for kept in outcome.kept {
         ereport!(
             NOTICE,
             PgSqlErrorCode::ERRCODE_SUCCESSFUL_COMPLETION,
-            kept_notice(kept, vectors, &graph.name)
+            kept_notice(&kept, &graph.name)
         );
     }
     Ok(())
 }
 
 /// The `NOTICE` for version `kept` of `graph`, kept beyond retention
-/// because `vectors` vectors are bound to it.
-fn kept_notice(kept: VersionId, vectors: i64, graph: &str) -> String {
-    let bound = match vectors {
-        1 => "1 vector is".to_owned(),
-        n => format!("{n} vectors are"),
+/// because vectors are bound to it or versions were contracted from it.
+fn kept_notice(kept: &Kept, graph: &str) -> String {
+    let vectors = match kept.vectors {
+        0 => None,
+        1 => Some("1 vector is bound to it".to_owned()),
+        n => Some(format!("{n} vectors are bound to it")),
     };
+    let derived = match kept.derived_versions {
+        0 => None,
+        1 => Some("1 contracted version derives from it".to_owned()),
+        n => Some(format!("{n} contracted versions derive from it")),
+    };
+    let reasons: Vec<String> = vectors.into_iter().chain(derived).collect();
     format!(
-        "version {kept} of graph \"{graph}\" is kept beyond retain_versions: {bound} bound to it"
+        "version {} of graph \"{graph}\" is kept beyond retain_versions: {}",
+        kept.version,
+        reasons.join(", and ")
     )
 }
 
@@ -285,6 +313,46 @@ pub(crate) fn compaction_between(
                 return Ok(None);
             }
             Ok(row.get::<i64>(1)?.zip(row.get::<i64>(2)?))
+        })
+    })
+}
+
+/// The version a contraction's version was contracted from (DESIGN.md
+/// §6.6), and its graph.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Parent {
+    /// The parent version.
+    pub(crate) version: VersionId,
+    /// Its graph's id.
+    pub(crate) graph_id: i32,
+    /// Its graph's name.
+    pub(crate) graph: String,
+}
+
+/// The version `version` was contracted from, if it was and that version
+/// still exists (dropping it sets `parent_version` to NULL).
+pub(crate) fn parent_of(version: VersionId) -> Result<Option<Parent>, CatalogError> {
+    as_catalog_owner(|| {
+        Spi::connect(|client| {
+            let row = client
+                .select(
+                    "SELECT p.version_id, g.graph_id, g.name
+                     FROM warren.versions v
+                     JOIN warren.versions p ON p.version_id = v.parent_version
+                     JOIN warren.graphs g ON g.graph_id = p.graph_id
+                     WHERE v.version_id = $1",
+                    Some(1),
+                    &[version.into()],
+                )?
+                .first();
+            if row.is_empty() {
+                return Ok(None);
+            }
+            Ok(Some(Parent {
+                version: row.get(1)?.unwrap_or_default(),
+                graph_id: row.get(2)?.unwrap_or_default(),
+                graph: row.get(3)?.unwrap_or_default(),
+            }))
         })
     })
 }
@@ -369,17 +437,35 @@ fn bigint(count: u64, column: &'static str) -> Result<i64, CatalogError> {
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod notices {
-    use super::kept_notice;
+    use super::{kept_notice, Kept};
+
+    fn kept(vectors: i64, derived_versions: i64) -> Kept {
+        Kept { version: 3, vectors, derived_versions }
+    }
 
     #[test]
     fn the_retention_notice_counts_vectors_in_the_singular_and_plural() {
         assert_eq!(
-            kept_notice(3, 1, "g"),
+            kept_notice(&kept(1, 0), "g"),
             "version 3 of graph \"g\" is kept beyond retain_versions: 1 vector is bound to it"
         );
         assert_eq!(
-            kept_notice(3, 2, "g"),
+            kept_notice(&kept(2, 0), "g"),
             "version 3 of graph \"g\" is kept beyond retain_versions: 2 vectors are bound to it"
+        );
+    }
+
+    #[test]
+    fn the_retention_notice_counts_contracted_versions() {
+        assert_eq!(
+            kept_notice(&kept(0, 1), "g"),
+            "version 3 of graph \"g\" is kept beyond retain_versions: \
+             1 contracted version derives from it"
+        );
+        assert_eq!(
+            kept_notice(&kept(1, 2), "g"),
+            "version 3 of graph \"g\" is kept beyond retain_versions: 1 vector is bound to it, \
+             and 2 contracted versions derive from it"
         );
     }
 }

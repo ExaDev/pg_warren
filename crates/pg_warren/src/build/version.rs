@@ -2,6 +2,8 @@
 //! `warren.versions` and may promote it (DESIGN.md §5.4 steps 5–6, §7).
 
 use super::error::BuildError;
+#[cfg(test)]
+use crate::catalog::Lineage;
 use crate::catalog::{GraphDefinition, NewVersion, VersionId, VersionStats};
 
 /// Records versions of a graph.
@@ -36,6 +38,7 @@ pub(crate) mod tests {
         pub(crate) stats: VersionStats,
         pub(crate) label: Option<String>,
         pub(crate) compacted_from: Option<VersionId>,
+        pub(crate) lineage: Option<Lineage>,
         pub(crate) bytes: u64,
         pub(crate) staged: bool,
     }
@@ -60,6 +63,7 @@ pub(crate) mod tests {
                 stats: version.stats,
                 label: version.label.map(str::to_owned),
                 compacted_from: version.compacted_from,
+                lineage: version.lineage,
                 bytes: 0,
                 staged: true,
             });

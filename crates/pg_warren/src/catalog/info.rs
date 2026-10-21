@@ -1,5 +1,6 @@
 //! `warren.info`: a graph's definition, its versions and their statistics,
-//! as `jsonb` (DESIGN.md §9.3). Owners and readers may call it.
+//! and for a contraction what each version was contracted from, as `jsonb`
+//! (DESIGN.md §9.3, §6.6). Owners and readers may call it.
 
 use pgrx::prelude::*;
 use pgrx::JsonB;
@@ -22,7 +23,7 @@ fn describe(name: &str) -> Result<JsonB, CatalogError> {
     let info = as_catalog_owner(|| {
         Ok::<_, CatalogError>(read_one::<JsonB>(
             "SELECT jsonb_build_object(
-                 'name', g.name, 'owner', g.owner::text, 'readers', to_jsonb(g.readers::text[]),
+                 'name', g.name, 'source', g.source, 'owner', g.owner::text, 'readers', to_jsonb(g.readers::text[]),
                  'id_type', g.id_type::text, 'search_path', g.search_path, 'directed', g.directed, 'weighted', g.weighted,
                  'has_relations', g.has_relations, 'build_reverse', g.build_reverse,
                  'store_merged', g.store_merged, 'node_order', g.node_order,
@@ -43,6 +44,11 @@ fn describe(name: &str) -> Result<JsonB, CatalogError> {
                          'deduplicated_edges', v.deduplicated_edges,
                          'target_width', v.target_width, 'bytes', v.bytes,
                          'compacted_from', v.compacted_from,
+                         'parent_version', v.parent_version,
+                         'parent_graph', (SELECT p.name FROM warren.versions pv
+                                          JOIN warren.graphs p ON p.graph_id = pv.graph_id
+                                          WHERE pv.version_id = v.parent_version),
+                         'label_vector', v.label_vector,
                          'vectors', (SELECT count(*) FROM warren.vectors x
                                      WHERE x.version_id = v.version_id))
                          ORDER BY v.seq)
@@ -88,6 +94,10 @@ mod tests {
         let promoted = refresh("i", true)?;
         let staged = refresh("i", false)?;
         assert_eq!(info("{name}")?.as_deref(), Some("\"i\""));
+        assert_eq!(info("{source}")?.as_deref(), Some("\"query\""));
+        assert_eq!(info("{versions,0,parent_version}")?.as_deref(), Some("null"));
+        assert_eq!(info("{versions,0,parent_graph}")?.as_deref(), Some("null"));
+        assert_eq!(info("{versions,0,label_vector}")?.as_deref(), Some("null"));
         assert_eq!(info("{owner}")?.as_deref(), Some("\"i_owner\""));
         assert_eq!(info("{id_type}")?.as_deref(), Some("\"bigint\""));
         assert_eq!(info("{readers}")?.as_deref(), Some("[]"));

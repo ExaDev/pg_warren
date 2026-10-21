@@ -18,7 +18,7 @@ use warren_core::graph::NodeOrder;
 const FIND: &str = "SELECT g.graph_id, g.owner::oid, g.readers::oid[], g.node_query, g.edge_query,
                            g.search_path, g.directed, g.weighted, g.has_relations,
                            g.build_reverse, g.retain_versions, g.current_version, g.id_type::oid,
-                           v.version_id, g.store_merged, g.node_order
+                           v.version_id, g.store_merged, g.node_order, g.source
                     FROM warren.graphs g
                     LEFT JOIN warren.versions v
                            ON v.version_id = g.current_version AND v.graph_id = g.graph_id
@@ -41,22 +41,45 @@ thread_local! {
     static FIND_PLAN: OnceCell<OwnedPreparedStatement> = const { OnceCell::new() };
 }
 
-/// A graph's definition, as `warren.create_graph` recorded it.
+/// Where a graph's versions come from (DESIGN.md §5.1, §6.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GraphSource {
+    /// Built by `warren.refresh` from its node and edge queries.
+    Query,
+    /// Derived by `warren.contract` from versions of another graph.
+    Contraction,
+}
+
+impl GraphSource {
+    /// Its name in `graphs.source`.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Query => "query",
+            Self::Contraction => "contraction",
+        }
+    }
+}
+
+/// A graph's definition, as `warren.create_graph` (or `warren.contract`)
+/// recorded it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GraphDefinition {
     /// `graphs.graph_id`.
     pub(crate) graph_id: i32,
     /// `graphs.name`.
     pub(crate) name: String,
+    /// Where its versions come from.
+    pub(crate) source: GraphSource,
     /// The owner role: source queries run as this role (DESIGN.md §7).
     pub(crate) owner: pg_sys::Oid,
     /// Roles whose members may query the graph (DESIGN.md §7).
     pub(crate) readers: Vec<pg_sys::Oid>,
     /// The type of its node ids.
     pub(crate) id_type: IdType,
-    /// `SELECT <id> ...`.
+    /// `SELECT <id> ...` (empty for a contraction).
     pub(crate) node_query: String,
-    /// `SELECT <src>, <dst> [, <rel>] [, <weight>] ...`.
+    /// `SELECT <src>, <dst> [, <rel>] [, <weight>] ...` (empty for a
+    /// contraction).
     pub(crate) edge_query: String,
     /// The `search_path` the source queries run under: the creator's.
     pub(crate) search_path: String,
@@ -88,9 +111,11 @@ pub(crate) struct GraphDefinition {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct NewGraph<'a> {
     pub(crate) name: &'a str,
+    pub(crate) source: GraphSource,
     pub(crate) owner: pg_sys::Oid,
-    pub(crate) node_query: &'a str,
-    pub(crate) edge_query: &'a str,
+    /// The source queries (NULL for a contraction).
+    pub(crate) node_query: Option<&'a str>,
+    pub(crate) edge_query: Option<&'a str>,
     pub(crate) search_path: &'a str,
     pub(crate) id_type: pg_sys::Oid,
     pub(crate) directed: bool,
@@ -125,8 +150,13 @@ impl GraphDefinition {
                     .get::<pg_sys::Oid>(13)?
                     .and_then(IdType::from_oid)
                     .ok_or_else(|| CatalogError::UnknownIdType(name.to_owned()))?;
+                let source = match row.get::<String>(17)?.as_deref() {
+                    Some("contraction") => GraphSource::Contraction,
+                    _ => GraphSource::Query,
+                };
                 Ok(Self {
                     id_type,
+                    source,
                     graph_id: row.get(1)?.unwrap_or_default(),
                     name: name.to_owned(),
                     owner: row.get(2)?.unwrap_or(pg_sys::Oid::INVALID),
@@ -175,6 +205,18 @@ impl GraphDefinition {
         self.current_version = current;
         self.stray_current_version = stray(stored, current);
         Ok(())
+    }
+
+    /// Checks that the graph is built from its queries: `refresh` and
+    /// `compact` (`action`) build no version of a contraction, which only
+    /// `warren.contract` makes (DESIGN.md §6.6).
+    pub(crate) fn require_query_source(&self, action: &'static str) -> Result<(), CatalogError> {
+        match self.source {
+            GraphSource::Query => Ok(()),
+            GraphSource::Contraction => {
+                Err(CatalogError::DerivedByContraction { graph: self.name.clone(), action })
+            }
+        }
     }
 
     /// Checks that the recorded current version, if any, is one of the
@@ -271,9 +313,9 @@ impl NewGraph<'_> {
                 client.update(
                     "INSERT INTO warren.graphs (name, owner, node_query, edge_query, search_path,
                          id_type, directed, weighted, has_relations, build_reverse,
-                         retain_versions, store_merged, node_order)
+                         retain_versions, store_merged, node_order, source)
                      VALUES ($1, $2::oid::regrole, $3, $4, $5, $6::oid::regtype, $7, $8, $9,
-                             $10, $11, $12, $13)",
+                             $10, $11, $12, $13, $14)",
                     None,
                     &[
                         graph.name.into(),
@@ -289,6 +331,7 @@ impl NewGraph<'_> {
                         graph.retain_versions.into(),
                         graph.store_merged.into(),
                         graph.node_order.name().into(),
+                        graph.source.name().into(),
                     ],
                 )?;
                 Ok(())

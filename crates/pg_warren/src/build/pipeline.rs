@@ -9,14 +9,14 @@
 
 use warren_core::graph::{
     BuildCharge, BuildMemory, BuildPlan, CsrLayout, EdgeIntake, EdgeList, ExternalId, GraphCsr,
-    GraphError, IdMap, NodeOrder, Permutation, RelationDictionary, RelationIndex,
+    GraphError, IdMap, Membership, NodeOrder, Permutation, RelationDictionary, RelationIndex,
 };
 
 use super::error::BuildError;
 use super::source::{EdgeRow, EdgeSink, SourceReader};
 use super::version::Catalog;
 use crate::cache::{load_identity, Identity};
-use crate::catalog::{GraphDefinition, NewVersion, VersionId, VersionStats};
+use crate::catalog::{GraphDefinition, Lineage, NewVersion, VersionId, VersionStats};
 use crate::segment::{writer_memory, SegmentStore, SegmentWriter};
 
 /// The name of the one relation of a graph without relations.
@@ -88,8 +88,51 @@ pub(crate) fn build<E: ExternalId>(
         id_map.renumber(&permutation, &memory)?;
     }
     let Relations { dictionary: relations, charge: _relations_charge, .. } = relations;
+    let contents = Contents { id_map, relations, edges, dropped_edges };
+    let version = write_contents(graph, request, contents, None, &memory, segments, catalog)?;
+    Ok(Built { version, memory_peak: memory.peak() })
+}
+
+/// A new version's id map, relation dictionary and edges, as a build or a
+/// contraction made them.
+pub(crate) struct Contents<E> {
+    /// The id map, tombstones included.
+    pub(crate) id_map: IdMap<E>,
+    /// The relation dictionary.
+    pub(crate) relations: RelationDictionary,
+    /// The edges, in dense ids.
+    pub(crate) edges: EdgeList,
+    /// The edge rows dropped while reading them.
+    pub(crate) dropped_edges: u64,
+}
+
+/// What a version of a contraction was derived from (DESIGN.md §6.6).
+pub(crate) struct Derivation<'m> {
+    /// The parent version and the label vector.
+    pub(crate) lineage: Lineage,
+    /// Each parent node's community.
+    pub(crate) membership: &'m Membership,
+}
+
+/// Writes a new version of `graph` from `contents` (DESIGN.md §5.4 steps
+/// 4–6): plans its CSRs within `memory`, refused before anything is
+/// written if they would not fit; records the version, staged; streams
+/// its CSRs, then its identity segments and, for a contraction, its
+/// `membership`, into `segments`; records its statistics and bytes; and
+/// promotes it if asked.
+pub(crate) fn write_contents<E: ExternalId>(
+    graph: &GraphDefinition,
+    request: &RefreshRequest<'_>,
+    contents: Contents<E>,
+    derivation: Option<Derivation<'_>>,
+    memory: &BuildMemory,
+    segments: &mut impl SegmentStore,
+    catalog: &mut impl Catalog,
+) -> Result<VersionId, BuildError> {
+    let Contents { id_map, relations, edges, dropped_edges } = contents;
+    let layout = CsrLayout { build_reverse: graph.build_reverse, store_merged: graph.store_merged };
     let beside = writer_memory(request.chunk_size);
-    let plan = BuildPlan::new(&edges, relations.len(), id_map.id_space(), layout, &memory, beside)?;
+    let plan = BuildPlan::new(&edges, relations.len(), id_map.id_space(), layout, memory, beside)?;
     memory.require(plan.bytes_needed() + beside)?;
 
     let stats = VersionStats::new(&id_map, 0, dropped_edges, 0);
@@ -98,17 +141,21 @@ pub(crate) fn build<E: ExternalId>(
         stats,
         label: request.label,
         compacted_from: None,
+        lineage: derivation.as_ref().map(|derivation| derivation.lineage),
     })?;
-    let mut writer = SegmentWriter::new(segments, version, request.chunk_size, &memory)?;
+    let mut writer = SegmentWriter::new(segments, version, request.chunk_size, memory)?;
     let built = plan.build(edges, &mut writer)?;
     writer.write_identity(&id_map, &relations)?;
+    if let Some(derivation) = &derivation {
+        writer.write_membership(derivation.membership)?;
+    }
     let stats =
         VersionStats::new(&id_map, built.edge_count, dropped_edges, built.deduplicated_edges);
     catalog.record_contents(version, &stats, writer.bytes())?;
     if request.promote {
         catalog.promote(graph, version)?;
     }
-    Ok(Built { version, memory_peak: memory.peak() })
+    Ok(version)
 }
 
 /// Reads the edge rows into an edge list charged to `memory`, interning new
@@ -235,6 +282,7 @@ mod tests {
         GraphDefinition {
             graph_id: 1,
             name: "g".to_owned(),
+            source: crate::catalog::GraphSource::Query,
             owner: pg_sys::Oid::INVALID,
             readers: Vec::new(),
             id_type: crate::source::IdType::Int8,

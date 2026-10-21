@@ -18,6 +18,7 @@ as a table the SQL test compares against.
 | hits | oracle_hits | node_id, hub, authority: `nx.hits` (power iteration, `max_iter` 1000; weighted when the edges have weights) |
 | label_propagation_majority | oracle_label_propagation_majority | node_id, label: `warren.label_propagation_majority`'s rule reimplemented, from each node's own id as its label (`--max-iter`, default 100) |
 | clustering | oracle_clustering | node_id, coefficient: `nx.clustering` of the undirected graph without self-loops |
+| quotient | oracle_quotient | source, target, weight: the edges of `nx.quotient_graph` by the labels of `--labels-sql` (node, label), between labels, each edge's weight the sum of the weights of the edges it joins (the count with `--count`), and a label's self-loop the sum over the edges inside it; an undirected edge counts once and is given both ways (a self-loop once) |
 
 Edges are `--edges-sql`'s first two columns; a third column, if present, is
 the edge's `weight`. A pair given more than once (the same ordered pair if
@@ -48,6 +49,7 @@ TABLES = {
     "hits": ("oracle_hits", "node_id bigint, hub float8, authority float8"),
     "label_propagation_majority": ("oracle_label_propagation_majority", "node_id bigint, label bigint"),
     "clustering": ("oracle_clustering", "node_id bigint, coefficient float8"),
+    "quotient": ("oracle_quotient", "source bigint, target bigint, weight float8"),
 }
 
 
@@ -121,6 +123,39 @@ def compute(computation, graph, arguments):
         return [(min(part), float(nx.minimum_spanning_tree(undirected.subgraph(part)).size(weight="weight")))
                 for part in nx.connected_components(undirected)]
     raise ValueError(f"unknown oracle computation {computation!r}; expected one of {sorted(TABLES)}")
+
+
+def quotient(graph, arguments, labels=None):
+    """The quotient's edges by `labels` (node → label; else read from
+    `--labels-sql` by `run`), through `nx.quotient_graph`: its edge data
+    sums only the edges from the first block to the second (NetworkX's
+    default sums both ways in a directed graph), and a block's self-loop is
+    the size of its subgraph, which `nx.quotient_graph` leaves out."""
+    options = argparse.ArgumentParser(prog="quotient")
+    options.add_argument("--count", action="store_true")
+    options.add_argument("--labels-sql")
+    weight = None if options.parse_args(arguments).count else "weight"
+    blocks = {}
+    for node, label in labels.items():
+        blocks.setdefault(label, set()).add(node)
+    label_of = {frozenset(block): label for label, block in blocks.items()}
+
+    def between(b, c):
+        return {"weight": sum(1 if weight is None else data.get(weight, 1)
+                              for u, v, data in graph.edges(b, data=True) if u in b and v in c)}
+
+    def inside(b):
+        return {"inside": graph.subgraph(b).size(weight=weight)}
+
+    q = nx.quotient_graph(graph, list(blocks.values()), edge_data=between, node_data=inside)
+    rows = []
+    for b, c, data in q.edges(data=True):
+        rows.append((label_of[b], label_of[c], float(data["weight"])))
+        if not graph.is_directed():
+            rows.append((label_of[c], label_of[b], float(data["weight"])))
+    rows += [(label_of[b], label_of[b], float(data["inside"])) for b, data in q.nodes(data=True)
+             if graph.subgraph(b).number_of_edges() > 0]
+    return rows
 
 
 def longest_path_into(dag, node):
@@ -214,6 +249,12 @@ def run(database, computation, arguments):
     graph_options.add_argument("--nodes-sql", default="SELECT id FROM nodes")
     graph_options.add_argument("--edges-sql", default="SELECT src, dst FROM edges")
     graph_options.add_argument("--directed", action="store_true")
+    graph_options.add_argument("--labels-sql")
     graph, rest = graph_options.parse_known_args(arguments)
     exported = export(database, graph.nodes_sql, graph.edges_sql, graph.directed)
-    write(database, computation, compute(computation, exported, rest))
+    if computation == "quotient":
+        labels = {int(node): int(label) for node, label in database.query(graph.labels_sql)}
+        rows = quotient(exported, rest, labels)
+    else:
+        rows = compute(computation, exported, rest)
+    write(database, computation, rows)

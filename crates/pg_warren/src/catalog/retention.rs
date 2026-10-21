@@ -1,7 +1,8 @@
 //! Retention (DESIGN.md §5.4 step 6, §7): which promoted versions a
 //! promotion deletes. The current version counts towards `retain_versions`
 //! and is never deleted; staged versions are never deleted; a version with
-//! bound vectors is kept, and reported.
+//! bound vectors, or one that a contraction's version was contracted from
+//! (DESIGN.md §6.6), is kept, and reported.
 
 use super::VersionId;
 
@@ -16,6 +17,19 @@ pub(crate) struct VersionSummary {
     pub(crate) staged: bool,
     /// The number of named vectors bound to it.
     pub(crate) bound_vectors: i64,
+    /// The number of versions contracted from it.
+    pub(crate) derived_versions: i64,
+}
+
+/// A version retention keeps beyond the limit, and why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Kept {
+    /// The version.
+    pub(crate) version: VersionId,
+    /// The number of vectors bound to it.
+    pub(crate) vectors: i64,
+    /// The number of versions contracted from it.
+    pub(crate) derived_versions: i64,
 }
 
 /// The outcome of retention.
@@ -24,14 +38,14 @@ pub(crate) struct Retention {
     /// Promoted versions beyond the limit, newest first.
     pub(crate) delete: Vec<VersionId>,
     /// Versions beyond the limit kept because vectors are bound to them,
-    /// with the number of vectors.
-    pub(crate) kept_for_vectors: Vec<(VersionId, i64)>,
+    /// or versions were contracted from them.
+    pub(crate) kept: Vec<Kept>,
 }
 
 /// Retention of `versions` once `current` is the current version: keep
 /// `current` and the `retain_versions - 1` newest (by `seq`) other promoted
 /// versions; delete the other promoted versions unless vectors are bound
-/// to them.
+/// to them or versions were contracted from them.
 pub(crate) fn retention(
     versions: &[VersionSummary],
     current: VersionId,
@@ -43,9 +57,11 @@ pub(crate) fn retention(
     let keep = usize::try_from(retain_versions.saturating_sub(1)).unwrap_or(0);
     let mut outcome = Retention::default();
     for version in others.into_iter().skip(keep) {
-        match version.bound_vectors {
-            0 => outcome.delete.push(version.version),
-            bound => outcome.kept_for_vectors.push((version.version, bound)),
+        match (version.bound_vectors, version.derived_versions) {
+            (0, 0) => outcome.delete.push(version.version),
+            (vectors, derived_versions) => {
+                outcome.kept.push(Kept { version: version.version, vectors, derived_versions })
+            }
         }
     }
     outcome
@@ -57,16 +73,19 @@ mod tests {
     use super::*;
 
     fn promoted(version: VersionId) -> VersionSummary {
-        VersionSummary { version, seq: version, staged: false, bound_vectors: 0 }
+        VersionSummary {
+            version,
+            seq: version,
+            staged: false,
+            bound_vectors: 0,
+            derived_versions: 0,
+        }
     }
 
     #[test]
     fn the_current_version_and_the_newest_others_are_kept() {
         let versions: Vec<_> = (1..=5).map(promoted).collect();
-        assert_eq!(
-            retention(&versions, 5, 3),
-            Retention { delete: vec![2, 1], kept_for_vectors: vec![] }
-        );
+        assert_eq!(retention(&versions, 5, 3), Retention { delete: vec![2, 1], kept: vec![] });
     }
 
     #[test]
@@ -95,7 +114,23 @@ mod tests {
         versions[0].bound_vectors = 2;
         assert_eq!(
             retention(&versions, 4, 2),
-            Retention { delete: vec![2], kept_for_vectors: vec![(1, 2)] }
+            Retention {
+                delete: vec![2],
+                kept: vec![Kept { version: 1, vectors: 2, derived_versions: 0 }]
+            }
+        );
+    }
+
+    #[test]
+    fn a_version_contracted_from_is_kept_and_reported() {
+        let mut versions: Vec<_> = (1..=4).map(promoted).collect();
+        versions[1].derived_versions = 1;
+        assert_eq!(
+            retention(&versions, 4, 1),
+            Retention {
+                delete: vec![3, 1],
+                kept: vec![Kept { version: 2, vectors: 0, derived_versions: 1 }]
+            }
         );
     }
 
