@@ -125,6 +125,7 @@ impl<'a, 'g> Boruvka<'a, 'g> {
     fn round(&mut self, work: &mut Work<'_>) -> Result<bool, ComputeError> {
         let nodes = self.parents.len() as DenseId;
         for node in 0..nodes {
+            work.spend(1)?;
             self.parents[node as usize] = root(&mut self.parents, node);
             self.lightest[node as usize] = None;
         }
@@ -148,6 +149,7 @@ impl<'a, 'g> Boruvka<'a, 'g> {
         }
         let mut joined = false;
         for component in 0..nodes as usize {
+            work.spend(1)?;
             let Some(edge @ (source, target, _)) = self.lightest[component] else { continue };
             let (a, b) = (root(&mut self.parents, source), root(&mut self.parents, target));
             if a != b {

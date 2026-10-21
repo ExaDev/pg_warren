@@ -382,7 +382,9 @@ check for cancellation as they go, and charge their scratch to
 `warren.max_compute_memory`: about 16 bytes per stored edge plus 32 per node
 for `core_number`, at most 56 per node for `strong_components_vector`, 16
 for `topological_order` and `dag_longest_path`, and 40 for
-`minimum_spanning_forest` plus up to 48 for its result (DESIGN.md §6.7).
+`minimum_spanning_forest` plus up to 48 for its result, and, for the last
+three when they read several relations' CSRs, a row scratch of 16 bytes per
+entry of the longest row (DESIGN.md §6.7).
 Edges are read under `rels` as the products read them: an edge in several
 selected relations is one edge, its weights summed.
 

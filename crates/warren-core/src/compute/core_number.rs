@@ -74,15 +74,18 @@ fn peel(
     // holds the nodes by ascending current degree; `at[v]`: `v`'s place.
     let (mut starts, _starts_charge) = memory.filled(largest + 1, 0usize)?;
     for &degree in degrees.iter() {
+        work.spend(1)?;
         starts[degree as usize] += 1;
     }
     let mut start = 0;
     for bucket in starts.iter_mut() {
+        work.spend(1)?;
         (*bucket, start) = (start, start + *bucket);
     }
     let (mut order, _order_charge) = memory.filled(nodes, 0usize)?;
     let (mut at, _at_charge) = memory.filled(nodes, 0usize)?;
     for (node, &degree) in degrees.iter().enumerate() {
+        work.spend(1)?;
         let bucket = &mut starts[degree as usize];
         (at[node], order[*bucket]) = (*bucket, node);
         *bucket += 1;

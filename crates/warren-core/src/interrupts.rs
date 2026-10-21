@@ -75,7 +75,7 @@ pub(crate) struct Work<'c> {
 }
 
 /// Units of work between cancellation checks.
-pub(crate) const WORK_PER_CHECK: u64 = 1 << 16;
+const WORK_PER_CHECK: u64 = 1 << 16;
 
 impl<'c> Work<'c> {
     /// No work done yet.

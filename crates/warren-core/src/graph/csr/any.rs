@@ -158,7 +158,7 @@ mod tests {
             assert_eq!(row.nth(1), Some(1));
             assert_eq!(row.next(), Some(2));
             assert_eq!(csr.neighbours(0).nth(3), None);
-            assert_eq!(csr.neighbours(1).nth(0), None);
+            assert_eq!(csr.neighbours(1).nth(2), None);
         }
     }
 }

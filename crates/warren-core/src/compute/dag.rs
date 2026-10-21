@@ -176,6 +176,7 @@ impl<'a, 'g> Kahn<'a, 'g> {
             })?;
         }
         for node in 0..nodes {
+            work.spend(1)?;
             if self.waiting[node as usize] == 0 && !self.tombstones.contains(node) {
                 self.ready.push(Reverse(node));
             }
