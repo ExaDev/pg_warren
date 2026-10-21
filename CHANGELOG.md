@@ -86,17 +86,20 @@
   `closeness_centrality(…, wf_improved, …)` and `harmonic_centrality(…)`
   write an `f64` vector and return their number of sources. Exact with
   `k := NULL` (every live node a source); otherwise from `k` sources
-  sampled with `seed` (default 0; the same sample on any thread count and
-  across refreshes), or from the nodes a bool vector `sources` selects.
-  Brandes' algorithm, breadth-first or (weighted, positive weights only,
-  else 22023) Dijkstra, along edges or (`directed := false`) in the
+  sampled with `seed` (default 0; the same sample on any thread count, and
+  after a refresh unless a new node's key displaces a sampled one or a
+  sampled node is deleted; `compact` re-keys every node), or from the nodes
+  a width-1 vector `sources` selects (non-zero values, as a mask).
+  Brandes' algorithm, breadth-first or (weighted: every edge followed must
+  weigh more than 0 and every distance stay finite, else 22023; self-loops
+  are ignored) Dijkstra, along edges or (`directed := false`) in the
   undirected simple graph, one source per compute thread at a time, summed
   in source order so results are bit-identical on any thread count.
   Betweenness is rescaled exactly as NetworkX 3.7 (including its sampling
   adjustment); closeness (with `wf_improved`) and harmonic centrality use
   incoming distances as NetworkX does, and from a sample are estimated from
-  each node's sampled sources (DESIGN.md §6.7 has the estimator and its
-  error). Checked against NetworkX given the same sources
+  each node's sampled sources (docs/compute.md has the estimator and when
+  its error bound holds). Checked against NetworkX given the same sources
   (`test/sql/oracle_paths.sql`, `oracle_paths_sampled.sql`).
 - **Neighbourhood similarity for link prediction** (DESIGN.md §6.7):
   `similarity(graph, pairs, id_type, measure, rels, version)` scores the

@@ -384,17 +384,20 @@ the random reads of the per-node arrays (each search's 8-byte distances and
 counts over 10M nodes) are memory-bound, so four threads give less than
 four times one. Exact betweenness (`k := NULL`) at 1M nodes would take
 about 55 hours on this box: the exact forms are for graphs of thousands of
-nodes, and the oracle. Weighted searches cost about twice as much (a heap
-per source, and a lazy-deletion queue that can hold an entry per improving
-relaxation: at 1M nodes, about 0.5 GB past the version for four weighted
-searches, against about 0.13 GB of fixed scratch unweighted).
+nodes, and the oracle. Weighted searches cost about twice as much (a heap per source). At 1M
+nodes four weighted searches took about 0.5 GB past the version, against
+about 0.13 GB unweighted: the measurement predates the PR #29 review, when
+Dijkstra's queue was a lazy-deletion heap that grew on the pool to an entry
+per improving relaxation; it is now an indexed heap of 16 bytes per node
+per search, allocated with the rest of the scratch (0.06 GB more for four
+searches at 1M nodes).
 `directed := false` and `similar_pairs` first build the symmetric
 adjacency, 16 bytes per stored edge (32 weighted): at 10M nodes and 100M
 edges weighted undirected betweenness needs about 4.6 GB of scratch,
 past the default `warren.max_compute_memory`, which refuses them (53400).
 `similar_pairs` over every node costs `Σ_w |N(w)|²` (about 4·10⁹ steps at
 10M nodes and average degree 20) plus a row out per pair; its result is
-charged at 24 bytes per row. One node's ranking or a batch of pairs reads
+charged at 24 bytes per row as rows are found. One node's ranking or a batch of pairs reads
 only the rows it needs when the graph has reverse CSRs, so it costs
 milliseconds at any size.
 
