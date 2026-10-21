@@ -23,7 +23,8 @@ CREATE TABLE warren.graphs (
     retain_versions  int NOT NULL DEFAULT 2 CHECK (retain_versions >= 1),
     current_version  bigint,
     store_merged     boolean NOT NULL DEFAULT true,
-    node_order       text NOT NULL DEFAULT 'id' CHECK (node_order IN ('id', 'locality'))
+    node_order       text NOT NULL DEFAULT 'id'
+                     CHECK (node_order IN ('id'::pg_catalog.text, 'locality'::pg_catalog.text))
 );
 
 CREATE TABLE warren.versions (

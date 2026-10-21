@@ -75,6 +75,18 @@ CATALOG = {
         SELECT t.tgrelid::regclass::text, t.tgname, pg_get_triggerdef(t.oid)
         FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
         WHERE c.relnamespace = 'warren'::regnamespace AND NOT tgisinternal ORDER BY 1, 2""",
+    "init_privs": """
+        SELECT i.classoid::regclass::text,
+               CASE WHEN i.classoid = 'pg_proc'::regclass THEN i.objoid::regprocedure::text
+                    WHEN i.classoid = 'pg_class'::regclass THEN i.objoid::regclass::text
+                    WHEN i.classoid = 'pg_namespace'::regclass THEN i.objoid::regnamespace::text
+                    ELSE i.objoid::text END,
+               i.objsubid, i.privtype, i.initprivs::text
+        FROM pg_init_privs i
+        WHERE EXISTS (SELECT FROM pg_depend d JOIN pg_extension e ON d.refobjid = e.oid
+                      WHERE d.classid = i.classoid AND d.objid = i.objoid AND d.deptype = 'e'
+                        AND e.extname = 'pg_warren')
+        ORDER BY 1, 2, 3""",
     "schema": """
         SELECT nspname, pg_get_userbyid(nspowner), coalesce(nspacl::text, ''),
                coalesce(obj_description(oid, 'pg_namespace'), '')
@@ -316,11 +328,15 @@ def after_update(upgraded):
     return problems
 
 
-# Privileges set on create_graph and compact under release 0.3.0. Its
-# update to 0.4.0 drops and creates both again (each gains a node_order
-# parameter), and must grant them again (CHANGELOG 0.4.0); so must every
-# later update. (Earlier releases' updates did not keep privileges.)
-GRANTS_RELEASE = "0.3.0"
+# Checks of the update from release 0.3.0, in a database of their own:
+# privileges set on create_graph and compact under it survive the update,
+# which drops and creates both again (each gains a node_order parameter),
+# in the catalog and in a dump (CHANGELOG 0.4.0); and an operator planted
+# in the extension's schema, which the installer of a trusted install can
+# write (it owns `public`), never runs during the update, which runs as the
+# bootstrap superuser (DESIGN.md §7). Earlier releases' updates did not
+# keep privileges.
+FROM_RELEASE = "0.3.0"
 GRANTS = """
     REVOKE ALL ON FUNCTION warren.create_graph(text, text, text, boolean, boolean, boolean,
                                                boolean, integer, boolean) FROM PUBLIC;
@@ -339,23 +355,68 @@ GRANTED = """
       AND a.grantee <> p.proowner
 """
 EXPECTED_GRANTED = "compact:upgrade_owner:false create_graph:upgrade_owner:true"
+# What a dump of the updated database must say about the two functions.
+DUMPED_GRANTS = [
+    "REVOKE ALL ON FUNCTION warren.compact(name text, node_order text) FROM PUBLIC;",
+    "GRANT ALL ON FUNCTION warren.compact(name text, node_order text) TO upgrade_owner;",
+    "REVOKE ALL ON FUNCTION warren.create_graph(",
+    "TO upgrade_owner WITH GRANT OPTION;",
+]
+EXTENSION_SCHEMA = "SELECT extnamespace::regnamespace::text FROM pg_extension WHERE extname = 'pg_warren'"
+# `=` (oid, regprocedure): an exact match for `oid = '…'::regprocedure`,
+# which Postgres prefers to pg_catalog's `=` (oid, oid) after a cast. It
+# records that it ran, and as whom.
+HOSTILE = """
+    CREATE TABLE {schema}.hostile_ran (role text);
+    GRANT INSERT ON {schema}.hostile_ran TO PUBLIC;
+    CREATE FUNCTION {schema}.hostile_eq(oid, regprocedure) RETURNS boolean
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        INSERT INTO {schema}.hostile_ran VALUES (current_user);
+        RETURN $1 OPERATOR(pg_catalog.=) $2::oid;
+    END $$;
+    CREATE OPERATOR {schema}.= (LEFTARG = oid, RIGHTARG = regprocedure,
+                                FUNCTION = {schema}.hostile_eq)
+"""
+REMOVE_HOSTILE = """
+    DROP OPERATOR {schema}.= (oid, regprocedure);
+    DROP FUNCTION {schema}.hostile_eq(oid, regprocedure);
+    DROP TABLE {schema}.hostile_ran
+"""
 
 
-def grants_kept(cluster, installer, release):
-    """None if privileges set on create_graph and compact under `release`
-    survive the update, else what is wrong. The release's
-    install script is in place, and the library is the version in
-    development's, whose C symbols the release's functions name."""
-    name = "upgrade_grants"
+def update_from_release(cluster, installer, expected):
+    """The problems of the update from FROM_RELEASE, installed and updated
+    by `installer`, with privileges set on create_graph and compact and an
+    operator planted in the extension's schema by the installer; `expected`
+    describes a fresh install. The release's install script is in place,
+    and the library is the version in development's, whose C symbols the
+    release's functions name."""
+    name = "upgrade_from_release_checks"
     cluster.database("postgres").execute(installer.create_database_sql(name))
     database = cluster.database(name)
-    database.execute(installer.as_installer(f"CREATE EXTENSION pg_warren VERSION '{release}'"))
+    database.execute(installer.as_installer(f"CREATE EXTENSION pg_warren VERSION '{FROM_RELEASE}'"))
     database.execute(GRANTS)
+    schema = database.query(EXTENSION_SCHEMA)[0][0]
+    database.execute(installer.as_installer(HOSTILE.format(schema=schema)))
     database.execute(installer.as_installer("ALTER EXTENSION pg_warren UPDATE"))
+    problems = []
+    ran = database.query(f"SELECT coalesce(string_agg(role, ' '), '') FROM {schema}.hostile_ran")
+    if ran != [[""]]:
+        problems.append(f"an operator planted in schema {schema} ran during the update as {ran}")
+    database.execute(installer.as_installer(REMOVE_HOSTILE.format(schema=schema)))
     granted = database.query(GRANTED)
     if granted != [[EXPECTED_GRANTED]]:
-        return f"{release}: privileges after the update are {granted}, not {EXPECTED_GRANTED}"
-    return None
+        problems.append(f"privileges after the update are {granted}, not {EXPECTED_GRANTED}")
+    init_privs = database.query(CATALOG["init_privs"])
+    if init_privs != expected["init_privs"]:
+        problems.append(f"initial privileges after the update are {init_privs}, "
+                        f"not a fresh install's {expected['init_privs']}")
+    dumped = cluster.dump_schema(name)
+    missing = [line for line in DUMPED_GRANTS if line not in dumped]
+    if missing:
+        problems.append(f"a dump after the update lacks {missing}")
+    return [f"{FROM_RELEASE} -> update checks: {problem}" for problem in problems]
 
 
 def library_problem(database, expected, when):
@@ -412,7 +473,5 @@ def check(cluster, current, installer, releases, installed):
         if diff:
             failures.append(f"{version} -> {current}: the upgraded catalog differs\n{diff}")
         failures += [f"{version} -> {current}: {problem}" for problem in after_update(upgraded)]
-    problem = grants_kept(cluster, installer, GRANTS_RELEASE)
-    if problem:
-        failures.append(problem)
+    failures += update_from_release(cluster, installer, expected)
     return failures

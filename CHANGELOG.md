@@ -13,8 +13,10 @@
 - `create_graph` and `compact` are dropped and re-created by the update
   (each gains an argument). Unlike 0.3.0's update, this one grants again
   every privilege that was set on them, so a `GRANT` or `REVOKE` you made
-  on `warren.create_graph` or `warren.compact` survives it (the grants are
-  recorded as made by the functions' owner).
+  on `warren.create_graph` or `warren.compact` survives it, in the catalog
+  and in `pg_dump` output. The grants are recorded as made by the
+  functions' owner: the original grantor, and so grant-option chains, are
+  not kept.
 
 ### New
 

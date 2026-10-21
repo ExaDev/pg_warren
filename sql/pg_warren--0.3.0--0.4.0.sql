@@ -11,19 +11,27 @@
 -- at its first build and at compaction. Graphs created before the update
 -- are backfilled 'id', the order every version of theirs was built in.
 ALTER TABLE warren.graphs ADD COLUMN node_order text NOT NULL DEFAULT 'id'
-    CHECK (node_order IN ('id', 'locality'));
+    CHECK (node_order IN ('id'::pg_catalog.text, 'locality'::pg_catalog.text));
 
 -- create_graph and compact gain a node_order parameter, so each is dropped
 -- and created again. That would reset their privileges to the default
--- (EXECUTE to PUBLIC), so any privileges set on them are granted again.
+-- (EXECUTE to PUBLIC), so any privileges set on them are granted again,
+-- recorded as granted by the functions' owner (the original grantor and
+-- grant-option chains are not kept). Grants made by an extension script are
+-- recorded as the functions' initial privileges, which pg_dump leaves out;
+-- a fresh install records none for them, so those rows are deleted again
+-- and a dump keeps the grants. Everything evaluated here uses exact-match
+-- pg_catalog operators (DESIGN.md §7): this runs as the bootstrap
+-- superuser, and a trusted install's installer can write the extension's
+-- schema.
 DO $upgrade$
 DECLARE
     create_graph_acl pg_catalog.aclitem[] := (
         SELECT p.proacl FROM pg_catalog.pg_proc p
-        WHERE p.oid = 'warren.create_graph(text, text, text, boolean, boolean, boolean, boolean, integer, boolean)'::pg_catalog.regprocedure);
+        WHERE p.oid OPERATOR(pg_catalog.=) 'warren.create_graph(text, text, text, boolean, boolean, boolean, boolean, integer, boolean)'::pg_catalog.regprocedure::pg_catalog.oid);
     compact_acl pg_catalog.aclitem[] := (
         SELECT p.proacl FROM pg_catalog.pg_proc p
-        WHERE p.oid = 'warren.compact(text)'::pg_catalog.regprocedure);
+        WHERE p.oid OPERATOR(pg_catalog.=) 'warren.compact(text)'::pg_catalog.regprocedure::pg_catalog.oid);
     kept record;
 BEGIN
     DROP FUNCTION warren.create_graph(text, text, text, boolean, boolean, boolean, boolean, integer, boolean);
@@ -72,4 +80,9 @@ BEGIN
                  ELSE kept.grantee::pg_catalog.regrole::pg_catalog.text END,
             CASE WHEN kept.is_grantable THEN ' WITH GRANT OPTION' ELSE '' END);
     END LOOP;
+    DELETE FROM pg_catalog.pg_init_privs i
+    WHERE i.classoid OPERATOR(pg_catalog.=) 'pg_catalog.pg_proc'::pg_catalog.regclass::pg_catalog.oid
+      AND i.objoid OPERATOR(pg_catalog.=) ANY (ARRAY[
+          'warren.create_graph(text, text, text, boolean, boolean, boolean, boolean, integer, boolean, text)'::pg_catalog.regprocedure::pg_catalog.oid,
+          'warren.compact(text, text)'::pg_catalog.regprocedure::pg_catalog.oid]);
 END $upgrade$;
