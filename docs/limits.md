@@ -287,13 +287,16 @@ At the DESIGN.md §12 scale (10M nodes, 100M edges), from the M7 soak's
 full-scale re-run (10f68ab) on an idle 4-vCPU Xeon (half the 8 cores §12
 assumes), release build, `warren.threads = 4`, default memory limits; full
 numbers, settings and the first soak's figures in DESIGN.md §12 and
-`bench/results/soak/`:
+`bench/results/soak/`. The 0.4.0 re-run (5b0bf81) measured the same peaks
+and times within this machine's run-to-run spread (10–20% for one build;
+an A/B against 10f68ab found no stage reproducibly slower), except that
+the five-relation `components()` without the merged CSR took 11.8 s:
 
 | What (target) | One relation, unweighted | Five weighted relations, merged CSR | Five weighted relations, `store_merged := false` |
 |---|---|---|---|
 | BFS depth 6 (≥ 20× a recursive CTE) | **11.0×** (0.67 s vs 7.32 s) | **23.4 s**, the load; 0.71 s at an 8GB cap | 0.71 s |
 | `reachable_set`, full component (> 50M edges/s) | **26M/s** (3.86 s) | **3.8M/s**, the load; 25M/s at 8GB | **16M/s** |
-| `components()` (< 10 s) | 6.2 s | **29.2 s**, the load; 5.8 s at 8GB | borderline: **10.1 s** |
+| `components()` (< 10 s) | 6.2 s | **29.2 s**, the load; 5.8 s at 8GB | borderline: **10.1 s** (11.8 s in the 0.4.0 run) |
 | `pagerank`, 20 iterations (< 30 s on 8 threads) | 15.6 s | **40.1 s**, one load; 17.4 s at 8GB | **35.6 s**, one load from cold; 32.7 s at 8GB |
 | `eigen`, k = 20, normalised Laplacian (< 10 min) | **misses**: 0.59 s a step, ~14,500 steps on this random graph (~2 h) | **refused (53400)** at the default limits; 0.77 s a step at 8GB | not measured |
 | `refresh()` (< 8 min, < 4 GB) | 153 s, 1.55 GB | 260 s, 3.26 GB | 228 s, 3.26 GB |
@@ -440,7 +443,7 @@ with five undirected edges per node (10N stored), contracted by
 | `modularity` of a partition | 0.44 s | 4.9 s |
 | `louvain` (3 levels at 1M, 5 at 10M) | 5.8 s | 93 s |
 | `leiden`, one iteration (7 levels at 1M, 8 at 10M) | 8.3 s | 119 s |
-| `leiden`, the default two iterations (13 levels at 1M) | 20.9 s, on a slower day (one iteration 10.4 s, `louvain` 9.1 s) | not yet re-measured |
+| `leiden`, the default two iterations (13 levels at 1M) | 20.9 s, on a slower day (one iteration 10.4 s, `louvain` 9.1 s) | not yet measured on this graph |
 
 A level's time, as the difference of runs with `max_levels` 1, 2 and 3:
 Louvain 2.4, 2.8 and 0.3 s at 1M, and 31.6, 49.5 and 11.8 s at 10M;
@@ -450,6 +453,32 @@ graph; every later one contracts the whole graph by the partition found so
 far, so each small late level costs a contraction. Leiden's second iteration
 repeats the levels from the first's partition, so it costs about as much
 again, and raises modularity on these blocks from 0.837 to 0.898.
+
+**The library at the soak's scale** (0.4.0 soak, `bench/results/soak/`,
+release build of 5b0bf81, PG 16, `warren.threads = 4`, every limit at its
+default; the 4-vCPU Xeon): the random graph of 10M nodes and 100M
+directed edges, one relation, unweighted (1.2 GB cached), each call once
+on the cached version, `persist := false` where the call takes it.
+Seconds, and the backend's private peak, version included:
+
+| Call | 10M nodes, 100M edges |
+|---|---|
+| `eigenvector_centrality` / `katz_centrality` / `hits`, 20 iterations | 15.0 / 9.8 / 17.3 s, 1.8–2.0 GB |
+| `clustering` | 47.5 s, 3.0 GB |
+| `core_number` | 22.8 s, 3.2 GB |
+| `strong_components_vector` | 15.8 s, 1.7 GB |
+| `minimum_spanning_forest` (rows counted) | 54.4 s |
+| `betweenness_centrality` / `closeness_centrality` / `harmonic_centrality`, 16 sources | 61.1 / 29.4 / 30.9 s, 2.0–2.6 GB |
+| `most_similar`, one node / `similarity`, 100,000 pairs | 2 ms / 0.55 s |
+| `similar_pairs`, `k := 10`, every 100th node | 10.2 s, 3.6 GB |
+| `louvain` | stopped for disk after 383 s (7.5 GB of segments written) |
+| `leiden` (two iterations) | refused (53400) after 59 s, in its first refinement |
+
+With five weighted relations and no merged CSR (3.44 GB cached) each takes
+1.4–3.5× as long (weighted searches, rows merged on the fly), within the
+default limits but `louvain` (stopped for disk) and `leiden` (refused).
+With the merged CSR (6.0 GB, over the cache cap) every call also pays the
+22 s load, and `similar_pairs`, `louvain` and `leiden` are refused (53400).
 
 ## Known limitations
 
@@ -540,7 +569,15 @@ vectors.
   segments and about 190 MB of WAL, `leiden` 294 MB and 323 MB for one
   iteration (516 MB of segments for the default two); at 10M
   nodes, four runs of each in one database left it at 6.7 GB (`louvain`)
-  and 9.1 GB (`leiden`), the graph included, before `VACUUM`. A native
+  and 9.1 GB (`leiden`), the graph included, before `VACUUM`. A graph
+  without communities is far worse, since each level's quotient stays
+  nearly as large as the graph: on the soak's random graph (1M nodes,
+  10M edges) one `louvain` run wrote 0.61 GB and `leiden` 2.0 GB, and at
+  10M nodes and 100M edges `louvain` had written 7.5 GB of segments
+  (and 9.1 GB of WAL) when the soak stopped it for disk after 383 s.
+  `leiden`'s refinement there needs more than the default
+  `warren.max_compute_memory` beside the 3.2 GB undirected view, and is
+  refused (53400); see "The library at the soak's scale" above. A native
   in-memory Louvain/Leiden kernel is deferred past 0.4.0: the planned fix
   is for `contract` to keep a quotient in memory for the rest of the
   statement, which helps every multilevel algorithm (DESIGN.md §6.7).

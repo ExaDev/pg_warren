@@ -90,3 +90,158 @@ measurement on case a at the default limits. Each runs `eigen` at
 `max_iter` 100 and 200 in one backend on a freshly built graph (from the
 generator query) and records the script that produced it in its
 provenance; the difference of the two is the cost of the steps alone.
+
+## The 0.4.0 full-scale re-run (5b0bf81)
+
+`a-040.json`, `b-unmerged-040.json`, `b-merged-040.json` and
+`a-040-locality.json`: every case at 10M nodes and 100M edges with a
+release build of 5b0bf81 (0.4.0 as of the Leiden iterations PR, adf0fff,
+plus these harness changes; `pg_warren.so` sha256 48c14e7e…), on the same
+4-vCPU Xeon, 15 GiB RAM, no swap, PostgreSQL 16.15, with the M7 re-run's
+settings and command lines, plus `--disk-floor 5368709120` (keep 5 GiB
+free; M7 kept the default 4 GiB). One run per case, in the order a,
+b-unmerged, b-merged, then a in locality order, each committed as it
+finished; load average 1.1–1.6 at each start (the run itself), against
+0.4–1.6 for M7:
+
+    bench/soak.py <case> --label=-040 --disk-floor 5368709120 --pg-config /usr/bin/pg_config \
+        --parent /var/tmp --extension-revision 5b0bf81 --extension-profile release --threads 4 \
+        --statement-timeout 20min --no-eigen-steps \
+        --eigen-max-iter 200        # a and b-merged; b-unmerged ran with --no-eigen
+    bench/soak.py a --label=-040-locality --node-order locality …   # as case a
+
+What the harness adds since M7 (bench/soak.py): after the second version
+(and once the edge table and the first version are dropped, to free disk)
+each case runs the library added in 0.4.0 on its current version in one
+backend at the first pass's cap (groups 1 and 2 of DESIGN.md §6.7: the
+iterative centralities for 20 iterations, the sampled ones from 16
+sources, `similar_pairs` over every 100th node), then `louvain` and
+`leiden` (default two iterations) each in its own backend, with a disk
+guard that cancels a community run before it takes the disk below the
+floor (its levels keep their rows until VACUUM, after the statement).
+Left out: `label_propagation_majority` (tier 2, minutes and gigabytes of
+executor sort per iteration at this scale), and `topological_order` and
+`dag_longest_path` (the graph has cycles).
+
+### Against M7 (seconds unless stated; M7 → 0.4.0)
+
+| Workload (target) | a | b-unmerged | b-merged | a, locality order |
+|---|---|---|---|---|
+| `refresh` (< 8 min, < 4 GB) | 153 → 160, 1.55 GB | 228 → 239, 3.26 GB | 260 → 233, 3.26 GB | 163, **2.51 GB** (ordering scratch) |
+| cold load (< 15 s) | 1.9 → 2.4 | 10.3 → 6.2 | 23.0 → 22.4 | 2.2 |
+| BFS depth 6 vs CTE (≥ 20×) | 11.0× → 10.0× (0.67 → 0.73) | 0.71 → 0.76 | 23.4 → 24.9 (the load) | 11.2× (0.68) |
+| `reachable_set` (> 50M edges/s) | 26M → 23M/s (3.86 → 4.30) | 16M → 15M/s (6.15 → 6.58) | 3.8M → 3.9M/s (the load) | 25M/s (3.95) |
+| `components()` (< 10 s) | 6.2 → 6.9 | **10.1 → 11.8** (10.6 → 10.2 at 8GB) | 29.2 → 28.6 (the load) | 6.7 |
+| `pagerank`, 20 it. (< 30 s) | 15.6 → 16.5 | 35.6 → 36.9 (32.7 → 36.7 at 8GB) | 40.1 → 38.4 (17.4 → 14.4 at 8GB) | 14.8 |
+| `eigen`, a step (200 steps) | **0.61 → 0.81 s** (122 → 162) | not run | refused (53400): after 141.5 s → up front, 21.2 s (the load) | 0.62 s (124) |
+| `diff` (< 30 s) | 17.8 → 20.5 | 58.4 → 59.7 | refused (53400) → not run (disk) | 18.5 |
+| `distance` edit / degree | 0.58 / 0.16 → 0.55 / 0.15 | 11.6 / 23.4 → 12.7 / 28.2 | refused → not run (disk) | 0.57 / 0.15 |
+
+Every peak is unchanged (to 0.01 GB). The times moved by up to ±17%
+either way, more than the code explains: case a ran in a slow stretch of
+this VM (the A/B below finds no stage reproducibly slower), and the
+b cases' differences are of the same size as one build's run-to-run
+spread. Where a row crosses a target, it says so: b-unmerged's
+`components` now misses (11.8 s; 10.2 s in the same run at 8GB, so
+borderline as at M7). b-merged's second version was
+skipped for disk (8.82 GB free against 5.92 GB plus the floor); M7's run
+had more free disk and showed `diff` and `distance` refused with 53400 at
+these limits, which nothing since changes. b-merged's `eigen` is now
+refused before its first step (PR #22), so only the 21 s load is spent.
+
+### Is anything slower than at M7? (the A/B)
+
+In `a-040.json` most stages ran 4–15% slower than in `a-m7.json`, and
+`eigen` 33% (162 against 122 s for 200 steps), with every peak unchanged.
+To tell the code from the machine, case a ran three times with each
+build, alternately, the M7 build first, without the CTE baseline, the
+second version, the library and the community runs (`--no-cte --skip
+second-version`, and for 0.4.0 `--skip library --skip communities`):
+`a-ab-10f68ab-{1,2,3}.json`, a release build of 10f68ab under its own
+harness (bench/ at 10f68ab, `pg_warren.so` sha256 827ba5b4…), and
+`a-ab-040-{1,2,3}.json`, the 5b0bf81 library of the runs above (sha256
+48c14e7e…; run 3 records a dirty harness: this README was being edited,
+nothing the harness runs). Seconds, runs 1 / 2 / 3, and the ratio of the
+medians:
+
+| Stage | 10f68ab (M7) | 5b0bf81 (0.4.0) | 0.4.0 / M7 |
+|---|---|---|---|
+| `refresh` | 138.9 / 144.0 / 150.8 | 125.4 / 150.3 / 143.4 | 1.00 |
+| `refresh` from the generator | 151.1 / 177.6 / 172.3 | 142.4 / 175.6 / 179.8 | 1.02 |
+| cold load (`prewarm`) | 1.99 / 1.91 / 2.00 | 1.89 / 2.16 / 1.99 | 1.00 |
+| BFS depth 6 | 0.68 / 0.67 / 0.75 | 0.64 / 0.66 / 0.68 | 0.97 |
+| `reachable_set` | 3.80 / 3.79 / 4.05 | 3.43 / 3.66 / 3.84 | 0.96 |
+| `components` | 5.71 / 5.24 / 4.71 | 4.34 / 4.55 / 5.40 | 0.87 |
+| `pagerank` | 14.1 / 15.9 / 14.1 | 12.5 / 15.1 / 14.8 | 1.04 |
+| `pagerank` from cold | 15.5 / 16.4 / 15.7 | 15.5 / 15.8 / 16.6 | 1.01 |
+| `eigen`, 200 steps | 112.9 / 121.2 / 122.8 | 127.3 / 121.8 / 142.6 | 1.05 |
+
+No stage is reproducibly slower: the same build varies by 10–20% from
+run to run on this VM (the build from the generator: 151–178 s at
+10f68ab), and `a-040.json`'s run fell in a slow stretch (its build from
+the generator, which no 0.4.0 change touches, took 196 s). `eigen` alone
+is slower on median, by 5% (0.61–0.71 s a step against 0.56–0.61 s),
+within that spread; 0.4.0's eigen changes (PR #22: the working set
+checked before the first step, the projected and Ritz matrices charged)
+cost once a solve or once a restart, not a step. Not a regression we can
+show; a fresh pair of runs on a quieter machine would settle the 5%.
+
+### The 0.4.0 library at 10M nodes and 100M edges
+
+Seconds, and the backend's private peak (RssAnon, the version held in the
+cache included), each call at the default limits, `persist := false`
+where the call takes it:
+
+| Call | a | a, locality | b-unmerged | b-merged (version over the cap: each call loads it, ~22 s) |
+|---|---|---|---|---|
+| `eigenvector_centrality`, 20 it. | 15.0, 1.78 GB | 14.0 | 39.4, 4.02 GB | 32.1, 7.29 GB |
+| `katz_centrality`, 20 it. | 9.8, 1.95 GB | 8.6 | 26.2, 4.19 GB | 27.4, 7.37 GB |
+| `hits`, 20 it. | 17.3, 1.87 GB | 14.8 | 49.0, 4.11 GB | 40.7, 7.36 GB |
+| `clustering` | 47.5, 3.04 GB | 40.9 | 66.6, 5.27 GB | 67.1, 7.84 GB |
+| `core_number` | 22.8, 3.20 GB | 19.8 | 38.2, 5.43 GB | 40.9, 8.00 GB |
+| `strong_components_vector` | 15.8, 1.65 GB | 14.0 | 24.8, 3.89 GB | 31.8, 7.36 GB |
+| `minimum_spanning_forest` (rows counted) | 54.4, 1.92 GB | 48.5 | 103.1 (weighted), 4.16 GB | 73.7 (weighted), 7.36 GB |
+| `betweenness_centrality`, k = 16 | 61.1, 2.64 GB | 58.9 | 146.3 (weighted), 5.42 GB | 111.2 (weighted), 7.98 GB |
+| `closeness_centrality`, k = 16 | 29.4, 2.08 GB | 27.7 | 104.1 (weighted), 4.86 GB | 96.2 (weighted), 7.42 GB |
+| `harmonic_centrality`, k = 16 | 30.9, 2.00 GB | 27.9 | 102.8 (weighted), 4.78 GB | 96.3 (weighted), 7.36 GB |
+| `most_similar`, one node | 0.002 | 0.001 | 0.002 | 17.1 (the load) |
+| `similarity`, 100,000 pairs | 0.55 | 0.46 | 0.71 | 19.2 (the load) |
+| `similar_pairs`, every 100th node | 10.2, 3.58 GB | 8.7 | 25.0, 5.82 GB | **refused (53400)**: the symmetric adjacency beside the 1.71 GB the version is over the cap |
+
+### Louvain and Leiden at 10M nodes and 100M edges
+
+None finished at the default limits on this machine:
+
+| | a | a, locality | b-unmerged | b-merged |
+|---|---|---|---|---|
+| `louvain` | **stopped for disk** after 383 s: 7.52 GB of segments and 9.1 GB of WAL written, peak 7.65 GB | stopped for disk after 335 s, 7.48 GB written | stopped for disk after 302 s, 2.67 GB of segments written (less free disk: the b versions are 3× larger), peak 9.50 GB | **refused (53400)** after the 23 s load: the undirected view (3.2 GB) beside the 1.71 GB over the cap |
+| `leiden` (2 iterations) | **refused (53400)** after 59 s, in level 1's refinement: 880 MB more with 3.52 GB in use | refused after 54 s, as a | refused after 76 s, as a | refused after 22 s, as `louvain` |
+
+On a uniform random graph Louvain's levels stay large: at 1M nodes and
+10M edges (the scale-10 case a, run while preparing this; not committed)
+`louvain` took 22–33 s in 5–6 levels and wrote 0.61 GB of segments,
+`leiden` 52–66 s in 16–17 levels and 1.98–2.01 GB, finding 14–36
+communities of modularity 0.14–0.20 (the graph has no communities to
+find). At 10M the stopped `louvain` had written 12× the 1M run's segments
+and was still going: the disk a run needs grows faster than the graph,
+because every level writes a quotient of the whole graph that a random
+graph barely shrinks. Leiden's refinement needs 88 B a node more than
+fits beside the 3.2 GB undirected view at the 4 GB compute limit. The peak
+past `warren.max_cache_memory` plus `warren.max_compute_memory` (b-unmerged
+`louvain`, 9.50 GB) is `contract`'s build scratch, charged to
+`warren.max_build_memory`.
+
+### Locality order on the random graph
+
+`a-040-locality.json` against `a-040.json`: every query stage and library
+call ran 2–23% faster in locality order, `eigen` the most (0.62 against
+0.81 s a step). But `a-040.json` ran in a slow stretch (above), and
+against the A/B's id-order runs the locality run is neither clearly faster
+nor slower (BFS 0.68 s against 0.64–0.68, `reachable_set` 3.95 against
+3.43–3.84, `components` 6.7 against 4.3–5.4, `pagerank` 14.8 against
+12.5–15.1, `eigen` 124 against 122–143 s): one run each cannot show a gain
+of the size the A/B's spread hides, and DESIGN.md §14 item 22 expects none
+on a uniform random graph, which has no locality for an ordering to
+recover. Its first build peaked at 2.51 GB private (VmHWM 3.66 GB) against
+1.55 GB, as DESIGN.md §14 item 22 predicts for the ordering's scratch, and
+took 163 against 160 s, within the 4 GB and 8 min targets.

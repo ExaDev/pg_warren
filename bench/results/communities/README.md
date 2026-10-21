@@ -44,4 +44,7 @@ machine was slower that day than for `blocks-1m-communities.json`:
 10.4 s against 8.3 s for the same partition, bit for bit. Two iterations
 took 20.9 s and raised modularity from 0.837 to 0.898 (the planted blocks
 score 0.899); until stable, 0.898 in 40.7 s. The 10M figures are still
-the single pass: the soak re-measures them.
+the single pass. The 0.4.0 soak (`bench/results/soak/README.md`) ran
+both at the default limits on its 10M-node random graphs, where neither
+completes (`leiden` refused with 53400, `louvain` stopped for disk), so
+two iterations at 10M remain to be measured on the block graph.
