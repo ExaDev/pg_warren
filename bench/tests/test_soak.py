@@ -473,3 +473,59 @@ def test_the_library_pass_sets_the_session_up_cleans_up_each_call_and_vacuums_af
     assert any("count(DISTINCT value)" in sql for sql in after)
     assert any(sql.startswith("VACUUM") and "warren.segments" in sql for sql in after)
     assert "communities: leiden" in result["stages"] and "library: hits" in result["stages"]
+
+
+class SlowSession(FakeSession):
+    """A session whose statement runs until it is cancelled (or 2 s)."""
+
+    pid = 4242
+
+    def __init__(self, log, cancelled):
+        super().__init__(log)
+        self.cancelled = cancelled
+
+    def measure(self, sql, repeat=1):
+        self.log.append(sql)
+        self.cancelled.wait(2)
+        if self.cancelled.is_set():
+            return {"median_seconds": 0.5, "rows": [], "errors": ["ERROR:  canceling statement due to user request"]}
+        return {"median_seconds": 2.0, "rows": ["0.5"]}
+
+
+def guarded_runner(free):
+    import threading
+    options = Options()
+    options.disk_floor = 5 * GIB
+    runner = soak.Soak(None, options, provenance={})
+    runner.DISK_POLL_SECONDS = 0.01
+    cancelled, pids = threading.Event(), []
+    runner.free_disk = lambda: free.pop(0) if len(free) > 1 else free[0]
+
+    def cancel(pid):
+        pids.append(pid)
+        cancelled.set()
+    runner.cancel = cancel
+    return runner, SlowSession([], cancelled), pids
+
+
+def test_a_community_run_is_cancelled_before_it_takes_the_disk_below_the_floor():
+    runner, session, pids = guarded_runner([8 * GIB, 6 * GIB, 4 * GIB])
+    stage = runner._guarded(session, "SELECT warren.leiden('soak', 'leiden')")
+    assert pids == [4242]
+    assert stage["cancelled_for_disk"] == {"free_disk": 4 * GIB, "floor": 5 * GIB}
+
+
+def test_a_community_run_that_stays_above_the_floor_is_left_alone():
+    runner, session, pids = guarded_runner([8 * GIB])
+    stage = runner._guarded(session, "SELECT warren.louvain('soak', 'louvain')")
+    assert pids == [] and "cancelled_for_disk" not in stage and stage["rows"] == ["0.5"]
+
+
+def test_a_run_cancelled_for_disk_reports_how_long_it_ran():
+    stages = {"communities: leiden": {"median_seconds": 900.0, "rows": [], "peak_rss_anon": GIB,
+                                      "errors": ["ERROR:  canceling statement due to user request"],
+                                      "cancelled_for_disk": {"free_disk": 4 * GIB, "floor": 5 * GIB}},
+              "communities: leiden disk": {"segments_written": 9 * GIB, "wal_written": 10 * GIB}}
+    found = soak.summary({"hardware": {"cpus": 4}, "stages": stages})["communities"]["leiden"]
+    assert found == {"stopped_for_disk": True, "seconds": 900.0, "peak_rss_anon": GIB,
+                     "segments_written": 9 * GIB, "wal_written": 10 * GIB}

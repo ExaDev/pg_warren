@@ -30,12 +30,15 @@ once) is aborted. A case whose version
 version, without the 0.1% of edges whose source is 7 mod 1000, is built
 for `diff` and `distance` only if the disk keeps `--disk-floor` free.
 
-Since 0.4.0 a case also runs the library added in 0.4.0 (DESIGN.md §6.7,
-groups 1 and 2, the calls that finish in minutes at this scale) and
-`louvain` and `leiden` at their defaults, recording each one's time and
-peak, and for the two community detections the modularity, levels and
-communities found and the segments and WAL they wrote (`--skip library`,
-`--skip communities`). `--node-order locality` builds the graph with
+Since 0.4.0 a case then runs, on its current version, the library added
+in 0.4.0 (DESIGN.md §6.7, groups 1 and 2, the calls that finish in
+minutes at this scale) and `louvain` and `leiden` at their defaults,
+recording each one's time and peak, and for the two community detections
+the modularity, levels and communities found and the segments and WAL
+they wrote (`--skip library`, `--skip communities`). Their levels keep
+their rows until VACUUM, after the run, so a run is cancelled if it
+would take the disk below `--disk-floor`; the edge table and the first
+version are dropped first. `--node-order locality` builds the graph with
 dense ids in locality order (DESIGN.md §14 item 22)."""
 
 import argparse
@@ -552,6 +555,8 @@ def memory_total():
 
 
 class Soak:
+    DISK_POLL_SECONDS = 1.0  # how often a community run's disk is checked
+
     def __init__(self, cluster, options, provenance):
         self.cluster, self.options, self.provenance = cluster, options, provenance
 
@@ -560,6 +565,34 @@ class Soak:
 
     def free_disk(self):
         return free_disk(self.options.parent)
+
+    def cancel(self, pid):
+        self.cluster.database().execute(f"SELECT pg_cancel_backend({pid})")
+
+    def _guarded(self, s, sql):
+        """`s.measure(sql)`, cancelled if the disk falls below `--disk-floor`
+        while it runs: a run's dropped levels keep their rows until VACUUM,
+        after its transaction, so the disk it needs grows with its levels."""
+        done, low = threading.Event(), {}
+
+        def watch():
+            while not done.wait(self.DISK_POLL_SECONDS):
+                free = self.free_disk()
+                if free < self.options.disk_floor:
+                    low.update(free_disk=free, floor=self.options.disk_floor)
+                    self.cancel(s.pid)
+                    return
+
+        watcher = threading.Thread(target=watch, daemon=True)
+        watcher.start()
+        try:
+            stage = s.measure(sql)
+        finally:
+            done.set()
+            watcher.join()
+        if low:
+            stage["cancelled_for_disk"] = low
+        return stage
 
     def _configure(self, s, cap):
         """A query session's settings: the threads, the statement timeout and the cap."""
@@ -632,11 +665,23 @@ class Soak:
             self._queries(result, "raised", cap=self.options.raised_cache_memory)
         if self.options.eigen and self.options.eigen_steps and case.name == "a":
             self._eigen_steps(case, result)
-        self._library(result, case)
         if "second-version" in self.options.skip:
             result["skipped"]["second_version"] = "--skip second-version"
         else:
             self._second_version(case, result, v1)
+        if case.table:
+            # Read by nothing after the second version: its disk goes to
+            # the community runs' levels.
+            with self.session() as s:
+                s.run("DROP TABLE soak_edges")
+        if "version_2" in result:
+            # The library reads the current version, the second; the first
+            # only holds disk the community runs' levels can reuse.
+            with self.session() as s:
+                s.run(f"SELECT warren.drop_version('{GRAPH}', {v1['version']})")
+                s.run(VACUUM_SQL)
+        result["library_version"] = result.get("version_2", v1)["version"]
+        self._library(result, case)
 
     def _generated_refresh(self, case, result):
         """The same build from the generator query, which the `b` cases
@@ -722,7 +767,7 @@ class Soak:
                 self._configure(s, self.first_cap())
                 before, free = s.run(DISK_SQL)["rows"][0].split("|"), self.free_disk()
                 stage = f"communities: {call.name}"
-                self.stage(result, stage, s.measure(call.sql))
+                self.stage(result, stage, self._guarded(s, call.sql))
                 if "errors" not in result["stages"][stage]:
                     self.stage(result, f"{stage} stats", {"rows": s.run(community_stats_sql(GRAPH, call.name))["rows"]})
                 after, free_after = s.run(DISK_SQL)["rows"][0].split("|"), self.free_disk()
@@ -880,10 +925,14 @@ def summary(result):
     measured["library"] = calls(result, "library", library_calls(GRAPH, 1))
     measured["communities"] = calls(result, "communities", community_calls(GRAPH))
     for name, found in measured["communities"].items():
-        if "failed" in found:
+        stage = stages.get(f"communities: {name}", {})
+        if "cancelled_for_disk" in stage:
+            found.clear()
+            found.update(stopped_for_disk=True, seconds=stage["median_seconds"], peak_rss_anon=stage.get("peak_rss_anon"))
+        elif "failed" in found:
             continue
-        stage = stages[f"communities: {name}"]
-        found["modularity"] = float(stage["rows"][0])
+        else:
+            found["modularity"] = float(stage["rows"][0])
         if stats := stages.get(f"communities: {name} stats"):
             found["levels"], found["communities"] = (int(part) for part in stats["rows"][0].split("|"))
         disk = stages.get(f"communities: {name} disk", {})
