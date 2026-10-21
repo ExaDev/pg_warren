@@ -66,6 +66,10 @@ jobs:
 
   miri:
     name: warren-core under Miri (pinned nightly)
+    # Off the pull-request path: warren-core has no unsafe code, so Miri can
+    # only find undefined behaviour in dependencies, and it takes 20+ minutes.
+    # It runs on every push to main and on demand.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     env:
       # Miri is slow: keep property tests small and off the filesystem.
