@@ -7,14 +7,17 @@
 -- scales it to unit L2 norm; it stops when the L1 change falls below
 -- (live nodes) × tol, or after max_iter iterations with a WARNING (NetworkX
 -- raises). Writes vector `out` (f64, unit L2 norm) and returns the
--- iterations run. Constants enter expressions as constant vectors.
+-- iterations run. Constants enter expressions as constant vectors, and
+-- scale by multiplying by a reciprocal: a constant vector is 0 at
+-- tombstoned rows, where vector_map evaluates too, so dividing by one
+-- would fail.
 CREATE FUNCTION warren.eigenvector_centrality(graph text, "out" text, tol float8 DEFAULT 1e-6,
                                               max_iter int DEFAULT 100, rels text[] DEFAULT NULL,
                                               weighted boolean DEFAULT NULL, version bigint DEFAULT NULL)
 RETURNS int LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   v bigint := coalesce(version, (warren.info(graph) ->> 'current_version')::bigint);
-  parts text[] := ARRAY['one', 'x', 'y', 'next', 'norm'];
+  parts text[] := ARRAY['one', 'x', 'y', 'next', 'scale'];
   nodes float8;
   norm float8;
   delta float8;
@@ -47,10 +50,10 @@ BEGIN
       PERFORM warren.vector_map(graph, '_warren_eigenvector_centrality_next',
         '_warren_eigenvector_centrality_x + _warren_eigenvector_centrality_y', false, v);
       norm := warren.vector_reduce(graph, '_warren_eigenvector_centrality_next', 'l2', v);
-      PERFORM warren.vector_const(graph, '_warren_eigenvector_centrality_norm',
-                                  CASE WHEN norm = 0 THEN 1 ELSE norm END, persist := false, version := v);
+      PERFORM warren.vector_const(graph, '_warren_eigenvector_centrality_scale',
+                                  CASE WHEN norm = 0 THEN 1 ELSE 1.0 / norm END, persist := false, version := v);
       PERFORM warren.vector_map(graph, '_warren_eigenvector_centrality_next',
-        '_warren_eigenvector_centrality_next / _warren_eigenvector_centrality_norm', false, v);
+        '_warren_eigenvector_centrality_next * _warren_eigenvector_centrality_scale', false, v);
       delta := warren.vector_norm_diff(graph, '_warren_eigenvector_centrality_next',
                                        '_warren_eigenvector_centrality_x', 'l1', v, v);
       PERFORM warren.vector_map(graph, '_warren_eigenvector_centrality_x', '_warren_eigenvector_centrality_next',

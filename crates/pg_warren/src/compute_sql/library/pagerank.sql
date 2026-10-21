@@ -34,9 +34,11 @@ BEGIN
     IF seed IS NULL THEN
       PERFORM warren.vector_map(graph, '_warren_pagerank_p', '_warren_pagerank_x', false, v);
     ELSE
-      PERFORM warren.vector_const(graph, '_warren_pagerank_total', warren.vector_reduce(graph, seed, 'sum', v),
+      -- Times the reciprocal: a constant vector is 0 at tombstoned rows,
+      -- where vector_map evaluates too, so dividing by one would fail.
+      PERFORM warren.vector_const(graph, '_warren_pagerank_total', 1.0 / warren.vector_reduce(graph, seed, 'sum', v),
                                   persist := false, version := v);
-      PERFORM warren.vector_map(graph, '_warren_pagerank_p', format('%I / _warren_pagerank_total', seed), false, v);
+      PERFORM warren.vector_map(graph, '_warren_pagerank_p', format('%I * _warren_pagerank_total', seed), false, v);
     END IF;
     PERFORM warren.vector_const(graph, '_warren_pagerank_damping', damping, persist := false, version := v);
     PERFORM warren.vector_const(graph, '_warren_pagerank_teleport', 1 - damping, persist := false, version := v);

@@ -9,7 +9,9 @@
 -- with a WARNING (NetworkX raises). With normalized, each result sums to
 -- 1; otherwise each has a largest value of 1. A zero sum or maximum (no
 -- edges) leaves the zeros as they are. Writes vectors `hubs` and
--- `authorities` (f64) and returns the iterations run.
+-- `authorities` (f64) and returns the iterations run. Scaling multiplies
+-- by a reciprocal constant vector: one is 0 at tombstoned rows, where
+-- vector_map evaluates too, so dividing by it would fail.
 CREATE FUNCTION warren.hits(graph text, hubs text, authorities text, tol float8 DEFAULT 1e-8,
                             max_iter int DEFAULT 100, normalized boolean DEFAULT true,
                             rels text[] DEFAULT NULL, weighted boolean DEFAULT NULL,
@@ -52,9 +54,9 @@ BEGIN
       PERFORM warren.spmv(graph, '_warren_hits_a', '_warren_hits_next', rels := rels, weighted := weighted,
                           persist := false, version := v);
       scale := warren.vector_reduce(graph, '_warren_hits_next', 'max', v);
-      PERFORM warren.vector_const(graph, '_warren_hits_scale', CASE WHEN scale = 0 THEN 1 ELSE scale END,
+      PERFORM warren.vector_const(graph, '_warren_hits_scale', CASE WHEN scale = 0 THEN 1 ELSE 1.0 / scale END,
                                   persist := false, version := v);
-      PERFORM warren.vector_map(graph, '_warren_hits_next', '_warren_hits_next / _warren_hits_scale', false, v);
+      PERFORM warren.vector_map(graph, '_warren_hits_next', '_warren_hits_next * _warren_hits_scale', false, v);
       delta := warren.vector_norm_diff(graph, '_warren_hits_next', '_warren_hits_x', 'l1', v, v);
       PERFORM warren.vector_map(graph, '_warren_hits_x', '_warren_hits_next', false, v);
       EXIT WHEN delta < tol;
@@ -64,17 +66,17 @@ BEGIN
     END IF;
     IF normalized THEN
       scale := warren.vector_reduce(graph, '_warren_hits_x', 'sum', v);
-      PERFORM warren.vector_const(graph, '_warren_hits_scale', CASE WHEN scale = 0 THEN 1 ELSE scale END,
+      PERFORM warren.vector_const(graph, '_warren_hits_scale', CASE WHEN scale = 0 THEN 1 ELSE 1.0 / scale END,
                                   persist := false, version := v);
-      PERFORM warren.vector_map(graph, hubs, '_warren_hits_x / _warren_hits_scale', true, v);
+      PERFORM warren.vector_map(graph, hubs, '_warren_hits_x * _warren_hits_scale', true, v);
       scale := warren.vector_reduce(graph, '_warren_hits_a', 'sum', v);
     ELSE
       PERFORM warren.vector_map(graph, hubs, '_warren_hits_x', true, v);
       scale := warren.vector_reduce(graph, '_warren_hits_a', 'max', v);
     END IF;
-    PERFORM warren.vector_const(graph, '_warren_hits_scale', CASE WHEN scale = 0 THEN 1 ELSE scale END,
+    PERFORM warren.vector_const(graph, '_warren_hits_scale', CASE WHEN scale = 0 THEN 1 ELSE 1.0 / scale END,
                                 persist := false, version := v);
-    PERFORM warren.vector_map(graph, authorities, '_warren_hits_a / _warren_hits_scale', true, v);
+    PERFORM warren.vector_map(graph, authorities, '_warren_hits_a * _warren_hits_scale', true, v);
   EXCEPTION WHEN OTHERS OR query_canceled THEN
     PERFORM warren.drop_vector(graph, '_warren_hits_' || part, v, true) FROM unnest(parts) part;
     RAISE;

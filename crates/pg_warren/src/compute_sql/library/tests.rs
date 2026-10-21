@@ -285,7 +285,7 @@ mod tests {
         (
             "eigenvector_centrality",
             "warren.eigenvector_centrality('r', 'taken')",
-            &["one", "x", "y", "next", "norm"],
+            &["one", "x", "y", "next", "scale"],
         ),
         (
             "katz_centrality",
@@ -324,5 +324,31 @@ mod tests {
             }
         }
         Spi::run("RESET ROLE")
+    }
+
+    /// Constant vectors hold zero at tombstoned rows, and `vector_map`
+    /// evaluates those rows too, so the library never divides by one.
+    #[pg_test]
+    fn the_library_runs_on_a_version_with_tombstones() -> Result<(), Error> {
+        ring("r", 6, 2)?;
+        refresh("r", true)?;
+        Spi::run("DELETE FROM r_nodes WHERE id = 3")?;
+        refresh("r", true)?;
+        Spi::run(
+            "SELECT warren.vector_from_query('r', 'seed', 'SELECT id, id FROM r_nodes');
+             SELECT warren.pagerank('r', 'pr', seed := 'seed');
+             SELECT warren.eigenvector_centrality('r', 'ev');
+             SELECT warren.katz_centrality('r', 'k', seed := 'seed');
+             SELECT warren.hits('r', 'h', 'a');
+             SELECT warren.clustering('r', 'cl');
+             SELECT warren.label_propagation_majority('r', 'lpm', seed := 'seed')",
+        )?;
+        // The ring is now the path 4 → 5 → 6 → 1 → 2: every node with an
+        // out-edge is an equal hub.
+        assert_eq!(
+            values("r", "h", 3)?.as_deref(),
+            Some("1:0.250 2:0.000 4:0.250 5:0.250 6:0.250")
+        );
+        Ok(())
     }
 }
