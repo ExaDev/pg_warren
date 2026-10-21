@@ -6,20 +6,29 @@ as a table the SQL test compares against.
 |---|---|---|
 | components | oracle_components | node_id, component: the component's smallest node id (weakly connected if directed) |
 | core_number | oracle_core_number | node_id, core: the node's core number in the undirected graph without self-loops |
-| dag_longest_path | oracle_dag_longest_path | node_id, length: the longest path ending at the node (`--directed`, acyclic; weights `--weighted`, else 1; assumes weights ≥ 0), as `dag_longest_path_length` of its ancestors |
+| dag_longest_path | oracle_dag_longest_path | node_id, length: the longest path ending at the node (`--directed`, acyclic; weights from a third column, else 1; assumes weights ≥ 0), as `dag_longest_path_length` of its ancestors |
 | pagerank | oracle_pagerank | node_id, score (sums to 1; `--damping`, default 0.85) |
-| spanning_forest | oracle_spanning_forest | component, weight: each component's smallest node id and the weight of its minimum spanning tree (undirected; `--weighted`, else 1) |
+| spanning_forest | oracle_spanning_forest | component, weight: each component's smallest node id and the weight of its minimum spanning tree (directions ignored, the lighter of a pair's two; weights from a third column, else 1) |
 | spectrum | oracle_spectrum | i, eigenvalue: the `--k` eigenvalues of `--matrix` (adjacency, laplacian, normalized_laplacian) at the `--which` end (largest magnitude, or smallest), by a dense solver over the nodes with an edge (undirected), as `warren.eigen` defines them |
 | strong_components | oracle_strong_components | node_id, component: the smallest node id of its strongly connected component (`--directed`) |
 | topological_order | oracle_topological_order | node_id, position: its place, from 0, in the lexicographically smallest topological order (`--directed`) |
 | triangles | oracle_triangles | node_id, triangles: the node's triangles in the undirected graph without self-loops |
+| eigenvector | oracle_eigenvector | node_id, score: `nx.eigenvector_centrality` (weighted when the edges have weights) |
+| katz | oracle_katz | node_id, score: `nx.katz_centrality` (`--alpha`, `--beta`, `--no-normalized`; weighted when the edges have weights) |
+| hits | oracle_hits | node_id, hub, authority: `nx.hits` (power iteration, `max_iter` 1000; weighted when the edges have weights) |
+| label_propagation_majority | oracle_label_propagation_majority | node_id, label: `warren.label_propagation_majority`'s rule reimplemented, from each node's own id as its label (`--max-iter`, default 100) |
+| clustering | oracle_clustering | node_id, coefficient: `nx.clustering` of the undirected graph without self-loops |
 
-With `--weighted`, the edge query's third column is the edge's weight, and
-a pair given twice (in either direction, if undirected) keeps its smallest
-weight, as `warren.minimum_spanning_forest` reads parallel edges.
+Edges are `--edges-sql`'s first two columns; a third column, if present, is
+the edge's `weight`. A pair given more than once (the same ordered pair if
+`--directed`, either order if not) is one edge whose weight is the sum, as
+a build deduplicates parallel edges (DESIGN.md §14 item 4).
+`spanning_forest` then joins the two directions of a directed pair keeping
+the lighter, as `warren.minimum_spanning_forest` reads them.
 """
 
 import argparse
+from collections import Counter
 
 import networkx as nx
 import numpy as np
@@ -34,34 +43,42 @@ TABLES = {
     "strong_components": ("oracle_strong_components", "node_id bigint, component bigint"),
     "topological_order": ("oracle_topological_order", "node_id bigint, position bigint"),
     "triangles": ("oracle_triangles", "node_id bigint, triangles bigint"),
+    "eigenvector": ("oracle_eigenvector", "node_id bigint, score float8"),
+    "katz": ("oracle_katz", "node_id bigint, score float8"),
+    "hits": ("oracle_hits", "node_id bigint, hub float8, authority float8"),
+    "label_propagation_majority": ("oracle_label_propagation_majority", "node_id bigint, label bigint"),
+    "clustering": ("oracle_clustering", "node_id bigint, coefficient float8"),
 }
 
 
-def export(database, nodes_sql, edges_sql, directed, weighted=False):
+def export(database, nodes_sql, edges_sql, directed):
     """The graph whose nodes are `nodes_sql`'s first column and whose edges
-    are `edges_sql`'s first two columns, weighted by its third if
-    `weighted`."""
+    are `edges_sql`'s first two columns, weighted by its third if it has one."""
     graph = nx.DiGraph() if directed else nx.Graph()
     graph.add_nodes_from(int(row[0]) for row in database.query(nodes_sql))
     for row in database.query(edges_sql):
-        add_edge(graph, int(row[0]), int(row[1]), float(row[2]) if weighted else None)
+        add_edge(graph, int(row[0]), int(row[1]), float(row[2]) if len(row) > 2 else None)
     return graph
 
 
 def add_edge(graph, source, target, weight):
-    """Adds `source → target`; with a weight, a pair already present keeps
-    the smaller one."""
+    """Adds `source → target`, summing the weights of a pair given again, as
+    a build deduplicates parallel edges."""
+    if weight is None:
+        graph.add_edge(source, target)
+    elif graph.has_edge(source, target):
+        graph[source][target]["weight"] += weight
+    else:
+        graph.add_edge(source, target, weight=weight)
+
+
+def lighter_edge(graph, source, target, weight):
+    """Adds `source – target` to an undirected graph; a pair already present
+    keeps the lighter weight."""
     if weight is None:
         graph.add_edge(source, target)
     elif not graph.has_edge(source, target) or weight < graph[source][target]["weight"]:
         graph.add_edge(source, target, weight=weight)
-
-
-def simple_undirected(graph):
-    """`graph` without directions or self-loops."""
-    simple = nx.Graph(graph.to_undirected() if graph.is_directed() else graph)
-    simple.remove_edges_from(list(nx.selfloop_edges(simple)))
-    return simple
 
 
 def compute(computation, graph, arguments):
@@ -76,9 +93,20 @@ def compute(computation, graph, arguments):
     if computation == "spectrum":
         return spectrum(graph, arguments)
     if computation == "triangles":
-        return list(nx.triangles(simple_undirected(graph)).items())
+        return list(nx.triangles(undirected_simple(graph)).items())
+    if computation == "eigenvector":
+        return list(nx.eigenvector_centrality(graph, weight="weight").items())
+    if computation == "katz":
+        return katz(graph, arguments)
+    if computation == "hits":
+        hubs, authorities = nx.hits(graph, max_iter=1000)
+        return [(node, hubs[node], authorities[node]) for node in graph]
+    if computation == "label_propagation_majority":
+        return label_propagation_majority(graph, arguments)
+    if computation == "clustering":
+        return list(nx.clustering(undirected_simple(graph)).items())
     if computation == "core_number":
-        return list(nx.core_number(simple_undirected(graph)).items())
+        return list(nx.core_number(undirected_simple(graph)).items())
     if computation == "strong_components":
         return [(node, min(part)) for part in nx.strongly_connected_components(graph) for node in part]
     if computation == "topological_order":
@@ -90,10 +118,52 @@ def compute(computation, graph, arguments):
         undirected = nx.Graph()
         undirected.add_nodes_from(graph.nodes)
         for source, target, data in graph.edges(data=True):
-            add_edge(undirected, source, target, data.get("weight"))
+            lighter_edge(undirected, source, target, data.get("weight"))
         return [(min(part), float(nx.minimum_spanning_tree(undirected.subgraph(part)).size(weight="weight")))
                 for part in nx.connected_components(undirected)]
     raise ValueError(f"unknown oracle computation {computation!r}; expected one of {sorted(TABLES)}")
+
+
+def undirected_simple(graph):
+    simple = nx.Graph(graph.to_undirected() if graph.is_directed() else graph)
+    simple.remove_edges_from(list(nx.selfloop_edges(simple)))
+    return simple
+
+
+def katz(graph, arguments):
+    options = argparse.ArgumentParser(prog="katz")
+    options.add_argument("--alpha", type=float, default=0.1)
+    options.add_argument("--beta", type=float, default=1.0)
+    options.add_argument("--no-normalized", dest="normalized", action="store_false")
+    args = options.parse_args(arguments)
+    return list(nx.katz_centrality(graph, alpha=args.alpha, beta=args.beta, normalized=args.normalized,
+                                   weight="weight").items())
+
+
+def label_propagation_majority(graph, arguments):
+    """Synchronous majority-vote label propagation, as
+    `warren.label_propagation_majority` defines it: each step every node
+    takes the most frequent label among its own and its neighbours'
+    (direction ignored, each neighbour once), the smallest on a tie, until
+    no label changes or after `--max-iter` steps."""
+    options = argparse.ArgumentParser(prog="label_propagation_majority")
+    options.add_argument("--max-iter", type=int, default=100)
+    max_iter = options.parse_args(arguments).max_iter
+    undirected = graph.to_undirected() if graph.is_directed() else graph
+    labels = {node: node for node in undirected}
+    for _ in range(max_iter):
+        step = {node: majority([labels[node]] + [labels[m] for m in undirected.neighbors(node)])
+                for node in undirected}
+        if step == labels:
+            break
+        labels = step
+    return list(labels.items())
+
+
+def majority(labels):
+    counts = Counter(labels)
+    most = max(counts.values())
+    return min(label for label, count in counts.items() if count == most)
 
 
 def spectrum(graph, arguments):
@@ -133,7 +203,6 @@ def run(database, computation, arguments):
     graph_options.add_argument("--nodes-sql", default="SELECT id FROM nodes")
     graph_options.add_argument("--edges-sql", default="SELECT src, dst FROM edges")
     graph_options.add_argument("--directed", action="store_true")
-    graph_options.add_argument("--weighted", action="store_true")
     graph, rest = graph_options.parse_known_args(arguments)
-    exported = export(database, graph.nodes_sql, graph.edges_sql, graph.directed, graph.weighted)
+    exported = export(database, graph.nodes_sql, graph.edges_sql, graph.directed)
     write(database, computation, compute(computation, exported, rest))

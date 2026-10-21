@@ -76,6 +76,11 @@ mod tests {
             ("SELECT warren.components_vector('{g}', 'cc')", "cc"),
             ("SELECT warren.label_propagation('{g}', 'lp')", "lp"),
             ("SELECT warren.sssp_vector('{g}', 'sp', 1::bigint)", "sp"),
+            ("SELECT warren.eigenvector_centrality('{g}', 'ev', max_iter := 20)", "ev"),
+            ("SELECT warren.katz_centrality('{g}', 'k', max_iter := 20)", "k"),
+            ("SELECT warren.hits('{g}', 'h', 'a', max_iter := 20)", "a"),
+            ("SELECT warren.clustering('{g}', 'cl')", "cl"),
+            ("SELECT warren.label_propagation_majority('{g}', 'lpm')", "lpm"),
         ] {
             same_after(setup, "vector_values", name)?;
         }

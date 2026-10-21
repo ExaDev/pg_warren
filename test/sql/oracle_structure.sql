@@ -7,8 +7,8 @@
 -- oracle: core_number
 -- oracle: strong_components --directed
 -- oracle: topological_order --directed --edges-sql 'SELECT src, dst FROM edges WHERE src < dst'
--- oracle: dag_longest_path --directed --weighted --edges-sql 'SELECT src, dst, (1 + (src * dst) % 5)::float8 FROM edges WHERE src < dst'
--- oracle: spanning_forest --directed --weighted --edges-sql 'SELECT src, dst, (1 + (src * 3 + dst) % 11)::float8 FROM edges'
+-- oracle: dag_longest_path --directed --edges-sql 'SELECT src, dst, (1 + (src * dst) % 5)::float8 FROM edges WHERE src < dst'
+-- oracle: spanning_forest --directed --edges-sql 'SELECT src, dst, (1 + (src * 3 + dst) % 11)::float8 FROM edges'
 SELECT warren.create_graph('g', 'SELECT id FROM nodes', 'SELECT src, dst FROM edges');
 SELECT warren.refresh('g');
 

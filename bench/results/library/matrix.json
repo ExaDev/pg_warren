@@ -1,0 +1,25 @@
+{
+  "graphs": {
+    "smoke": {"generate": ["random", "--nodes", "2000", "--edges", "10000", "--seed", "1"]},
+    "random-1m": {"generate": ["random", "--nodes", "1000000", "--edges", "10000000", "--seed", "1"]}
+  },
+  "setup": [
+    "DO $$ BEGIN EXECUTE format('ALTER DATABASE %I SET warren.threads = 4', current_database()); END $$",
+    "SELECT warren.create_graph('g', 'SELECT id FROM nodes', 'SELECT src, dst FROM edges', directed := false)"
+  ],
+  "params": "SELECT 1 AS unused",
+  "workloads": [
+    {"name": "refresh", "sql": "SELECT warren.refresh('g')", "repeat": 1},
+    {"name": "prewarm", "sql": "SELECT warren.prewarm('g')"},
+    {"name": "pagerank_20_iterations", "requires": ["warren.pagerank"], "sql": "SELECT warren.pagerank('g', 'pr', tol := 0, max_iter := 20)"},
+    {"name": "eigenvector_centrality_20_iterations", "requires": ["warren.eigenvector_centrality"], "sql": "SELECT warren.eigenvector_centrality('g', 'ev', tol := 0, max_iter := 20)"},
+    {"name": "eigenvector_centrality_converged", "requires": ["warren.eigenvector_centrality"], "sql": "SELECT warren.eigenvector_centrality('g', 'ev')", "repeat": 1},
+    {"name": "katz_centrality_20_iterations", "requires": ["warren.katz_centrality"], "sql": "SELECT warren.katz_centrality('g', 'katz', alpha := 0.01, tol := 0, max_iter := 20)"},
+    {"name": "hits_20_iterations", "requires": ["warren.hits"], "sql": "SELECT warren.hits('g', 'hub', 'authority', tol := 0, max_iter := 20)"},
+    {"name": "triangles", "requires": ["warren.triangles"], "sql": "SELECT warren.triangles('g', 'tri')"},
+    {"name": "clustering", "requires": ["warren.clustering"], "sql": "SELECT warren.clustering('g', 'cc')"},
+    {"name": "label_propagation_majority_1_iteration", "requires": ["warren.label_propagation_majority"], "sql": "SELECT warren.label_propagation_majority('g', 'lpm', max_iter := 1)"},
+    {"name": "label_propagation_majority_5_iterations", "requires": ["warren.label_propagation_majority"], "sql": "SELECT warren.label_propagation_majority('g', 'lpm', max_iter := 5)", "repeat": 1},
+    {"name": "label_propagation_10_iterations", "requires": ["warren.label_propagation"], "sql": "SELECT warren.label_propagation('g', 'lp', max_iter := 10)"}
+  ]
+}

@@ -1,0 +1,139 @@
+{
+ "graph": "random-1m",
+ "generate": [
+  "random",
+  "--nodes",
+  "1000000",
+  "--edges",
+  "10000000",
+  "--seed",
+  "1"
+ ],
+ "nodes": 1000000,
+ "edges": 10000000,
+ "params": {
+  "unused": "1"
+ },
+ "pg_warren": "0.4.0",
+ "postgres": "16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
+ "git": "e0afd04",
+ "cpus": 4,
+ "machine": "x86_64",
+ "recorded_at": "2026-10-21T07:55:56+00:00",
+ "workloads": [
+  {
+   "name": "refresh",
+   "sql": "SELECT warren.refresh('g')",
+   "seconds": [
+    8.573704
+   ],
+   "median": 8.573704
+  },
+  {
+   "name": "prewarm",
+   "sql": "SELECT warren.prewarm('g')",
+   "seconds": [
+    0.334886,
+    0.353418,
+    0.368299
+   ],
+   "median": 0.353418
+  },
+  {
+   "name": "pagerank_20_iterations",
+   "sql": "SELECT warren.pagerank('g', 'pr', tol := 0, max_iter := 20)",
+   "seconds": [
+    1.67415,
+    1.64686,
+    1.624041
+   ],
+   "median": 1.64686
+  },
+  {
+   "name": "eigenvector_centrality_20_iterations",
+   "sql": "SELECT warren.eigenvector_centrality('g', 'ev', tol := 0, max_iter := 20)",
+   "seconds": [
+    1.265443,
+    1.21358,
+    1.331871
+   ],
+   "median": 1.265443
+  },
+  {
+   "name": "eigenvector_centrality_converged",
+   "sql": "SELECT warren.eigenvector_centrality('g', 'ev')",
+   "seconds": [
+    0.703634
+   ],
+   "median": 0.703634
+  },
+  {
+   "name": "katz_centrality_20_iterations",
+   "sql": "SELECT warren.katz_centrality('g', 'katz', alpha := 0.01, tol := 0, max_iter := 20)",
+   "seconds": [
+    1.173153,
+    1.242659,
+    1.152804
+   ],
+   "median": 1.173153
+  },
+  {
+   "name": "hits_20_iterations",
+   "sql": "SELECT warren.hits('g', 'hub', 'authority', tol := 0, max_iter := 20)",
+   "seconds": [
+    1.861957,
+    1.876962,
+    1.864764
+   ],
+   "median": 1.864764
+  },
+  {
+   "name": "triangles",
+   "sql": "SELECT warren.triangles('g', 'tri')",
+   "seconds": [
+    4.308131,
+    4.462801,
+    4.191699
+   ],
+   "median": 4.308131
+  },
+  {
+   "name": "clustering",
+   "sql": "SELECT warren.clustering('g', 'cc')",
+   "seconds": [
+    4.608884,
+    4.451339,
+    4.633807
+   ],
+   "median": 4.608884
+  },
+  {
+   "name": "label_propagation_majority_1_iteration",
+   "sql": "SELECT warren.label_propagation_majority('g', 'lpm', max_iter := 1)",
+   "seconds": [
+    22.402278,
+    21.30769,
+    21.870809
+   ],
+   "median": 21.870809
+  },
+  {
+   "name": "label_propagation_majority_5_iterations",
+   "sql": "SELECT warren.label_propagation_majority('g', 'lpm', max_iter := 5)",
+   "seconds": [
+    100.482756
+   ],
+   "median": 100.482756
+  },
+  {
+   "name": "label_propagation_10_iterations",
+   "sql": "SELECT warren.label_propagation('g', 'lp', max_iter := 10)",
+   "seconds": [
+    0.972775,
+    1.046692,
+    1.042484
+   ],
+   "median": 1.042484
+  }
+ ]
+}

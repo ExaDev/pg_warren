@@ -162,7 +162,7 @@ reads the graph, an optional `version` (default: the current version).
 | Walk steps | `s` and `steps` (jsonb), which build the composite type `warren.step`; the cast `jsonb::warren.step[]` |
 | Vectors | `vector_from_query`, `vector_const`, `vector_degree`, `vector_dense_id`, `vector_values`, `matrix_rows`, `vector_topk`, `vector_stats`, `id_map`, `drop_vector` |
 | Compute | `spmv`, `spmm`, `vector_map`, `explain_map`, `vector_reduce`, `vector_norm_diff`, `gather` |
-| Library | `pagerank`, `components_vector`, `label_propagation`, `sssp_vector`, `degree_vector`, `aggregate_neighbours`, `triangles`, `core_number`, `strong_components_vector`, `topological_order`, `dag_longest_path`, `minimum_spanning_forest` |
+| Library | `pagerank`, `eigenvector_centrality`, `katz_centrality`, `hits`, `components_vector`, `label_propagation`, `label_propagation_majority`, `sssp_vector`, `degree_vector`, `aggregate_neighbours`, `triangles`, `clustering`, `core_number`, `strong_components_vector`, `topological_order`, `dag_longest_path`, `minimum_spanning_forest` |
 | Spectral | `eigen`, `distance` |
 | Extension | `version` |
 
@@ -217,7 +217,9 @@ Every SQL example in the README and `docs/` runs in CI, in
 
 - **0.4.0** (in development): locality ordering of dense ids
   (`create_graph(…, node_order := 'locality')`, `compact(…, node_order)`;
-  DESIGN.md §14 item 22), then the planned library's first groups (§6.7).
+  DESIGN.md §14 item 22); the planned library's group 1 (§6.7:
+  eigenvector and Katz centrality, HITS, clustering, majority-vote label
+  propagation), then its group 2.
 
 See [CHANGELOG.md](CHANGELOG.md). This is pre-1.0 software: the SQL surface
 may still change between minor versions, with an upgrade script each time.

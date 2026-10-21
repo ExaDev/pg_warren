@@ -1,31 +1,38 @@
-//! In-database tests of the algorithm library.
+//! In-database tests of the algorithm library, and the helpers the
+//! library's other test modules share.
+
+use pgrx::prelude::*;
+use pgrx::spi::Error;
+
+use super::super::map::executor_maps;
+use crate::fixture::{failure, rows};
+
+/// `name`'s values, as `node:value` text, rounded to `digits`.
+pub(super) fn values(graph: &str, name: &str, digits: i32) -> Result<Option<String>, Error> {
+    rows(&format!(
+        "SELECT node_id || ':' || round(value::numeric, {digits})
+         FROM warren.vector_values('{graph}', '{name}', NULL::bigint)"
+    ))
+}
+
+/// Runs `sql` and checks that every vector_map it made was compiled and
+/// that it left no intermediate vector of `algorithm` behind.
+pub(super) fn compiled(graph: &str, algorithm: &str, sql: &str) -> Result<(), Error> {
+    let before = executor_maps();
+    Spi::run(sql)?;
+    assert_eq!(executor_maps(), before, "{algorithm}: a vector_map took the executor path");
+    let left = failure(&format!("warren.explain_map('{graph}', '_warren_{algorithm}_x')"))?;
+    assert!(left.is_some(), "{algorithm} left its intermediates");
+    Ok(())
+}
 
 #[pgrx::pg_schema]
 mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use super::super::super::map::executor_maps;
+    use super::{compiled, values};
     use crate::fixture::{failure, refresh, ring, rows, small};
-
-    /// `name`'s values, as `node:value` text, rounded to `digits`.
-    fn values(graph: &str, name: &str, digits: i32) -> Result<Option<String>, Error> {
-        rows(&format!(
-            "SELECT node_id || ':' || round(value::numeric, {digits})
-             FROM warren.vector_values('{graph}', '{name}', NULL::bigint)"
-        ))
-    }
-
-    /// Runs `sql` and checks that every vector_map it made was compiled and
-    /// that it left no intermediate vector of `algorithm` behind.
-    fn compiled(graph: &str, algorithm: &str, sql: &str) -> Result<(), Error> {
-        let before = executor_maps();
-        Spi::run(sql)?;
-        assert_eq!(executor_maps(), before, "{algorithm}: a vector_map took the executor path");
-        let left = failure(&format!("warren.explain_map('{graph}', '_warren_{algorithm}_x')"))?;
-        assert!(left.is_some(), "{algorithm} left its intermediates");
-        Ok(())
-    }
 
     #[pg_test]
     fn pagerank_is_uniform_on_a_ring_and_personalised_by_a_seed() -> Result<(), Error> {
@@ -96,6 +103,14 @@ mod tests {
             "warren.degree_vector('t', '_warren_deg')",
             "warren.aggregate_neighbours('t', '_warren_x', 'a')",
             "warren.aggregate_neighbours('t', 'e', '_warren_a')",
+            "warren.eigenvector_centrality('t', '_warren_ev')",
+            "warren.katz_centrality('t', '_warren_k')",
+            "warren.katz_centrality('t', 'k', seed := '_warren_s')",
+            "warren.hits('t', '_warren_h', 'a')",
+            "warren.hits('t', 'h', '_warren_a')",
+            "warren.clustering('t', '_warren_c')",
+            "warren.label_propagation_majority('t', '_warren_lp')",
+            "warren.label_propagation_majority('t', 'lp', seed := '_warren_s')",
         ];
         for call in calls {
             let refused = failure(call)?.unwrap_or_default();
@@ -232,6 +247,108 @@ mod tests {
         let bad =
             failure("warren.aggregate_neighbours('t', 'e', 'x', 'median')")?.unwrap_or_default();
         assert!(bad.starts_with("22023: agg must be mean, sum or max"), "{bad}");
+        Ok(())
+    }
+
+    #[pg_test]
+    fn bad_arguments_are_refused() -> Result<(), Error> {
+        small("t")?;
+        Spi::run(
+            "CREATE TABLE none_nodes (id bigint);
+             SELECT warren.create_graph('none', 'SELECT id FROM none_nodes', 'SELECT id, id FROM none_nodes');
+             SELECT warren.refresh('none')",
+        )?;
+        let calls = [
+            ("warren.eigenvector_centrality('nope', 'ev')", "42704: graph \"nope\" does not exist"),
+            (
+                "warren.eigenvector_centrality('t', 'ev', tol := -1)",
+                "22023: tol must be at least 0, not -1",
+            ),
+            (
+                "warren.eigenvector_centrality('t', 'ev', max_iter := 0)",
+                "22023: max_iter must be at least 1, not 0",
+            ),
+            (
+                "warren.eigenvector_centrality('none', 'ev')",
+                "22023: graph \"none\" has no live nodes",
+            ),
+        ];
+        for (call, expected) in calls {
+            let refused = failure(call)?.unwrap_or_default();
+            assert!(refused.starts_with(expected), "{call}: {refused}");
+        }
+        Ok(())
+    }
+
+    /// Each function of DESIGN.md §6.7's group 1 and its intermediates.
+    const GROUP_ONE: &[(&str, &str, &[&str])] = &[
+        (
+            "eigenvector_centrality",
+            "warren.eigenvector_centrality('r', 'taken')",
+            &["one", "x", "y", "next", "scale"],
+        ),
+        (
+            "katz_centrality",
+            "warren.katz_centrality('r', 'taken')",
+            &["one", "b", "alpha", "x", "y", "next", "scale"],
+        ),
+        ("hits", "warren.hits('r', 'h', 'taken')", &["one", "x", "a", "next", "scale"]),
+        ("clustering", "warren.clustering('r', 'taken')", &["triangles", "degree"]),
+        (
+            "label_propagation_majority",
+            "warren.label_propagation_majority('r', 'taken')",
+            &["x", "next"],
+        ),
+    ];
+
+    /// A reader may not replace the owner's vector, so writing `out` fails
+    /// after every intermediate exists: the run drops them all.
+    #[pg_test]
+    fn a_run_that_cannot_write_its_output_drops_its_intermediates() -> Result<(), Error> {
+        ring("r", 5, 2)?;
+        refresh("r", true)?;
+        Spi::run(
+            "CREATE ROLE r_reader;
+             SELECT warren.grant('r', 'r_reader');
+             SET ROLE r_owner;
+             SELECT warren.vector_const('r', 'taken', 1);
+             SET ROLE r_reader",
+        )?;
+        for (algorithm, call, parts) in GROUP_ONE {
+            let refused = failure(call)?.unwrap_or_default();
+            assert!(refused.starts_with("42501: "), "{call}: {refused}");
+            for part in *parts {
+                let left =
+                    failure(&format!("warren.explain_map('r', '_warren_{algorithm}_{part}')"))?;
+                assert!(left.is_some(), "_warren_{algorithm}_{part} was left behind");
+            }
+        }
+        Spi::run("RESET ROLE")
+    }
+
+    /// Constant vectors hold zero at tombstoned rows, and `vector_map`
+    /// evaluates those rows too, so the library never divides by one.
+    #[pg_test]
+    fn the_library_runs_on_a_version_with_tombstones() -> Result<(), Error> {
+        ring("r", 6, 2)?;
+        refresh("r", true)?;
+        Spi::run("DELETE FROM r_nodes WHERE id = 3")?;
+        refresh("r", true)?;
+        Spi::run(
+            "SELECT warren.vector_from_query('r', 'seed', 'SELECT id, id FROM r_nodes');
+             SELECT warren.pagerank('r', 'pr', seed := 'seed');
+             SELECT warren.eigenvector_centrality('r', 'ev');
+             SELECT warren.katz_centrality('r', 'k', seed := 'seed');
+             SELECT warren.hits('r', 'h', 'a');
+             SELECT warren.clustering('r', 'cl');
+             SELECT warren.label_propagation_majority('r', 'lpm', seed := 'seed')",
+        )?;
+        // The ring is now the path 4 → 5 → 6 → 1 → 2: every node with an
+        // out-edge is an equal hub.
+        assert_eq!(
+            values("r", "h", 3)?.as_deref(),
+            Some("1:0.250 2:0.000 4:0.250 5:0.250 6:0.250")
+        );
         Ok(())
     }
 }
