@@ -11,6 +11,10 @@ use super::{CommunityError, Undirected};
 use crate::compute::{ComputeError, ComputeMemory};
 use crate::graph::DenseId;
 
+/// The bytes per node [`modularity`] charges: the grouping's order and
+/// index, and each community's two sums.
+pub(super) const GROUPING_BYTES_PER_NODE: u64 = 32;
+
 /// The modularity of the partition that gives node `n` the label
 /// `labels[n]`, at resolution `resolution`. Nodes without edges (tombstoned
 /// ones among them) add nothing, whatever their label.
@@ -32,7 +36,7 @@ pub fn modularity(
         return Ok(0.0);
     }
     // The grouping's order and index, then each community's two sums.
-    let _grouping = memory.charge((labels.len() as u64).saturating_mul(32))?;
+    let _grouping = memory.charge((labels.len() as u64).saturating_mul(GROUPING_BYTES_PER_NODE))?;
     let communities = Communities::of(labels)?;
     let mut inside = vec![0.0; communities.count];
     let mut degrees = vec![0.0; communities.count];

@@ -24,6 +24,7 @@ use std::mem::size_of;
 
 use rayon::prelude::*;
 
+use super::modularity::GROUPING_BYTES_PER_NODE;
 use super::random::priority;
 use super::{modularity, CommunityError, Undirected};
 use crate::compute::{ComputeError, ComputeMemory, MemoryCharge, Vector, Workers};
@@ -121,8 +122,8 @@ fn run(
     labels: &mut [i64],
 ) -> Result<(u64, u32, u64, f64), CommunityError> {
     let mut state = State::new(memory, graph, initial)?;
-    let classes = Colouring::new(memory, cancellation, graph, options.seed)?;
     let mut q = state.modularity(memory, graph, options.resolution)?;
+    let classes = Colouring::new(memory, cancellation, graph, options.seed)?;
     let (mut sweeps, mut moves) = (0, 0);
     while sweeps < options.max_sweeps {
         sweeps += 1;
@@ -168,11 +169,17 @@ struct State {
 }
 
 impl State {
-    /// The bytes the state and the colouring hold for `nodes` nodes, and the
-    /// decisions' scratch at its largest.
+    /// The most [`local_moving`] charges at once on the pool for `nodes`
+    /// nodes, with the decisions' scratch at its largest: the state (16 B
+    /// a node) beside the starting modularity's labels and grouping (40 B,
+    /// before the colouring exists), or beside the colouring and then the
+    /// labelling's least keys (24 + 16 B).
     fn bytes(nodes: u64, graph: &Undirected) -> u64 {
         let longest = (0..nodes).map(|node| graph.row(node).len() as u64).max().unwrap_or(0);
-        let per_node = (size_of::<DenseId>() + size_of::<f64>()) as u64 + Colouring::BYTES_PER_NODE;
+        let state = (size_of::<DenseId>() + size_of::<f64>()) as u64;
+        let per_node = state
+            + (size_of::<i64>() as u64 + GROUPING_BYTES_PER_NODE)
+                .max(Colouring::BYTES_PER_NODE + 16);
         nodes.saturating_mul(per_node).saturating_add(longest.saturating_mul(16 * 64))
     }
 
