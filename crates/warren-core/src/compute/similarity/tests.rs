@@ -268,3 +268,12 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn k_may_exceed_the_id_space() {
+    let graph = small(true);
+    let graph = all(&graph);
+    assert_eq!(top(&graph, Similarity::CommonNeighbours, 0, u64::MAX), vec![(3, 2.0)]);
+    let found = each(&graph, Similarity::CommonNeighbours, u64::MAX, None);
+    assert_eq!(found.len(), 8);
+}

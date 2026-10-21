@@ -57,17 +57,20 @@ struct Best {
     k: usize,
     /// The best so far, the worst on top.
     kept: BinaryHeap<Similar>,
+    _charge: MemoryCharge,
 }
 
 impl Best {
-    fn new(k: u64) -> Result<Self, ComputeError> {
-        let k = usize::try_from(k).unwrap_or(usize::MAX);
+    /// Room for the best `k` of at most `id_space` candidates, charged to
+    /// `memory`.
+    fn new(memory: &ComputeMemory, k: u64, id_space: u64) -> Result<Self, ComputeError> {
+        let k = k.min(id_space) as usize;
+        let room = k + 1;
+        let charge = memory.charge_elements::<Similar>(room)?;
         let mut kept = BinaryHeap::new();
-        let room = k.saturating_add(1);
-        kept.try_reserve_exact(room).map_err(|_| ComputeError::OutOfMemory {
-            bytes: (room as u64).saturating_mul(size_of::<Similar>() as u64),
-        })?;
-        Ok(Self { k, kept })
+        kept.try_reserve_exact(room)
+            .map_err(|_| ComputeError::OutOfMemory { bytes: charge.bytes() })?;
+        Ok(Self { k, kept, _charge: charge })
     }
 
     fn offer(&mut self, candidate: Similar) {
@@ -169,7 +172,7 @@ pub fn most_similar<I: Interrupts>(
             let adamic_adar = run.iter().map(|&(_, term)| term).sum();
             (run[0].0, Shared { count: run.len() as u64, adamic_adar })
         });
-        let mut best = Best::new(k)?;
+        let mut best = Best::new(memory, k, graph.graph.all_relations().forward().id_space())?;
         rank(
             &neighbourhoods,
             measure,
@@ -239,7 +242,8 @@ pub fn similar_pairs<I: Interrupts>(
     }
     let ranked = (0..id_space).filter(|&node| nodes.is_none_or(|mask| mask.selects(node))).count();
     let pair = size_of::<(DenseId, Similar)>() as u64;
-    let charge = memory.charge((ranked as u64).saturating_mul(k).saturating_mul(pair))?;
+    let charge =
+        memory.charge((ranked as u64).saturating_mul(k.min(id_space)).saturating_mul(pair))?;
     let threads = workers.threads().min(ranked.max(1));
     let mut tallies =
         (0..threads).map(|_| Tally::new(memory, id_space)).collect::<Result<Vec<_>, _>>()?;
@@ -284,7 +288,7 @@ impl Ranker<'_, '_> {
             RowBuffer::new(self.memory)?,
             RowBuffer::new(self.memory)?,
         );
-        let mut best = Best::new(self.k)?;
+        let mut best = Best::new(self.memory, self.k, id_space)?;
         let mut done = Vec::new();
         loop {
             let task = self.next.fetch_add(1, Atomic::Relaxed);
