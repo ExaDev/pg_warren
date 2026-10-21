@@ -65,3 +65,67 @@ def test_triangles_count_each_nodes_triangles_ignoring_direction_and_self_loops(
     rows = oracle.compute("triangles", graph([(1, 2), (2, 3), (3, 1), (1, 3), (3, 4), (4, 4)], nodes=[5],
                                              directed=True), [])
     assert sorted(rows) == [(1, 1), (2, 1), (3, 1), (4, 0), (5, 0)]
+
+
+class Rows:
+    """`database.query` over fixed node and edge rows, for `oracle.export`."""
+
+    def __init__(self, nodes, edges):
+        self.nodes, self.edges = nodes, edges
+
+    def query(self, sql):
+        return [[str(v) for v in row] for row in (self.nodes if sql == "nodes" else self.edges)]
+
+
+def test_a_third_edge_column_is_the_weight():
+    exported = oracle.export(Rows([(1,), (2,)], [(1, 2, 2.5)]), "nodes", "edges", directed=True)
+    assert exported[1][2]["weight"] == 2.5
+    unweighted = oracle.export(Rows([(1,), (2,)], [(1, 2)]), "nodes", "edges", directed=True)
+    assert "weight" not in unweighted[1][2]
+
+
+def test_eigenvector_centrality_is_networkxs_with_weights():
+    g = graph([(1, 2), (2, 3), (3, 1), (3, 4)])
+    g[3][4]["weight"] = 3.0
+    rows = dict(oracle.compute("eigenvector", g, []))
+    assert rows == pytest.approx(nx.eigenvector_centrality(g, weight="weight"))
+    assert rows[3] > rows[1]
+
+
+def test_katz_centrality_takes_alpha_beta_and_normalized():
+    g = graph([(1, 2), (2, 3), (3, 1), (4, 1)], directed=True)
+    rows = dict(oracle.compute("katz", g, ["--alpha", "0.2", "--beta", "0.5", "--no-normalized"]))
+    assert rows == pytest.approx(nx.katz_centrality(g, alpha=0.2, beta=0.5, normalized=False, weight="weight"))
+    assert rows[4] == pytest.approx(0.5)
+    normalized = dict(oracle.compute("katz", g, []))
+    assert sum(v * v for v in normalized.values()) == pytest.approx(1)
+
+
+def test_hits_gives_each_node_a_hub_and_an_authority_score():
+    g = graph([(1, 3), (2, 3), (1, 4)], directed=True)
+    rows = {node: (hub, authority) for node, hub, authority in oracle.compute("hits", g, [])}
+    assert max(rows, key=lambda n: rows[n][0]) == 1
+    assert max(rows, key=lambda n: rows[n][1]) == 3
+    assert sum(hub for hub, _ in rows.values()) == pytest.approx(1)
+    assert sum(authority for _, authority in rows.values()) == pytest.approx(1)
+
+
+def test_majority_label_propagation_takes_the_most_frequent_label_smallest_first():
+    star = graph([(5, 1), (5, 2), (5, 3), (5, 4)])
+    rows = dict(oracle.compute("label_propagation_majority", star, []))
+    # Step 1: leaves see {self, 5} and take min(self, 5); the hub sees five
+    # labels once each and takes 1. Step 2: leaves see {self, 1}: 1.
+    assert rows == {1: 1, 2: 1, 3: 1, 4: 1, 5: 1}
+    rows = dict(oracle.compute("label_propagation_majority", star, ["--max-iter", "1"]))
+    assert rows == {1: 1, 2: 2, 3: 3, 4: 4, 5: 1}
+
+
+def test_majority_label_propagation_ignores_direction():
+    rows = dict(oracle.compute("label_propagation_majority", graph([(2, 1)], directed=True), []))
+    assert rows == {1: 1, 2: 1}
+
+
+def test_clustering_is_networkxs_on_the_undirected_simple_graph():
+    g = graph([(1, 2), (2, 3), (3, 1), (1, 4), (4, 1), (4, 4)], directed=True)
+    rows = dict(oracle.compute("clustering", g, []))
+    assert rows == pytest.approx({1: 1 / 3, 2: 1.0, 3: 1.0, 4: 0.0})

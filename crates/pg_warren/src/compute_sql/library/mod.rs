@@ -26,7 +26,32 @@ pgrx::extension_sql_file!(
     name = "aggregate_neighbours",
     requires = [extension::warren]
 );
+pgrx::extension_sql_file!(
+    "eigenvector_centrality.sql",
+    name = "eigenvector_centrality",
+    requires = [extension::warren]
+);
+pgrx::extension_sql_file!(
+    "katz_centrality.sql",
+    name = "katz_centrality",
+    requires = [extension::warren]
+);
+pgrx::extension_sql_file!("hits.sql", name = "hits", requires = [extension::warren]);
+pgrx::extension_sql_file!("clustering.sql", name = "clustering", requires = [extension::warren]);
+pgrx::extension_sql_file!(
+    "label_propagation_majority.sql",
+    name = "label_propagation_majority",
+    requires = [extension::warren]
+);
 
 #[cfg(any(test, feature = "pg_test"))]
 #[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod tests;
+
+#[cfg(any(test, feature = "pg_test"))]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
+mod centrality_tests;
+
+#[cfg(any(test, feature = "pg_test"))]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
+mod community_tests;

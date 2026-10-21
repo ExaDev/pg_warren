@@ -328,6 +328,29 @@ Smaller-scale kernel numbers (100K nodes, 1M edges unless stated):
 | BFS, 1 / 2 / 3 / 5 of 5 relations (1M weighted edges, 1 thread) | 2.0 / 4.9 / 7.2 / 5.3 ms | DESIGN §5.3, `benches/relation_layout.rs` |
 | Build, forward + reverse, 5 relations | 104 ms, 28.8 MB forward | DESIGN §5.3 |
 
+The library at 1M nodes and 10M undirected edges (G(n, m), 20M stored
+edges, average degree 20; release build, `warren.threads = 4`, a shared
+4-vCPU Xeon; each time is a fresh session, so it includes the 0.35 s load
+of the version; best of three, `bench/results/library/`):
+
+| What | Measured |
+|---|---|
+| `pagerank`, 20 iterations (for comparison) | 1.62 s |
+| `eigenvector_centrality`, 20 iterations | 1.21 s; converged (defaults) in 0.70 s |
+| `katz_centrality`, 20 iterations (`alpha := 0.01`) | 1.15 s |
+| `hits`, 20 iterations (two SpMVs each) | 1.86 s |
+| `triangles` | 4.19 s |
+| `clustering` (`triangles` plus degrees) | 4.45 s |
+| `label_propagation`, 10 iterations (min-label, tier 1) | 0.97 s |
+| `label_propagation_majority`, 1 iteration | 21.3 s |
+| `label_propagation_majority`, 5 iterations | 100.5 s (~20 s an iteration) |
+
+The SpMV centralities cost 40–90 ms an iteration. Majority-vote label
+propagation is tier 2: each iteration `gather`s 20M labels and counts them
+in the executor (`unnest`, `GROUP BY`, `DISTINCT ON` over 21M rows), about
+300 times an SpMV iteration. An in-engine `mode` combiner for `gather` would
+make it one kernel call (DESIGN.md §6.7, missing primitives).
+
 ## Known limitations
 
 **PostgreSQL versions.** 15, 16, 17 and 18. CI runs the in-database tests

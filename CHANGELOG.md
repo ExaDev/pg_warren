@@ -9,7 +9,8 @@
   `warren.*` function. 0.4.0 changes the schema: the update adds the column
   `warren.graphs.node_order` (existing graphs are backfilled `'id'`, the
   order they were built in) and the `node_order` arguments of
-  `create_graph` and `compact`.
+  `create_graph` and `compact`, creates the new library functions below,
+  and replaces `pagerank` (a fix below).
 - `create_graph` and `compact` are dropped and re-created by the update
   (each gains an argument). Unlike 0.3.0's update, this one grants again
   every privilege that was set on them, so a `GRANT` or `REVOKE` you made
@@ -35,6 +36,28 @@
   compactions follow it. This is how an existing graph gets locality order.
   The order's scratch is charged to `warren.max_build_memory` (53400 past
   it). Persisted vectors move by node, as before.
+
+- **Library, group 1 (DESIGN.md §6.7)**, PL/pgSQL over the primitives like
+  `pagerank`, each checked against NetworkX on random graphs:
+  `eigenvector_centrality`, `katz_centrality` (with a per-node β from a
+  seed vector) and `hits` (hubs and authorities, two vectors), following
+  NetworkX's iteration, normalisation and stopping rule, so they agree to
+  rounding; `clustering`, the local clustering coefficient from `triangles`
+  and degrees; and `label_propagation_majority`, a deterministic,
+  synchronous majority-vote label propagation (smallest label on a tie;
+  NetworkX's is random or semi-synchronous, so it is checked against a
+  Python reimplementation of its rule). Where NetworkX raises on
+  non-convergence, these write the last iterate with a `WARNING`. At 1M
+  nodes and 10M undirected edges on 4 vCPUs the SpMV centralities take
+  40–90 ms an iteration and `clustering` 4.5 s; majority-vote label
+  propagation, a tier-2 program, ~20 s an iteration (docs/limits.md).
+
+### Fixes
+
+- `pagerank` with a `seed` failed with "division by zero" on any version
+  with a deleted node: it divided by a constant vector, which is 0 at
+  tombstoned rows, and `vector_map` evaluates those rows too. The library
+  now multiplies by reciprocals instead.
 
 ### Behaviour changes
 
