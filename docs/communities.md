@@ -172,13 +172,24 @@ labels, NULL)` makes a new graph of the caller's named
 At 1M nodes and 5M undirected edges on 4 vCPUs, `louvain` takes 5.8 s and
 `leiden` 8.3 s for one iteration; at 10M nodes, 93 s and 119 s. The default
 two iterations take about twice one (20.9 s at 1M, measured on a slower
-day) and raise modularity there from 0.837 to 0.898 ([limits.md](limits.md)).
+day; 246.5 s at 10M, 18 levels, against 115.4 s for `louvain` in the same
+run) and raise modularity from 0.837 to 0.898 at 1M and from 0.840 to 0.900
+at 10M, where the planted blocks score 0.8995 ([limits.md](limits.md)).
 Each level writes its graph as a version (segments and WAL), and the rows
 of a level's graph dropped during the run are reclaimed only by `VACUUM`
 after its transaction ends, so a run needs free disk for every level: on
 that 1M-node graph, whose own segments take 75 MB, `louvain` wrote 166 MB
 of segments and about as much WAL, `leiden` (one iteration, 7 levels) 294 MB and 323 MB, and its second iteration
-about as much again.
+about as much again. At 10M nodes (0.72 GB of segments) `louvain` wrote
+2.5 GB of segments and 2.6 GB of WAL, and `leiden` with its two
+iterations 7.8 GB and 8.2 GB. On a graph with little community structure
+it is far more, because each level's graph stays nearly as large as the
+input: on a uniform random graph of 10M nodes and 100M edges `louvain`
+had written 7.5 GB of segments when it was stopped for disk, and `leiden`
+is refused there at the default limits (53400; see
+[limits.md](limits.md#known-limitations)). The planned fix for the disk is
+for `contract` to keep a quotient in memory for the rest of the statement
+(DESIGN.md §6.7, §13).
 A failed or cancelled run rolls its level graphs back, but their segment
 rows, already written, also stay as dead tuples until `VACUUM`.
 
