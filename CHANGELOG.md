@@ -52,7 +52,9 @@
   40–90 ms an iteration and `clustering` 4.5 s; majority-vote label
   propagation, a tier-2 program, ~20 s an iteration (docs/limits.md).
 - **Structural kernels** (DESIGN.md §6.7, planned library group 2), each
-  checked against NetworkX on random graphs (`test/sql/oracle_structure.sql`):
+  checked against NetworkX on a random graph with self-loops, parallel
+  edges in one relation and across two, a deleted node and, for the DAG,
+  negative weights (`test/sql/oracle_structure.sql`):
   - `core_number(graph, out, rels, persist, version)`: each node's k-core
     number in the undirected simple graph (Batagelj–Zaversnik peeling);
     returns the degeneracy.

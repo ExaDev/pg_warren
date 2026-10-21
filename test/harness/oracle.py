@@ -6,7 +6,7 @@ as a table the SQL test compares against.
 |---|---|---|
 | components | oracle_components | node_id, component: the component's smallest node id (weakly connected if directed) |
 | core_number | oracle_core_number | node_id, core: the node's core number in the undirected graph without self-loops |
-| dag_longest_path | oracle_dag_longest_path | node_id, length: the longest path ending at the node (`--directed`, acyclic; weights from a third column, else 1; assumes weights ≥ 0), as `dag_longest_path_length` of its ancestors |
+| dag_longest_path | oracle_dag_longest_path | node_id, length: the longest path ending at the node (`--directed`, acyclic; weights from a third column, else 1), as `dag_longest_path_length` of the paths ending there (at least 0: NetworkX restarts after a negative prefix) |
 | pagerank | oracle_pagerank | node_id, score (sums to 1; `--damping`, default 0.85) |
 | spanning_forest | oracle_spanning_forest | component, weight: each component's smallest node id and the weight of its minimum spanning tree (directions ignored, the lighter of a pair's two; weights from a third column, else 1) |
 | spectrum | oracle_spectrum | i, eigenvalue: the `--k` eigenvalues of `--matrix` (adjacency, laplacian, normalized_laplacian) at the `--which` end (largest magnitude, or smallest), by a dense solver over the nodes with an edge (undirected), as `warren.eigen` defines them |
@@ -112,8 +112,7 @@ def compute(computation, graph, arguments):
     if computation == "topological_order":
         return [(node, i) for i, node in enumerate(nx.lexicographical_topological_sort(graph))]
     if computation == "dag_longest_path":
-        return [(node, float(nx.dag_longest_path_length(graph.subgraph(nx.ancestors(graph, node) | {node}))))
-                for node in graph.nodes]
+        return [(node, longest_path_into(graph, node)) for node in graph.nodes]
     if computation == "spanning_forest":
         undirected = nx.Graph()
         undirected.add_nodes_from(graph.nodes)
@@ -122,6 +121,18 @@ def compute(computation, graph, arguments):
         return [(min(part), float(nx.minimum_spanning_tree(undirected.subgraph(part)).size(weight="weight")))
                 for part in nx.connected_components(undirected)]
     raise ValueError(f"unknown oracle computation {computation!r}; expected one of {sorted(TABLES)}")
+
+
+def longest_path_into(dag, node):
+    """`nx.dag_longest_path_length` of the paths ending at `node`: its
+    ancestors with one more edge out of it, heavier than any path, so the
+    longest path ends with that edge, then less that edge. NetworkX restarts
+    a path rather than carry a negative prefix, so this is at least 0."""
+    heavy = 1 + sum(abs(data.get("weight", 1)) for _, _, data in dag.edges(data=True))
+    paths = nx.DiGraph(dag.subgraph(nx.ancestors(dag, node) | {node}))
+    end = max(dag.nodes) + 1
+    paths.add_edge(node, end, weight=heavy)
+    return float(nx.dag_longest_path_length(paths) - heavy)
 
 
 def undirected_simple(graph):
