@@ -6,6 +6,7 @@
 //! budget, the domain side of the `warren.max_compute_memory` GUC.
 
 mod cast;
+mod core_number;
 mod dtype;
 mod encoding;
 mod error;
@@ -27,6 +28,7 @@ mod triangles;
 mod vector;
 mod workers;
 
+pub use core_number::{core_number, CoreNumbers};
 pub use dtype::{Dtype, Element};
 pub use encoding::{encode, Decoder};
 pub use error::{ArithmeticError, ComputeError};
