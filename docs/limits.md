@@ -9,7 +9,7 @@ All are ordinary GUCs, settable per session or per transaction
 
 | Setting | Default | Range | What it bounds | When exceeded |
 |---|---|---|---|---|
-| `warren.threads` | half the cores, at least 1 | 1–1024 | threads a compute kernel runs on (`spmv`, `spmm`, `vector_map`, reductions, `gather`, `eigen`, `distance`, `triangles`) | — |
+| `warren.threads` | half the cores, at least 1 | 1–1024 | threads a compute kernel runs on (`spmv`, `spmm`, `vector_map`, reductions, `gather`, `eigen`, `distance`, `triangles`, and the sort in `core_number`) | — |
 | `warren.max_compute_memory` | `4GB` | `64kB` up | memory one call holds: every vector it reads (once, cached or not), every vector and work buffer it allocates, and what its statement holds in the cache past `warren.max_cache_memory` | `configuration_limit_exceeded` (53400), before allocating or loading |
 | `warren.max_cache_memory` | `4GB` | `64kB` up | what this backend's cache holds *between* statements: cached versions, cached persisted vectors, and every role's transient vectors | versions and persisted vectors no running statement has read are evicted, least recently used first; a transient write that would go over is refused with 53400 |
 | `warren.max_build_memory` | `4GB` | `1MB` up | everything a `refresh` holds at once: the node ids, the id map, the edge list, the CSRs it is building and its sort and write buffers; and, separately, the CSR offsets of the whole version (8 bytes × (id_space + 1) per relation's CSR, and the merged CSR's if stored, per direction) | `configuration_limit_exceeded` (53400): before the edge query runs if the id map or the offsets do not fit, before the version is written if the build's estimate does not, else when the edge list grows past it |
@@ -327,6 +327,36 @@ Smaller-scale kernel numbers (100K nodes, 1M edges unless stated):
 | `eigen`, k = 20, f32, normalised Laplacian, smallest | 1,342 steps: 13.1 s / 5.1 s; ARPACK 1,406–1,477 matvecs. At 1M nodes and 10M edges: not converged in the then default 4,100 steps (226 s, 4 threads), where ARPACK took 4,343 matvecs (712 s); 4,590 steps to converge under the M7 default (`results/eigen/scaling/`); adjacency 3,174 steps (173 s) vs ARPACK 3,325 (499 s). Steps grow as √N on a uniform random graph and stay flat (300–386) on a 40-community block model (DESIGN §12) | DESIGN §6.5, `bench/results/eigen/` |
 | BFS, 1 / 2 / 3 / 5 of 5 relations (1M weighted edges, 1 thread) | 2.0 / 4.9 / 7.2 / 5.3 ms | DESIGN §5.3, `benches/relation_layout.rs` |
 | Build, forward + reverse, 5 relations | 104 ms, 28.8 MB forward | DESIGN §5.3 |
+| Structural kernels, 1 thread: `core_number` / `strong_components` / `topological_order` / `dag_longest_path` / `minimum_spanning_forest` unweighted, weighted (`triangles`: 610 ms) | 56 / 26 / 9 / 17 / 62, 109 ms | DESIGN §6.7, `benches/structure.rs` |
+
+**The structural kernels at scale** (DESIGN.md §6.7), through SQL, release
+build, PG 16, `warren.threads = 4`, on the shared 4-vCPU Xeon (another
+worker's builds ran beside it): G(n, m) random graphs from a seeded
+`random()`, `g` directed and unweighted with reverse CSRs, `dag` its edges
+from the smaller id to the larger, self-loops dropped, weighted 1–100,
+without reverse CSRs. Each call on a prewarmed version, `persist := false`;
+two runs, seconds. The memory column is the backend's peak RSS past the
+loaded version (VmHWM less RssAnon after `prewarm`), where the kernel's
+peak exceeded the load's.
+
+| Call | 1M nodes, 10M edges | 10M nodes, 100M edges | Peak past the version (10M) |
+|---|---|---|---|
+| `refresh` of `g` / `dag` | 8.2 / 9.6 | 175 / 192 | |
+| `triangles` (4 threads; for comparison) | 2.6, 2.8 | 45.2, 42.7 | 2.0 GB |
+| `core_number` (degeneracy 14) | 1.0, 1.0 | 22.8, 23.5 | 2.2 GB |
+| `strong_components_vector` (89 / 867 components) | 0.62, 0.60 | 17.0, 16.8 | 0.7 GB |
+| `components_vector` (PL/pgSQL, weak; for comparison) | 0.33, 0.36 | 7.1, 6.2 | |
+| `topological_order` | 0.18, 0.18 | 4.9, 4.7 | |
+| `dag_longest_path` | 0.31, 0.31 | 7.7, 7.6 | |
+| `minimum_spanning_forest`, weighted (all rows, counted) | 3.1, 2.9 | 63.6, 55.7 | |
+| `minimum_spanning_forest`, `weighted := false` | 1.7, 1.7 | 35.3, 36.2 | |
+
+All run on one compute thread except `triangles` and the sort of
+`core_number`'s adjacency. `core_number` spends most of its time building
+the symmetric adjacency (16 bytes per stored edge, the bulk of its peak).
+The forest is the slowest: each Borůvka round scans every stored edge with a
+random access per edge, and random weights take more rounds than unit
+weights.
 
 ## Known limitations
 
@@ -396,6 +426,10 @@ can still `drop_graph`); per-role quotas on readers' vectors.
 - `triangles` costs about Σ over edges of min(d_u, d_v) · log max(d_u, d_v):
   near-linear on sparse graphs, and a hub costs about its degree × log, not
   its degree squared.
+- `core_number`, `strong_components_vector`, `topological_order` and
+  `dag_longest_path` are linear (the DAG functions × log N for their heap);
+  `minimum_spanning_forest` costs a pass over the edges per Borůvka round,
+  at most log₂ N rounds. All five run on one thread.
 - `gather(…, 'collect')` of growing sets costs memory O(N × neighbourhood);
   it suits local neighbourhoods, not community-wide state.
 - A persisted vector write costs WAL (8 bytes × id_space per `f64` column)

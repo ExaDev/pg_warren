@@ -8,8 +8,8 @@
   extension**, after installing the new build and *before* calling any
   `warren.*` function. 0.4.0 changes the schema: the update adds the column
   `warren.graphs.node_order` (existing graphs are backfilled `'id'`, the
-  order they were built in) and the `node_order` arguments of
-  `create_graph` and `compact`.
+  order they were built in), the `node_order` arguments of
+  `create_graph` and `compact`, and the structural kernels below.
 - `create_graph` and `compact` are dropped and re-created by the update
   (each gains an argument). Unlike 0.3.0's update, this one grants again
   every privilege that was set on them, so a `GRANT` or `REVOKE` you made
@@ -35,6 +35,30 @@
   compactions follow it. This is how an existing graph gets locality order.
   The order's scratch is charged to `warren.max_build_memory` (53400 past
   it). Persisted vectors move by node, as before.
+
+- **Structural kernels** (DESIGN.md §6.7, planned library group 2), each
+  checked against NetworkX on random graphs (`test/sql/oracle_structure.sql`):
+  - `core_number(graph, out, rels, persist, version)`: each node's k-core
+    number in the undirected simple graph (Batagelj–Zaversnik peeling);
+    returns the degeneracy.
+  - `strong_components_vector(graph, out, rels, persist, version)`: each
+    node's strongly connected component, labelled by its smallest dense id
+    as `components_vector` labels weak ones (iterative Tarjan, so long
+    paths need no recursion); returns the component count.
+  - `topological_order(graph, out, rels, persist, version)`: each node's
+    position in the topological order that takes the smallest ready dense
+    id first (Kahn), NetworkX's `lexicographical_topological_sort`;
+    returns the vector id.
+  - `dag_longest_path(graph, out, rels, weighted, persist, version)`: the
+    longest path ending at each node, as `nx.dag_longest_path`; returns the
+    longest. Both DAG functions raise 22023 on a cycle.
+  - `minimum_spanning_forest(graph, id_type, rels, weighted, version)`:
+    rows `(source, target, weight)` of a minimum spanning tree of each
+    component, directions ignored (Borůvka).
+
+  They run on one compute thread, charge their scratch to
+  `warren.max_compute_memory` and can be cancelled. Timings at 1M and 10M
+  nodes are in docs/limits.md.
 
 ### Behaviour changes
 

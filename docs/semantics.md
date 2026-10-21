@@ -329,8 +329,8 @@ vectors, and could not hand `last_stats()` back. So:
 
 | Label | Functions |
 |---|---|
-| `PARALLEL RESTRICTED` (run in the leader, never in a worker) | everything that reads a graph or a vector: traversal, `info`, `diff`, `distance`, `prewarm`, `evict`, `last_stats`, `vector_values`, `matrix_rows`, `vector_topk`, `vector_stats`, `vector_reduce`, `vector_norm_diff`, `id_map`, `explain_map` |
-| `PARALLEL UNSAFE` (no parallel plan) | everything that writes or may persist: graph management, the vector constructors, `spmv`, `spmm`, `vector_map`, `gather`, `triangles`, `eigen`, the library, `drop_vector` |
+| `PARALLEL RESTRICTED` (run in the leader, never in a worker) | everything that reads a graph or a vector: traversal, `info`, `diff`, `distance`, `prewarm`, `evict`, `last_stats`, `vector_values`, `matrix_rows`, `vector_topk`, `vector_stats`, `vector_reduce`, `vector_norm_diff`, `id_map`, `explain_map`, `minimum_spanning_forest` |
+| `PARALLEL UNSAFE` (no parallel plan) | everything that writes or may persist: graph management, the vector constructors, `spmv`, `spmm`, `vector_map`, `gather`, `triangles`, the structural kernels that write a vector (`core_number`, `strong_components_vector`, `topological_order`, `dag_longest_path`), `eigen`, the library, `drop_vector` |
 | `PARALLEL SAFE` | `version`, `s`, `steps` (they read no graph) |
 
 Restricted functions work inside parallel plans: the rest of the query runs

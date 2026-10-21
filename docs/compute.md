@@ -51,12 +51,15 @@ Rules:
 
 - **Persisted or transient.** The constructors (`vector_from_query`,
   `vector_const`, `vector_degree`, `vector_dense_id`), `spmv`, `spmm`,
-  `vector_map`, `triangles` and `eigen` take `persist := true`. The library
+  `vector_map`, `triangles`, the [structural kernels](#structural-kernels)
+  and `eigen` take `persist := true`. The library
   functions take no `persist`: they always persist `out`. A persisted vector
   is a row in `warren.vectors` (transactional, survives the session, costs
   WAL; 8 bytes × `id_space` per `f64` column).
-- **Return values.** The constructors and `triangles` return the persisted
-  vector's id, or NULL when transient. `spmv`, `spmm`, `vector_map` and
+- **Return values.** The constructors, `triangles` and `topological_order`
+  return the persisted vector's id, or NULL when transient; `core_number`,
+  `strong_components_vector` and `dag_longest_path` return a summary (the
+  degeneracy, the component count, the longest path's length). `spmv`, `spmm`, `vector_map` and
   `aggregate_neighbours` return nothing (`void`). The iterative library
   functions return the iterations they ran, and `degree_vector` the vector
   id.
@@ -303,9 +306,15 @@ intermediates transient, and persists only `out`.
 | `degree_vector(graph, out, direction := 'out', rels)` | distinct-neighbour degree | vector id |
 | `aggregate_neighbours(graph, x, out, agg := 'mean', hops := 1, rels, direction := 'out')` | `mean`, `sum` or `max` of neighbours' rows of matrix `x` (a "one-layer GNN") | void |
 | `triangles(graph, out, rels := NULL, persist := true)` | per-node triangle count in the undirected simple graph | vector id |
+| `core_number(graph, out, rels := NULL, persist := true)` | each node's k-core number in the undirected simple graph | the degeneracy |
+| `strong_components_vector(graph, out, rels := NULL, persist := true)` | each node's strongly connected component, as the smallest dense id in it | the component count |
+| `topological_order(graph, out, rels := NULL, persist := true)` | each node's position, from 0, in the topological order (smallest dense id first among ready nodes) | vector id |
+| `dag_longest_path(graph, out, rels := NULL, weighted := NULL, persist := true)` | the length of the longest path ending at each node | the longest length |
+| `minimum_spanning_forest(graph, id_type, rels := NULL, weighted := NULL)` | rows `(source, target, weight)`: a minimum spanning tree of each component | rows |
 
 All take `version := …`. `label_propagation` is deterministic min-label
-propagation, not majority-vote LPA.
+propagation, not majority-vote LPA. `triangles` and the structural kernels
+are native kernels rather than PL/pgSQL (below).
 
 ```sql
 SELECT warren.pagerank('roads', 'pr', weighted := false);
@@ -323,6 +332,60 @@ The `_warren_` prefix is **reserved**: no persisted vector may have such a
 name (`reserved_name`, 42939), including `eigen`'s `<vectors_prefix>_i`, and
 the library refuses it for `out` and its inputs. Transient vectors of your
 own may still use it, but there is no reason to.
+
+### Structural kernels
+
+`core_number`, `strong_components_vector`, `topological_order`,
+`dag_longest_path` and `minimum_spanning_forest` are native kernels: each is
+one pass (or, for the forest, a few) over the version's CSRs, as NetworkX's
+function of the same name computes it. None needs a reverse CSR. They run on
+one compute thread (the sort of `core_number`'s adjacency uses them all),
+check for cancellation as they go, and charge their scratch to
+`warren.max_compute_memory`: about 16 bytes per stored edge plus 32 per node
+for `core_number`, at most 32 per node for `strong_components_vector`, 16
+for `topological_order` and `dag_longest_path`, and 40 for
+`minimum_spanning_forest` plus up to 48 for its result (DESIGN.md §6.7).
+Edges are read under `rels` as the products read them: an edge in several
+selected relations is one edge, its weights summed.
+
+- `core_number` and `minimum_spanning_forest` ignore direction and
+  self-loops. `core_number` returns the graph's degeneracy (its largest core
+  number).
+- `strong_components_vector` labels components as `components_vector` does,
+  by the smallest dense id in each, and returns how many there are.
+- `topological_order` takes, among the nodes whose predecessors are all
+  placed, the smallest dense id first: NetworkX's
+  `lexicographical_topological_sort` by dense id (on a graph's first build in
+  `'id'` order, by node id). `dag_longest_path` gives the longest path *ending
+  at* each node: the sum of its edges' weights (with `weighted := false`, or
+  on an unweighted graph, its number of edges), and never below 0, since a
+  path restarts after a prefix of negative length, as NetworkX's
+  `dag_longest_path` does. Its return value is NetworkX's
+  `dag_longest_path_length`. On a graph with a cycle (a self-loop included)
+  both fail with 22023 and write nothing.
+- `minimum_spanning_forest` returns each forest edge in its stored direction,
+  ordered by source and target. Where `u → v` and `v → u` both exist, the
+  lighter can be chosen. Edges are compared by weight in SQL order (NaN
+  heaviest, `-0 = 0`) and then by their endpoints' dense ids, so the forest is
+  the same however it is computed; with tied weights, another algorithm may
+  pick other edges of the same total. `id_type` fixes the id columns' type,
+  as for `components`; it is `PARALLEL RESTRICTED` and writes nothing.
+
+```sql
+SELECT warren.core_number('roads', 'core');                            -- 2: the cycle ash–birch–cedar–dale
+SELECT * FROM warren.minimum_spanning_forest('roads', NULL::int);      -- 4 roads, 23 km: all but ash–dale
+
+CREATE TABLE course (id int PRIMARY KEY);
+CREATE TABLE prereq (first int, next int, hours float8);
+INSERT INTO course VALUES (1), (2), (3), (4), (5);
+INSERT INTO prereq VALUES (4, 1, 2), (3, 1, 1), (1, 2, 3), (3, 5, 4);
+SELECT warren.create_graph('plan', 'SELECT id FROM course', 'SELECT first, next, hours FROM prereq',
+                           weighted := true);
+SELECT warren.refresh('plan');
+SELECT warren.topological_order('plan', 'step');                       -- 3, 4, 1, 2, 5
+SELECT warren.dag_longest_path('plan', 'hours');                       -- 5: 4 → 1 → 2
+SELECT warren.strong_components_vector('plan', 'scc');                 -- 5: no cycles
+```
 
 ## `eigen`
 
