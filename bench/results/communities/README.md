@@ -44,4 +44,21 @@ machine was slower that day than for `blocks-1m-communities.json`:
 10.4 s against 8.3 s for the same partition, bit for bit. Two iterations
 took 20.9 s and raised modularity from 0.837 to 0.898 (the planted blocks
 score 0.899); until stable, 0.898 in 40.7 s. The 10M figures are still
-the single pass: the soak re-measures them.
+the single pass. The 0.4.0 soak (`bench/results/soak/README.md`) ran
+both at the default limits on its 10M-node random graphs, where neither
+completes (`leiden` refused with 53400, `louvain` stopped for disk), so
+two iterations at 10M were measured on the block graph instead.
+
+## The defaults at 10M (0.4.0 soak)
+
+`blocks-10m-defaults.json`: `louvain` and `leiden` at their defaults
+(`leiden`'s two iterations) on `blocks-10m`'s graph (the same
+`create_graph`, 0.72 GB of segments), each in a fresh backend, through
+`bench/soak.py`'s community pass on a scratch cluster with the soak's
+settings, release build of 827b94f (5b0bf81's code), PostgreSQL 16.15,
+`warren.threads = 4`, default memory limits; the file records the script
+that ran it. `louvain` 115.4 s (93 s in `blocks-10m-louvain.json`, the same
+partition: modularity 0.8401, 1,425 communities, 5 levels), peak private
+memory 4.31 GB, 2.48 GB of segments and 2.61 GB of WAL written. `leiden`
+246.5 s, 18 levels, modularity 0.8996 (the planted blocks: 0.8995),
+5,528 communities, peak 5.28 GB, 7.81 GB of segments and 8.22 GB of WAL.

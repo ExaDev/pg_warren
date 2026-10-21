@@ -1,0 +1,191 @@
+{
+ "provenance": {
+  "argv": [
+   "/tmp/claude-0/-home-user-pg-warren/d0e27763-6651-5ebc-9e14-ccc3a1ae882e/scratchpad/blocks/blocks.py",
+   "10000000",
+   "/home/user/wt/soak-040/bench/results/communities/blocks-10m-defaults.json",
+   "827b94f"
+  ],
+  "harness": {
+   "revision": "827b94f52da0d90e8b44486ebfffc42a37849c29",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "827b94f",
+   "profile": "release",
+   "library": "/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "48c14e7ecab10d5fb1445d2573f0cc01908d816f6167b3c6b8869f90968f6f59"
+  },
+  "script": "\"\"\"louvain and leiden at their defaults on the \u00a76.6 block graph\n(bench/results/communities/matrix.json's create_graph, the same edges),\neach in a fresh backend, through bench/soak.py's community pass: time,\nprivate peak, modularity, levels, communities, segments and WAL written.\nUsage: blocks.py NODES OUT EXTENSION_REVISION\"\"\"\nimport json, sys, types\nfrom pathlib import Path\nsys.path.insert(0, \"/home/user/wt/soak-040/bench\")\nsys.path.insert(0, \"/home/user/wt/soak-040/test\")\nimport soak\nfrom harness.cluster import Cluster\n\nnodes, out, revision = int(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]\nEDGES = (\"SELECT n.id, CASE WHEN abs(hashint8(n.id * 8 + k)) % 10 < 9 THEN (n.id - 1) / 1000 * 1000 + 1 + \"\n         \"abs(hashint8(-(n.id * 8 + k))) % 1000 ELSE 1 + abs(hashint8(-(n.id * 8 + k))) % (SELECT max(id) FROM nodes) END, \"\n         \"CASE WHEN abs(hashint8(n.id * 8 + k)) % 10 < 9 THEN 'in' ELSE 'out' END FROM nodes n, generate_series(1, 5) k\")\noptions = types.SimpleNamespace(skip=[\"library\"], threads=4, statement_timeout=None, cache_memory_kb=None,\n                                disk_floor=5 * soak.GIB, parent=Path(\"/var/tmp\"))\nfound = soak.provenance(sys.argv, revision, \"release\", soak.installed_library(\"/usr/bin/pg_config\"))\nfound[\"script\"] = Path(__file__).read_text()\nwith Cluster(\"/usr/bin/pg_config\", \"runner\", parent=Path(\"/var/tmp\"), settings=soak.SETTINGS) as cluster:\n    admin = cluster.database()\n    admin.execute(\"DROP DATABASE IF EXISTS soak\")\n    admin.execute(\"CREATE DATABASE soak\")\n    runner = soak.Soak(cluster, options, found)\n    result = {\"provenance\": found, \"nodes\": nodes, \"hardware\": soak.hardware(), \"started_at\": soak._now(),\n              \"stages\": {}, \"skipped\": {}}\n    with runner.session() as s:\n        s.run(\"CREATE EXTENSION pg_warren\")\n        s.run(f\"CREATE TABLE nodes AS SELECT id::bigint AS id FROM generate_series(1, {nodes}) id\")\n        s.run(\"ANALYZE nodes\")\n        s.run(f\"SELECT warren.create_graph('soak', 'SELECT id FROM nodes', $q${EDGES}$q$, directed := false, \"\n              \"has_relations := true, build_reverse := false, store_merged := false)\")\n        runner.stage(result, \"refresh\", s.measure(\"SELECT warren.refresh('soak')\"))\n        result[\"version_1\"] = json.loads(s.run(\"SELECT warren.info('soak')\")[\"rows\"][0])[\"versions\"][-1]\n        result[\"pg_warren\"] = s.run(\"SELECT warren.version()\")[\"rows\"][0]\n        result[\"postgres\"] = s.run(\"SELECT current_setting('server_version')\")[\"rows\"][0]\n    with runner.session() as s:\n        runner.stage(result, \"prewarm\", s.measure(\"SELECT warren.prewarm('soak')\"))\n    runner._library(result, types.SimpleNamespace(nodes=nodes))\n    admin.execute(\"DROP DATABASE IF EXISTS soak\")\n    result[\"finished_at\"], result[\"load_average_after\"] = soak._now(), soak.os.getloadavg()\n    result[\"measured\"] = {\"communities\": soak.calls(result, \"communities\", soak.community_calls(soak.GRAPH))}\n    for name, entry in result[\"measured\"][\"communities\"].items():\n        stage = result[\"stages\"][f\"communities: {name}\"]\n        if \"failed\" in entry or \"cancelled_for_disk\" in stage:\n            continue\n        entry[\"modularity\"] = float(stage[\"rows\"][0])\n        entry[\"levels\"], entry[\"communities\"] = map(int, result[\"stages\"][f\"communities: {name} stats\"][\"rows\"][0].split(\"|\"))\n        disk = result[\"stages\"][f\"communities: {name} disk\"]\n        entry.update(segments_written=disk[\"segments_written\"], wal_written=disk[\"wal_written\"])\n    out.write_text(json.dumps(result, indent=1) + \"\\n\")\n    print(json.dumps(result[\"measured\"], indent=1))\n"
+ },
+ "nodes": 10000000,
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v140",
+  "load_average": [
+   0.13525390625,
+   1.04296875,
+   1.34033203125
+  ]
+ },
+ "started_at": "2026-10-21T22:41:37+00:00",
+ "stages": {
+  "refresh": {
+   "sql": "SELECT warren.refresh('soak')",
+   "seconds": [
+    43.2363
+   ],
+   "median_seconds": 43.2363,
+   "rows": [
+    "1"
+   ],
+   "first_rows": [
+    "1"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 14086144,
+   "peak_rss_anon": 2051203072,
+   "vm_hwm": 2160619520,
+   "rss_anon_after": 40648704
+  },
+  "prewarm": {
+   "sql": "SELECT warren.prewarm('soak')",
+   "seconds": [
+    3.8546
+   ],
+   "median_seconds": 3.8546,
+   "rows": [
+    "1"
+   ],
+   "first_rows": [
+    "1"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 3203072,
+   "peak_rss_anon": 1130340352,
+   "vm_hwm": 1789198336,
+   "rss_anon_after": 811933696
+  },
+  "communities: louvain": {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    115.3825
+   ],
+   "median_seconds": 115.3825,
+   "rows": [
+    "0.8401031596173099"
+   ],
+   "first_rows": [
+    "0.8401031596173099"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 3375104,
+   "peak_rss_anon": 4306530304,
+   "vm_hwm": 5434994688,
+   "rss_anon_after": 1376911360
+  },
+  "communities: louvain stats": {
+   "rows": [
+    "5|1425"
+   ]
+  },
+  "communities: louvain disk": {
+   "segments_written": 2479554560,
+   "wal_written": 2611368312,
+   "free_disk_before": 14451720192,
+   "free_disk_after_run": 11686895616,
+   "free_disk_after_vacuum": 14139387904
+  },
+  "communities: leiden": {
+   "sql": "SELECT warren.leiden('soak', 'leiden', levels_prefix := 'leiden')",
+   "seconds": [
+    246.4997
+   ],
+   "median_seconds": 246.4997,
+   "rows": [
+    "0.8995753702160784"
+   ],
+   "first_rows": [
+    "0.8995753702160784"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 3362816,
+   "peak_rss_anon": 5280206848,
+   "vm_hwm": 6410452992,
+   "rss_anon_after": 2886684672
+  },
+  "communities: leiden stats": {
+   "rows": [
+    "18|5528"
+   ]
+  },
+  "communities: leiden disk": {
+   "segments_written": 7805296640,
+   "wal_written": 8220258016,
+   "free_disk_before": 14139387904,
+   "free_disk_after_run": 6334021632,
+   "free_disk_after_vacuum": 14054608896
+  }
+ },
+ "skipped": {
+  "library": "--skip library"
+ },
+ "version_1": {
+  "seq": 1,
+  "bytes": 719622249,
+  "label": null,
+  "staged": false,
+  "current": true,
+  "vectors": 0,
+  "version": 1,
+  "built_at": "2026-10-21T22:41:39.585512+00:00",
+  "id_space": 10000000,
+  "built_lsn": "0/1CA2000",
+  "staleness": "00:00:43.236784",
+  "edge_count": 99593027,
+  "node_count": 10000000,
+  "label_vector": null,
+  "parent_graph": null,
+  "target_width": 4,
+  "dropped_edges": 0,
+  "compacted_from": null,
+  "parent_version": null,
+  "deduplicated_edges": 362134
+ },
+ "pg_warren": "0.4.0",
+ "postgres": "16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
+ "finished_at": "2026-10-21T22:49:01+00:00",
+ "load_average_after": [
+  1.09912109375,
+  1.21533203125,
+  1.3232421875
+ ],
+ "measured": {
+  "communities": {
+   "louvain": {
+    "seconds": 115.3825,
+    "peak_rss_anon": 4306530304,
+    "modularity": 0.8401031596173099,
+    "levels": 5,
+    "communities": 1425,
+    "segments_written": 2479554560,
+    "wal_written": 2611368312
+   },
+   "leiden": {
+    "seconds": 246.4997,
+    "peak_rss_anon": 5280206848,
+    "modularity": 0.8995753702160784,
+    "levels": 18,
+    "communities": 5528,
+    "segments_written": 7805296640,
+    "wal_written": 8220258016
+   }
+  }
+ }
+}

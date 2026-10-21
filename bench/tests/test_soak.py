@@ -209,9 +209,10 @@ class Options:
 def test_the_planned_stages_follow_the_case_and_the_options():
     base = {"refresh", "cold_load_probe", "default: prewarm", "default: bfs depth 6", "default: reachable_set",
             "default: components", "default: pagerank"}
-    assert soak.planned_stages(soak.CASES["a"], Options()) == sorted(base | {"default: eigen", "bfs_cte", "diff"})
+    assert [name for name in soak.planned_stages(soak.CASES["a"], Options()) if ":" not in name or
+            name.startswith("default")] == sorted(base | {"default: eigen", "bfs_cte", "diff"})
     options = Options()
-    options.eigen, options.skip = False, ["second-version"]
+    options.eigen, options.skip = False, ["second-version", "library", "communities"]
     assert soak.planned_stages(soak.CASES["b-merged"], options) == sorted(base)
 
 
@@ -288,7 +289,9 @@ class FakeSession:
 
     def run(self, sql):
         self.log.append(sql)
-        return {"rows": ['{"edges_traversed": 1}'] if "last_stats" in sql else ["x=1"]}
+        if "last_stats" in sql:
+            return {"rows": ['{"edges_traversed": 1}']}
+        return {"rows": ["0|0"] if "pg_current_wal_lsn" in sql else ["x=1"]}
 
     def measure(self, sql, repeat=1):
         self.log.append(sql)
@@ -375,3 +378,154 @@ def test_reachable_set_throughput_counts_the_graph_s_edges_not_the_row_entries_s
     measured = soak.summary(result)
     assert measured["reachable_edges_per_second"] == 50
     assert measured["reachable_row_entries_per_second"] == 15
+
+
+def test_create_graph_orders_dense_ids_by_id_unless_asked_for_locality():
+    case = soak.CASES["a"]
+    assert "node_order := 'id'" in soak.create_graph_sql(case, seed=0.25)
+    assert "node_order := 'locality'" in soak.create_graph_sql(case, seed=0.25, node_order="locality")
+
+
+def test_the_library_covers_the_0_4_0_groups_that_run_at_10m_nodes():
+    calls = {call.name: call for call in soak.library_calls("soak", nodes=10_000_000)}
+    assert set(calls) == {
+        "eigenvector_centrality", "katz_centrality", "hits", "clustering",  # group 1
+        "core_number", "strong_components_vector", "minimum_spanning_forest", "betweenness_centrality",
+        "closeness_centrality", "harmonic_centrality", "most_similar", "similarity", "similar_pairs",  # group 2
+    }
+    for call in calls.values():
+        assert "'soak'" in call.sql
+    # The iterative ones run 20 iterations, as pagerank does.
+    for name in ("eigenvector_centrality", "katz_centrality", "hits"):
+        assert "tol := 0" in calls[name].sql and "max_iter := 20" in calls[name].sql
+    # Kernels that can leave their result transient do (the PL/pgSQL ones
+    # persist theirs); every result is dropped afterwards.
+    for name in ("core_number", "strong_components_vector", "betweenness_centrality"):
+        assert "persist := false" in calls[name].sql
+        assert calls[name].cleanup == ("SELECT warren.drop_vector('soak', 'library', NULL, true)",)
+    assert calls["clustering"].cleanup == ("SELECT warren.drop_vector('soak', 'library', NULL, true)",)
+    assert set(calls["hits"].cleanup) == {"SELECT warren.drop_vector('soak', 'library_hubs', NULL, true)",
+                                          "SELECT warren.drop_vector('soak', 'library_authorities', NULL, true)"}
+    # The sampled centralities take 16 sources at this scale.
+    assert "k := 16" in calls["closeness_centrality"].sql
+    # Pairs and the similar_pairs mask stay inside the id range.
+    assert "% 10000000" in calls["similarity"].sql
+    assert "generate_series(1::bigint, 100000)" in calls["similarity"].sql, "i * 104729 overflows int4"
+    assert calls["similar_pairs"].setup and "generate_series(1::bigint, 10000000, 100)" in calls["similar_pairs"].setup[0]
+
+
+def test_louvain_and_leiden_run_at_their_defaults_and_keep_their_levels():
+    calls = {call.name: call for call in soak.community_calls("soak")}
+    assert set(calls) == {"louvain", "leiden"}
+    assert calls["louvain"].sql == "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')"
+    assert calls["leiden"].sql == "SELECT warren.leiden('soak', 'leiden', levels_prefix := 'leiden')", \
+        "the default iterations (2)"
+
+
+def test_a_community_run_reports_its_modularity_levels_and_communities():
+    stages = {"communities: leiden": {"median_seconds": 300.0, "rows": ["0.25"], "peak_rss_anon": GIB},
+              "communities: leiden stats": {"rows": ["4|1234"]},
+              "communities: leiden disk": {"segments_written": 5 * GIB, "wal_written": 6 * GIB}}
+    found = soak.summary({"hardware": {"cpus": 4}, "stages": stages})["communities"]["leiden"]
+    assert found == {"seconds": 300.0, "modularity": 0.25, "levels": 4, "communities": 1234,
+                     "peak_rss_anon": GIB, "segments_written": 5 * GIB, "wal_written": 6 * GIB}
+
+
+def test_a_library_call_reports_its_time_and_peak_or_its_error():
+    stages = {"library: core_number": {"median_seconds": 23.0, "rows": ["14"], "peak_rss_anon": 2 * GIB},
+              "library: hits": {"median_seconds": 1.0, "rows": [], "errors": ["ERROR:  53400: over the limit"]}}
+    measured = soak.summary({"hardware": {"cpus": 4}, "stages": stages})
+    assert measured["library"] == {"core_number": {"seconds": 23.0, "peak_rss_anon": 2 * GIB},
+                                   "hits": {"failed": "ERROR:  53400: over the limit"}}
+
+
+def test_a_library_call_never_reached_is_reported_as_such():
+    result = {"hardware": {"cpus": 4}, "aborted": "psql ended during: SELECT warren.leiden",
+              "planned_stages": ["communities: leiden"], "skipped": {}, "stages": {}}
+    measured = soak.summary(result)
+    assert measured["communities"]["leiden"] == {"failed": "not reached: psql ended during: SELECT warren.leiden"}
+
+
+def test_the_library_and_the_communities_are_planned_unless_skipped():
+    planned = soak.planned_stages(soak.CASES["a"], Options())
+    assert "library: core_number" in planned and "communities: leiden" in planned
+    options = Options()
+    options.skip = ["library", "communities"]
+    planned = soak.planned_stages(soak.CASES["a"], options)
+    assert not [name for name in planned if name.startswith(("library", "communities"))]
+
+
+def test_the_library_pass_sets_the_session_up_cleans_up_each_call_and_vacuums_after_each_community_run():
+    log = []
+    options = Options()
+    options.threads, options.statement_timeout, options.cache_memory_kb = 4, "20min", None
+    runner = soak.Soak(None, options, provenance={})
+    runner.session = lambda: FakeSession(log)
+    runner.free_disk = lambda: 10 * GIB
+    result = {"stages": {}, "version_1": {"id_space": 1000}}
+    runner._library(result, soak.CASES["a"].scaled(10_000))
+    first_call = next(i for i, sql in enumerate(log) if "warren.eigenvector_centrality" in sql)
+    assert log[:first_call] == ["SET warren.threads = 4", "SET statement_timeout = '20min'"]
+    clustering = next(i for i, sql in enumerate(log) if "warren.clustering" in sql)
+    assert log[clustering + 1] == "SELECT warren.drop_vector('soak', 'library', NULL, true)"
+    leiden = next(i for i, sql in enumerate(log) if "warren.leiden(" in sql)
+    after = log[leiden + 1:]
+    assert any("count(DISTINCT value)" in sql for sql in after)
+    assert any(sql.startswith("VACUUM") and "warren.segments" in sql for sql in after)
+    assert "communities: leiden" in result["stages"] and "library: hits" in result["stages"]
+
+
+class SlowSession(FakeSession):
+    """A session whose statement runs until it is cancelled (or 2 s)."""
+
+    pid = 4242
+
+    def __init__(self, log, cancelled):
+        super().__init__(log)
+        self.cancelled = cancelled
+
+    def measure(self, sql, repeat=1):
+        self.log.append(sql)
+        self.cancelled.wait(2)
+        if self.cancelled.is_set():
+            return {"median_seconds": 0.5, "rows": [], "errors": ["ERROR:  canceling statement due to user request"]}
+        return {"median_seconds": 2.0, "rows": ["0.5"]}
+
+
+def guarded_runner(free):
+    import threading
+    options = Options()
+    options.disk_floor = 5 * GIB
+    runner = soak.Soak(None, options, provenance={})
+    runner.DISK_POLL_SECONDS = 0.01
+    cancelled, pids = threading.Event(), []
+    runner.free_disk = lambda: free.pop(0) if len(free) > 1 else free[0]
+
+    def cancel(pid):
+        pids.append(pid)
+        cancelled.set()
+    runner.cancel = cancel
+    return runner, SlowSession([], cancelled), pids
+
+
+def test_a_community_run_is_cancelled_before_it_takes_the_disk_below_the_floor():
+    runner, session, pids = guarded_runner([8 * GIB, 6 * GIB, 4 * GIB])
+    stage = runner._guarded(session, "SELECT warren.leiden('soak', 'leiden')")
+    assert pids == [4242]
+    assert stage["cancelled_for_disk"] == {"free_disk": 4 * GIB, "floor": 5 * GIB}
+
+
+def test_a_community_run_that_stays_above_the_floor_is_left_alone():
+    runner, session, pids = guarded_runner([8 * GIB])
+    stage = runner._guarded(session, "SELECT warren.louvain('soak', 'louvain')")
+    assert pids == [] and "cancelled_for_disk" not in stage and stage["rows"] == ["0.5"]
+
+
+def test_a_run_cancelled_for_disk_reports_how_long_it_ran():
+    stages = {"communities: leiden": {"median_seconds": 900.0, "rows": [], "peak_rss_anon": GIB,
+                                      "errors": ["ERROR:  canceling statement due to user request"],
+                                      "cancelled_for_disk": {"free_disk": 4 * GIB, "floor": 5 * GIB}},
+              "communities: leiden disk": {"segments_written": 9 * GIB, "wal_written": 10 * GIB}}
+    found = soak.summary({"hardware": {"cpus": 4}, "stages": stages})["communities"]["leiden"]
+    assert found == {"stopped_for_disk": True, "seconds": 900.0, "peak_rss_anon": GIB,
+                     "segments_written": 9 * GIB, "wal_written": 10 * GIB}

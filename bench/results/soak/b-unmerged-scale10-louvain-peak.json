@@ -1,0 +1,886 @@
+{
+ "provenance": {
+  "argv": [
+   "/tmp/claude-0/-home-user-pg-warren/d0e27763-6651-5ebc-9e14-ccc3a1ae882e/scratchpad/peak/peak.py",
+   "10",
+   "/home/user/wt/soak-040/bench/results/soak/b-unmerged-scale10-louvain-peak.json",
+   "c6eedc0"
+  ],
+  "harness": {
+   "revision": "c6eedc0f09af61b294b780c440abf2789b5cb508",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "c6eedc0",
+   "profile": "release",
+   "library": "/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "48c14e7ecab10d5fb1445d2573f0cc01908d816f6167b3c6b8869f90968f6f59"
+  },
+  "script": "\"\"\"Is louvain's private peak within what it charges? Case b-unmerged at\n1/SCALE of the soak, louvain at its defaults, each run in a fresh backend.\n1. at the default limits: the peak;\n2. the least warren.max_cache_memory with which it runs (the others at\n   4GB), then with that the least max_compute_memory, then with both the\n   least max_build_memory (bisection, to within 3%);\n3. at those three limits together: the peak. What the process holds past\n   the three limits' sum (and its own baseline) is not charged to any.\nUsage: peak.py SCALE OUT EXTENSION_REVISION\"\"\"\nimport json, math, sys, types\nfrom pathlib import Path\nsys.path.insert(0, \"/home/user/wt/soak-040/bench\")\nsys.path.insert(0, \"/home/user/wt/soak-040/test\")\nimport soak\nfrom harness.cluster import Cluster\n\nscale, out, revision = int(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]\ncase = soak.CASES[\"b-unmerged\"].scaled(scale)\nLOUVAIN = \"SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')\"\nCLEANUP = next(c for c in soak.community_calls(\"soak\") if c.name == \"louvain\").cleanup\nDEFAULT_KB = 4 * 1024 * 1024\nfound = soak.provenance(sys.argv, revision, \"release\", soak.installed_library(\"/usr/bin/pg_config\"))\nfound[\"script\"] = Path(__file__).read_text()\nresult = {\"provenance\": found, \"case\": case.name, \"nodes\": case.nodes, \"edges\": case.edges,\n          \"hardware\": soak.hardware(), \"started_at\": soak._now(), \"runs\": []}\n\n\ndef run(cluster, limits):\n    with soak.Session(cluster, \"soak\") as s:\n        s.run(\"SET warren.threads = 4\")\n        for name, kb in limits.items():\n            s.run(f\"SET warren.{name} = '{kb}kB'\")\n        stage = s.measure(LOUVAIN)\n        for sql in CLEANUP:\n            s.run(sql)\n        s.run(soak.VACUUM_SQL)  # a run's levels, and a refused run's, leave rows behind\n    stage[\"limits_kb\"] = dict(limits)\n    result[\"runs\"].append(stage)\n    out.write_text(json.dumps(result, indent=1) + \"\\n\")\n    return \"errors\" not in stage, stage\n\n\ndef least(cluster, limits, name, low_kb):\n    \"\"\"The least `name` (kB) with which louvain runs, within 3%, given `limits`.\"\"\"\n    lo, hi = low_kb, DEFAULT_KB  # lo fails or is the floor; hi runs\n    while hi / lo > 1.03:\n        mid = int(math.sqrt(lo * hi))\n        ok, _ = run(cluster, {**limits, name: mid})\n        lo, hi = (lo, mid) if ok else (mid, hi)\n    return hi\n\n\nwith Cluster(\"/usr/bin/pg_config\", \"runner\", parent=Path(\"/var/tmp\"), settings=soak.SETTINGS) as cluster:\n    admin = cluster.database()\n    admin.execute(\"DROP DATABASE IF EXISTS soak\")\n    admin.execute(\"CREATE DATABASE soak\")\n    with soak.Session(cluster, \"soak\") as s:\n        s.run(\"CREATE EXTENSION pg_warren\")\n        s.run(\"CREATE UNLOGGED TABLE soak_removed ()\")\n        s.run(soak.create_graph_sql(case, soak.SEED))\n        result[\"refresh\"] = s.measure(\"SELECT warren.refresh('soak')\")\n        result[\"version_1\"] = json.loads(s.run(\"SELECT warren.info('soak')\")[\"rows\"][0])[\"versions\"][-1]\n    ok, result[\"default\"] = run(cluster, {})\n    limits = {}\n    limits[\"max_cache_memory\"] = least(cluster, {}, \"max_cache_memory\", 64)\n    limits[\"max_compute_memory\"] = least(cluster, limits, \"max_compute_memory\", 64)\n    limits[\"max_build_memory\"] = least(cluster, limits, \"max_build_memory\", 1024)\n    result[\"least_limits_kb\"] = limits\n    ok, result[\"tight\"] = run(cluster, limits)\n    result[\"tight_ok\"] = ok\n    total = sum(limits.values()) * 1024\n    result[\"summary\"] = {\"default_peak_rss_anon\": result[\"default\"][\"peak_rss_anon\"],\n                         \"tight_peak_rss_anon\": result[\"tight\"][\"peak_rss_anon\"],\n                         \"limits_sum_bytes\": total,\n                         \"tight_rss_anon_before\": result[\"tight\"][\"rss_anon_before\"],\n                         \"past_the_limits\": result[\"tight\"][\"peak_rss_anon\"] - result[\"tight\"][\"rss_anon_before\"] - total}\n    admin.execute(\"DROP DATABASE IF EXISTS soak\")\n    result[\"finished_at\"] = soak._now()\n    out.write_text(json.dumps(result, indent=1) + \"\\n\")\n    print(json.dumps(result[\"summary\"], indent=1), result[\"least_limits_kb\"])\n"
+ },
+ "case": "b-unmerged",
+ "nodes": 1000000,
+ "edges": 10000000,
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v140",
+  "load_average": [
+   0.7392578125,
+   1.1142578125,
+   1.28466796875
+  ]
+ },
+ "started_at": "2026-10-21T22:49:35+00:00",
+ "runs": [
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    35.9408
+   ],
+   "median_seconds": 35.9408,
+   "rows": [
+    "0.2043787995745968"
+   ],
+   "first_rows": [
+    "0.2043787995745968"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 3198976,
+   "peak_rss_anon": 1080758272,
+   "vm_hwm": 2073821184,
+   "rss_anon_after": 760758272,
+   "limits_kb": {}
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    4.4343
+   ],
+   "median_seconds": 4.4343,
+   "rows": [],
+   "first_rows": [
+    null
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (16777216 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3203072,
+   "peak_rss_anon": 781086720,
+   "vm_hwm": 1164156928,
+   "rss_anon_after": 93327360,
+   "errors": [
+    "ERROR:  cache memory limit exceeded: a transient vector of 8000000 bytes would bring transient vectors to 24000000 bytes, over warren.max_cache_memory (16777216 bytes); 16000000 are in use, 16000000 of them this role's; persist it, drop transient vectors or raise warren.max_cache_memory",
+    "CONTEXT:  SQL statement \"SELECT warren.vector_map(graph, '_warren_louvain_down', '_warren_louvain_labels', false, v)\""
+   ],
+   "limits_kb": {
+    "max_cache_memory": 16384
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    30.6099
+   ],
+   "median_seconds": 30.6099,
+   "rows": [
+    "0.2043787995745968"
+   ],
+   "first_rows": [
+    "0.2043787995745968"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (268435456 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3203072,
+   "peak_rss_anon": 1058099200,
+   "vm_hwm": 2051096576,
+   "rss_anon_after": 706072576,
+   "limits_kb": {
+    "max_cache_memory": 262144
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    28.7868
+   ],
+   "median_seconds": 28.7868,
+   "rows": [
+    "0.2043787995745968"
+   ],
+   "first_rows": [
+    "0.2043787995745968"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (67108864 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3203072,
+   "peak_rss_anon": 1073995776,
+   "vm_hwm": 2067685376,
+   "rss_anon_after": 721973248,
+   "limits_kb": {
+    "max_cache_memory": 65536
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    29.1481
+   ],
+   "median_seconds": 29.1481,
+   "rows": [
+    "0.2043787995745968"
+   ],
+   "first_rows": [
+    "0.2043787995745968"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (33554432 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3203072,
+   "peak_rss_anon": 1074020352,
+   "vm_hwm": 2067439616,
+   "rss_anon_after": 721997824,
+   "limits_kb": {
+    "max_cache_memory": 32768
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    4.5067
+   ],
+   "median_seconds": 4.5067,
+   "rows": [],
+   "first_rows": [
+    null
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (23726080 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3203072,
+   "peak_rss_anon": 797020160,
+   "vm_hwm": 1180143616,
+   "rss_anon_after": 109223936,
+   "errors": [
+    "ERROR:  cache memory limit exceeded: a transient vector of 8000000 bytes would bring transient vectors to 24000000 bytes, over warren.max_cache_memory (23726080 bytes); 16000000 are in use, 16000000 of them this role's; persist it, drop transient vectors or raise warren.max_cache_memory",
+    "CONTEXT:  SQL statement \"SELECT warren.vector_map(graph, '_warren_louvain_down', '_warren_louvain_labels', false, v)\""
+   ],
+   "limits_kb": {
+    "max_cache_memory": 23170
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    8.977
+   ],
+   "median_seconds": 8.977,
+   "rows": [],
+   "first_rows": [
+    null
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (28215296 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3203072,
+   "peak_rss_anon": 1055969280,
+   "vm_hwm": 1781035008,
+   "rss_anon_after": 717062144,
+   "errors": [
+    "ERROR:  cache memory limit exceeded: a transient vector of 2355752 bytes would bring transient vectors to 28711504 bytes, over warren.max_cache_memory (28215296 bytes); 26355752 are in use, 26355752 of them this role's; persist it, drop transient vectors or raise warren.max_cache_memory",
+    "CONTEXT:  PL/pgSQL function warren.louvain(text,text,double precision,bigint,integer,double precision,boolean,text,bigint) line 46 at assignment"
+   ],
+   "limits_kb": {
+    "max_cache_memory": 27554
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    30.2372
+   ],
+   "median_seconds": 30.2372,
+   "rows": [
+    "0.2043787995745968"
+   ],
+   "first_rows": [
+    "0.2043787995745968"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (30769152 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3203072,
+   "peak_rss_anon": 1058086912,
+   "vm_hwm": 2051129344,
+   "rss_anon_after": 706064384,
+   "limits_kb": {
+    "max_cache_memory": 30048
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    27.9936
+   ],
+   "median_seconds": 27.9936,
+   "rows": [
+    "0.2043787995745968"
+   ],
+   "first_rows": [
+    "0.2043787995745968"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (29463552 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3203072,
+   "peak_rss_anon": 1073995776,
+   "vm_hwm": 2066989056,
+   "rss_anon_after": 721973248,
+   "limits_kb": {
+    "max_cache_memory": 28773
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    30.061
+   ],
+   "median_seconds": 30.061,
+   "rows": [
+    "0.2043787995745968"
+   ],
+   "first_rows": [
+    "0.2043787995745968"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (28831744 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3203072,
+   "peak_rss_anon": 1073999872,
+   "vm_hwm": 2067087360,
+   "rss_anon_after": 721977344,
+   "limits_kb": {
+    "max_cache_memory": 28156
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    0.0069
+   ],
+   "median_seconds": 0.0069,
+   "rows": [],
+   "first_rows": [
+    null
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 3207168,
+   "peak_rss_anon": 4644864,
+   "vm_hwm": 35291136,
+   "rss_anon_after": 4644864,
+   "errors": [
+    "ERROR:  memory limit exceeded: loading version 1 (344124246 bytes) would bring what this statement holds in the cache to 344124246 bytes, over warren.max_cache_memory (28831744 bytes) and warren.max_compute_memory (16777216 bytes) together; 0 bytes are held already, by transient vectors and what the statement has read; raise warren.max_cache_memory or warren.max_compute_memory",
+    "CONTEXT:  SQL statement \"SELECT warren.vector_dense_id(graph, '_warren_louvain_single', persist := false, version := v)\""
+   ],
+   "limits_kb": {
+    "max_cache_memory": 28156,
+    "max_compute_memory": 16384
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    0.0062
+   ],
+   "median_seconds": 0.0062,
+   "rows": [],
+   "first_rows": [
+    null
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 3207168,
+   "peak_rss_anon": 4644864,
+   "vm_hwm": 35291136,
+   "rss_anon_after": 4644864,
+   "errors": [
+    "ERROR:  memory limit exceeded: loading version 1 (344124246 bytes) would bring what this statement holds in the cache to 344124246 bytes, over warren.max_cache_memory (28831744 bytes) and warren.max_compute_memory (268435456 bytes) together; 0 bytes are held already, by transient vectors and what the statement has read; raise warren.max_cache_memory or warren.max_compute_memory",
+    "CONTEXT:  SQL statement \"SELECT warren.vector_dense_id(graph, '_warren_louvain_single', persist := false, version := v)\""
+   ],
+   "limits_kb": {
+    "max_cache_memory": 28156,
+    "max_compute_memory": 262144
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    28.5406
+   ],
+   "median_seconds": 28.5406,
+   "rows": [
+    "0.2043787995745968"
+   ],
+   "first_rows": [
+    "0.2043787995745968"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (28831744 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3207168,
+   "peak_rss_anon": 1058091008,
+   "vm_hwm": 2051149824,
+   "rss_anon_after": 706068480,
+   "limits_kb": {
+    "max_cache_memory": 28156,
+    "max_compute_memory": 1048576
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    0.5512
+   ],
+   "median_seconds": 0.5512,
+   "rows": [],
+   "first_rows": [
+    null
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (28831744 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3207168,
+   "peak_rss_anon": 388853760,
+   "vm_hwm": 772718592,
+   "rss_anon_after": 36978688,
+   "errors": [
+    "ERROR:  compute memory limit exceeded: 319998016 bytes requested, 339292428 of 536870912 in use",
+    "CONTEXT:  PL/pgSQL function warren.louvain(text,text,double precision,bigint,integer,double precision,boolean,text,bigint) line 34 at assignment"
+   ],
+   "limits_kb": {
+    "max_cache_memory": 28156,
+    "max_compute_memory": 524288
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    30.1769
+   ],
+   "median_seconds": 30.1769,
+   "rows": [
+    "0.2043787995745968"
+   ],
+   "first_rows": [
+    "0.2043787995745968"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (28831744 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3207168,
+   "peak_rss_anon": 1083187200,
+   "vm_hwm": 2076291072,
+   "rss_anon_after": 446152704,
+   "limits_kb": {
+    "max_cache_memory": 28156,
+    "max_compute_memory": 741455
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    0.5836
+   ],
+   "median_seconds": 0.5836,
+   "rows": [],
+   "first_rows": [
+    null
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (28831744 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3207168,
+   "peak_rss_anon": 388853760,
+   "vm_hwm": 772845568,
+   "rss_anon_after": 36978688,
+   "errors": [
+    "ERROR:  compute memory limit exceeded: 319998016 bytes requested, 339292428 of 638449664 in use",
+    "CONTEXT:  PL/pgSQL function warren.louvain(text,text,double precision,bigint,integer,double precision,boolean,text,bigint) line 34 at assignment"
+   ],
+   "limits_kb": {
+    "max_cache_memory": 28156,
+    "max_compute_memory": 623486
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    1.2466
+   ],
+   "median_seconds": 1.2466,
+   "rows": [],
+   "first_rows": [
+    null
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (28831744 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3207168,
+   "peak_rss_anon": 716894208,
+   "vm_hwm": 1099759616,
+   "rss_anon_after": 45019136,
+   "errors": [
+    "ERROR:  compute memory limit exceeded: 32000000 bytes requested, 667290444 of 696233984 in use",
+    "CONTEXT:  PL/pgSQL function warren.louvain(text,text,double precision,bigint,integer,double precision,boolean,text,bigint) line 34 at assignment"
+   ],
+   "limits_kb": {
+    "max_cache_memory": 28156,
+    "max_compute_memory": 679916
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    29.9283
+   ],
+   "median_seconds": 29.9283,
+   "rows": [
+    "0.2043787995745968"
+   ],
+   "first_rows": [
+    "0.2043787995745968"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (28831744 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3207168,
+   "peak_rss_anon": 1083203584,
+   "vm_hwm": 2076119040,
+   "rss_anon_after": 446169088,
+   "limits_kb": {
+    "max_cache_memory": 28156,
+    "max_compute_memory": 710019
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    2.1127
+   ],
+   "median_seconds": 2.1127,
+   "rows": [],
+   "first_rows": [
+    null
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (28831744 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3207168,
+   "peak_rss_anon": 748257280,
+   "vm_hwm": 1147842560,
+   "rss_anon_after": 45158400,
+   "errors": [
+    "ERROR:  compute memory limit exceeded: 32000000 bytes requested, 691290444 of 711479296 in use",
+    "CONTEXT:  PL/pgSQL function warren.louvain(text,text,double precision,bigint,integer,double precision,boolean,text,bigint) line 46 at assignment"
+   ],
+   "limits_kb": {
+    "max_cache_memory": 28156,
+    "max_compute_memory": 694804
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    5.1032
+   ],
+   "median_seconds": 5.1032,
+   "rows": [],
+   "first_rows": [
+    null
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (28831744 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3207168,
+   "peak_rss_anon": 781078528,
+   "vm_hwm": 1164161024,
+   "rss_anon_after": 421412864,
+   "errors": [
+    "ERROR:  build memory limit exceeded: 20 bytes requested, 67108861 of 67108864 in use",
+    "CONTEXT:  PL/pgSQL function warren.louvain(text,text,double precision,bigint,integer,double precision,boolean,text,bigint) line 68 at assignment"
+   ],
+   "limits_kb": {
+    "max_cache_memory": 28156,
+    "max_compute_memory": 710019,
+    "max_build_memory": 65536
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    30.4818
+   ],
+   "median_seconds": 30.4818,
+   "rows": [
+    "0.2043787995745968"
+   ],
+   "first_rows": [
+    "0.2043787995745968"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (28831744 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3207168,
+   "peak_rss_anon": 1067270144,
+   "vm_hwm": 2060738560,
+   "rss_anon_after": 430235648,
+   "limits_kb": {
+    "max_cache_memory": 28156,
+    "max_compute_memory": 710019,
+    "max_build_memory": 524288
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    5.6888
+   ],
+   "median_seconds": 5.6888,
+   "rows": [],
+   "first_rows": [
+    null
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (28831744 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3207168,
+   "peak_rss_anon": 781070336,
+   "vm_hwm": 1164038144,
+   "rss_anon_after": 440410112,
+   "errors": [
+    "ERROR:  build memory limit exceeded: 20 bytes requested, 189811701 of 189811712 in use",
+    "CONTEXT:  PL/pgSQL function warren.louvain(text,text,double precision,bigint,integer,double precision,boolean,text,bigint) line 68 at assignment"
+   ],
+   "limits_kb": {
+    "max_cache_memory": 28156,
+    "max_compute_memory": 710019,
+    "max_build_memory": 185363
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    30.5824
+   ],
+   "median_seconds": 30.5824,
+   "rows": [
+    "0.2043787995745968"
+   ],
+   "first_rows": [
+    "0.2043787995745968"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (28831744 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3207168,
+   "peak_rss_anon": 1083195392,
+   "vm_hwm": 2076696576,
+   "rss_anon_after": 446160896,
+   "limits_kb": {
+    "max_cache_memory": 28156,
+    "max_compute_memory": 710019,
+    "max_build_memory": 311742
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    5.7935
+   ],
+   "median_seconds": 5.7935,
+   "rows": [],
+   "first_rows": [
+    null
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (28831744 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3207168,
+   "peak_rss_anon": 797020160,
+   "vm_hwm": 1180209152,
+   "rss_anon_after": 456323072,
+   "errors": [
+    "ERROR:  build memory limit exceeded: 94168048 bytes requested, 212837928 of 246155264 in use",
+    "CONTEXT:  PL/pgSQL function warren.louvain(text,text,double precision,bigint,integer,double precision,boolean,text,bigint) line 68 at assignment"
+   ],
+   "limits_kb": {
+    "max_cache_memory": 28156,
+    "max_compute_memory": 710019,
+    "max_build_memory": 240386
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    6.5688
+   ],
+   "median_seconds": 6.5688,
+   "rows": [],
+   "first_rows": [
+    null
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (28831744 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3207168,
+   "peak_rss_anon": 781074432,
+   "vm_hwm": 1164095488,
+   "rss_anon_after": 440410112,
+   "errors": [
+    "ERROR:  build memory limit exceeded: 94168048 bytes requested, 212837928 of 280317952 in use",
+    "CONTEXT:  PL/pgSQL function warren.louvain(text,text,double precision,bigint,integer,double precision,boolean,text,bigint) line 68 at assignment"
+   ],
+   "limits_kb": {
+    "max_cache_memory": 28156,
+    "max_compute_memory": 710019,
+    "max_build_memory": 273748
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    5.7444
+   ],
+   "median_seconds": 5.7444,
+   "rows": [],
+   "first_rows": [
+    null
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (28831744 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3207168,
+   "peak_rss_anon": 781070336,
+   "vm_hwm": 1164165120,
+   "rss_anon_after": 440410112,
+   "errors": [
+    "ERROR:  build memory limit exceeded: 94168048 bytes requested, 212837928 of 299138048 in use",
+    "CONTEXT:  PL/pgSQL function warren.louvain(text,text,double precision,bigint,integer,double precision,boolean,text,bigint) line 68 at assignment"
+   ],
+   "limits_kb": {
+    "max_cache_memory": 28156,
+    "max_compute_memory": 710019,
+    "max_build_memory": 292127
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    29.8787
+   ],
+   "median_seconds": 29.8787,
+   "rows": [
+    "0.2043787995745968"
+   ],
+   "first_rows": [
+    "0.2043787995745968"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (28831744 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3207168,
+   "peak_rss_anon": 1083195392,
+   "vm_hwm": 2076733440,
+   "rss_anon_after": 446160896,
+   "limits_kb": {
+    "max_cache_memory": 28156,
+    "max_compute_memory": 710019,
+    "max_build_memory": 301775
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    5.7531
+   ],
+   "median_seconds": 5.7531,
+   "rows": [],
+   "first_rows": [
+    null
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (28831744 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3207168,
+   "peak_rss_anon": 797028352,
+   "vm_hwm": 1180049408,
+   "rss_anon_after": 456327168,
+   "errors": [
+    "ERROR:  build memory limit exceeded: 94168048 bytes requested, 212837928 of 304036864 in use",
+    "CONTEXT:  PL/pgSQL function warren.louvain(text,text,double precision,bigint,integer,double precision,boolean,text,bigint) line 68 at assignment"
+   ],
+   "limits_kb": {
+    "max_cache_memory": 28156,
+    "max_compute_memory": 710019,
+    "max_build_memory": 296911
+   }
+  },
+  {
+   "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+   "seconds": [
+    30.3691
+   ],
+   "median_seconds": 30.3691,
+   "rows": [
+    "0.2043787995745968"
+   ],
+   "first_rows": [
+    "0.2043787995745968"
+   ],
+   "notices": [
+    "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (28831744 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+   ],
+   "warnings": [],
+   "rss_anon_before": 3207168,
+   "peak_rss_anon": 1083195392,
+   "vm_hwm": 2076811264,
+   "rss_anon_after": 446160896,
+   "limits_kb": {
+    "max_cache_memory": 28156,
+    "max_compute_memory": 710019,
+    "max_build_memory": 301775
+   }
+  }
+ ],
+ "refresh": {
+  "sql": "SELECT warren.refresh('soak')",
+  "seconds": [
+   11.7029
+  ],
+  "median_seconds": 11.7029,
+  "rows": [
+   "1"
+  ],
+  "first_rows": [
+   "1"
+  ],
+  "notices": [],
+  "warnings": [],
+  "rss_anon_before": 10891264,
+  "peak_rss_anon": 370380800,
+  "vm_hwm": 575217664,
+  "rss_anon_after": 106770432
+ },
+ "version_1": {
+  "seq": 1,
+  "bytes": 336124246,
+  "label": null,
+  "staged": false,
+  "current": true,
+  "vectors": 0,
+  "version": 1,
+  "built_at": "2026-10-21T22:49:35.721445+00:00",
+  "id_space": 1000000,
+  "built_lsn": "0/1CA2000",
+  "staleness": "00:00:11.703373",
+  "edge_count": 9999942,
+  "node_count": 1000000,
+  "label_vector": null,
+  "parent_graph": null,
+  "target_width": 4,
+  "dropped_edges": 0,
+  "compacted_from": null,
+  "parent_version": null,
+  "deduplicated_edges": 58
+ },
+ "default": {
+  "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+  "seconds": [
+   35.9408
+  ],
+  "median_seconds": 35.9408,
+  "rows": [
+   "0.2043787995745968"
+  ],
+  "first_rows": [
+   "0.2043787995745968"
+  ],
+  "notices": [],
+  "warnings": [],
+  "rss_anon_before": 3198976,
+  "peak_rss_anon": 1080758272,
+  "vm_hwm": 2073821184,
+  "rss_anon_after": 760758272,
+  "limits_kb": {}
+ },
+ "least_limits_kb": {
+  "max_cache_memory": 28156,
+  "max_compute_memory": 710019,
+  "max_build_memory": 301775
+ },
+ "tight": {
+  "sql": "SELECT warren.louvain('soak', 'louvain', levels_prefix := 'louvain')",
+  "seconds": [
+   30.3691
+  ],
+  "median_seconds": 30.3691,
+  "rows": [
+   "0.2043787995745968"
+  ],
+  "first_rows": [
+   "0.2043787995745968"
+  ],
+  "notices": [
+   "NOTICE:  version 1 (344124246 bytes) cannot be kept within warren.max_cache_memory (28831744 bytes, 0 of them held by transient vectors), so it is held only until the statement ends, the bytes past the cap charged to warren.max_compute_memory, and reloaded by each statement that reads it; raise warren.max_cache_memory"
+  ],
+  "warnings": [],
+  "rss_anon_before": 3207168,
+  "peak_rss_anon": 1083195392,
+  "vm_hwm": 2076811264,
+  "rss_anon_after": 446160896,
+  "limits_kb": {
+   "max_cache_memory": 28156,
+   "max_compute_memory": 710019,
+   "max_build_memory": 301775
+  }
+ },
+ "tight_ok": true,
+ "summary": {
+  "default_peak_rss_anon": 1080758272,
+  "tight_peak_rss_anon": 1083195392,
+  "limits_sum_bytes": 1064908800,
+  "tight_rss_anon_before": 3207168,
+  "past_the_limits": 15079424
+ },
+ "finished_at": "2026-10-21T22:57:52+00:00"
+}
