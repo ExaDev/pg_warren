@@ -9,7 +9,7 @@ All are ordinary GUCs, settable per session or per transaction
 
 | Setting | Default | Range | What it bounds | When exceeded |
 |---|---|---|---|---|
-| `warren.threads` | half the cores, at least 1 | 1–1024 | threads a compute kernel runs on (`spmv`, `spmm`, `vector_map`, reductions, `gather`, `eigen`, `distance`, `triangles`, and the sort in `core_number`) | — |
+| `warren.threads` | half the cores, at least 1 | 1–1024 | threads a compute kernel runs on (`spmv`, `spmm`, `vector_map`, reductions, `gather`, `eigen`, `distance`, `triangles`, the sort in `core_number`, the centralities' sources and the similarities) | — |
 | `warren.max_compute_memory` | `4GB` | `64kB` up | memory one call holds: every vector it reads (once, cached or not), every vector and work buffer it allocates, and what its statement holds in the cache past `warren.max_cache_memory` | `configuration_limit_exceeded` (53400), before allocating or loading |
 | `warren.max_cache_memory` | `4GB` | `64kB` up | what this backend's cache holds *between* statements: cached versions, cached persisted vectors, and every role's transient vectors | versions and persisted vectors no running statement has read are evicted, least recently used first; a transient write that would go over is refused with 53400 |
 | `warren.max_build_memory` | `4GB` | `1MB` up | everything a `refresh` holds at once: the node ids, the id map, the edge list, the CSRs it is building and its sort and write buffers; and, separately, the CSR offsets of the whole version (8 bytes × (id_space + 1) per relation's CSR, and the merged CSR's if stored, per direction) | `configuration_limit_exceeded` (53400): before the edge query runs if the id map or the offsets do not fit, before the version is written if the build's estimate does not, else when the edge list grows past it |
@@ -357,6 +357,46 @@ the symmetric adjacency (16 bytes per stored edge, the bulk of its peak).
 The forest is the slowest: each Borůvka round scans every stored edge with a
 random access per edge, and random weights take more rounds than unit
 weights.
+
+**The centralities and similarities at scale** (DESIGN.md §6.7), through
+SQL, release build, PG 16, `warren.threads = 4`,
+`warren.max_compute_memory = 12GB`, on the shared 4-vCPU Xeon (15 GB):
+G(n, m) random directed graphs from a seeded hash, weights 1–16, with
+reverse CSRs. Each call on a prewarmed version, `persist := false`; two
+runs at 1M, one at 10M, seconds.
+
+| Call | 1M nodes, 10M edges | 10M nodes, 100M edges |
+|---|---|---|
+| `refresh` (for comparison) | 10.9 | 223 |
+| `betweenness_centrality`, `k := 64` / 16 (1M / 10M), unweighted | 12.4, 16.3, 14.2, 13.8 | 130, 94 |
+| the same, weighted (Dijkstra) | 23.1, 24.7 | 216 |
+| the same, `directed := false`, unweighted (builds the symmetric adjacency) | 26.2, 21.0 | 134 |
+| `closeness_centrality`, `k := 64` / 16, unweighted | 9.9, 5.6 | 58 |
+| `harmonic_centrality`, `k := 64` / 16, weighted | 28.9, 18.5 | 165 |
+| `most_similar`, one node, `k := 10`, jaccard / adamic_adar (rows read node by node) | 0.0015 / 0.0004, 0.0025 / 0.0005 | 0.0033 / 0.0010 |
+| `similarity` of 100,000 random pairs (node by node) | 0.20, 0.19 | 0.44 |
+| `similar_pairs`, `k := 10`, every 100th node (builds the symmetric adjacency) | 0.68 / 0.58 (jaccard / adamic_adar) | 10.6 / 9.6 |
+| `similar_pairs`, `k := 10`, every node (10M / 100M rows, counted) | 12.0, 11.7 | 318 |
+
+A source costs one search and, for betweenness, a second pass over what it
+reached: about 0.8 s on one thread at 1M nodes and 20–30 s at 10M, where
+the random reads of the per-node arrays (each search's 8-byte distances and
+counts over 10M nodes) are memory-bound, so four threads give less than
+four times one. Exact betweenness (`k := NULL`) at 1M nodes would take
+about 55 hours on this box: the exact forms are for graphs of thousands of
+nodes, and the oracle. Weighted searches cost about twice as much (a heap
+per source, and a lazy-deletion queue that can hold an entry per improving
+relaxation: at 1M nodes, about 0.5 GB past the version for four weighted
+searches, against about 0.13 GB of fixed scratch unweighted).
+`directed := false` and `similar_pairs` first build the symmetric
+adjacency, 16 bytes per stored edge (32 weighted): at 10M nodes and 100M
+edges weighted undirected betweenness needs about 4.6 GB of scratch,
+past the default `warren.max_compute_memory`, which refuses them (53400).
+`similar_pairs` over every node costs `Σ_w |N(w)|²` (about 4·10⁹ steps at
+10M nodes and average degree 20) plus a row out per pair; its result is
+charged at 24 bytes per row. One node's ranking or a batch of pairs reads
+only the rows it needs when the graph has reverse CSRs, so it costs
+milliseconds at any size.
 
 The library at 1M nodes and 10M undirected edges (G(n, m), 20M stored
 edges, average degree 20; release build, `warren.threads = 4`, a shared
