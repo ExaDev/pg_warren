@@ -156,6 +156,10 @@ pub enum ComputeError {
         /// The live nodes Kahn's algorithm could not order.
         unordered: u64,
     },
+    /// A weighted shortest path met an edge whose weight is not positive
+    /// and finite (DESIGN.md §6.7).
+    #[error("weighted shortest paths need positive, finite edge weights")]
+    NonPositiveWeight,
     /// The caller's interrupts asked the kernel to stop.
     #[error("compute cancelled")]
     Cancelled,

@@ -180,7 +180,8 @@ pub(crate) fn compute_sqlstate(error: &ComputeError) -> PgSqlErrorCode {
         | ComputeError::UnknownCombiner(_)
         | ComputeError::ZeroWidth
         | ComputeError::WidthMismatch { .. }
-        | ComputeError::Cycle { .. } => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+        | ComputeError::Cycle { .. }
+        | ComputeError::NonPositiveWeight => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
         ComputeError::DtypeMismatch { .. }
         | ComputeError::OperandType { .. }
         | ComputeError::CombinerType { .. } => PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,

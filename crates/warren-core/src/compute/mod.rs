@@ -6,6 +6,7 @@
 //! budget, the domain side of the `warren.max_compute_memory` GUC.
 
 mod cast;
+mod centrality;
 mod core_number;
 mod dag;
 mod dtype;
@@ -17,6 +18,7 @@ mod mask;
 pub(crate) mod memory;
 mod message;
 mod product;
+pub(crate) mod random;
 mod ranking;
 mod reduce;
 #[cfg(test)]
@@ -31,6 +33,10 @@ mod triangles;
 mod vector;
 mod workers;
 
+pub use centrality::{
+    betweenness_centrality, closeness_centrality, harmonic_centrality, BetweennessScale,
+    Centrality, Sampling, ShortestPaths,
+};
 pub use core_number::{core_number, CoreNumbers};
 pub use dag::{dag_longest_path, topological_order, LongestPaths};
 pub use dtype::{Dtype, Element};

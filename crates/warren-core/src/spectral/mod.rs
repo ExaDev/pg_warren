@@ -9,7 +9,6 @@ mod distance;
 mod error;
 mod lanczos;
 mod operator;
-mod random;
 mod rayleigh;
 #[cfg(test)]
 #[cfg(not(miri))]
