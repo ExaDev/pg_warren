@@ -27,11 +27,12 @@ pub struct Contraction {
 /// edges go to. Between two communities `c` and `d` there is an edge
 /// `c → d` if some member of `c` has an edge to some member of `d`,
 /// weighted by the sum of those edges' weights (or their count, if not
-/// `weighted`): `PᵀAP`. For an undirected parent each undirected edge
-/// counts once, so the quotient is undirected too (stored both ways, a
-/// community's self-loop once): an edge inside a community adds its weight
-/// once to the community's self-loop, where `PᵀAP` of the stored matrix
-/// would add it twice.
+/// `weighted`): `PᵀAP` of the stored matrix. An undirected parent is
+/// stored both ways (a self-loop once), so its quotient is undirected too:
+/// an edge between two communities adds its weight to both directions, an
+/// edge inside a community adds it twice to the community's self-loop, and
+/// a self-loop once, as each counts in its nodes' degrees, so every
+/// community's weighted degree is the sum of its members'.
 ///
 /// Gustavson's row-by-row product: the members of each community in turn,
 /// in ascending dense id, accumulate their rows' entries into a dense row
@@ -72,10 +73,9 @@ fn aggregate(
                 let weights = csr.neighbour_weights(member);
                 for (at, target) in csr.neighbours(member).enumerate() {
                     let Some(other) = membership.community(target) else { continue };
-                    let counted = match contraction.undirected {
-                        true => other > community || (other == community && target >= member),
-                        false => true,
-                    };
+                    // The upper triangle of an undirected quotient, mirrored
+                    // below, so both directions hold one sum.
+                    let counted = !contraction.undirected || other >= community;
                     if !counted || (contraction.drop_self_loops && other == community) {
                         continue;
                     }
@@ -290,26 +290,28 @@ mod tests {
     }
 
     #[test]
-    fn an_undirected_edge_counts_once_inside_and_between_communities() {
+    fn an_undirected_edge_inside_a_community_counts_both_ways() {
         // Undirected: 0 – 1 (inside 0), 1 – 2 and 0 – 2 (between), 2 – 2
-        // (a self-loop), 2 – 3 (inside 1).
+        // (a self-loop, stored once), 2 – 3 (inside 1). The quotient is
+        // PᵀAP of the stored matrix: an edge inside counts twice, a
+        // self-loop once, as each counts in its nodes' degrees.
         let edges: Edges =
             vec![(0, 0, 1, 1.0), (0, 1, 2, 2.0), (0, 0, 2, 4.0), (0, 2, 2, 8.0), (0, 2, 3, 16.0)];
         let graph = parent(4, 1, &edges, true);
         let p = membership(&[Some(0), Some(0), Some(1), Some(1)], 2);
         let expected = Quotient::from([
-            ((0, 0, 0), 1.0),
+            ((0, 0, 0), 2.0),
             ((0, 0, 1), 6.0),
             ((0, 1, 0), 6.0),
-            ((0, 1, 1), 24.0),
+            ((0, 1, 1), 40.0),
         ]);
         assert_eq!(quotient(&graph, &p, UNDIRECTED).unwrap(), expected);
         let counted = Contraction { weighted: false, ..UNDIRECTED };
         let counts = Quotient::from([
-            ((0, 0, 0), 1.0),
+            ((0, 0, 0), 2.0),
             ((0, 0, 1), 2.0),
             ((0, 1, 0), 2.0),
-            ((0, 1, 1), 2.0),
+            ((0, 1, 1), 3.0),
         ]);
         assert_eq!(quotient(&graph, &p, counted).unwrap(), counts);
     }
@@ -323,47 +325,27 @@ mod tests {
         assert_eq!(quotient(&graph, &p, DIRECTED).unwrap(), expected);
     }
 
-    /// The quotient by dense matrices: `PᵀAP` for a directed parent; for
-    /// an undirected one, with `U` its edges once each (`u ≤ v`),
-    /// `PᵀUP + (PᵀUP)ᵀ − diag(PᵀUP)`.
-    #[allow(clippy::needless_range_loop)] // `q` is read both ways round.
+    /// The quotient by dense matrices: `PᵀAP` of the stored matrix, an
+    /// undirected parent's stored both ways (a self-loop once).
     fn naive(
         id_space: u64,
         edges: &Edges,
         relations: usize,
         p: &[Option<DenseId>],
-        k: u64,
         contraction: Contraction,
     ) -> Quotient {
         let graph = parent(id_space, relations, edges, contraction.undirected);
         let mut found = Quotient::new();
         for relation in 0..relations {
             let a = reference::adjacency(id_space, &stored(&graph, relation), None, true);
-            let mut q = vec![vec![None::<f64>; k as usize]; k as usize];
             for (u, row) in a.iter().enumerate() {
                 for (v, entry) in row.iter().enumerate() {
                     let (Some(w), Some(c), Some(d)) = (entry, p[u], p[v]) else { continue };
-                    if contraction.undirected && v < u {
+                    if contraction.drop_self_loops && c == d {
                         continue;
                     }
                     let value = if contraction.weighted { *w } else { 1.0 };
-                    let cell = &mut q[c as usize][d as usize];
-                    *cell = Some(cell.unwrap_or(0.0) + value);
-                }
-            }
-            for c in 0..k as usize {
-                for d in 0..k as usize {
-                    let value = match contraction.undirected && c != d {
-                        true => match (q[c][d], q[d][c]) {
-                            (None, None) => None,
-                            (x, y) => Some(x.unwrap_or(0.0) + y.unwrap_or(0.0)),
-                        },
-                        false => q[c][d],
-                    };
-                    if let Some(value) = value.filter(|_| !(contraction.drop_self_loops && c == d))
-                    {
-                        found.insert((relation, c as u64, d as u64), value);
-                    }
+                    *found.entry((relation, c, d)).or_insert(0.0) += value;
                 }
             }
         }
@@ -415,8 +397,36 @@ mod tests {
             let graph = parent(id_space, 2, &edges, undirected);
             let p = membership(&communities, 6);
             let found = quotient(&graph, &p, contraction).unwrap();
-            let expected = naive(id_space, &edges, 2, &communities, 6, contraction);
+            let expected = naive(id_space, &edges, 2, &communities, contraction);
             prop_assert!(close(&found, &expected), "{found:?} != {expected:?}");
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn a_communitys_weighted_degree_is_its_members(
+            (id_space, edges, communities) in (1u64..20).prop_flat_map(|n| (
+                Just(n),
+                prop::collection::vec((0..n, 0..n, 1..5u32), 0..60),
+                prop::collection::vec(0u64..4, n as usize),
+            )),
+            undirected in any::<bool>(),
+        ) {
+            let edges: Edges =
+                edges.into_iter().map(|(s, t, w)| (0, s, t, f64::from(w))).collect();
+            let graph = parent(id_space, 1, &edges, undirected);
+            let p = membership(&communities.iter().map(|&c| Some(c)).collect::<Vec<_>>(), 4);
+            let contraction = Contraction { undirected, ..DIRECTED };
+            let found = quotient(&graph, &p, contraction).unwrap();
+            let csr = graph.relations()[0].forward();
+            for c in 0..4u64 {
+                let members: f64 = (0..id_space)
+                    .filter(|&u| communities[u as usize] == c)
+                    .flat_map(|u| csr.neighbour_weights(u).unwrap().to_vec())
+                    .sum();
+                let row: f64 = found.iter().filter(|((_, s, _), _)| *s == c).map(|(_, w)| w).sum();
+                prop_assert_eq!(row, members);
+            }
         }
     }
 

@@ -89,8 +89,10 @@
     promote, version)` builds a version of a **quotient graph**: one node
     per distinct label of an integral label vector (its `bigint` node ids
     are the labels), the edges between communities summed by weight or
-    counted, the edges inside a community its self-loop (or dropped). An
-    undirected edge counts once; relations are kept. The first contraction
+    counted, the edges inside a community its self-loop (or dropped):
+    `PᵀAP` of the stored matrix, so an undirected edge inside a community
+    counts in both directions and every community's weighted degree is the
+    sum of its members'; relations are kept. The first contraction
     creates the graph (`source` `'contraction'`, owned by the caller);
     later ones add versions, staged or promoted, with stable dense ids per
     label. The version records the parent version and label vector it came

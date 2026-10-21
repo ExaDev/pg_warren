@@ -195,15 +195,16 @@ def test_longest_paths_restart_after_a_negative_prefix():
 
 
 def test_a_quotient_sums_the_edges_between_and_inside_each_label():
-    # Labels 0: {1, 2}, 1: {3}; edges 1 – 2 (inside 0), 2 – 3, 1 – 3, 3 – 3.
+    # Labels 0: {1, 2}, 1: {3}; edges 1 – 2 (inside 0: twice), 2 – 3, 1 – 3,
+    # 3 – 3 (a self-loop: once).
     g = graph([(1, 2), (2, 3), (1, 3), (3, 3)])
     for u, v in g.edges:
         g[u][v]["weight"] = u + v
     labels = {1: 0, 2: 0, 3: 1}
     rows = sorted(oracle.quotient(g, [], labels))
-    assert rows == [(0, 0, 3.0), (0, 1, 9.0), (1, 0, 9.0), (1, 1, 6.0)]
+    assert rows == [(0, 0, 6.0), (0, 1, 9.0), (1, 0, 9.0), (1, 1, 6.0)]
     counted = sorted(oracle.quotient(g, ["--count"], labels))
-    assert counted == [(0, 0, 1.0), (0, 1, 2.0), (1, 0, 2.0), (1, 1, 1.0)]
+    assert counted == [(0, 0, 2.0), (0, 1, 2.0), (1, 0, 2.0), (1, 1, 1.0)]
 
 
 def test_a_directed_quotient_keeps_the_direction_of_each_edge():

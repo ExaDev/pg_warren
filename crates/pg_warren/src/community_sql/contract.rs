@@ -229,7 +229,7 @@ mod tests {
     }
 
     #[pg_test]
-    fn an_undirected_edge_inside_a_community_counts_once() -> Result<(), Error> {
+    fn an_undirected_edge_inside_a_community_counts_both_ways() -> Result<(), Error> {
         Spi::run(
             "CREATE TABLE u_nodes (id bigint); CREATE TABLE u_edges (src bigint, dst bigint);
              INSERT INTO u_nodes VALUES (1), (2), (3);
@@ -241,9 +241,37 @@ mod tests {
                  'SELECT id, CASE WHEN id <= 2 THEN 0 ELSE 1 END FROM u_nodes');
              SELECT warren.contract('u', 'l', 'uq', weighted := false)",
         )?;
-        assert_eq!(out_weights("uq")?.as_deref(), Some("0:2 1:2"), "0: 0–0 and 0–1; 1: 1–0, 1–1");
+        // 0: 1 – 2 both ways, and 2 – 3; 1: 3 – 2, and the self-loop once.
+        assert_eq!(out_weights("uq")?.as_deref(), Some("0:3 1:2"));
         let directed = Spi::get_one::<bool>("SELECT (warren.info('uq') ->> 'directed')::bool")?;
         assert_eq!(directed, Some(false));
+        Ok(())
+    }
+
+    /// The quotient keeps weighted degree, as pg_warren counts it (a
+    /// self-loop once): a community's is the sum of its members'.
+    #[pg_test]
+    fn a_communitys_weighted_degree_is_its_members() -> Result<(), Error> {
+        Spi::run(
+            "CREATE TABLE w_nodes AS SELECT generate_series(1, 40)::bigint AS id;
+             CREATE TABLE w_edges AS
+             SELECT (g % 40 + 1)::bigint AS src, ((g * 7) % 40 + 1)::bigint AS dst, (1 + g % 5)::float8 AS w
+             FROM generate_series(1, 150) g;
+             SELECT warren.create_graph('w', 'SELECT id FROM w_nodes', 'SELECT src, dst, w FROM w_edges',
+                                        directed := false, weighted := true);
+             SELECT warren.refresh('w');
+             SELECT warren.vector_from_query('w', 'l', 'SELECT id, id % 6 FROM w_nodes');
+             SELECT warren.contract('w', 'l', 'wq')",
+        )?;
+        out_weights("w")?;
+        Spi::run("SELECT warren.project('w', 'out', 'wq', 'member_degrees')")?;
+        out_weights("wq")?;
+        let differ = Spi::get_one::<i64>(
+            "SELECT count(*) FROM warren.vector_values('wq', 'out', NULL::bigint) q
+             JOIN warren.vector_values('wq', 'member_degrees', NULL::bigint) p USING (node_id)
+             WHERE abs(q.value - p.value) > 1e-9",
+        )?;
+        assert_eq!(differ, Some(0));
         Ok(())
     }
 
