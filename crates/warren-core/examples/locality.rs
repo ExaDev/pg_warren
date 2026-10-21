@@ -25,8 +25,8 @@ use std::time::Instant;
 
 use warren_core::compute::{spmv, AnyVector, ComputeMemory, Product, Semiring, Vector, Workers};
 use warren_core::graph::{
-    BuildMemory, DenseId, Direction, EdgeList, GraphCsr, Permutation, RelationDictionary,
-    RelationSelection,
+    BuildBuffer, BuildMemory, DenseId, Direction, EdgeIntake, EdgeList, GraphCsr, IdMap,
+    Permutation, RelationDictionary, RelationSelection,
 };
 use warren_core::interrupts::Uninterrupted;
 use warren_core::traversal::{bfs_each, components, Adjacency, Limits};
@@ -50,16 +50,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     let start = scramble[0];
     let mut orders = vec![("id", renumbered(&natural, nodes, |node| scramble[node as usize])?)];
     let edges = orders[0].1.clone();
-    let memory = BuildMemory::unlimited();
-    let (permutation, ordering) = timed(runs, || Permutation::locality(&edges, nodes, &memory))?;
+    let mut scratch = 0;
+    let (permutation, ordering) = timed(runs, || {
+        let memory = BuildMemory::unlimited();
+        let permutation = Permutation::locality(&edges, nodes, &memory);
+        scratch = memory.peak();
+        permutation
+    })?;
     let mut local = edges.clone();
     let started = Instant::now();
     local.renumber(&permutation)?;
     let renumbering = started.elapsed().as_secs_f64();
+    let (intake_peak, ordering_peak) = first_build_peaks(&edges, nodes)?;
     println!(
-        "{{\"graph\": \"{kind}\", \"nodes\": {nodes}, \"edges\": {}, \"kernel\": \"order\", \"median_seconds\": {ordering:e}, \"renumber_seconds\": {renumbering:e}, \"peak_bytes\": {}}}",
+        "{{\"graph\": \"{kind}\", \"nodes\": {nodes}, \"edges\": {}, \"kernel\": \"order\", \"median_seconds\": {ordering:e}, \"renumber_seconds\": {renumbering:e}, \"scratch_bytes\": {scratch}, \"first_build_intake_peak_bytes\": {intake_peak}, \"first_build_ordering_peak_bytes\": {ordering_peak}}}",
         edges.len(),
-        memory.peak(),
     );
     let local_start = permutation.new_dense_id(start);
     orders.push(("locality", local));
@@ -116,6 +121,31 @@ fn measure(
     let (_, seconds) = timed(runs, || components(&graph, &mut Uninterrupted))?;
     report("components", seconds);
     Ok(())
+}
+
+/// The build memory a first build charges, as a refresh does, for `int8`
+/// node ids `0..nodes` and the edges of `edges` (one relation,
+/// unweighted, reserved up front): its peak once the edges are read, and
+/// its peak once they are ordered for locality and renumbered.
+fn first_build_peaks(edges: &EdgeList, nodes: u64) -> Result<(u64, u64), Box<dyn Error>> {
+    let memory = BuildMemory::unlimited();
+    let mut ids = BuildBuffer::with_capacity(&memory, nodes as usize)?;
+    for id in 0..nodes as i64 {
+        ids.push(id)?;
+    }
+    let (mut id_map, _id_map_charge) = IdMap::new().rebuild_within(ids)?;
+    let relation = RelationDictionary::new().intern("edge")?;
+    let mut intake = EdgeIntake::directed(&id_map, false).within(&memory);
+    intake.reserve(edges.len())?;
+    for (_, source, target) in edges.edges() {
+        intake.push(relation, Some(&(source as i64)), Some(&(target as i64)), 1.0)?;
+    }
+    let (mut list, _) = intake.finish();
+    let intake_peak = memory.peak();
+    let permutation = Permutation::locality(&list, nodes, &memory)?;
+    list.renumber(&permutation)?;
+    id_map.renumber(&permutation, &memory)?;
+    Ok((intake_peak, memory.peak()))
 }
 
 /// Runs `work` `runs` times; its last result and the median seconds.

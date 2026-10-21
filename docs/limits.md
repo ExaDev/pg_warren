@@ -275,10 +275,10 @@ carry no structure (DESIGN.md §14 item 22):
 The gain is worth having on graphs with communities whose ids are arbitrary
 (uuids, ids from a busy shared sequence), and small on power-law graphs; if
 your ids already follow the structure, keep `'id'`. Ordering needs scratch
-of about 24 bytes per node and 8 bytes per edge (1.12 GB at 10M/100M),
+of about 24 bytes per node and 8 bytes per edge (1.04 GB at 10M/100M),
 charged to `warren.max_build_memory`, so a first build in locality order
-peaks higher (about 2.6 GB rather than 1.6 GB for one unweighted relation at
-that size). Later refreshes keep every surviving node's dense id and append
+peaks higher: 2.48 GB rather than 1.56 GB for one unweighted relation at
+that size. Later refreshes keep every surviving node's dense id and append
 new nodes, so locality decays as the graph changes; `compact` restores it.
 
 ## Measured performance

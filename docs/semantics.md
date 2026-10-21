@@ -39,6 +39,10 @@ SELECT warren.create_graph(name, node_query, edge_query,
   may change: `'id'` in id order, `'locality'` so that neighbours get
   nearby dense ids, which makes large graphs' kernels faster
   ([limits.md](limits.md#node-order-locality)). Results are the same.
+  Until a graph is first promoted, every `refresh` is a first build, so
+  each staged version of a never-promoted `'locality'` graph gets its own
+  order, and `diff`, `distance` and `vector_norm_diff` between two of them
+  are refused (22023, as for sibling staged versions, below).
 
 Edges are cleaned at build time, and counted, never silently:
 
