@@ -203,4 +203,26 @@ pub enum GraphError {
     /// item 22).
     #[error("node_order must be 'id' or 'locality', not '{0}'")]
     UnknownNodeOrder(String),
+    /// A membership names a community outside the quotient's id space.
+    #[error("membership puts node {node} in community {community}, outside the quotient")]
+    CommunityOutsideQuotient {
+        /// The parent node.
+        node: u64,
+        /// Its stored community.
+        community: u64,
+    },
+    /// A membership must have one entry per node of its parent version.
+    #[error("membership covers {found} nodes, expected the parent's id space {expected}")]
+    MembershipLength {
+        /// The parent version's id space.
+        expected: u64,
+        /// The membership's length.
+        found: u64,
+    },
+    /// Exactly the parent version's live nodes belong to a community.
+    #[error("membership of node {node} disagrees with the parent version's tombstones")]
+    MembershipDisagrees {
+        /// The first node that disagrees.
+        node: u64,
+    },
 }

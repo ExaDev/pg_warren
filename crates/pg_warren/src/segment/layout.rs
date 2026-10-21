@@ -1,18 +1,19 @@
 //! The segment layout of a version (DESIGN.md §5.3): `id_map`,
 //! `tombstones`, `rel_dict`, and the `offsets`/`targets`/`weights` of each
 //! relation's forward and (if built) reverse CSR, plus the merged CSR's
-//! unless there is exactly one relation. `cache` reads the same layout.
+//! unless there is exactly one relation; and a contraction's `membership`
+//! (§6.6). `cache` reads the same layout.
 //! Segments are encoded a chunk at a time, so writing one holds a chunk,
 //! not the segment.
 
 use warren_core::graph::{
     AnyCsr, BuildCharge, BuildMemory, BuiltCsr, ChunkSink, CsrSink, ExternalId, GraphCsr, IdMap,
-    RelationCsr, RelationDictionary,
+    Membership, RelationCsr, RelationDictionary,
 };
 
 use super::{
     csr_segment, write_segment, CsrPart, CsrScope, Direction, SegmentError, SegmentStore, ID_MAP,
-    RELATION_DICTIONARY, TOMBSTONES,
+    MEMBERSHIP, RELATION_DICTIONARY, TOMBSTONES,
 };
 use crate::catalog::VersionId;
 
@@ -102,6 +103,12 @@ impl<'s, S: SegmentStore> SegmentWriter<'s, S> {
             self.chunk_size,
         )?;
         Ok(())
+    }
+
+    /// The `membership` segment of a contraction's version.
+    pub(crate) fn write_membership(&mut self, membership: &Membership) -> Result<(), SegmentError> {
+        let (chunk_size, memory) = (self.chunk_size, self.memory.clone());
+        self.chunked(MEMBERSHIP, |each| membership.encode_chunked(chunk_size, &memory, each))
     }
 
     /// The forward and reverse CSRs of a relation, or of the merged CSR.

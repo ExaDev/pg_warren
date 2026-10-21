@@ -325,6 +325,43 @@ def after_update(upgraded):
     expected = "upgrade:id upgrade_local:locality upgrade_new:id upgrade_typed:locality"
     if orders != [[expected]]:
         problems.append(f"node orders after compacting and creating are {orders}")
+    return problems + contraction_problems(upgraded)
+
+
+# The quotient's version, its parent and its label vector.
+LINEAGE = ("SELECT v.version_id || ':' || coalesce(v.parent_version::text, '-') || ':'"
+           " || coalesce(v.label_vector::text, '-')"
+           " FROM warren.versions v JOIN warren.graphs g USING (graph_id) WHERE g.name = 'upgrade_quotient'")
+
+
+def contraction_problems(upgraded):
+    """Contracts a version built before the update (0.4.0), projects and
+    lifts over it, then fires the trigger that forgets a deleted label
+    vector and the ON DELETE SET NULL of a dropped parent version."""
+    problems = []
+    upgraded.execute(
+        "SELECT warren.vector_from_query('upgrade', 'community', 'SELECT id, id % 2 FROM upgrade_nodes');"
+        " SELECT warren.contract('upgrade', 'community', 'upgrade_quotient');"
+        " SELECT warren.vector_const('upgrade', 'one', 1);"
+        " SELECT warren.project('upgrade', 'one', 'upgrade_quotient', 'members', 'count');"
+        " SELECT warren.lift('upgrade_quotient', 'members', 'upgrade', 'sizes')")
+    sizes = upgraded.query(
+        "SELECT (SELECT count(*) FROM warren.id_map('upgrade_quotient', NULL::bigint) WHERE live)"
+        " || ':' || (SELECT sum(value) FROM warren.vector_values('upgrade_quotient', 'members', NULL::bigint))"
+        " || ':' || (SELECT count(*) FROM warren.vector_values('upgrade', 'sizes', NULL::bigint) WHERE value < 1)")
+    nodes = upgraded.query(
+        "SELECT count(*) FROM warren.id_map('upgrade', NULL::bigint) WHERE live")[0][0]
+    if sizes != [[f"2:{nodes}:0"]]:
+        problems.append(f"contract, project and lift after the update give {sizes} for {nodes} nodes")
+    quotient, parent, label = upgraded.query(LINEAGE)[0][0].split(":")
+    if "-" in (parent, label):
+        problems.append(f"the quotient's lineage is {parent}:{label}")
+    upgraded.execute("SELECT warren.drop_vector('upgrade', 'community')")
+    upgraded.execute("SELECT warren.refresh('upgrade')")
+    upgraded.execute(f"SELECT warren.drop_version('upgrade', {parent})")
+    lineage = upgraded.query(LINEAGE)
+    if lineage != [[f"{quotient}:-:-"]]:
+        problems.append(f"after dropping the label vector and the parent version the lineage is {lineage}")
     return problems
 
 

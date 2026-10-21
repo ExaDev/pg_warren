@@ -22,6 +22,7 @@ as a table the SQL test compares against.
 | closeness | oracle_closeness | node_id, score: `nx.closeness_centrality` (`--no-wf-improved`); from `--sources-sql`'s nodes, `warren.closeness_centrality`'s estimator over NetworkX's distances |
 | harmonic | oracle_harmonic | node_id, score: `nx.harmonic_centrality`; from `--sources-sql`'s nodes, `sources=` scaled by (n − 1) / k_u |
 | similarity | oracle_similarity | source, target, jaccard, adamic_adar, common: `nx.jaccard_coefficient`, `nx.adamic_adar_index` and `len(nx.common_neighbors)` of every ordered pair of distinct nodes of the undirected graph without self-loops |
+| quotient | oracle_quotient | source, target, weight: the edges of `nx.quotient_graph` by the labels of `--labels-sql` (node, label), between labels, each edge's weight the sum of the weights of the edges it joins (the count with `--count`), and a label's self-loop the sum over the edges inside it; undirected, an edge between labels is given both ways and an edge inside a label counts twice in its self-loop (a self-loop once), as the stored matrix's `PᵀAP` |
 
 The three centralities take `--weighted` (Dijkstra over the `weight`) and
 `--undirected` (the undirected graph without self-loops, a pair's lighter
@@ -62,6 +63,7 @@ TABLES = {
     "harmonic": ("oracle_harmonic", "node_id bigint, score float8"),
     "similarity": ("oracle_similarity",
                    "source bigint, target bigint, jaccard float8, adamic_adar float8, common float8"),
+    "quotient": ("oracle_quotient", "source bigint, target bigint, weight float8"),
 }
 
 
@@ -139,6 +141,46 @@ def compute(computation, graph, arguments):
         return [(min(part), float(nx.minimum_spanning_tree(undirected.subgraph(part)).size(weight="weight")))
                 for part in nx.connected_components(undirected)]
     raise ValueError(f"unknown oracle computation {computation!r}; expected one of {sorted(TABLES)}")
+
+
+def quotient(graph, arguments, labels=None):
+    """The quotient's edges by `labels` (node → label; else read from
+    `--labels-sql` by `run`), through `nx.quotient_graph`: its edge data
+    sums only the edges from the first block to the second (NetworkX's
+    default sums both ways in a directed graph), and a block's self-loop is
+    the size of its subgraph, which `nx.quotient_graph` leaves out; in an
+    undirected graph an edge inside a block counts twice there (both of
+    its stored directions), a self-loop once."""
+    options = argparse.ArgumentParser(prog="quotient")
+    options.add_argument("--count", action="store_true")
+    options.add_argument("--labels-sql")
+    weight = None if options.parse_args(arguments).count else "weight"
+    blocks = {}
+    for node, label in labels.items():
+        blocks.setdefault(label, set()).add(node)
+    label_of = {frozenset(block): label for label, block in blocks.items()}
+
+    def between(b, c):
+        return {"weight": sum(1 if weight is None else data.get(weight, 1)
+                              for u, v, data in graph.edges(b, data=True) if u in b and v in c)}
+
+    def inside(b):
+        subgraph = graph.subgraph(b)
+        total = subgraph.size(weight=weight)
+        if graph.is_directed():
+            return {"inside": total}
+        loops = sum(1 if weight is None else data.get(weight, 1) for _, _, data in nx.selfloop_edges(subgraph, data=True))
+        return {"inside": 2 * total - loops}
+
+    q = nx.quotient_graph(graph, list(blocks.values()), edge_data=between, node_data=inside)
+    rows = []
+    for b, c, data in q.edges(data=True):
+        rows.append((label_of[b], label_of[c], float(data["weight"])))
+        if not graph.is_directed():
+            rows.append((label_of[c], label_of[b], float(data["weight"])))
+    rows += [(label_of[b], label_of[b], float(data["inside"])) for b, data in q.nodes(data=True)
+             if graph.subgraph(b).number_of_edges() > 0]
+    return rows
 
 
 def longest_path_into(dag, node):
@@ -308,9 +350,15 @@ def run(database, computation, arguments):
     graph_options.add_argument("--edges-sql", default="SELECT src, dst FROM edges")
     graph_options.add_argument("--directed", action="store_true")
     graph_options.add_argument("--sources-sql")
+    graph_options.add_argument("--labels-sql")
     graph, rest = graph_options.parse_known_args(arguments)
     exported = export(database, graph.nodes_sql, graph.edges_sql, graph.directed)
     if graph.sources_sql:
         sources = sorted(int(row[0]) for row in database.query(graph.sources_sql))
         rest += ["--sources", ",".join(map(str, sources))]
-    write(database, computation, compute(computation, exported, rest))
+    if computation == "quotient":
+        labels = {int(node): int(label) for node, label in database.query(graph.labels_sql)}
+        rows = quotient(exported, rest, labels)
+    else:
+        rows = compute(computation, exported, rest)
+    write(database, computation, rows)

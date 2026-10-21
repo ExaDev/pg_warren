@@ -55,6 +55,9 @@ pub(crate) enum CatalogError {
     /// The recorded id type is not one this library supports.
     #[error("graph \"{0}\" has an unsupported id type")]
     UnknownIdType(String),
+    /// The recorded source is not one this library knows.
+    #[error("graph \"{0}\" has an unknown source")]
+    UnknownSource(String),
     /// A count does not fit its `bigint` column.
     #[error("{0} exceeds the range of bigint")]
     TooLarge(&'static str),
@@ -79,6 +82,15 @@ pub(crate) enum CatalogError {
     /// A node order other than 'id' or 'locality' (DESIGN.md §14 item 22).
     #[error(transparent)]
     NodeOrder(GraphError),
+    /// A graph derived by contraction gets new versions only from
+    /// `warren.contract` (DESIGN.md §6.6).
+    #[error("cannot {action} graph \"{graph}\": it is derived by contraction; warren.contract makes its versions")]
+    DerivedByContraction {
+        /// The graph.
+        graph: String,
+        /// What was refused.
+        action: &'static str,
+    },
     /// An SPI call failed.
     #[error(transparent)]
     Spi(#[from] pgrx::spi::Error),
@@ -96,11 +108,14 @@ impl SqlError for CatalogError {
             }
             Self::GraphExists(_) => PgSqlErrorCode::ERRCODE_DUPLICATE_OBJECT,
             Self::RetainVersions(_) => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
-            Self::UnknownIdType(_) => PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+            Self::UnknownIdType(_) | Self::UnknownSource(_) => {
+                PgSqlErrorCode::ERRCODE_DATA_CORRUPTED
+            }
             Self::TooLarge(_) => PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
             Self::Access(error) => error.sqlstate(),
             Self::Source(error) => error.sqlstate(),
             Self::NodeOrder(error) => graph_sqlstate(error),
+            Self::DerivedByContraction { .. } => PgSqlErrorCode::ERRCODE_WRONG_OBJECT_TYPE,
             Self::Spi(_) => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
         }
     }

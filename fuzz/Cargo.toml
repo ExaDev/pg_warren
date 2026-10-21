@@ -44,3 +44,10 @@ path = "fuzz_targets/decode_relation_dictionary.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "decode_membership"
+path = "fuzz_targets/decode_membership.rs"
+test = false
+doc = false
+bench = false

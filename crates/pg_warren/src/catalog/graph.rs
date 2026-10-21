@@ -8,6 +8,7 @@ use pgrx::PgOid;
 
 use super::CatalogError;
 use crate::access::as_catalog_owner;
+use crate::read_only::read_one;
 use crate::source::IdType;
 use warren_core::graph::NodeOrder;
 
@@ -18,7 +19,7 @@ use warren_core::graph::NodeOrder;
 const FIND: &str = "SELECT g.graph_id, g.owner::oid, g.readers::oid[], g.node_query, g.edge_query,
                            g.search_path, g.directed, g.weighted, g.has_relations,
                            g.build_reverse, g.retain_versions, g.current_version, g.id_type::oid,
-                           v.version_id, g.store_merged, g.node_order
+                           v.version_id, g.store_merged, g.node_order, g.source
                     FROM warren.graphs g
                     LEFT JOIN warren.versions v
                            ON v.version_id = g.current_version AND v.graph_id = g.graph_id
@@ -26,6 +27,13 @@ const FIND: &str = "SELECT g.graph_id, g.owner::oid, g.readers::oid[], g.node_qu
 
 /// [`GraphDefinition::lock`]'s lock on the graph's row.
 const LOCK: &str = "SELECT FROM warren.graphs WHERE graph_id = $1 FOR UPDATE";
+
+/// [`GraphDefinition::share`]'s lock on the graph's row.
+const SHARE: &str = "SELECT FROM warren.graphs WHERE graph_id = $1 FOR SHARE";
+
+/// [`GraphDefinition::share`]'s check once it holds the lock.
+const STILL_THERE: &str =
+    "SELECT EXISTS (SELECT FROM warren.versions WHERE version_id = $1 AND graph_id = $2)";
 
 /// [`GraphDefinition::lock`]'s re-read once it holds the lock:
 /// `current_version` as in [`FIND`], and `node_order`, which a compaction
@@ -41,22 +49,45 @@ thread_local! {
     static FIND_PLAN: OnceCell<OwnedPreparedStatement> = const { OnceCell::new() };
 }
 
-/// A graph's definition, as `warren.create_graph` recorded it.
+/// Where a graph's versions come from (DESIGN.md §5.1, §6.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GraphSource {
+    /// Built by `warren.refresh` from its node and edge queries.
+    Query,
+    /// Derived by `warren.contract` from versions of another graph.
+    Contraction,
+}
+
+impl GraphSource {
+    /// Its name in `graphs.source`.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Query => "query",
+            Self::Contraction => "contraction",
+        }
+    }
+}
+
+/// A graph's definition, as `warren.create_graph` (or `warren.contract`)
+/// recorded it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GraphDefinition {
     /// `graphs.graph_id`.
     pub(crate) graph_id: i32,
     /// `graphs.name`.
     pub(crate) name: String,
+    /// Where its versions come from.
+    pub(crate) source: GraphSource,
     /// The owner role: source queries run as this role (DESIGN.md §7).
     pub(crate) owner: pg_sys::Oid,
     /// Roles whose members may query the graph (DESIGN.md §7).
     pub(crate) readers: Vec<pg_sys::Oid>,
     /// The type of its node ids.
     pub(crate) id_type: IdType,
-    /// `SELECT <id> ...`.
+    /// `SELECT <id> ...` (empty for a contraction).
     pub(crate) node_query: String,
-    /// `SELECT <src>, <dst> [, <rel>] [, <weight>] ...`.
+    /// `SELECT <src>, <dst> [, <rel>] [, <weight>] ...` (empty for a
+    /// contraction).
     pub(crate) edge_query: String,
     /// The `search_path` the source queries run under: the creator's.
     pub(crate) search_path: String,
@@ -88,9 +119,11 @@ pub(crate) struct GraphDefinition {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct NewGraph<'a> {
     pub(crate) name: &'a str,
+    pub(crate) source: GraphSource,
     pub(crate) owner: pg_sys::Oid,
-    pub(crate) node_query: &'a str,
-    pub(crate) edge_query: &'a str,
+    /// The source queries (NULL for a contraction).
+    pub(crate) node_query: Option<&'a str>,
+    pub(crate) edge_query: Option<&'a str>,
     pub(crate) search_path: &'a str,
     pub(crate) id_type: pg_sys::Oid,
     pub(crate) directed: bool,
@@ -125,8 +158,14 @@ impl GraphDefinition {
                     .get::<pg_sys::Oid>(13)?
                     .and_then(IdType::from_oid)
                     .ok_or_else(|| CatalogError::UnknownIdType(name.to_owned()))?;
+                let source = match row.get::<String>(17)?.as_deref() {
+                    Some("query") => GraphSource::Query,
+                    Some("contraction") => GraphSource::Contraction,
+                    _ => return Err(CatalogError::UnknownSource(name.to_owned())),
+                };
                 Ok(Self {
                     id_type,
+                    source,
                     graph_id: row.get(1)?.unwrap_or_default(),
                     name: name.to_owned(),
                     owner: row.get(2)?.unwrap_or(pg_sys::Oid::INVALID),
@@ -175,6 +214,57 @@ impl GraphDefinition {
         self.current_version = current;
         self.stray_current_version = stray(stored, current);
         Ok(())
+    }
+
+    /// Locks the graph's row `FOR SHARE` until the end of the transaction,
+    /// so that no promotion (and its retention), refresh, compaction or
+    /// drop of the graph or its versions runs meanwhile, then checks that
+    /// `version` is still one of its versions: a drop that held the lock
+    /// first may have deleted it. A derived version reads its parent
+    /// under this lock (DESIGN.md §6.6).
+    pub(crate) fn share(&self, version: i64) -> Result<(), CatalogError> {
+        let found = as_catalog_owner(|| {
+            Spi::connect_mut(|client| {
+                let locked = client.update(SHARE, Some(1), &[self.graph_id.into()])?.len();
+                if locked == 0 {
+                    return Err(CatalogError::GraphNotFound(self.name.clone()));
+                }
+                // A statement of its own, so its snapshot follows the lock.
+                Ok(client
+                    .update(STILL_THERE, Some(1), &[version.into(), self.graph_id.into()])?
+                    .first()
+                    .get_one::<bool>()?)
+            })
+        })?;
+        match found {
+            Some(true) => Ok(()),
+            _ => Err(CatalogError::VersionNotFound { graph: self.name.clone(), version }),
+        }
+    }
+
+    /// The graph whose versions this contraction's latest linked version
+    /// was contracted from, if any is still linked.
+    pub(crate) fn parent_graph(&self) -> Result<Option<i32>, CatalogError> {
+        as_catalog_owner(|| {
+            Ok(read_one::<i32>(
+                "SELECT (SELECT p.graph_id FROM warren.versions v
+                         JOIN warren.versions p ON p.version_id = v.parent_version
+                         WHERE v.graph_id = $1 ORDER BY v.seq DESC LIMIT 1)",
+                &[self.graph_id.into()],
+            )?)
+        })
+    }
+
+    /// Checks that the graph is built from its queries: `refresh` and
+    /// `compact` (`action`) build no version of a contraction, which only
+    /// `warren.contract` makes (DESIGN.md §6.6).
+    pub(crate) fn require_query_source(&self, action: &'static str) -> Result<(), CatalogError> {
+        match self.source {
+            GraphSource::Query => Ok(()),
+            GraphSource::Contraction => {
+                Err(CatalogError::DerivedByContraction { graph: self.name.clone(), action })
+            }
+        }
     }
 
     /// Checks that the recorded current version, if any, is one of the
@@ -271,9 +361,9 @@ impl NewGraph<'_> {
                 client.update(
                     "INSERT INTO warren.graphs (name, owner, node_query, edge_query, search_path,
                          id_type, directed, weighted, has_relations, build_reverse,
-                         retain_versions, store_merged, node_order)
+                         retain_versions, store_merged, node_order, source)
                      VALUES ($1, $2::oid::regrole, $3, $4, $5, $6::oid::regtype, $7, $8, $9,
-                             $10, $11, $12, $13)",
+                             $10, $11, $12, $13, $14)",
                     None,
                     &[
                         graph.name.into(),
@@ -289,6 +379,7 @@ impl NewGraph<'_> {
                         graph.retain_versions.into(),
                         graph.store_merged.into(),
                         graph.node_order.name().into(),
+                        graph.source.name().into(),
                     ],
                 )?;
                 Ok(())

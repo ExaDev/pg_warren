@@ -176,6 +176,8 @@ Signatures are in `\df warren.*` and in DESIGN.md (§6, §8, §9.3).
   and its steps, `last_stats`.
 - [docs/compute.md](docs/compute.md): vectors, semiring products, masks,
   `vector_map`, `gather`, the algorithm library, `eigen` and `distance`.
+- [docs/communities.md](docs/communities.md): contraction to community-level
+  graphs, `project` and `lift`.
 - [docs/change-detection.md](docs/change-detection.md): measuring structural
   change before you commit it, in one transaction or with a shadow graph.
 - [docs/limits.md](docs/limits.md): settings, memory, measured performance,
@@ -219,14 +221,18 @@ Every SQL example in the README and `docs/` runs in CI, in
   (`create_graph(…, node_order := 'locality')`, `compact(…, node_order)`;
   DESIGN.md §14 item 22); the planned library's group 1 (§6.7:
   eigenvector and Katz centrality, HITS, clustering, majority-vote label
-  propagation), then its group 2.
+  propagation), then its group 2 (k-core, strong components, DAG order and
+  longest path, minimum spanning forest); contraction, projection and
+  lifting (`contract`, `project`, `lift`: community-level graphs and the
+  vectors between the levels, DESIGN.md §6.6,
+  [docs/communities.md](docs/communities.md)).
 
 See [CHANGELOG.md](CHANGELOG.md). This is pre-1.0 software: the SQL surface
 may still change between minor versions, with an upgrade script each time.
 
 Not there yet: a shared-memory cache across backends, incremental
-maintenance, contraction (community-level graphs), sparse matrix algebra,
-and text ids
+maintenance, general sparse matrix algebra (contraction's `PᵀAP` is the one
+sparse product), and text ids
 ([docs/limits.md](docs/limits.md)).
 
 ## Positioning vs prior art
@@ -251,7 +257,9 @@ pg_warren's contribution is different:
   names).
 - Control flow stays in PL/pgSQL, with per-node logic written as SQL
   expressions.
-- Contraction (planned, v1.1) will give community-level computation.
+- Contraction gives community-level computation: a quotient graph per
+  partition, a real graph version with its own vectors, and `project` /
+  `lift` between the levels.
 
 pg_warren takes no code from either project. Ideas adopted from them are
 credited in [NOTICE](NOTICE) and in comments where they are used; the reading

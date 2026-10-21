@@ -1,0 +1,107 @@
+{
+ "graph": "blocks-10m",
+ "generate": [
+  "random",
+  "--nodes",
+  "10000000",
+  "--edges",
+  "0",
+  "--seed",
+  "1"
+ ],
+ "nodes": 10000000,
+ "edges": 0,
+ "params": {
+  "nodes": "10000000"
+ },
+ "pg_warren": "0.4.0",
+ "postgres": "16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
+ "git": "94ffd68",
+ "cpus": 4,
+ "machine": "x86_64",
+ "recorded_at": "2026-10-21T09:33:49+00:00",
+ "workloads": [
+  {
+   "name": "refresh",
+   "sql": "SELECT warren.refresh('g')",
+   "seconds": [
+    36.465951
+   ],
+   "median": 36.465951
+  },
+  {
+   "name": "prewarm",
+   "sql": "SELECT warren.prewarm('g')",
+   "seconds": [
+    1.448434,
+    1.464343,
+    1.446912
+   ],
+   "median": 1.448434
+  },
+  {
+   "name": "components_vector_in",
+   "sql": "SELECT warren.components_vector('g', 'cc', rels := ARRAY['in'])",
+   "seconds": [
+    7.91478
+   ],
+   "median": 7.91478
+  },
+  {
+   "name": "contract_by_components",
+   "sql": "SELECT warren.contract('g', 'cc', 'q')",
+   "seconds": [
+    4.124426,
+    4.281246,
+    4.16483
+   ],
+   "median": 4.16483
+  },
+  {
+   "name": "project_count",
+   "sql": "SELECT warren.project('g', 'cc', 'q', 'members', 'count')",
+   "seconds": [
+    2.045872,
+    1.970672,
+    2.02423
+   ],
+   "median": 2.02423
+  },
+  {
+   "name": "project_mean",
+   "sql": "SELECT warren.project('g', 'cc', 'q', 'mean_label', 'mean', persist := false)",
+   "seconds": [
+    1.936864,
+    1.919524,
+    2.003627
+   ],
+   "median": 1.936864
+  },
+  {
+   "name": "lift",
+   "sql": "SELECT warren.lift('q', 'members', 'g', 'community_size', persist := false)",
+   "seconds": [
+    1.989612,
+    2.319889,
+    2.021521
+   ],
+   "median": 2.021521
+  },
+  {
+   "name": "dense_ids",
+   "sql": "SELECT warren.vector_dense_id('g', 'ids')",
+   "seconds": [
+    1.800265
+   ],
+   "median": 1.800265
+  },
+  {
+   "name": "contract_by_dense_ids",
+   "sql": "SELECT warren.contract('g', 'ids', 'identity')",
+   "seconds": [
+    13.731137
+   ],
+   "median": 13.731137
+  }
+ ]
+}

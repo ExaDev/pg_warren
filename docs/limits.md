@@ -424,6 +424,20 @@ in the executor (`unnest`, `GROUP BY`, `DISTINCT ON` over 21M rows), about
 300 times an SpMV iteration. An in-engine `mode` combiner for `gather` would
 make it one kernel call (DESIGN.md §6.7, missing primitives).
 
+**Contraction at scale** (DESIGN.md §6.6, `bench/results/communities/`;
+release build, 4 shared vCPUs, through SQL, each call in a fresh session so
+including the version's load). A block graph of N nodes in blocks of 1,000
+with five undirected edges per node (10N stored), contracted by
+`components_vector` over the blocks' own edges:
+
+| Call | 1M nodes | 10M nodes |
+|---|---|---|
+| `refresh` of the graph (for comparison) | 3.1 s | 36.5 s |
+| `prewarm` (the load every call below includes) | 0.13 s | 1.45 s |
+| `contract` into N / 1,000 communities | 0.35 s | 4.2 s |
+| `contract` by dense id (N communities, the worst case) | 1.7 s | 13.7 s |
+| `project` (`count`, `mean`), `lift` | 0.14–0.16 s | 1.9–2.0 s |
+
 ## Known limitations
 
 **PostgreSQL versions.** 15, 16, 17 and 18. CI runs the in-database tests
@@ -482,8 +496,9 @@ warren.vector_reduce(…)`, so the call runs once.
 reads ([memory model](#memory-model)), within `warren.max_cache_memory`.
 
 **Not yet supported:** `text` node ids; incremental maintenance (every
-`refresh` is a full rebuild); contraction, `project`, `lift` and Louvain
-(DESIGN.md §6.6); edge properties beyond one weight; ownership transfer;
+`refresh` is a full rebuild); `refresh` or `compact` of a graph derived by
+contraction (contract again); Louvain and Leiden (DESIGN.md §6.7, group
+3); edge properties beyond one weight; ownership transfer;
 cleanup of graphs and vectors when their owner role is dropped (a superuser
 can still `drop_graph`); per-role quotas on readers' vectors.
 
@@ -497,7 +512,15 @@ can still `drop_graph`); per-role quotas on readers' vectors.
   `minimum_spanning_forest` costs a pass over the edges per Borůvka round,
   at most log₂ N rounds. All five run on one thread.
 - `gather(…, 'collect')` of growing sets costs memory O(N × neighbourhood);
-  it suits local neighbourhoods, not community-wide state.
+  it suits local neighbourhoods, not community-wide state; contract to a
+  quotient graph for that ([communities.md](communities.md)).
+- `contract` is linear: a counting sort of the nodes by community, then one
+  pass over the stored edges, on one thread, plus a build of the quotient
+  (its edges, at most the parent's). Its scratch, charged to
+  `warren.max_build_memory`, is about 24 bytes per node at its peak and
+  about 33 bytes per community, beside the parent version (cached) and the
+  label vector (charged to `warren.max_compute_memory`). `project` and `lift` are one
+  pass over the nodes and read the 8-byte-per-node membership.
 - A persisted vector write costs WAL (8 bytes × id_space per `f64` column)
   on every call; keep iterative scratch transient (`persist := false`).
 - `walk` in `paths` mode can be exponential in the number of hops; it is
