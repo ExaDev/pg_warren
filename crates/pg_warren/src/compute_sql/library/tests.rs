@@ -108,6 +108,7 @@ mod tests {
             "warren.katz_centrality('t', 'k', seed := '_warren_s')",
             "warren.hits('t', '_warren_h', 'a')",
             "warren.hits('t', 'h', '_warren_a')",
+            "warren.clustering('t', '_warren_c')",
         ];
         for call in calls {
             let refused = failure(call)?.unwrap_or_default();
@@ -290,6 +291,7 @@ mod tests {
             &["one", "b", "alpha", "x", "y", "next", "scale"],
         ),
         ("hits", "warren.hits('r', 'h', 'taken')", &["one", "x", "a", "next", "scale"]),
+        ("clustering", "warren.clustering('r', 'taken')", &["triangles", "degree"]),
     ];
 
     /// A reader may not replace the owner's vector, so writing `out` fails

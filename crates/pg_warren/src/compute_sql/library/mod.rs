@@ -37,6 +37,7 @@ pgrx::extension_sql_file!(
     requires = [extension::warren]
 );
 pgrx::extension_sql_file!("hits.sql", name = "hits", requires = [extension::warren]);
+pgrx::extension_sql_file!("clustering.sql", name = "clustering", requires = [extension::warren]);
 
 #[cfg(any(test, feature = "pg_test"))]
 #[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
@@ -45,3 +46,7 @@ mod tests;
 #[cfg(any(test, feature = "pg_test"))]
 #[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod centrality_tests;
+
+#[cfg(any(test, feature = "pg_test"))]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
+mod community_tests;

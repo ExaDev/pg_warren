@@ -24,6 +24,7 @@ mod tests {
     const LABELS: &[(&str, &str)] = &[
         ("aggregate_neighbours", "u"),
         ("bfs", "r"),
+        ("clustering", "u"),
         ("compact", "u"),
         ("components", "r"),
         ("components_vector", "u"),
