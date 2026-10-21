@@ -439,14 +439,17 @@ with five undirected edges per node (10N stored), contracted by
 | `project` (`count`, `mean`), `lift` | 0.14–0.16 s | 1.9–2.0 s |
 | `modularity` of a partition | 0.44 s | 4.9 s |
 | `louvain` (3 levels at 1M, 5 at 10M) | 5.8 s | 93 s |
-| `leiden` (7 levels at 1M, 8 at 10M) | 8.3 s | 119 s |
+| `leiden`, one iteration (7 levels at 1M, 8 at 10M) | 8.3 s | 119 s |
+| `leiden`, the default two iterations (13 levels at 1M) | 20.9 s, on a slower day (one iteration 10.4 s, `louvain` 9.1 s) | not yet re-measured |
 
 A level's time, as the difference of runs with `max_levels` 1, 2 and 3:
 Louvain 2.4, 2.8 and 0.3 s at 1M, and 31.6, 49.5 and 11.8 s at 10M;
 Leiden 2.3, 3.2 and 1.9 s at 1M (0.9 s for the rest), and 29.4, 49.2 and
 22.3 s at 10M (18.2 s for the rest). The first level runs on the whole
 graph; every later one contracts the whole graph by the partition found so
-far, so each small late level costs a contraction.
+far, so each small late level costs a contraction. Leiden's second iteration
+repeats the levels from the first's partition, so it costs about as much
+again, and raises modularity on these blocks from 0.837 to 0.898.
 
 ## Known limitations
 
@@ -534,9 +537,13 @@ vectors.
   the next is built, but its rows stay until `VACUUM` after the run's
   transaction ends, so the disk a run needs grows with its levels: on the
   1M-node block graph (75 MB of segments) `louvain` wrote 166 MB of
-  segments and about 190 MB of WAL, `leiden` 294 MB and 323 MB; at 10M
+  segments and about 190 MB of WAL, `leiden` 294 MB and 323 MB for one
+  iteration (516 MB of segments for the default two); at 10M
   nodes, four runs of each in one database left it at 6.7 GB (`louvain`)
-  and 9.1 GB (`leiden`), the graph included, before `VACUUM`.
+  and 9.1 GB (`leiden`), the graph included, before `VACUUM`. A native
+  in-memory Louvain/Leiden kernel is deferred past 0.4.0: the planned fix
+  is for `contract` to keep a quotient in memory for the rest of the
+  statement, which helps every multilevel algorithm (DESIGN.md §6.7).
 - `contract` is linear: a counting sort of the nodes by community, then one
   pass over the stored edges, on one thread, plus a build of the quotient
   (its edges, at most the parent's). Its scratch, charged to

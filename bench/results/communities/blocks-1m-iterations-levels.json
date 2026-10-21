@@ -1,0 +1,50 @@
+{
+ "git": "7c1e963",
+ "louvain_seconds": 9.073123,
+ "leiden": {
+  "iterations": 2,
+  "modularity": 0.8983243936839618,
+  "communities": 852,
+  "seconds": 20.957453,
+  "level_count": 13,
+  "segments_mb": 516,
+  "wal_mb": 691
+ },
+ "leiden_iterations_1": {
+  "iterations": 1,
+  "modularity": 0.8366157515868657,
+  "communities": 482,
+  "seconds": 10.397308,
+  "level_count": 7,
+  "segments_mb": 294,
+  "wal_mb": 472,
+  "levels": [
+   {
+    "max_levels": 1,
+    "seconds": 2.51123,
+    "modularity": 0.11981512853999902,
+    "communities": 441624
+   },
+   {
+    "max_levels": 2,
+    "seconds": 6.727484,
+    "modularity": 0.20675272921366444,
+    "communities": 124587
+   },
+   {
+    "max_levels": 3,
+    "seconds": 7.426806,
+    "modularity": 0.6021863526306036,
+    "communities": 9289
+   }
+  ]
+ },
+ "leiden_until_stable": {
+  "iterations": -1,
+  "modularity": 0.8984461733376812,
+  "communities": 867,
+  "seconds": 40.669,
+  "level_count": 31
+ },
+ "blocks_modularity": 0.898614129543034
+}

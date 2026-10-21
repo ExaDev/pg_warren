@@ -150,10 +150,15 @@
 - **Louvain and Leiden** (DESIGN.md §6.7 group 3,
   [docs/communities.md](docs/communities.md)): `louvain(graph, out,
   resolution, seed, max_levels, tolerance, weighted, levels_prefix,
-  version)` and `leiden(…, randomness, …)` write a label vector of
-  communities that maximise modularity and return its modularity;
-  `levels_prefix` keeps each level's partition. Leiden's communities are
-  always connected. Graph names beginning with `_warren_` are now
+  version)` and `leiden(…, randomness, iterations, …)` write a label
+  vector of communities that maximise modularity and return its
+  modularity; `levels_prefix` keeps each level's partition. Leiden's
+  communities are always connected. Leiden runs `iterations` passes (2 by
+  default, as igraph's `community_leiden`), each after the first starting
+  from the partition the last found, and stops early after a pass that
+  changes nothing; a negative value runs until then (at most 100), and 0
+  is refused. On 20 planted blocks one pass scores 0.794 and two find the
+  planted blocks (0.855), as igraph's two do. Graph names beginning with `_warren_` are now
   reserved for their level graphs: `create_graph` and `contract` refuse
   them (42939), and `contract(graph, labels, NULL)` creates a new level
   graph named after its version. Both are PL/pgSQL over `contract`, `project`, `lift`
@@ -169,8 +174,10 @@
   NetworkX's `louvain_communities` on stochastic block models
   (`test/sql/oracle_louvain*.sql`: modularity, NMI against the planted
   partition, connectedness). At 1M nodes and 5M edges on 4 vCPUs
-  `louvain` takes 5.8 s and `leiden` 8.3 s, at 10M nodes 93 s and 119 s
-  (docs/limits.md).
+  `louvain` takes 5.8 s and `leiden` 8.3 s for one iteration, at 10M
+  nodes 93 s and 119 s; Leiden's default two iterations take about twice
+  one at 1M (20.9 s, on a slower day) and raise modularity there from
+  0.837 to 0.898 (docs/limits.md).
 
 ### Fixes
 

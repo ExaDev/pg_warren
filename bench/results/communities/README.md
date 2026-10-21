@@ -28,3 +28,20 @@ database held 6.7 GB after the four `louvain` runs and 9.1 GB after the
 four `leiden` runs. Runs with `max_levels` below the number of levels
 `leiden` takes return the refined partition, hence their low modularity.
 DESIGN.md §6.7 (group 3) and docs/limits.md read these.
+
+## Leiden's iterations
+
+`blocks-1m-iterations.json` is the matrix re-run at a later commit (its
+`git` field), after `leiden` gained `iterations` (default 2): the
+`leiden_max_levels_*` workloads pass `iterations := 1`, so they still
+time one iteration's levels, and `leiden_iterations_1` times the single
+pass. `blocks-1m-iterations-levels.json` summarises it as
+`blocks-1m-levels.json` does, with each run's segments and WAL written;
+those, and the `iterations := -1` run, come from a separate session on a
+scratch cluster of the same build (`seconds` there is that run's). The
+machine was slower that day than for `blocks-1m-communities.json`:
+`louvain`, unchanged, took 9.1 s against 5.8 s, and Leiden's single pass
+10.4 s against 8.3 s for the same partition, bit for bit. Two iterations
+took 20.9 s and raised modularity from 0.837 to 0.898 (the planted blocks
+score 0.899); until stable, 0.898 in 40.7 s. The 10M figures are still
+the single pass: the soak re-measures them.

@@ -88,6 +88,78 @@ mod tests {
         Ok(())
     }
 
+    /// The bench's 20-block smoke graph as undirected graph `pb`: 20,000
+    /// nodes in blocks of 1,000, five edges a node, nine in ten inside its
+    /// block; vector `planted` labels each node by its block.
+    fn planted_blocks() -> Result<(), Error> {
+        Spi::run(
+            "CREATE TABLE pb_nodes AS SELECT generate_series(1, 20000)::bigint AS id;
+             CREATE TABLE pb_edges AS
+             SELECT n.id AS src,
+                    CASE WHEN abs(hashint8(n.id * 8 + k)) % 10 < 9
+                         THEN (n.id - 1) / 1000 * 1000 + 1 + abs(hashint8(-(n.id * 8 + k))) % 1000
+                         ELSE 1 + abs(hashint8(-(n.id * 8 + k))) % 20000 END AS dst
+             FROM pb_nodes n, generate_series(1, 5) k;
+             SELECT warren.create_graph('pb', 'SELECT id FROM pb_nodes', 'SELECT src, dst FROM pb_edges',
+                                        directed := false);
+             SELECT warren.refresh('pb');
+             SELECT warren.vector_from_query('pb', 'planted', 'SELECT id, (id - 1) / 1000 FROM pb_nodes', 'i64')",
+        )
+    }
+
+    /// One iteration is the multilevel pass Leiden ran before it had
+    /// iterations, to the bit (0.794 on these blocks; igraph's one
+    /// iteration 0.797 to 0.803 over five seeds). A second, from the first's
+    /// partition, finds the planted blocks, as igraph's default two
+    /// iterations do: at least the planted partition's modularity, short
+    /// by no more than the rounding of a sum of 20,000 degrees (1e-12, as
+    /// the oracles allow); it finds 0.85460666914 against the planted
+    /// 0.85460666889, the planted blocks with one node moved.
+    #[pg_test]
+    fn a_second_iteration_finds_the_planted_blocks() -> Result<(), Error> {
+        planted_blocks()?;
+        let planted =
+            Spi::get_one::<f64>("SELECT warren.modularity('pb', 'planted')")?.unwrap_or(0.0);
+        let one = Spi::get_one::<f64>("SELECT warren.leiden('pb', 'one', iterations := 1)")?;
+        assert_eq!(one, Some(0.7942688393977094), "one iteration is the pass before iterations");
+        let two = Spi::get_one::<f64>("SELECT warren.leiden('pb', 'two')")?.unwrap_or(0.0);
+        assert!(two >= planted - 1e-12, "two iterations {two}, planted {planted}");
+        let stable = Spi::get_one::<f64>("SELECT warren.leiden('pb', 'stable', iterations := -1)")?
+            .unwrap_or(0.0);
+        assert!(stable >= two - 1e-12, "until stable {stable}, two iterations {two}");
+        Ok(())
+    }
+
+    /// An iteration whose partition is the one it started from would give
+    /// it again (the same start and seed), so Leiden stops after it: the
+    /// levels written are the same for every number of iterations past it.
+    #[pg_test]
+    fn an_iteration_that_changes_nothing_ends_the_run() -> Result<(), Error> {
+        ring_of_cliques()?;
+        let mut levels = Vec::new();
+        for iterations in [1, 2, 3, -1] {
+            Spi::run(&format!(
+                "SELECT warren.drop_vector('rc', name) FROM warren.vectors WHERE name LIKE 'lv\\_%';
+                 SELECT warren.leiden('rc', 'c', iterations := {iterations}, levels_prefix := 'lv')"
+            ))?;
+            assert_eq!(communities("c")?.as_deref(), Some(CLIQUES), "iterations := {iterations}");
+            let last = Spi::get_one::<i64>(
+                "SELECT count(*) FROM warren.vector_values('rc', 'c', NULL::bigint) c
+                 JOIN warren.vector_values('rc', 'lv_' || (SELECT count(*) FROM warren.vectors
+                                                           WHERE name LIKE 'lv\\_%'), NULL::bigint) l
+                   USING (node_id) WHERE c.value <> l.value",
+            )?;
+            assert_eq!(last, Some(0), "iterations := {iterations}: the last level is out");
+            levels.push(Spi::get_one::<i64>(
+                "SELECT count(*) FROM warren.vectors WHERE name LIKE 'lv\\_%'",
+            )?);
+        }
+        assert!(levels[1] > levels[0], "the second iteration ran: {levels:?}");
+        assert_eq!(levels[2], levels[1], "the second changed nothing, so no third: {levels:?}");
+        assert_eq!(levels[3], levels[1], "until stable stops there too: {levels:?}");
+        Ok(())
+    }
+
     /// The reviewer's two cases: a graph named as a level graph would be
     /// was given a version and then dropped by a run (data loss), and a
     /// reader could create one to make other roles' runs fail.
@@ -136,7 +208,7 @@ mod tests {
         )?;
         // After one level it is the refinement of that level's moving.
         Spi::run(
-            "SELECT warren.leiden('sp', 'one_level', max_levels := 1);
+            "SELECT warren.leiden('sp', 'one_level', max_levels := 1, iterations := 1);
              SELECT warren.local_moving('sp', 'moved');
              SELECT warren.leiden_refine('sp', 'moved', 'refined')",
         )?;
@@ -146,11 +218,16 @@ mod tests {
              WHERE a.value <> b.value",
         )?;
         assert_eq!(differ, Some(0), "max_levels := 1 returns the refined partition");
+        // A later iteration starts from the one before, and stops as the
+        // first does.
         for (call, out) in [
             ("max_levels := 1", "one"),
             ("max_levels := 2", "two"),
             ("seed := 3, max_levels := 1", "three"),
             ("resolution := 0.2, max_levels := 1", "coarse"),
+            ("iterations := 1", "once"),
+            ("iterations := 3, max_levels := 1", "thrice_one_level"),
+            ("iterations := -1", "stable"),
             ("", "all"),
         ] {
             let sep = if call.is_empty() { "" } else { ", " };
@@ -209,9 +286,18 @@ mod tests {
             let refused =
                 failure(&format!("warren.{algorithm}('rc', 'taken')"))?.unwrap_or_default();
             assert!(refused.starts_with("42501: "), "{algorithm}: {refused}");
-            for part in
-                ["single", "labels", "keys", "down", "moved", "refined", "initial", "refined_down"]
-            {
+            for part in [
+                "single",
+                "labels",
+                "keys",
+                "down",
+                "moved",
+                "refined",
+                "initial",
+                "refined_down",
+                "prev",
+                "changed",
+            ] {
                 let left =
                     failure(&format!("warren.explain_map('rc', '_warren_{algorithm}_{part}')"))?;
                 assert!(left.is_some(), "_warren_{algorithm}_{part} was left behind");
@@ -262,6 +348,12 @@ mod tests {
                 "{algorithm}"
             );
         }
+        // Iterations compare partitions over the live nodes only.
+        Spi::run("SELECT warren.leiden('rc', 'stable', iterations := -1)")?;
+        assert_eq!(
+            communities("stable")?.as_deref(),
+            Some(CLIQUES.replacen("1,2,3,4,5", "1,2,4,5", 1).as_str())
+        );
         Ok(())
     }
 
@@ -316,6 +408,14 @@ mod tests {
         assert_eq!(
             failure("warren.leiden('rc', 'c', max_levels := 0)")?.as_deref(),
             Some("22023: max_levels must be at least 1, not 0")
+        );
+        assert_eq!(
+            failure("warren.leiden('rc', 'c', iterations := 0)")?.as_deref(),
+            Some("22023: iterations must be at least 1, or negative to run until the partition is stable, not 0")
+        );
+        assert_eq!(
+            failure("warren.leiden('rc', 'c', iterations := NULL)")?.as_deref(),
+            Some("22004: iterations must not be NULL")
         );
         assert_eq!(
             failure("warren.leiden('rc', '_warren_c')")?.as_deref(),
