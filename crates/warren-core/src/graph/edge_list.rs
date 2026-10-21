@@ -6,8 +6,8 @@ use std::mem::size_of;
 
 use super::build_memory::growth;
 use super::{
-    BuildBuffer, BuildMemory, DenseId, ExternalId, GraphError, IdMap, RelationIndex, Target,
-    TargetWidth,
+    BuildBuffer, BuildMemory, DenseId, ExternalId, GraphError, IdMap, Permutation, RelationIndex,
+    Target, TargetWidth,
 };
 
 /// Edges in dense ids, as parallel arrays, in the order they were pushed.
@@ -182,6 +182,19 @@ impl EdgeList {
         })
     }
 
+    /// Renumbers both endpoints of every edge in place by `permutation`,
+    /// whose id space must hold them all; else changes nothing.
+    pub fn renumber(&mut self, permutation: &Permutation) -> Result<(), GraphError> {
+        match &mut self.endpoints {
+            Endpoints::U32 { sources, targets } => {
+                renumber_endpoints(sources, targets, permutation)
+            }
+            Endpoints::U64 { sources, targets } => {
+                renumber_endpoints(sources, targets, permutation)
+            }
+        }
+    }
+
     /// The weight of each edge, if the list is weighted.
     pub fn weights(&self) -> Option<&[f64]> {
         self.weights.as_deref()
@@ -210,6 +223,28 @@ fn push_endpoints<T: Target>(
     };
     sources.push(narrow_source)?;
     targets.push(narrow_target)
+}
+
+fn renumber_endpoints<T: Target>(
+    sources: &mut [T],
+    targets: &mut [T],
+    permutation: &Permutation,
+) -> Result<(), GraphError> {
+    let id_space = permutation.id_space();
+    if T::TARGET_WIDTH == TargetWidth::U32
+        && TargetWidth::for_id_space(id_space) == TargetWidth::U64
+    {
+        return Err(GraphError::IdSpaceExceedsTargetWidth);
+    }
+    let outside = sources.iter().zip(targets.iter()).find(|(s, t)| s.max(t).dense() >= id_space);
+    if let Some((source, target)) = outside {
+        return Err(GraphError::EdgeOutsideIdSpace { from: source.dense(), to: target.dense() });
+    }
+    for endpoint in sources.iter_mut().chain(targets.iter_mut()) {
+        let new = permutation.new_dense_id(endpoint.dense());
+        *endpoint = T::from_dense(new).ok_or(GraphError::IdSpaceExceedsTargetWidth)?;
+    }
+    Ok(())
 }
 
 /// Remaps edges from external ids to dense ids through an id map.
@@ -288,7 +323,7 @@ impl<'m, E: ExternalId> EdgeIntake<'m, E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{RelationDictionary, TargetWidth};
+    use crate::graph::{Permutation, RelationDictionary, TargetWidth};
 
     fn id_map() -> IdMap<i64> {
         // 10 → 0, 20 → 1 (tombstoned), 30 → 2
@@ -314,6 +349,37 @@ mod tests {
         );
         assert_eq!(narrow.len(), 1);
         assert_eq!(EdgeList::new(false).width(), TargetWidth::U64);
+    }
+
+    #[test]
+    fn renumbering_maps_both_endpoints_and_keeps_relations_and_weights() {
+        let mut relations = RelationDictionary::new();
+        let (a, b) = (relations.intern("a").unwrap(), relations.intern("b").unwrap());
+        // A path 0 - 2 - 1, whose locality order is 0 → 2, 2 → 1, 1 → 0.
+        let mut list = EdgeList::for_id_space(3, true);
+        list.push(a, 0, 2, 1.5).unwrap();
+        list.push(b, 2, 1, 2.5).unwrap();
+        list.push(b, 1, 1, 3.5).unwrap();
+        let permutation = Permutation::locality(&list, 3, &BuildMemory::unlimited()).unwrap();
+        assert_eq!((0..3).map(|old| permutation.new_dense_id(old)).collect::<Vec<_>>(), [2, 0, 1]);
+        list.renumber(&permutation).unwrap();
+        assert_eq!(edges(&list), [(0, 2, 1), (1, 1, 0), (1, 0, 0)]);
+        assert_eq!(list.weights(), Some(&[1.5, 2.5, 3.5][..]));
+    }
+
+    #[test]
+    fn renumbering_refuses_a_permutation_of_a_smaller_id_space() {
+        let r = RelationDictionary::new().intern("r").unwrap();
+        let mut list = EdgeList::for_id_space(3, false);
+        list.push(r, 0, 2, 1.0).unwrap();
+        let mut short = EdgeList::for_id_space(2, false);
+        short.push(r, 0, 1, 1.0).unwrap();
+        let permutation = Permutation::locality(&short, 2, &BuildMemory::unlimited()).unwrap();
+        assert_eq!(
+            list.renumber(&permutation),
+            Err(GraphError::EdgeOutsideIdSpace { from: 0, to: 2 })
+        );
+        assert_eq!(edges(&list), [(0, 0, 2)], "nothing is renumbered");
     }
 
     #[test]

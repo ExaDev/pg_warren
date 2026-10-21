@@ -199,4 +199,8 @@ pub enum GraphError {
         /// The reserved byte.
         found: u8,
     },
+    /// A node order other than `'id'` or `'locality'` (DESIGN.md §14
+    /// item 22).
+    #[error("node_order must be 'id' or 'locality', not '{0}'")]
+    UnknownNodeOrder(String),
 }

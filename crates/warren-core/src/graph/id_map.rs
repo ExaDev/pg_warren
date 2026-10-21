@@ -4,7 +4,9 @@
 use std::cmp::Ordering;
 use std::fmt::Debug;
 
-use super::{memory, BuildBuffer, BuildCharge, BuildMemory, DenseId, GraphError, Tombstones};
+use super::{
+    memory, BuildBuffer, BuildCharge, BuildMemory, DenseId, GraphError, Permutation, Tombstones,
+};
 
 /// An external id type: the type of a graph's node ids in its user tables
 /// (`id_type`). Dense ids follow this type's order, which must match the
@@ -200,6 +202,27 @@ impl<E: ExternalId> IdMap<E> {
         Ok(Self { by_external, by_dense, tombstones })
     }
 
+    /// Renumbers every dense id, tombstones included, by `permutation`,
+    /// which must permute this id map's id space; else changes nothing.
+    pub fn renumber(&mut self, permutation: &Permutation) -> Result<(), GraphError> {
+        if permutation.id_space() != self.id_space() {
+            return Err(GraphError::IdSpaceMismatch {
+                expected: self.id_space(),
+                found: permutation.id_space(),
+            });
+        }
+        let mut tombstones = Tombstones::new(self.id_space())?;
+        for old in (0..self.id_space()).filter(|&old| self.tombstones.contains(old)) {
+            tombstones.insert(permutation.new_dense_id(old));
+        }
+        self.tombstones = tombstones;
+        for (external, dense) in &mut self.by_external {
+            *dense = permutation.new_dense_id(*dense);
+            self.by_dense[*dense as usize] = *external;
+        }
+        Ok(())
+    }
+
     /// The (external id, dense id) pairs, sorted by external id.
     pub(crate) fn pairs(&self) -> &[(E, DenseId)] {
         &self.by_external
@@ -289,6 +312,44 @@ mod tests {
                 rebuilt.bytes()
             );
         }
+    }
+
+    /// The locality order of the path 0 - 2 - 1 (`new = [2, 0, 1]`), over
+    /// an id space of 3.
+    fn path_permutation() -> Permutation {
+        let relation = crate::graph::RelationDictionary::new().intern("").unwrap();
+        let mut edges = crate::graph::EdgeList::for_id_space(3, false);
+        edges.push(relation, 0, 2, 1.0).unwrap();
+        edges.push(relation, 2, 1, 1.0).unwrap();
+        Permutation::locality(&edges, 3, &BuildMemory::unlimited()).unwrap()
+    }
+
+    #[test]
+    fn renumbering_moves_both_directions_and_the_tombstones() {
+        // 10 → 0, 20 → 1 (tombstoned), 30 → 2.
+        let mut id_map = first_build(vec![10, 20, 30]).rebuild(vec![10, 30]).unwrap();
+        id_map.renumber(&path_permutation()).unwrap();
+        assert_eq!(id_map.dense_id(&10), Some(2));
+        assert_eq!(id_map.dense_id(&30), Some(1));
+        assert_eq!(id_map.dense_id(&20), None);
+        assert_eq!(
+            (0..3).map(|dense| id_map.external_id(dense).unwrap()).collect::<Vec<_>>(),
+            [20, 30, 10]
+        );
+        assert!(id_map.tombstones().contains(0));
+        assert_eq!(id_map.tombstones().count(), 1);
+        assert_eq!((id_map.id_space(), id_map.node_count()), (3, 2));
+        assert!(id_map.pairs().windows(2).all(|pair| pair[0].0 < pair[1].0));
+    }
+
+    #[test]
+    fn renumbering_refuses_a_permutation_of_another_id_space() {
+        let mut id_map = first_build(vec![10, 20]);
+        assert_eq!(
+            id_map.renumber(&path_permutation()),
+            Err(GraphError::IdSpaceMismatch { expected: 2, found: 3 })
+        );
+        assert_eq!(id_map, first_build(vec![10, 20]));
     }
 
     #[test]
