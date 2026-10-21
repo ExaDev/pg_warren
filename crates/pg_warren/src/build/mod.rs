@@ -16,7 +16,7 @@ mod spi_catalog;
 mod spi_source;
 mod version;
 
-pub(crate) use budget::define_max_build_memory;
+pub(crate) use budget::{define_max_build_memory, max_build_memory};
 pub(crate) use error::BuildError;
 pub(crate) use spi_catalog::SpiCatalog;
 pub(crate) use version::Catalog;

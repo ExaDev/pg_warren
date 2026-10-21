@@ -9,6 +9,7 @@ use crate::access::SqlError;
 use crate::build::BuildError;
 use crate::cache::{CacheError, LoadError};
 use crate::catalog::{CatalogError, VersionId};
+use crate::extension::graph_sqlstate;
 use crate::segment::SegmentError;
 use crate::vector::VectorError;
 
@@ -65,6 +66,7 @@ impl SqlError for VersionOperationError {
     fn sqlstate(&self) -> PgSqlErrorCode {
         match self {
             Self::NoCurrentVersion(_) => PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+            Self::Version(VersionError::Graph(error)) => graph_sqlstate(error),
             Self::CompactionBoundary { .. } | Self::Version(_) => {
                 PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE
             }

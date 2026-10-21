@@ -7,27 +7,35 @@ use warren_core::version::compact as renumber;
 
 use super::error::VersionOperationError;
 use crate::access::{entry, require_owner};
-use crate::build::{Catalog, SpiCatalog};
+use crate::build::{max_build_memory, Catalog, SpiCatalog};
 use crate::cache::load;
-use crate::catalog::{version_record, GraphDefinition, NewVersion, VersionId, VersionStats};
+use crate::catalog::{
+    parse_node_order, version_record, GraphDefinition, NewVersion, VersionId, VersionStats,
+};
 use crate::segment::{write_version, SegmentStore, SpiSegmentStore, CHUNK_SIZE};
 use crate::source::with_id_type;
 use crate::vector::{move_vectors, moved_notice, SpiVectorStore, VectorStore};
 
 /// `warren.compact`: renumbers graph `name`'s current version to remove its
-/// tombstones, records the result as a new version with `compacted_from`
-/// set, promotes it (applying retention) and returns its id. The caller
-/// must be a member of the owner role.
+/// tombstones, in `node_order` (`'id'` or `'locality'`; NULL is the graph's
+/// own, DESIGN.md §14 item 22), records the result as a new version with
+/// `compacted_from` set, promotes it (applying retention) and returns its
+/// id. A `node_order` given becomes the graph's. The caller must be a
+/// member of the owner role.
 #[pg_extern(schema = "warren")]
-fn compact(name: &str) -> i64 {
-    entry(|_| compact_graph(name))
+fn compact(name: &str, node_order: default!(Option<&str>, "NULL")) -> i64 {
+    entry(|_| compact_graph(name, node_order))
 }
 
-fn compact_graph(name: &str) -> Result<VersionId, VersionOperationError> {
+fn compact_graph(name: &str, node_order: Option<&str>) -> Result<VersionId, VersionOperationError> {
+    let node_order = node_order.map(parse_node_order).transpose()?;
     let mut graph = GraphDefinition::find(name)?;
     require_owner(graph.owner, &graph.name, "compact")?;
     graph.lock()?;
     graph.require_sound_current_version()?;
+    if let Some(order) = node_order.filter(|&order| order != graph.node_order) {
+        graph.set_node_order(order)?;
+    }
     let source = graph
         .current_version
         .ok_or_else(|| VersionOperationError::NoCurrentVersion(graph.name.clone()))?;
@@ -36,6 +44,7 @@ fn compact_graph(name: &str) -> Result<VersionId, VersionOperationError> {
         &graph,
         source,
         &carried,
+        &Ordering { order: graph.node_order, memory: &BuildMemory::new(max_build_memory()) },
         CHUNK_SIZE,
         &mut Stores {
             segments: &mut SpiSegmentStore,
@@ -59,21 +68,32 @@ pub(crate) struct Stores<'a, S, V, C> {
     pub(crate) catalog: &'a mut C,
 }
 
-/// Compacts version `source` of `graph` into a new, promoted version.
-/// Its dropped and deduplicated edge counts are carried over from
-/// `carried`, the source's recorded statistics: the compacted version holds
-/// the same edges. The source's persisted vectors move to it, with their
-/// rows in the new dense ids. Returns the version and the vectors moved.
+/// The node order of a compaction, and the build memory its scratch is
+/// charged to.
+pub(crate) struct Ordering<'a> {
+    /// The order of the new id space.
+    pub(crate) order: NodeOrder,
+    /// `warren.max_build_memory`.
+    pub(crate) memory: &'a BuildMemory,
+}
+
+/// Compacts version `source` of `graph` into a new, promoted version in
+/// `ordering`. Its dropped and deduplicated edge counts are carried over
+/// from `carried`, the source's recorded statistics: the compacted version
+/// holds the same edges. The source's persisted vectors move to it, with
+/// their rows in the new dense ids. Returns the version and the vectors
+/// moved.
 pub(crate) fn compact_version<E: ExternalId>(
     graph: &GraphDefinition,
     source: VersionId,
     carried: &VersionStats,
+    ordering: &Ordering<'_>,
     chunk_size: usize,
     stores: &mut Stores<'_, impl SegmentStore, impl VectorStore, impl Catalog>,
 ) -> Result<(VersionId, Vec<String>), VersionOperationError> {
     let Stores { segments, vectors, catalog } = stores;
     let loaded = load::<E>(*segments, source, graph.store_merged)?;
-    let compaction = renumber(&loaded.version()?, NodeOrder::Id, &BuildMemory::unlimited())?;
+    let compaction = renumber(&loaded.version()?, ordering.order, ordering.memory)?;
     let stats = VersionStats::measure(
         &compaction.id_map,
         &compaction.graph,
@@ -130,6 +150,7 @@ mod unit {
             build_reverse: true,
             store_merged: true,
             retain_versions: 2,
+            node_order: warren_core::graph::NodeOrder::Id,
             current_version: Some(1),
             stray_current_version: None,
         }
@@ -158,8 +179,11 @@ mod unit {
         let mut vectors = MemoryVectorStore::default();
         let mut stores =
             Stores { segments: &mut store, vectors: &mut vectors, catalog: &mut catalog };
+        let ordering = Ordering { order: NodeOrder::Id, memory: &BuildMemory::unlimited() };
         let compacted =
-            compact_version::<i64>(&graph(), source, &carried, 16, &mut stores).unwrap().0;
+            compact_version::<i64>(&graph(), source, &carried, &ordering, 16, &mut stores)
+                .unwrap()
+                .0;
 
         let row = catalog.version(compacted).clone();
         assert_eq!(row.compacted_from, Some(source));
@@ -379,6 +403,82 @@ mod tests {
                 "55000: version {staged} of graph \"c\" is in an id space that compacted \
                  version {compacted} replaced"
             ))
+        );
+        Ok(())
+    }
+
+    /// Each live node's dense id in graph `name`'s current version, as
+    /// `node:dense` text by node.
+    fn dense_ids(name: &str) -> Result<Option<String>, Error> {
+        rows(&format!(
+            "SELECT node_id || ':' || dense_id FROM warren.id_map('{name}', NULL::bigint)
+             WHERE live ORDER BY node_id"
+        ))
+    }
+
+    fn node_order(name: &str) -> Result<Option<String>, Error> {
+        Spi::get_one::<String>(&format!(
+            "SELECT node_order FROM warren.graphs WHERE name = '{name}'"
+        ))
+    }
+
+    /// DESIGN.md §14 item 22: `compact(…, node_order := …)` orders the new
+    /// id space and records the order, which later compactions follow.
+    #[pg_test]
+    fn compact_in_locality_order_orders_the_ids_and_records_the_order() -> Result<(), Error> {
+        // The live graph is the path 4 → 5 → 1 → 2.
+        tombstoned()?;
+        Spi::run("SELECT warren.compact('c', node_order := 'locality')")?;
+        assert_eq!(node_order("c")?.as_deref(), Some("locality"));
+        // Reverse Cuthill-McKee from 2 (its end of least degree with the
+        // lower id in id order): 2 1 5 4, reversed.
+        assert_eq!(dense_ids("c")?.as_deref(), Some("1:2 2:3 4:0 5:1"));
+        // NULL is the graph's order, now locality: the ids stay.
+        Spi::run("SELECT warren.compact('c', NULL)")?;
+        assert_eq!(dense_ids("c")?.as_deref(), Some("1:2 2:3 4:0 5:1"));
+        Spi::run("SELECT warren.compact('c', 'id')")?;
+        assert_eq!(node_order("c")?.as_deref(), Some("id"));
+        assert_eq!(dense_ids("c")?.as_deref(), Some("1:0 2:1 4:2 5:3"));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn compact_refuses_an_unknown_node_order() -> Result<(), Error> {
+        let (_, second) = tombstoned()?;
+        assert_eq!(
+            failure("warren.compact('c', 'nearby')")?.as_deref(),
+            Some("22023: node_order must be 'id' or 'locality', not 'nearby'")
+        );
+        assert_eq!(current("c")?, Some(second));
+        assert_eq!(node_order("c")?.as_deref(), Some("id"));
+        Ok(())
+    }
+
+    /// The locality order's scratch is charged to warren.max_build_memory.
+    #[pg_test]
+    fn a_locality_compaction_over_the_build_memory_budget_is_refused() -> Result<(), Error> {
+        ring("big", 70_000, 2)?;
+        let built = refresh("big", true)?;
+        Spi::run("SET LOCAL warren.max_build_memory = '1MB'")?;
+        let refused = failure("warren.compact('big', 'locality')")?.unwrap_or_default();
+        assert!(refused.starts_with("53400: build memory limit exceeded"), "{refused}");
+        assert_eq!(current("big")?, Some(built));
+        assert_eq!(node_order("big")?.as_deref(), Some("id"));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_vector_moves_by_node_through_a_locality_compaction() -> Result<(), Error> {
+        tombstoned()?;
+        Spi::run(
+            "SELECT warren.vector_from_query('c', 'tenfold', 'SELECT id, id * 10.0 FROM c_nodes');
+             SELECT warren.compact('c', 'locality')",
+        )?;
+        assert_eq!(
+            rows("SELECT node_id || ':' || value FROM warren.vector_values('c', 'tenfold', NULL::bigint)
+                  ORDER BY node_id")?
+            .as_deref(),
+            Some("1:10 2:20 4:40 5:50")
         );
         Ok(())
     }

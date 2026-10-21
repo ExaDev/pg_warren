@@ -405,12 +405,12 @@ END $$;
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/version_sql/compact.rs:21
+-- crates/pg_warren/src/version_sql/compact.rs:25
 -- pg_warren::version_sql::compact::compact
 CREATE  FUNCTION warren."compact"(
-	"name" TEXT /* & str */
+	"name" TEXT, /* & str */
+	"node_order" TEXT DEFAULT NULL /* Option < & str > */
 ) RETURNS bigint /* i64 */
-STRICT 
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'compact_wrapper';
 /* </end connected objects> */
@@ -653,7 +653,7 @@ AS 'MODULE_PATHNAME', 'vector_degree_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/catalog/create_graph.rs:39
+-- crates/pg_warren/src/catalog/create_graph.rs:41
 -- pg_warren::catalog::create_graph::create_graph
 CREATE  FUNCTION warren."create_graph"(
 	"name" TEXT, /* & str */
@@ -664,7 +664,8 @@ CREATE  FUNCTION warren."create_graph"(
 	"has_relations" bool DEFAULT false, /* bool */
 	"build_reverse" bool DEFAULT true, /* bool */
 	"retain_versions" INT DEFAULT 2, /* i32 */
-	"store_merged" bool DEFAULT true /* bool */
+	"store_merged" bool DEFAULT true, /* bool */
+	"node_order" TEXT DEFAULT 'id' /* & str */
 ) RETURNS void
 STRICT 
 LANGUAGE c /* Rust */
@@ -1018,7 +1019,8 @@ CREATE TABLE warren.graphs (
     has_relations    boolean NOT NULL DEFAULT false,
     retain_versions  int NOT NULL DEFAULT 2 CHECK (retain_versions >= 1),
     current_version  bigint,
-    store_merged     boolean NOT NULL DEFAULT true
+    store_merged     boolean NOT NULL DEFAULT true,
+    node_order       text NOT NULL DEFAULT 'id' CHECK (node_order IN ('id', 'locality'))
 );
 
 CREATE TABLE warren.versions (

@@ -242,10 +242,17 @@ MERGED = """
 EXPECTED_MERGED = "upgrade:true:0 upgrade_new:false:0 upgrade_typed:true:6"
 
 
+# Each graph's node order (0.4.0): graphs from before it are backfilled 'id'.
+NODE_ORDERS = "SELECT string_agg(name || ':' || node_order, ' ' ORDER BY name) FROM warren.graphs"
+
+
 def after_update(upgraded):
     """Checks the upgraded state, then runs a promotion on it; returns the
     problems found."""
     problems = []
+    orders = upgraded.query(NODE_ORDERS)
+    if orders != [["upgrade:id upgrade_typed:id"]]:
+        problems.append(f"node orders after the update are {orders}")
     seeded = upgraded.query("SELECT created_by::text || ':' || length FROM warren.vectors WHERE name = 'old'")
     if seeded != [["upgrade_owner:4"]]:
         problems.append(f"backfilled vectors are {seeded}")
@@ -295,7 +302,60 @@ def after_update(upgraded):
     merged = upgraded.query(MERGED)
     if merged != [[EXPECTED_MERGED]]:
         problems.append(f"store_merged and merged segments after the update are {merged}")
+    # A graph from before the update can be compacted in locality order,
+    # which becomes its node order, and one created after it can start in it.
+    upgraded.execute(
+        "SELECT warren.compact('upgrade_typed', node_order := 'locality');"
+        " SELECT warren.create_graph('upgrade_local', 'SELECT id FROM upgrade_nodes',"
+        " 'SELECT src, dst FROM upgrade_edges', node_order := 'locality');"
+        " SELECT warren.refresh('upgrade_local')")
+    orders = upgraded.query(NODE_ORDERS)
+    expected = "upgrade:id upgrade_local:locality upgrade_new:id upgrade_typed:locality"
+    if orders != [[expected]]:
+        problems.append(f"node orders after compacting and creating are {orders}")
     return problems
+
+
+# Privileges set on create_graph and compact under release 0.3.0. Its
+# update to 0.4.0 drops and creates both again (each gains a node_order
+# parameter), and must grant them again (CHANGELOG 0.4.0); so must every
+# later update. (Earlier releases' updates did not keep privileges.)
+GRANTS_RELEASE = "0.3.0"
+GRANTS = """
+    REVOKE ALL ON FUNCTION warren.create_graph(text, text, text, boolean, boolean, boolean,
+                                               boolean, integer, boolean) FROM PUBLIC;
+    GRANT EXECUTE ON FUNCTION warren.create_graph(text, text, text, boolean, boolean, boolean,
+                                                  boolean, integer, boolean)
+        TO upgrade_owner WITH GRANT OPTION;
+    REVOKE ALL ON FUNCTION warren.compact(text) FROM PUBLIC;
+    GRANT EXECUTE ON FUNCTION warren.compact(text) TO upgrade_owner;
+"""
+GRANTED = """
+    SELECT string_agg(p.proname || ':' || CASE WHEN a.grantee = 0 THEN 'PUBLIC'
+                                               ELSE a.grantee::regrole::text END
+                      || ':' || a.is_grantable, ' ' ORDER BY p.proname, a.grantee)
+    FROM pg_proc p, aclexplode(p.proacl) a
+    WHERE p.pronamespace = 'warren'::regnamespace AND p.proname IN ('create_graph', 'compact')
+      AND a.grantee <> p.proowner
+"""
+EXPECTED_GRANTED = "compact:upgrade_owner:false create_graph:upgrade_owner:true"
+
+
+def grants_kept(cluster, installer, release):
+    """None if privileges set on create_graph and compact under `release`
+    survive the update, else what is wrong. The release's
+    install script is in place, and the library is the version in
+    development's, whose C symbols the release's functions name."""
+    name = "upgrade_grants"
+    cluster.database("postgres").execute(installer.create_database_sql(name))
+    database = cluster.database(name)
+    database.execute(installer.as_installer(f"CREATE EXTENSION pg_warren VERSION '{release}'"))
+    database.execute(GRANTS)
+    database.execute(installer.as_installer("ALTER EXTENSION pg_warren UPDATE"))
+    granted = database.query(GRANTED)
+    if granted != [[EXPECTED_GRANTED]]:
+        return f"{release}: privileges after the update are {granted}, not {EXPECTED_GRANTED}"
+    return None
 
 
 def library_problem(database, expected, when):
@@ -352,4 +412,7 @@ def check(cluster, current, installer, releases, installed):
         if diff:
             failures.append(f"{version} -> {current}: the upgraded catalog differs\n{diff}")
         failures += [f"{version} -> {current}: {problem}" for problem in after_update(upgraded)]
+    problem = grants_kept(cluster, installer, GRANTS_RELEASE)
+    if problem:
+        failures.append(problem)
     return failures

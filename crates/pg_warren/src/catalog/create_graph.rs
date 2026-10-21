@@ -3,7 +3,7 @@
 
 use pgrx::prelude::*;
 
-use super::{CatalogError, NewGraph};
+use super::{parse_node_order, CatalogError, NewGraph};
 use crate::access::{current_user, entry, with_search_path};
 use crate::read_only::read_one;
 use crate::source::{check_edge_columns, check_node_columns, source_columns};
@@ -34,7 +34,9 @@ const WRITABLE_SCHEMAS: &str = "SELECT pg_catalog.string_agg(pg_catalog.quote_id
 /// becomes the graph's `id_type`. With several relations, `store_merged`
 /// stores the merged CSR; without it, all-relations reads merge the
 /// relations' rows on the fly, with the same results, in less memory and
-/// more time (DESIGN.md §5.3).
+/// more time (DESIGN.md §5.3). `node_order` orders the dense ids of the
+/// first build: `'id'` in external-id order, `'locality'` so that
+/// neighbours get nearby ids (DESIGN.md §14 item 22).
 #[allow(clippy::too_many_arguments)] // the SQL signature of DESIGN.md §9.3
 #[pg_extern(schema = "warren")]
 fn create_graph(
@@ -47,9 +49,11 @@ fn create_graph(
     build_reverse: default!(bool, true),
     retain_versions: default!(i32, 2),
     store_merged: default!(bool, true),
+    node_order: default!(&str, "'id'"),
 ) {
     entry(|caller| {
         record(&NewGraph {
+            node_order: parse_node_order(node_order)?,
             name,
             owner: current_user(),
             search_path: caller.search_path(),
@@ -177,20 +181,21 @@ mod tests {
             "SELECT warren.create_graph('cg', 'SELECT id FROM cg_nodes',
                  'SELECT src, dst, rel, w FROM cg_edges', directed := false,
                  weighted := true, has_relations := true, build_reverse := false,
-                 retain_versions := 3, store_merged := false)",
+                 retain_versions := 3, store_merged := false, node_order := 'locality')",
         )?;
         let row = Spi::get_one::<String>(
-            "SELECT format('%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s', owner = current_user::regrole,
-                           readers, source, node_query, edge_query, id_type, directed, weighted,
-                           has_relations, build_reverse, retain_versions,
-                           current_version IS NULL, store_merged)
+            "SELECT format('%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s',
+                           owner = current_user::regrole, readers, source, node_query,
+                           edge_query, id_type, directed, weighted, has_relations,
+                           build_reverse, retain_versions, current_version IS NULL,
+                           store_merged, node_order)
              FROM warren.graphs WHERE name = 'cg'",
         )?;
         assert_eq!(
             row.as_deref(),
             Some(
                 "t|{}|query|SELECT id FROM cg_nodes|SELECT src, dst, rel, w FROM cg_edges|\
-                 bigint|f|t|t|f|3|t|f"
+                 bigint|f|t|t|f|3|t|f|locality"
             )
         );
         Ok(())
@@ -204,11 +209,11 @@ mod tests {
                                         'SELECT src, dst FROM cg_edges')",
         )?;
         let flags = Spi::get_one::<String>(
-            "SELECT format('%s|%s|%s|%s|%s|%s', directed, weighted, has_relations, build_reverse,
-                           retain_versions, store_merged)
+            "SELECT format('%s|%s|%s|%s|%s|%s|%s', directed, weighted, has_relations,
+                           build_reverse, retain_versions, store_merged, node_order)
              FROM warren.graphs WHERE name = 'cg'",
         )?;
-        assert_eq!(flags.as_deref(), Some("t|f|f|t|2|t"));
+        assert_eq!(flags.as_deref(), Some("t|f|f|t|2|t|id"));
         Ok(())
     }
 
@@ -316,5 +321,22 @@ mod tests {
             "SELECT warren.create_graph('cg', 'SELECT id FROM cg_nodes',
                                         'SELECT src, dst FROM cg_edges', retain_versions := 0)",
         )
+    }
+
+    /// DESIGN.md §14 item 22: the node order is 'id' or 'locality'.
+    #[pg_test]
+    fn an_unknown_node_order_is_an_invalid_parameter() -> Result<(), Error> {
+        tables()?;
+        let refused = crate::fixture::failure(
+            "warren.create_graph('cg', 'SELECT id FROM cg_nodes', 'SELECT src, dst FROM cg_edges',
+                                 node_order := 'random')",
+        )?;
+        assert_eq!(
+            refused.as_deref(),
+            Some("22023: node_order must be 'id' or 'locality', not 'random'")
+        );
+        let graphs = Spi::get_one::<i64>("SELECT count(*) FROM warren.graphs")?;
+        assert_eq!(graphs, Some(0));
+        Ok(())
     }
 }

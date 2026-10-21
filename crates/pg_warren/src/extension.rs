@@ -17,7 +17,8 @@ use warren_core::graph::GraphError;
 mod warren {}
 
 /// The SQLSTATE of a graph error: out of memory, over the build memory
-/// budget, a size limit, or (when decoding) corrupt data.
+/// budget, a size limit, an unknown node order, or (when decoding) corrupt
+/// data.
 pub(crate) fn graph_sqlstate(error: &GraphError) -> PgSqlErrorCode {
     match error {
         GraphError::OutOfMemory { .. } => PgSqlErrorCode::ERRCODE_OUT_OF_MEMORY,
@@ -27,6 +28,7 @@ pub(crate) fn graph_sqlstate(error: &GraphError) -> PgSqlErrorCode {
         GraphError::TooManyRelations
         | GraphError::IdSpaceTooLarge
         | GraphError::RelationNameTooLong => PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+        GraphError::UnknownNodeOrder(_) => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
         _ => PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
     }
 }
