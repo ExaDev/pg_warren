@@ -28,7 +28,10 @@ impl Build {
         empty.next(nodes, edges, weighted, reverse)
     }
 
-    /// The next build, starting from this one's id map and dictionary.
+    /// The next build, starting from this one's id map and dictionary. A
+    /// build of an odd number of edge rows is read through shared views of
+    /// heap segments, so that the version tests read both owned and shared
+    /// buffers.
     pub(crate) fn next(
         &self,
         nodes: &[i64],
@@ -45,7 +48,10 @@ impl Build {
         }
         let (list, _) = intake.finish();
         let graph = GraphCsr::build(list, relations.len(), id_map.id_space(), reverse).unwrap();
-        Self { id_map, relations, graph }
+        match edges.len() % 2 {
+            0 => Self { id_map, relations, graph },
+            _ => Self { id_map: id_map.shared_views(), relations, graph: graph.shared_views() },
+        }
     }
 
     /// This build without its merged CSR: the same relations, rebuilt so

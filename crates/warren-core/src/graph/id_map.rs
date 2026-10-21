@@ -312,6 +312,18 @@ impl<E: ExternalId> IdMap<E> {
     }
 }
 
+#[cfg(test)]
+impl<E: ExternalId + Send + Sync + 'static> IdMap<E> {
+    /// The same id map with every buffer a shared view of a heap segment.
+    pub(crate) fn shared_views(&self) -> Self {
+        Self {
+            by_external: SegmentBuffer::shared(super::HeapSegment::of(&self.by_external)),
+            by_dense: SegmentBuffer::shared(super::HeapSegment::of(&self.by_dense)),
+            tombstones: self.tombstones.shared_views(),
+        }
+    }
+}
+
 /// Checks that the pairs are strictly sorted by external id and that the
 /// tombstones cover their id space.
 fn check_pairs<E: Ord>(pairs: &[IdPair<E>], tombstones: &Tombstones) -> Result<(), GraphError> {

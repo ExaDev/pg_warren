@@ -22,11 +22,13 @@ pub(crate) struct Scenario {
     /// Whether the graph stores its merged CSR (else traversals merge the
     /// relations' rows on the fly).
     pub(crate) store_merged: bool,
+    /// Whether the graph's buffers are shared views (else owned).
+    pub(crate) shared: bool,
 }
 
 pub(crate) fn scenarios() -> impl Strategy<Value = Scenario> {
-    let shape = (1u64..14, 1usize..4, any::<bool>(), any::<bool>());
-    shape.prop_flat_map(|(id_space, relation_count, weighted, store_merged)| {
+    let shape = (1u64..14, 1usize..4, any::<bool>(), any::<bool>(), any::<bool>());
+    shape.prop_flat_map(|(id_space, relation_count, weighted, store_merged, shared)| {
         let edge = (0..relation_count, 0..id_space, 0..id_space, 0u8..8);
         (prop::collection::vec(edge, 0..40), prop::collection::btree_set(0..id_space, 0..3))
             .prop_map(move |(edges, tombstones)| Scenario {
@@ -39,6 +41,7 @@ pub(crate) fn scenarios() -> impl Strategy<Value = Scenario> {
                     .collect(),
                 tombstones,
                 store_merged,
+                shared,
             })
     })
 }
@@ -65,8 +68,19 @@ pub(crate) fn directions() -> impl Strategy<Value = Direction> {
 impl Scenario {
     /// The graph the build makes of the live edges, with a reverse CSR.
     pub(crate) fn graph(&self) -> GraphCsr {
-        GraphCsr::build_as(self.edge_list(), self.relation_count, self.id_space, self.layout())
-            .unwrap()
+        let layout = self.layout();
+        self.views(
+            GraphCsr::build_as(self.edge_list(), self.relation_count, self.id_space, layout)
+                .unwrap(),
+        )
+    }
+
+    /// `graph`, as shared views if the scenario is shared.
+    fn views(&self, graph: GraphCsr) -> GraphCsr {
+        match self.shared {
+            true => graph.shared_views(),
+            false => graph,
+        }
     }
 
     fn layout(&self) -> CsrLayout {
@@ -78,11 +92,11 @@ impl Scenario {
     pub(crate) fn graph_as(&self, store_merged: bool, build_reverse: bool, wide: bool) -> GraphCsr {
         let (count, id_space) = (self.relation_count, self.id_space);
         let layout = CsrLayout { build_reverse, store_merged };
-        match wide {
+        let graph = match wide {
             false => GraphCsr::build_as(self.edge_list(), count, id_space, layout),
             true => GraphCsr::build_with::<u64>(self.edge_list(), count, id_space, layout),
-        }
-        .unwrap()
+        };
+        self.views(graph.unwrap())
     }
 
     /// [`Self::graph`] with `u64` targets, which the build otherwise
@@ -92,7 +106,7 @@ impl Scenario {
         let graph =
             GraphCsr::build_with::<u64>(self.edge_list(), count, id_space, self.layout()).unwrap();
         assert!(matches!(graph.relations()[0].forward(), AnyCsr::U64(_)));
-        graph
+        self.views(graph)
     }
 
     fn edge_list(&self) -> EdgeList {

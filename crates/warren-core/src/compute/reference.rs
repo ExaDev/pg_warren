@@ -24,7 +24,9 @@ pub(crate) fn graph(
     graph_as(id_space, relation_count, edges, weighted, layout)
 }
 
-/// [`graph`] built with `layout`.
+/// [`graph`] built with `layout`. A graph of an odd number of edges is
+/// read through shared views of heap segments, so that the kernels'
+/// tests read both owned and shared buffers.
 pub(crate) fn graph_as(
     id_space: u64,
     relation_count: usize,
@@ -37,7 +39,11 @@ pub(crate) fn graph_as(
     for &(relation, source, target, weight) in edges {
         list.push(indexes[relation], source, target, weight).unwrap();
     }
-    GraphCsr::build_as(list, relation_count, id_space, layout).unwrap()
+    let graph = GraphCsr::build_as(list, relation_count, id_space, layout).unwrap();
+    match edges.len() % 2 {
+        0 => graph,
+        _ => graph.shared_views(),
+    }
 }
 
 /// The dense adjacency matrix `A[i][j]` of the edges in `selected`

@@ -169,9 +169,28 @@ impl<T: Target> Csr<T> {
 }
 
 #[cfg(test)]
+impl<T: Target> Csr<T> {
+    /// The same CSR with every buffer a shared view of a heap segment.
+    pub(crate) fn shared_views(&self) -> Self {
+        Self {
+            id_space: self.id_space,
+            offsets: shared_view(&self.offsets),
+            targets: shared_view(&self.targets),
+            weights: self.weights.as_deref().map(shared_view),
+        }
+    }
+}
+
+/// A shared view of a heap segment holding a copy of `elements`.
+#[cfg(test)]
+fn shared_view<E: Clone + Send + Sync + 'static>(elements: &[E]) -> SegmentBuffer<E> {
+    SegmentBuffer::shared(super::HeapSegment::of(elements))
+}
+
+#[cfg(test)]
 mod tests {
+    use super::shared_view as shared;
     use super::*;
-    use crate::graph::HeapSegment;
 
     // 0 → {1, 2}, 1 → {}, 2 → {0, 2}
     fn example() -> Csr<u32> {
@@ -226,10 +245,6 @@ mod tests {
         let wide = Csr::from_parts(3, vec![0, 2, 2, 4], vec![1u64, 2, 0, 2], None).unwrap();
         assert_eq!(AnyCsr::U64(wide).bytes(), 4 * 8 + 4 * 8);
         assert_eq!(AnyCsr::U32(example()).bytes(), example().bytes());
-    }
-
-    fn shared<T: Clone + Send + Sync + 'static>(elements: &[T]) -> SegmentBuffer<T> {
-        SegmentBuffer::shared(HeapSegment::of(elements))
     }
 
     #[test]

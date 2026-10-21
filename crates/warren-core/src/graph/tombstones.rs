@@ -113,6 +113,15 @@ impl Tombstones {
     }
 }
 
+#[cfg(test)]
+impl Tombstones {
+    /// The same bitmap as a shared view of a heap segment.
+    pub(crate) fn shared_views(&self) -> Self {
+        let words = SegmentBuffer::shared(super::HeapSegment::of(&self.words));
+        Self { id_space: self.id_space, words }
+    }
+}
+
 fn word_count(id_space: u64) -> usize {
     id_space.div_ceil(WORD_BITS) as usize
 }
