@@ -67,7 +67,8 @@ before changing code. Commands, toolchain setup and environment gotchas are in
 6. **Main stays green; CI is the gate.** Every commit passes fmt, clippy
    `-D warnings`, rustdoc `-D warnings`, the core tests, the core-isolation
    check and pgrx tests on PG 15–18. Don't merge on red, and don't weaken a
-   check to get green.
+   check to get green. Miri runs on pushes to main, not on pull requests; a
+   Miri failure on main is fixed before anything else merges.
 7. **Keep DESIGN.md true.** When you make a §14 decision or change a design
    detail, update DESIGN.md in the same change (§15.5).
 
@@ -79,7 +80,7 @@ before changing code. Commands, toolchain setup and environment gotchas are in
 | Adapter logic behind ports, against fakes | `pg_warren`, plain `#[test]` | `cargo pgrx test pgNN` (crate needs the pgrx harness) |
 | In-database (`#[pg_test]`): SQL surface, SPI adapters, transactions | `pg_warren`, `#[pg_schema] mod tests` per feature module | `cargo pgrx test pgNN` |
 | Integration / oracle / Appendix A use cases | `test/sql/` (+ generators in `bench/`) | `test/run.py` (and `pytest` for the generators) |
-| Domain tests under Miri | `warren-core` (same tests) | `cargo +$MIRI_NIGHTLY miri test -p warren-core` (pinned nightly, see `ci.yml`) |
+| Domain tests under Miri | `warren-core` (same tests) | `cargo +$MIRI_NIGHTLY miri test -p warren-core` (pinned nightly, see `ci.yml`; CI runs it on main only) |
 | Micro-benchmarks (`criterion`) | `warren-core/benches/` | `cargo bench -p warren-core` |
 
 ## pgrx specifics (learned in M0)
