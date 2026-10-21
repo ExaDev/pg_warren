@@ -4,6 +4,7 @@ use thiserror::Error;
 
 use crate::compute::{ComputeError, Dtype};
 use crate::graph::{DenseId, GraphError};
+use crate::interrupts::Cancelled;
 
 /// Why a community operation could not run to completion.
 #[derive(Debug, Clone, PartialEq, Error)]
@@ -47,4 +48,20 @@ pub enum CommunityError {
     /// `project` aggregates with `sum`, `mean`, `max`, `min` or `count`.
     #[error("unknown aggregate \"{0}\": expected sum, mean, max, min or count")]
     UnknownAggregate(String),
+    /// Modularity needs weights of at least 0.
+    #[error("the edge {from} → {to} weighs {weight}: modularity needs weights of at least 0")]
+    NegativeWeight {
+        /// The edge's source.
+        from: DenseId,
+        /// Its target.
+        to: DenseId,
+        /// Its weight.
+        weight: f64,
+    },
+}
+
+impl From<Cancelled> for CommunityError {
+    fn from(_: Cancelled) -> Self {
+        Self::Compute(ComputeError::Cancelled)
+    }
 }

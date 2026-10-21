@@ -1,0 +1,383 @@
+//! Leiden's refinement (DESIGN.md §6.7; Traag, Waltman and van Eck, "From
+//! Louvain to Leiden: guaranteeing well-connected communities", 2019,
+//! Algorithm A.2 `RefinePartition` and `MergeNodesSubset`), for modularity:
+//! within each community of a partition, nodes start alone and merge only
+//! into refined communities that are well connected to the rest of the
+//! community, so every refined community is connected. The next level
+//! aggregates by the refined partition but starts from the unrefined one.
+//!
+//! With `k` a node's degree, `K` a sum of degrees, `2m` the total and `γ`
+//! the resolution, in community `S`: a node `v` takes part if it is well
+//! connected, `E(v, S − v) ≥ γ k_v (K_S − k_v) / 2m`, and is still alone;
+//! it may join a refined community `C ⊆ S` that is well connected,
+//! `E(C, S − C) ≥ γ K_C (K_S − K_C) / 2m`, and whose modularity change
+//! `ΔH = (E(v, C) − γ k_v K_C / 2m) / m` is at least 0 (staying alone is
+//! `ΔH = 0`); it picks among them at random with probability proportional
+//! to `exp(ΔH / θ)`, `θ` the randomness. Nodes are taken in the seeded
+//! order, and the draw is a counter-based function of seed and node, so
+//! communities refine independently (in parallel) and the result is the
+//! same for any thread count.
+
+use std::mem::size_of;
+
+use rayon::prelude::*;
+
+use super::random::{priority, unit};
+use super::{CommunityError, Undirected};
+use crate::compute::{ComputeError, ComputeMemory, Vector, Workers};
+use crate::graph::{DenseId, Tombstones};
+use crate::interrupts::{Cancellation, Interrupts};
+
+/// How a refinement runs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Refinement {
+    /// The resolution `γ`.
+    pub resolution: f64,
+    /// Orders the nodes and seeds the draws.
+    pub seed: u64,
+    /// The randomness `θ` of the draws (Traag et al. use 0.01).
+    pub randomness: f64,
+}
+
+/// A refined partition.
+#[derive(Debug)]
+pub struct Refined {
+    /// Each live node's refined community, labelled by the smallest key of
+    /// its members (tombstoned nodes hold 0).
+    pub labels: Vector<i64>,
+    /// The number of refined communities of live nodes.
+    pub communities: u64,
+}
+
+/// The stream of [`unit`]'s draws.
+const DRAWS: u64 = 1;
+
+/// Refines the partition `communities` labels (one label per node) of the
+/// live nodes of `graph`. Refined communities are labelled by the smallest
+/// of their members' `keys` (dense ids if `None`).
+#[allow(clippy::too_many_arguments)] // a kernel's inputs, as the other kernels take them
+pub fn refine<I: Interrupts>(
+    workers: &Workers,
+    memory: &ComputeMemory,
+    interrupts: &mut I,
+    graph: &Undirected,
+    tombstones: &Tombstones,
+    communities: &[i64],
+    keys: Option<&[i64]>,
+    options: Refinement,
+) -> Result<Refined, CommunityError> {
+    let nodes = graph.id_space();
+    for vector in [Some(communities), keys].into_iter().flatten() {
+        if vector.len() as u64 != nodes {
+            return Err(ComputeError::IdSpaceMismatch {
+                expected: nodes,
+                found: vector.len() as u64,
+            }
+            .into());
+        }
+    }
+    let mut labels = Vector::filled(memory, nodes, 1, 0i64)?;
+    // Grouping, places and each node's refined community; the groups' own
+    // state, at most one entry per node across the groups refined at once.
+    let per_node = 3 * size_of::<u64>() as u64 + Group::BYTES_PER_MEMBER;
+    let scratch = memory.charge(nodes.saturating_mul(per_node))?;
+    let count = workers.run(interrupts, |cancellation| {
+        Ok(run(cancellation, graph, tombstones, communities, keys, options, labels.values_mut()))
+    })??;
+    drop(scratch);
+    Ok(Refined { labels, communities: count })
+}
+
+/// [`refine`]'s work on the pool: writes the labels and returns the
+/// number of refined communities.
+fn run(
+    cancellation: &Cancellation,
+    graph: &Undirected,
+    tombstones: &Tombstones,
+    communities: &[i64],
+    keys: Option<&[i64]>,
+    options: Refinement,
+    labels: &mut [i64],
+) -> Result<u64, CommunityError> {
+    let nodes = graph.id_space();
+    let mut members: Vec<DenseId> = (0..nodes).filter(|&node| !tombstones.contains(node)).collect();
+    members.sort_by_key(|&node| (communities[node as usize], priority(options.seed, node), node));
+    let mut starts = vec![0usize];
+    for at in 1..members.len() {
+        if communities[members[at - 1] as usize] != communities[members[at] as usize] {
+            starts.push(at);
+        }
+    }
+    starts.push(members.len());
+    let mut place = vec![usize::MAX; nodes as usize];
+    for range in starts.windows(2) {
+        for (at, &node) in members[range[0]..range[1]].iter().enumerate() {
+            place[node as usize] = at;
+        }
+    }
+    let groups: Vec<&[DenseId]> = starts.windows(2).map(|r| &members[r[0]..r[1]]).collect();
+    let refined: Vec<Vec<usize>> = groups
+        .par_iter()
+        .map(|members| {
+            if cancellation.is_cancelled() {
+                return Err(ComputeError::Cancelled.into());
+            }
+            Ok(Group::new(graph, members, &place).refine(options))
+        })
+        .collect::<Result<_, CommunityError>>()?;
+    let key = |node: DenseId| keys.map_or(node as i64, |keys| keys[node as usize]);
+    let mut count = 0;
+    for (members, roots) in groups.iter().zip(&refined) {
+        let mut least = vec![i64::MAX; members.len()];
+        for (at, &root) in roots.iter().enumerate() {
+            least[root] = least[root].min(key(members[at]));
+        }
+        count += roots.iter().enumerate().filter(|&(at, &root)| at == root).count() as u64;
+        for (at, &root) in roots.iter().enumerate() {
+            labels[members[at] as usize] = least[root];
+        }
+    }
+    Ok(count)
+}
+
+/// One community being refined: its members in the seeded order, and each
+/// member's refined community (a member standing for it) with that
+/// community's degree sum, its weight to the rest of the community and its
+/// size.
+struct Group<'a> {
+    graph: &'a Undirected,
+    members: &'a [DenseId],
+    place: &'a [usize],
+    root: Vec<usize>,
+    sums: Vec<f64>,
+    outside: Vec<f64>,
+    sizes: Vec<usize>,
+}
+
+impl<'a> Group<'a> {
+    /// The bytes per member its state holds.
+    const BYTES_PER_MEMBER: u64 = (3 * size_of::<f64>() + size_of::<usize>()) as u64;
+
+    fn new(graph: &'a Undirected, members: &'a [DenseId], place: &'a [usize]) -> Self {
+        let n = members.len();
+        Self {
+            graph,
+            members,
+            place,
+            root: (0..n).collect(),
+            sums: members.iter().map(|&node| graph.degree(node)).collect(),
+            outside: vec![0.0; n],
+            sizes: vec![1; n],
+        }
+    }
+
+    /// Whether `node` (a member) is in this group: its place points at it.
+    fn holds(&self, node: DenseId) -> Option<usize> {
+        let at = self.place[node as usize];
+        (self.members.get(at) == Some(&node)).then_some(at)
+    }
+
+    /// Each member's refined community, as the place of the member
+    /// standing for it.
+    fn refine(mut self, options: Refinement) -> Vec<usize> {
+        let total = self.graph.total();
+        if total == 0.0 {
+            return self.root;
+        }
+        let scale = options.resolution / total;
+        let group_sum: f64 = self.sums.iter().sum();
+        for at in 0..self.members.len() {
+            let node = self.members[at];
+            self.outside[at] = self
+                .graph
+                .row(node)
+                .iter()
+                .filter_map(|&(neighbour, weight)| {
+                    self.holds(neighbour).filter(|&other| other != at).map(|_| weight)
+                })
+                .sum();
+        }
+        let mut weights: Vec<(usize, f64)> = Vec::new();
+        for at in 0..self.members.len() {
+            let node = self.members[at];
+            let degree = self.graph.degree(node);
+            let alone = self.root[at] == at && self.sizes[at] == 1;
+            if !alone || self.outside[at] < scale * degree * (group_sum - degree) {
+                continue;
+            }
+            weights.clear();
+            for &(neighbour, weight) in self.graph.row(node) {
+                if let Some(other) = self.holds(neighbour).filter(|&other| other != at) {
+                    weights.push((self.root[other], weight));
+                }
+            }
+            weights.sort_by_key(|&(root, _)| root);
+            let to_self = self.outside[at];
+            let mut candidates: Vec<(usize, f64, f64)> = vec![(at, 0.0, 0.0)];
+            let mut i = 0;
+            while i < weights.len() {
+                let root = weights[i].0;
+                let mut to = 0.0;
+                while i < weights.len() && weights[i].0 == root {
+                    to += weights[i].1;
+                    i += 1;
+                }
+                let sum = self.sums[root];
+                let well_connected = self.outside[root] >= scale * sum * (group_sum - sum);
+                let change = 2.0 * (to - scale * degree * sum) / total;
+                if well_connected && change >= 0.0 {
+                    candidates.push((root, to, change));
+                }
+            }
+            let chosen = draw(&candidates, options, node);
+            if chosen.0 != at {
+                let (root, to, _) = chosen;
+                self.root[at] = root;
+                self.sizes[root] += 1;
+                self.sizes[at] = 0;
+                self.sums[root] += degree;
+                self.outside[root] += to_self - 2.0 * to;
+            }
+        }
+        self.root
+    }
+}
+
+/// One of `candidates` (staying first), drawn with probability
+/// proportional to `exp(change / θ)` by `node`'s counter-based draw. A
+/// randomness of 0 takes the greatest change (the first on a tie).
+fn draw(candidates: &[(usize, f64, f64)], options: Refinement, node: DenseId) -> (usize, f64, f64) {
+    let greatest = candidates.iter().map(|c| c.2).fold(f64::NEG_INFINITY, f64::max);
+    if options.randomness <= 0.0 {
+        return candidates.iter().copied().find(|c| c.2 == greatest).unwrap_or(candidates[0]);
+    }
+    let weight = |change: f64| ((change - greatest) / options.randomness).exp();
+    let total: f64 = candidates.iter().map(|c| weight(c.2)).sum();
+    let mut target = unit(options.seed, DRAWS, node) * total;
+    for &candidate in candidates {
+        target -= weight(candidate.2);
+        if target < 0.0 {
+            return candidate;
+        }
+    }
+    candidates[candidates.len() - 1]
+}
+
+// Not under Miri: the compute pool's work stealing runs through
+// crossbeam-epoch, which Miri's Stacked Borrows model rejects.
+#[cfg(test)]
+#[cfg(not(miri))]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::OnceLock;
+
+    use proptest::prelude::*;
+
+    use super::*;
+    use crate::compute::reference::{self, Edges};
+    use crate::interrupts::Uninterrupted;
+
+    fn workers() -> &'static Workers {
+        static WORKERS: OnceLock<Workers> = OnceLock::new();
+        WORKERS.get_or_init(|| Workers::new(3).unwrap())
+    }
+
+    fn undirected(n: u64, edges: &Edges) -> Undirected {
+        let mut both = edges.clone();
+        both.extend(edges.iter().filter(|e| e.1 != e.2).map(|&(r, s, t, w)| (r, t, s, w)));
+        let graph = reference::graph(n, 1, &both, true, false);
+        Undirected::new(&ComputeMemory::new(u64::MAX), &Cancellation::new(), &graph, true, false)
+            .unwrap()
+    }
+
+    const OPTIONS: Refinement = Refinement { resolution: 1.0, seed: 0, randomness: 0.01 };
+
+    fn refined(
+        graph: &Undirected,
+        communities: &[i64],
+        workers: &Workers,
+        options: Refinement,
+    ) -> Refined {
+        let tombstones = Tombstones::new(graph.id_space()).unwrap();
+        let memory = ComputeMemory::new(u64::MAX);
+        refine(workers, &memory, &mut Uninterrupted, graph, &tombstones, communities, None, options)
+            .unwrap()
+    }
+
+    /// Whether the nodes of each label are connected by edges among
+    /// themselves.
+    fn connected(graph: &Undirected, labels: &[i64]) -> bool {
+        let mut by_label: BTreeMap<i64, Vec<u64>> = BTreeMap::new();
+        for (node, &label) in labels.iter().enumerate() {
+            by_label.entry(label).or_default().push(node as u64);
+        }
+        by_label.values().all(|members| {
+            let set: BTreeSet<u64> = members.iter().copied().collect();
+            let mut seen = BTreeSet::from([members[0]]);
+            let mut todo = vec![members[0]];
+            while let Some(node) = todo.pop() {
+                for &(neighbour, _) in graph.row(node) {
+                    if set.contains(&neighbour) && seen.insert(neighbour) {
+                        todo.push(neighbour);
+                    }
+                }
+            }
+            seen.len() == set.len()
+        })
+    }
+
+    #[test]
+    fn a_community_of_two_cliques_without_an_edge_between_splits() {
+        // One community holding two triangles that no edge joins.
+        let edges: Edges = vec![
+            (0, 0, 1, 1.0),
+            (0, 1, 2, 1.0),
+            (0, 0, 2, 1.0),
+            (0, 3, 4, 1.0),
+            (0, 4, 5, 1.0),
+            (0, 3, 5, 1.0),
+        ];
+        let graph = undirected(6, &edges);
+        let found = refined(&graph, &[1; 6], workers(), OPTIONS);
+        let labels = found.labels.values();
+        assert!(labels[..3].iter().all(|label| !labels[3..].contains(label)), "{labels:?}");
+        assert!(connected(&graph, labels));
+        assert!(found.communities < 6, "nodes merge: {labels:?}");
+    }
+
+    #[test]
+    fn the_result_is_the_same_on_any_number_of_threads() {
+        let edges: Edges = (0..400u64).map(|i| (0, i % 80, (i * 17 + 1) % 80, 1.0)).collect();
+        let graph = undirected(80, &edges);
+        let communities: Vec<i64> = (0..80).map(|n| n % 4).collect();
+        let one = refined(&graph, &communities, &Workers::new(1).unwrap(), OPTIONS);
+        let many = refined(&graph, &communities, workers(), OPTIONS);
+        assert_eq!(one.labels.values(), many.labels.values());
+    }
+
+    proptest! {
+        #[test]
+        fn refined_communities_are_connected_and_within_their_community(
+            (n, edges, communities, seed) in (2u64..30).prop_flat_map(|n| (
+                Just(n),
+                prop::collection::vec((0..n, 0..n, 1..4u32), 0..90),
+                prop::collection::vec(0i64..4, n as usize),
+                any::<u64>(),
+            )),
+        ) {
+            let edges: Edges =
+                edges.into_iter().map(|(s, t, w)| (0, s, t, f64::from(w))).collect();
+            let graph = undirected(n, &edges);
+            let found = refined(&graph, &communities, workers(), Refinement { seed, ..OPTIONS });
+            let labels = found.labels.values();
+            for u in 0..n as usize {
+                for v in 0..n as usize {
+                    if labels[u] == labels[v] {
+                        prop_assert_eq!(communities[u], communities[v]);
+                    }
+                }
+            }
+            prop_assert!(connected(&graph, labels));
+        }
+    }
+}
