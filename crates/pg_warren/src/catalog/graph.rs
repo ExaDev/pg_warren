@@ -9,6 +9,7 @@ use pgrx::PgOid;
 use super::CatalogError;
 use crate::access::as_catalog_owner;
 use crate::source::IdType;
+use warren_core::graph::NodeOrder;
 
 /// The query [`GraphDefinition::find`] runs, planned once per backend.
 /// `current_version` is read with the version it names when that is one of
@@ -17,7 +18,7 @@ use crate::source::IdType;
 const FIND: &str = "SELECT g.graph_id, g.owner::oid, g.readers::oid[], g.node_query, g.edge_query,
                            g.search_path, g.directed, g.weighted, g.has_relations,
                            g.build_reverse, g.retain_versions, g.current_version, g.id_type::oid,
-                           v.version_id, g.store_merged
+                           v.version_id, g.store_merged, g.node_order
                     FROM warren.graphs g
                     LEFT JOIN warren.versions v
                            ON v.version_id = g.current_version AND v.graph_id = g.graph_id
@@ -27,8 +28,9 @@ const FIND: &str = "SELECT g.graph_id, g.owner::oid, g.readers::oid[], g.node_qu
 const LOCK: &str = "SELECT FROM warren.graphs WHERE graph_id = $1 FOR UPDATE";
 
 /// [`GraphDefinition::lock`]'s re-read once it holds the lock:
-/// `current_version` as in [`FIND`].
-const REREAD: &str = "SELECT g.current_version, v.version_id
+/// `current_version` as in [`FIND`], and `node_order`, which a compaction
+/// that held the lock may have changed.
+const REREAD: &str = "SELECT g.current_version, v.version_id, g.node_order
                       FROM warren.graphs g
                       LEFT JOIN warren.versions v
                              ON v.version_id = g.current_version AND v.graph_id = g.graph_id
@@ -71,6 +73,9 @@ pub(crate) struct GraphDefinition {
     pub(crate) store_merged: bool,
     /// Promoted versions kept, the current one included.
     pub(crate) retain_versions: i32,
+    /// How dense ids are ordered where they may change: at the first build
+    /// and at compaction (DESIGN.md §14 item 22).
+    pub(crate) node_order: NodeOrder,
     /// The promoted version builds start from, if any.
     pub(crate) current_version: Option<i64>,
     /// The version `graphs.current_version` names when that is not one of
@@ -94,6 +99,7 @@ pub(crate) struct NewGraph<'a> {
     pub(crate) build_reverse: bool,
     pub(crate) store_merged: bool,
     pub(crate) retain_versions: i32,
+    pub(crate) node_order: NodeOrder,
 }
 
 impl GraphDefinition {
@@ -136,6 +142,7 @@ impl GraphDefinition {
                     current_version: row.get(14)?,
                     stray_current_version: stray(row.get(12)?, row.get(14)?),
                     store_merged: row.get(15)?.unwrap_or(true),
+                    node_order: parse_node_order(&row.get::<String>(16)?.unwrap_or_default())?,
                 })
             })
         })
@@ -143,8 +150,9 @@ impl GraphDefinition {
 
     /// Locks the graph's row until the end of the transaction, so that
     /// refreshes of one graph run one at a time, and re-reads its current
-    /// version, which a refresh that held the lock may have changed. A
-    /// graph dropped since [`find`](Self::find) is not found.
+    /// version and node order, which a refresh or compaction that held the
+    /// lock may have changed. A graph dropped since [`find`](Self::find) is
+    /// not found.
     pub(crate) fn lock(&mut self) -> Result<(), CatalogError> {
         // A row lock is a write (it assigns a transaction id): only the
         // functions that build or drop versions take it. The lock and the
@@ -153,16 +161,17 @@ impl GraphDefinition {
         // the locked row (EvalPlanQual), so a version joined in the same
         // statement would be the one from before the wait. The re-read,
         // as a statement of its own, takes a snapshot after the lock.
-        let (stored, current) = as_catalog_owner(|| {
+        let (stored, current, node_order) = as_catalog_owner(|| {
             Spi::connect_mut(|client| {
                 let locked = client.update(LOCK, Some(1), &[self.graph_id.into()])?.len();
                 if locked == 0 {
                     return Err(CatalogError::GraphNotFound(self.name.clone()));
                 }
                 let row = client.update(REREAD, Some(1), &[self.graph_id.into()])?.first();
-                Ok((row.get::<i64>(1)?, row.get::<i64>(2)?))
+                Ok((row.get::<i64>(1)?, row.get::<i64>(2)?, row.get::<String>(3)?))
             })
         })?;
+        self.node_order = parse_node_order(&node_order.unwrap_or_default())?;
         self.current_version = current;
         self.stray_current_version = stray(stored, current);
         Ok(())
@@ -178,6 +187,23 @@ impl GraphDefinition {
             }
             None => Ok(()),
         }
+    }
+
+    /// Records `order` as the graph's node order (DESIGN.md §14 item 22).
+    /// Its row must be locked ([`lock`](Self::lock)).
+    pub(crate) fn set_node_order(&mut self, order: NodeOrder) -> Result<(), CatalogError> {
+        as_catalog_owner(|| {
+            Spi::connect_mut(|client| {
+                client.update(
+                    "UPDATE warren.graphs SET node_order = $2 WHERE graph_id = $1",
+                    None,
+                    &[self.graph_id.into(), order.name().into()],
+                )?;
+                Ok::<_, CatalogError>(())
+            })
+        })?;
+        self.node_order = order;
+        Ok(())
     }
 
     /// Deletes the graph, and with it every version, segment and vector.
@@ -215,6 +241,12 @@ impl GraphDefinition {
     }
 }
 
+/// The node order named `name` (DESIGN.md §14 item 22), or an
+/// `invalid_parameter_value` error.
+pub(crate) fn parse_node_order(name: &str) -> Result<NodeOrder, CatalogError> {
+    name.parse().map_err(CatalogError::NodeOrder)
+}
+
 /// The stored current version when it is not one of the graph's versions.
 fn stray(stored: Option<i64>, current: Option<i64>) -> Option<i64> {
     stored.filter(|_| current.is_none())
@@ -239,9 +271,9 @@ impl NewGraph<'_> {
                 client.update(
                     "INSERT INTO warren.graphs (name, owner, node_query, edge_query, search_path,
                          id_type, directed, weighted, has_relations, build_reverse,
-                         retain_versions, store_merged)
+                         retain_versions, store_merged, node_order)
                      VALUES ($1, $2::oid::regrole, $3, $4, $5, $6::oid::regtype, $7, $8, $9,
-                             $10, $11, $12)",
+                             $10, $11, $12, $13)",
                     None,
                     &[
                         graph.name.into(),
@@ -256,6 +288,7 @@ impl NewGraph<'_> {
                         graph.build_reverse.into(),
                         graph.retain_versions.into(),
                         graph.store_merged.into(),
+                        graph.node_order.name().into(),
                     ],
                 )?;
                 Ok(())

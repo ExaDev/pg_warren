@@ -1,14 +1,15 @@
 //! The build pipeline (DESIGN.md §5.4 steps 2–6), over the build's ports:
-//! stable-id merge against the base version's id map, edge intake, CSR
-//! build, chunked segment write, version row and optional promotion. Graph
-//! logic is `warren_core::graph`'s; this module only sequences it, with
+//! stable-id merge against the base version's id map, edge intake, the
+//! locality order of a first build (§14 item 22), CSR build, chunked
+//! segment write, version row and optional promotion. Graph logic is
+//! `warren_core::graph`'s; this module only sequences it, with
 //! every graph-sized buffer charged to one `warren.max_build_memory`
 //! budget: a build that would exceed it is refused with 53400 before its
 //! CSRs are built where the plan shows it, else where it reserves.
 
 use warren_core::graph::{
     BuildCharge, BuildMemory, BuildPlan, CsrLayout, EdgeIntake, EdgeList, ExternalId, GraphCsr,
-    GraphError, IdMap, RelationDictionary, RelationIndex,
+    GraphError, IdMap, NodeOrder, Permutation, RelationDictionary, RelationIndex,
 };
 
 use super::error::BuildError;
@@ -63,7 +64,7 @@ pub(crate) fn build<E: ExternalId>(
         },
     };
     let Identity { id_map: base, id_map_charge: base_charge, relations, relations_charge } = base;
-    let (id_map, _id_map_charge) = base.rebuild_within(source.node_ids(&memory)?)?;
+    let (mut id_map, _id_map_charge) = base.rebuild_within(source.node_ids(&memory)?)?;
     drop((base, base_charge));
     let layout = CsrLayout { build_reverse: graph.build_reverse, store_merged: graph.store_merged };
     let mut relations = Relations {
@@ -78,7 +79,14 @@ pub(crate) fn build<E: ExternalId>(
         false => Some(relations.intern(IMPLICIT_RELATION)?),
     };
     relations.check_offsets()?;
-    let (edges, dropped_edges) = edges(graph, &id_map, implicit, &mut relations, source, &memory)?;
+    let (mut edges, dropped_edges) =
+        edges(graph, &id_map, implicit, &mut relations, source, &memory)?;
+    if graph.node_order == NodeOrder::Locality && graph.current_version.is_none() {
+        // A first build: its ids are provisional until ordered (§14 item 22).
+        let permutation = Permutation::locality(&edges, id_map.id_space(), &memory)?;
+        edges.renumber(&permutation)?;
+        id_map.renumber(&permutation, &memory)?;
+    }
     let Relations { dictionary: relations, charge: _relations_charge, .. } = relations;
     let beside = writer_memory(request.chunk_size);
     let plan = BuildPlan::new(&edges, relations.len(), id_map.id_space(), layout, &memory, beside)?;
@@ -239,6 +247,7 @@ mod tests {
             build_reverse: true,
             store_merged: true,
             retain_versions: 2,
+            node_order: NodeOrder::Id,
             current_version: None,
             stray_current_version: None,
         }
@@ -441,6 +450,44 @@ mod tests {
         assert_eq!(forward.degree(1), 0, "a tombstoned node's row is empty");
     }
 
+    /// DESIGN.md §14 item 22: the first build of a graph in locality order
+    /// gives neighbours nearby dense ids; later builds keep them and append
+    /// new nodes.
+    #[test]
+    fn a_first_build_in_locality_order_renumbers_and_later_builds_keep_the_ids() {
+        let mut world = World::default();
+        let graph = GraphDefinition { node_order: NodeOrder::Locality, ..graph() };
+        // The path 10 - 40 - 20 - 50 - 30, whose ids are scrambled along it.
+        let path = [(10, 40), (40, 20), (20, 50), (50, 30)];
+        let source = MemorySource {
+            nodes: vec![10, 20, 30, 40, 50],
+            edges: path.iter().map(|&(s, t)| edge(s, t)).collect(),
+            ..MemorySource::default()
+        };
+        let v1 = world.refresh(&graph, &source, true);
+        let id_map = world.id_map(v1);
+        let dense = |external| id_map.dense_id(&external).unwrap() as i64;
+        for (source, target) in path {
+            assert_eq!((dense(source) - dense(target)).abs(), 1, "{source} - {target}");
+        }
+        assert_ne!(dense(10), 0, "not external-id order");
+        let forward = world.csr(v1, "", "0");
+        assert_eq!(neighbours(&forward, &id_map, 40), [20]);
+        assert_eq!(world.catalog.version(v1).stats.edge_count, 4);
+
+        let next = MemorySource {
+            nodes: vec![5, 10, 20, 30, 40, 50],
+            edges: vec![edge(5, 10), edge(10, 40)],
+            ..MemorySource::default()
+        };
+        let v2 = world.refresh(&graph, &next, true);
+        let after = world.id_map(v2);
+        for external in [10, 20, 30, 40, 50] {
+            assert_eq!(after.dense_id(&external), id_map.dense_id(&external));
+        }
+        assert_eq!(after.dense_id(&5), Some(5), "appended at the high-water mark");
+    }
+
     #[test]
     fn a_build_starts_from_the_current_version_not_a_staged_one() {
         let mut world = World::default();
@@ -626,10 +673,11 @@ mod tests {
     }
 
     /// The plan's estimate is an upper bound on what the build charges, so
-    /// every budget too small for a build is refused before it writes.
+    /// every budget too small for a build is refused before it writes; the
+    /// locality order's scratch is charged before the plan's check, so the
+    /// same holds in that order.
     #[test]
     fn every_build_refused_for_memory_is_refused_before_it_writes() {
-        let graph = GraphDefinition { weighted: true, has_relations: true, ..graph() };
         let edges = (0..300).map(|e| {
             typed_edge(e % 40, (e * 7) % 40, ["a", "b", "c"][e as usize % 3], 0.1 * e as f64)
         });
@@ -638,30 +686,34 @@ mod tests {
             edges: edges.collect(),
             ..MemorySource::default()
         };
-        let mut built = None;
-        for budget in (0..40_000).step_by(250) {
-            let mut world = World::default();
-            let request = RefreshRequest {
-                promote: true,
-                label: None,
-                chunk_size: 16,
-                memory_budget: budget,
-            };
-            match world.try_refresh(&graph, &request, &source) {
-                Ok(version) => {
-                    built = Some((budget, world.catalog.version(version).stats));
-                    break;
+        for node_order in [NodeOrder::Id, NodeOrder::Locality] {
+            let graph =
+                GraphDefinition { weighted: true, has_relations: true, node_order, ..graph() };
+            let mut built = None;
+            for budget in (0..40_000).step_by(250) {
+                let mut world = World::default();
+                let request = RefreshRequest {
+                    promote: true,
+                    label: None,
+                    chunk_size: 16,
+                    memory_budget: budget,
+                };
+                match world.try_refresh(&graph, &request, &source) {
+                    Ok(version) => {
+                        built = Some((budget, world.catalog.version(version).stats));
+                        break;
+                    }
+                    Err(BuildError::Graph(GraphError::BuildMemoryLimit { .. })) => {
+                        assert!(world.catalog.versions.is_empty(), "budget {budget}");
+                        assert!(world.store.chunks.is_empty(), "budget {budget}");
+                    }
+                    Err(error) => panic!("budget {budget}: {error}"),
                 }
-                Err(BuildError::Graph(GraphError::BuildMemoryLimit { .. })) => {
-                    assert!(world.catalog.versions.is_empty(), "budget {budget}");
-                    assert!(world.store.chunks.is_empty(), "budget {budget}");
-                }
-                Err(error) => panic!("budget {budget}: {error}"),
             }
+            let (budget, stats) = built.expect("a budget of 40 kB builds 300 edges");
+            assert!(budget > 0);
+            assert_eq!(stats.edge_count + stats.deduplicated_edges, 300, "{node_order}");
         }
-        let (budget, stats) = built.expect("a budget of 40 kB builds 300 edges");
-        assert!(budget > 0);
-        assert_eq!(stats.edge_count + stats.deduplicated_edges, 300);
     }
 
     /// Edge rows each naming a new relation, `name-<i>`, on `nodes` nodes.

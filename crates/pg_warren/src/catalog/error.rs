@@ -6,7 +6,9 @@ use thiserror::Error;
 use super::VersionId;
 use crate::access::AccessError;
 use crate::access::SqlError;
+use crate::extension::graph_sqlstate;
 use crate::source::SourceError;
+use warren_core::graph::GraphError;
 
 /// Why a graph definition could not be created, found or used.
 #[derive(Debug, Error)]
@@ -74,6 +76,9 @@ pub(crate) enum CatalogError {
         /// The version its row names.
         version: i64,
     },
+    /// A node order other than 'id' or 'locality' (DESIGN.md §14 item 22).
+    #[error(transparent)]
+    NodeOrder(GraphError),
     /// An SPI call failed.
     #[error(transparent)]
     Spi(#[from] pgrx::spi::Error),
@@ -95,6 +100,7 @@ impl SqlError for CatalogError {
             Self::TooLarge(_) => PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
             Self::Access(error) => error.sqlstate(),
             Self::Source(error) => error.sqlstate(),
+            Self::NodeOrder(error) => graph_sqlstate(error),
             Self::Spi(_) => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
         }
     }

@@ -22,7 +22,9 @@ CREATE TABLE warren.graphs (
     has_relations    boolean NOT NULL DEFAULT false,
     retain_versions  int NOT NULL DEFAULT 2 CHECK (retain_versions >= 1),
     current_version  bigint,
-    store_merged     boolean NOT NULL DEFAULT true
+    store_merged     boolean NOT NULL DEFAULT true,
+    node_order       text NOT NULL DEFAULT 'id'
+                     CHECK (node_order IN ('id'::pg_catalog.text, 'locality'::pg_catalog.text))
 );
 
 CREATE TABLE warren.versions (
@@ -242,7 +244,8 @@ mod tests {
                  edge_query text, search_path text not null, id_type regtype not null, directed boolean not null, \
                  build_reverse boolean not null, weighted boolean not null, \
                  has_relations boolean not null, retain_versions integer not null, \
-                 current_version bigint, store_merged boolean not null"
+                 current_version bigint, store_merged boolean not null, \
+                 node_order text not null"
             )
         );
         Ok(())

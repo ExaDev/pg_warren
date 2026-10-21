@@ -239,7 +239,7 @@ mod tests {
     const CALLS: &[(&str, &str)] = &[
         ("aggregate_neighbours", "warren.aggregate_neighbours('victim', 'c', 'a')"),
         ("bfs", "warren.bfs('victim', ARRAY[1::bigint], 2)"),
-        ("compact", "warren.compact('victim')"),
+        ("compact", "warren.compact('victim', 'locality')"),
         ("components", "warren.components('victim', NULL::bigint)"),
         ("components_vector", "warren.components_vector('victim', 'cc')"),
         (

@@ -53,6 +53,29 @@ SELECT count(*) FROM dblink_get_result('b', false) AS t(x text);
 SELECT dblink_error_message('b') AS b_error \gset
 SELECT assert.that(:'b_error' LIKE '%cannot drop version % of graph "g": it is the current version%',
                    'drop_version refuses the new current version: ' || :'b_error');
-SELECT dblink_disconnect('b');
 SELECT assert.equal((SELECT current_version FROM warren.graphs WHERE name = 'g'), :staged::bigint,
                     'the promoted version is current');
+
+-- 4. b's compact without an order waits on this session's compact in
+-- locality order, and then follows the order that compact recorded: the
+-- graph's node order describes its id space (DESIGN.md §14 item 22).
+SELECT count(*) FROM dblink_get_result('b', false) AS t(x text);  -- the empty result ending case 3
+BEGIN;
+SELECT warren.compact('g', 'locality') AS local \gset
+SELECT dblink_send_query('b', $$SELECT warren.compact('g')$$);
+SELECT pg_sleep(0.5);
+SELECT assert.equal(dblink_is_busy('b'), 1, 'the compact waits on the graph''s row');
+COMMIT;
+SELECT count(*) FROM dblink_get_result('b', false) AS t(x text);
+SELECT assert.equal(dblink_error_message('b'), 'OK', 'a compact after a compact succeeds');
+SELECT count(*) FROM dblink_get_result('b', false) AS t(x text);  -- the empty result ending the query
+SELECT assert.equal(
+    (SELECT array_agg(node_id || ':' || dense_id ORDER BY node_id)
+     FROM warren.id_map('g', NULL::bigint)),
+    (SELECT array_agg(node_id || ':' || dense_id ORDER BY node_id)
+     FROM warren.id_map('g', NULL::bigint, :local)),
+    'the waiting compact kept the locality order');
+SELECT assert.that((SELECT current_version FROM warren.graphs WHERE name = 'g') > :local,
+                   'the waiting compact made a new version');
+
+SELECT dblink_disconnect('b');

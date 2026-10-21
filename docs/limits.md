@@ -254,6 +254,33 @@ memory limits. The choice is per graph, kept by `compact`, and shown by
 `warren.info(name) -> 'store_merged'`; it cannot be changed after
 `create_graph`.
 
+### Node order (locality)
+
+At millions of nodes SpMV and traversal are bound by memory: each edge reads
+its neighbour's value at a random place. `create_graph(…, node_order :=
+'locality')` numbers the first build's nodes so that neighbours get nearby
+dense ids (Reverse Cuthill–McKee), and `compact(name, node_order :=
+'locality')` does the same for an existing graph (the order given becomes
+the graph's). Results are the same in either order, read by external id.
+Measured at 10M nodes and 100M edges on 4 vCPUs, against node ids that
+carry no structure (DESIGN.md §14 item 22):
+
+| | community-structured graph | power-law graph |
+|---|---|---|
+| SpMV, 1 / 4 threads | 1.51× / 1.63× faster | 1.13× / 1.04× |
+| BFS | 1.25× | 1.23× |
+| `components` | 1.66× | 1.25× |
+| cost: ordering at the first build or `compact` | 10 s | 12 s |
+
+The gain is worth having on graphs with communities whose ids are arbitrary
+(uuids, ids from a busy shared sequence), and small on power-law graphs; if
+your ids already follow the structure, keep `'id'`. Ordering needs scratch
+of about 24 bytes per node and 8 bytes per edge (1.04 GB at 10M/100M),
+charged to `warren.max_build_memory`, so a first build in locality order
+peaks higher: 2.48 GB rather than 1.56 GB for one unweighted relation at
+that size. Later refreshes keep every surviving node's dense id and append
+new nodes, so locality decays as the graph changes; `compact` restores it.
+
 ## Measured performance
 
 At the DESIGN.md §12 scale (10M nodes, 100M edges), from the M7 soak's

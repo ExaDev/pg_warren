@@ -61,6 +61,14 @@ class Cluster:
         """The path of client program `program` (pg_dump, pg_restore) of this cluster's Postgres."""
         return str(self.bindir / program)
 
+    def dump_schema(self, name):
+        """The plain schema-only dump of database `name`, by the superuser."""
+        done = subprocess.run([self.client("pg_dump"), *self.connection(name), "--schema-only"],
+                              capture_output=True, text=True)
+        if done.returncode != 0:
+            raise RuntimeError(f"pg_dump failed: {done.stdout}{done.stderr}")
+        return done.stdout
+
     def _run(self, program, *arguments):
         command = [str(self.bindir / program), *map(str, arguments)]
         if self.runas:

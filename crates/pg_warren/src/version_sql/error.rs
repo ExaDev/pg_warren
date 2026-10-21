@@ -9,12 +9,16 @@ use crate::access::SqlError;
 use crate::build::BuildError;
 use crate::cache::{CacheError, LoadError};
 use crate::catalog::{CatalogError, VersionId};
+use crate::extension::graph_sqlstate;
 use crate::segment::SegmentError;
 use crate::vector::VectorError;
 
 /// Why `compact` or `diff` could not run.
 #[derive(Debug, Error)]
 pub(crate) enum VersionOperationError {
+    /// A required argument is NULL.
+    #[error("{0} must not be NULL")]
+    NullArgument(&'static str),
     /// The graph has never been promoted.
     #[error("graph \"{0}\" has no current version to compact")]
     NoCurrentVersion(String),
@@ -64,7 +68,9 @@ pub(crate) enum VersionOperationError {
 impl SqlError for VersionOperationError {
     fn sqlstate(&self) -> PgSqlErrorCode {
         match self {
+            Self::NullArgument(_) => PgSqlErrorCode::ERRCODE_NULL_VALUE_NOT_ALLOWED,
             Self::NoCurrentVersion(_) => PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+            Self::Version(VersionError::Graph(error)) => graph_sqlstate(error),
             Self::CompactionBoundary { .. } | Self::Version(_) => {
                 PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE
             }

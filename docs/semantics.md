@@ -13,7 +13,7 @@ A **graph** is a name plus two SQL queries (signature, with defaults):
 SELECT warren.create_graph(name, node_query, edge_query,
                            directed := true, weighted := false, has_relations := false,
                            build_reverse := true, retain_versions := 2,
-                           store_merged := true);
+                           store_merged := true, node_order := 'id');
 ```
 
 - `node_query` returns one column, the node's **external id**: `integer`,
@@ -35,6 +35,15 @@ SELECT warren.create_graph(name, node_query, edge_query,
   several relations, which reads over all relations use. Without it they
   merge the relations' rows on the fly: same results, less memory, slower
   ([limits.md](limits.md#the-merged-csr-store_merged)).
+- `node_order` (default `'id'`) is how dense ids are numbered where they
+  may change: `'id'` in id order, `'locality'` so that neighbours get
+  nearby dense ids, which makes large graphs' kernels faster
+  ([limits.md](limits.md#node-order-locality)). Results are the same.
+  Until a graph is first promoted, every `refresh` is a first build, so
+  each staged version of a never-promoted `'locality'` graph gets its own
+  order, from its own edges; `diff`, `distance` and `vector_norm_diff`
+  refuse two of them whose orders differ (22023, as for sibling staged
+  versions, below).
 
 Edges are cleaned at build time, and counted, never silently:
 
@@ -87,7 +96,8 @@ row until the end of its transaction.
 Inside a version every node has a **dense id**, `0 … id_space − 1`.
 `warren.id_map(name, NULL::<id type>)` lists them.
 
-- The first build numbers nodes in id order.
+- The first build numbers nodes in id order, or, with `node_order :=
+  'locality'`, so that neighbours get nearby dense ids.
 - Later builds start from the current version's id map and keep every
   surviving node's dense id. New nodes are appended
   after the highest dense id. A node that disappears keeps its dense id as a
@@ -120,6 +130,11 @@ and returns its id. Compaction is a boundary:
   `diff`, `distance` and `vector_norm_diff` refuse to compare across the
   boundary (`invalid_parameter_value`). Later refreshes continue in the new id
   space.
+
+`warren.compact(name, node_order := 'locality')` (or `'id'`) compacts in
+that order, which becomes the graph's; NULL, the default, keeps the
+graph's order. Compacting is how an existing graph gets locality order, and
+how a locality graph gets it back after many refreshes have appended nodes.
 
 Compact only when no cross-version comparison is pending.
 
