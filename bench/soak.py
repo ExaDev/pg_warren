@@ -28,7 +28,15 @@ once) is aborted. A case whose version
 (or the graph and `pagerank`'s scratch) does not fit
 `warren.max_cache_memory` is measured again with the cap raised. A second
 version, without the 0.1% of edges whose source is 7 mod 1000, is built
-for `diff` and `distance` only if the disk keeps `--disk-floor` free."""
+for `diff` and `distance` only if the disk keeps `--disk-floor` free.
+
+Since 0.4.0 a case also runs the library added in 0.4.0 (DESIGN.md §6.7,
+groups 1 and 2, the calls that finish in minutes at this scale) and
+`louvain` and `leiden` at their defaults, recording each one's time and
+peak, and for the two community detections the modularity, levels and
+communities found and the segments and WAL they wrote (`--skip library`,
+`--skip communities`). `--node-order locality` builds the graph with
+dense ids in locality order (DESIGN.md §14 item 22)."""
 
 import argparse
 import datetime
@@ -131,11 +139,96 @@ def edge_query(case, seed, table=None):
             f"WHERE {KEPT} OR NOT EXISTS (SELECT FROM soak_removed)")
 
 
-def create_graph_sql(case, seed, name=GRAPH, table=None):
+def create_graph_sql(case, seed, name=GRAPH, table=None, node_order="id"):
     multi = case.relations > 1
     return (f"SELECT warren.create_graph('{name}', 'SELECT id FROM generate_series(1::bigint, {case.nodes}) id', "
             f"$q${edge_query(case, seed, table)}$q$, weighted := {str(case.weighted).lower()}, "
-            f"has_relations := {str(multi).lower()}, store_merged := {str(case.store_merged).lower()})")
+            f"has_relations := {str(multi).lower()}, store_merged := {str(case.store_merged).lower()}, "
+            f"node_order := '{node_order}')")
+
+
+@dataclass(frozen=True)
+class Call:
+    """A library call: its SQL, what it needs run first and what it leaves to drop."""
+    name: str
+    sql: str
+    setup: tuple = ()
+    cleanup: tuple = ()
+
+
+SOURCES = 16  # the sampled centralities' sources, as docs/limits.md measured them at 10M nodes
+PAIRS = 100_000  # the pairs `similarity` scores
+
+
+def _drop(graph, *names):
+    return tuple(f"SELECT warren.drop_vector('{graph}', '{name}', NULL, true)" for name in names)
+
+
+def library_calls(graph, nodes):
+    """The library added in 0.4.0 (DESIGN.md §6.7, groups 1 and 2) on
+    `graph`, whose external ids are 1..`nodes`: the iterative ones for 20
+    iterations, as `pagerank`, the sampled centralities from 16 sources.
+    Left out: `label_propagation_majority` (tier 2, its votes counted in
+    the executor: minutes an iteration and gigabytes of sort at this
+    scale), and `topological_order` and `dag_longest_path` (the graph has
+    cycles)."""
+    g, out, drop = f"'{graph}'", "'library'", _drop(graph, "library")
+    pairs = (f"SELECT (1 + (i * 7919) % {nodes})::bigint, (1 + (i * 104729) % {nodes})::bigint "
+             f"FROM generate_series(1::bigint, {PAIRS}) i")
+    mask = f"SELECT id, 1 FROM generate_series(1::bigint, {nodes}, 100) id"
+    return (
+        Call("eigenvector_centrality", f"SELECT warren.eigenvector_centrality({g}, {out}, tol := 0, max_iter := 20)",
+             cleanup=drop),
+        Call("katz_centrality",
+             f"SELECT warren.katz_centrality({g}, {out}, alpha := 0.01, tol := 0, max_iter := 20)", cleanup=drop),
+        Call("hits", f"SELECT warren.hits({g}, 'library_hubs', 'library_authorities', tol := 0, max_iter := 20)",
+             cleanup=_drop(graph, "library_hubs", "library_authorities")),
+        Call("clustering", f"SELECT warren.clustering({g}, {out})", cleanup=drop),
+        Call("core_number", f"SELECT warren.core_number({g}, {out}, persist := false)", cleanup=drop),
+        Call("strong_components_vector", f"SELECT warren.strong_components_vector({g}, {out}, persist := false)",
+             cleanup=drop),
+        Call("minimum_spanning_forest", f"SELECT count(*) FROM warren.minimum_spanning_forest({g}, NULL::bigint)"),
+        Call("betweenness_centrality",
+             f"SELECT warren.betweenness_centrality({g}, {out}, k := {SOURCES}, persist := false)", cleanup=drop),
+        Call("closeness_centrality",
+             f"SELECT warren.closeness_centrality({g}, {out}, k := {SOURCES}, persist := false)", cleanup=drop),
+        Call("harmonic_centrality",
+             f"SELECT warren.harmonic_centrality({g}, {out}, k := {SOURCES}, persist := false)", cleanup=drop),
+        Call("most_similar", f"SELECT count(*) FROM warren.most_similar({g}, 1::bigint)"),
+        Call("similarity", f"SELECT count(*) FROM warren.similarity({g}, $p${pairs}$p$, NULL::bigint)"),
+        Call("similar_pairs", f"SELECT count(*) FROM warren.similar_pairs({g}, NULL::bigint, nodes := 'library_mask')",
+             setup=(f"SELECT warren.vector_from_query({g}, 'library_mask', $p${mask}$p$, persist := false)",),
+             cleanup=_drop(graph, "library_mask")),
+    )
+
+
+def _levels(graph, name):
+    """`name`'s level vectors on `graph` (`levels_prefix := name`), as a FROM clause."""
+    return (f"FROM warren.vectors v JOIN warren.graphs g USING (graph_id) "
+            f"WHERE g.name = '{graph}' AND v.name LIKE '{name}\\_%'")
+
+
+def community_calls(graph):
+    """`louvain` and `leiden` at their defaults (`leiden`'s two
+    iterations), each keeping its levels to count them, then dropping them."""
+    return tuple(Call(name, f"SELECT warren.{name}('{graph}', '{name}', levels_prefix := '{name}')",
+                      cleanup=(f"SELECT warren.drop_vector('{graph}', v.name, v.version_id, true) "
+                               f"{_levels(graph, name)}", *_drop(graph, name)))
+                 for name in ("louvain", "leiden"))
+
+
+def community_stats_sql(graph, name):
+    """`levels|communities` of a community run's result."""
+    return (f"SELECT (SELECT count(*) {_levels(graph, name)}) || '|' || "
+            f"(SELECT count(DISTINCT value) FROM warren.vector_values('{graph}', '{name}', NULL::bigint))")
+
+
+# The bytes of the catalog's segment and vector chunk tables, and the WAL
+# position, as `segments|wal`: a run's levels are dropped, but their rows
+# stay until VACUUM.
+DISK_SQL = ("SELECT pg_total_relation_size('warren.segments') + pg_total_relation_size('warren.vector_chunks') "
+            "|| '|' || (pg_current_wal_lsn() - '0/0'::pg_lsn)")
+VACUUM_SQL = "VACUUM warren.segments, warren.vector_chunks, warren.vectors, warren.versions"
 
 
 def table_sql(case, seed):
@@ -337,6 +430,10 @@ def planned_stages(case, options):
         planned.add("bfs_cte")
     if "second-version" not in options.skip:
         planned.add("diff")
+    if "library" not in options.skip:
+        planned |= {f"library: {call.name}" for call in library_calls(GRAPH, case.nodes)}
+    if "communities" not in options.skip:
+        planned |= {f"communities: {call.name}" for call in community_calls(GRAPH)}
     return sorted(planned)
 
 
@@ -461,6 +558,17 @@ class Soak:
     def session(self):
         return Session(self.cluster, "soak")
 
+    def free_disk(self):
+        return free_disk(self.options.parent)
+
+    def _configure(self, s, cap):
+        """A query session's settings: the threads, the statement timeout and the cap."""
+        s.run(f"SET warren.threads = {self.options.threads}")
+        if self.options.statement_timeout:
+            s.run(f"SET statement_timeout = '{self.options.statement_timeout}'")
+        if cap:
+            s.run(f"SET warren.max_cache_memory = '{cap}'")
+
     def stage(self, result, name, measured):
         result["stages"][name] = measured
         return measured
@@ -471,7 +579,7 @@ class Soak:
         admin.execute("CREATE DATABASE soak")
         result = {"provenance": self.provenance, "case": case.name, "nodes": case.nodes, "edges": case.edges, "weighted": case.weighted,
                   "relations": case.relations, "store_merged": case.store_merged, "threads": self.options.threads,
-                  "eigen_max_iter": self.options.eigen_max_iter,
+                  "node_order": self.options.node_order, "eigen_max_iter": self.options.eigen_max_iter,
                   "statement_timeout": self.options.statement_timeout, "skip": self.options.skip, "planned_stages": planned_stages(case, self.options),
                   "hardware": hardware(), "started_at": _now(), "stages": {}, "skipped": {}}
         try:
@@ -505,7 +613,7 @@ class Soak:
                 if self.options.cte:
                     self._cte_baseline(s, result)
         with self.session() as s:
-            self.stage(result, "create_graph", s.measure(create_graph_sql(case, SEED)))
+            self.stage(result, "create_graph", s.measure(create_graph_sql(case, SEED, node_order=self.options.node_order)))
             self.stage(result, "refresh", s.measure(f"SELECT warren.refresh('{GRAPH}')"))
         if case.table:
             self._generated_refresh(case, result)
@@ -524,6 +632,7 @@ class Soak:
             self._queries(result, "raised", cap=self.options.raised_cache_memory)
         if self.options.eigen and self.options.eigen_steps and case.name == "a":
             self._eigen_steps(case, result)
+        self._library(result, case)
         if "second-version" in self.options.skip:
             result["skipped"]["second_version"] = "--skip second-version"
         else:
@@ -534,7 +643,7 @@ class Soak:
         read, to compare with the build from the table."""
         name = f"{GRAPH}_generated"
         with self.session() as s:
-            s.run(create_graph_sql(case, SEED, name=name, table=False))
+            s.run(create_graph_sql(case, SEED, name=name, table=False, node_order=self.options.node_order))
             self.stage(result, "refresh from the generator", s.measure(f"SELECT warren.refresh('{name}')"))
             s.run(f"SELECT warren.drop_graph('{name}')")
             s.run("VACUUM warren.segments")
@@ -567,11 +676,7 @@ class Soak:
         that cannot fit the cap reloads on every statement, so latencies repeat less."""
         reloads = label == "default" and (result["cached_bytes"] or 0) > cap_bytes(self.options.cache_memory_kb)
         with self.session() as s:
-            s.run(f"SET warren.threads = {self.options.threads}")
-            if self.options.statement_timeout:
-                s.run(f"SET statement_timeout = '{self.options.statement_timeout}'")
-            if cap:
-                s.run(f"SET warren.max_cache_memory = '{cap}'")
+            self._configure(s, cap)
 
             def stage(name, sql, repeat=1, server=False):
                 measured = s.measure(timed(sql) if server else sql, repeat)
@@ -597,6 +702,44 @@ class Soak:
                 limit = f", max_iter := {self.options.eigen_max_iter}" if self.options.eigen_max_iter else ""
                 stage("eigen", f"SELECT count(*), max(residual) FROM warren.eigen('{GRAPH}', 20, "
                                f"'normalized_laplacian', 'smallest', tol := {EIGEN_TOL}{limit})")
+
+    def _library(self, result, case):
+        """The 0.4.0 library in one backend, then each community detection
+        in its own, at the first pass's cap; each call's outputs are
+        dropped after it, and a community run's segments vacuumed."""
+        for part in ("library", "communities"):
+            if part in self.options.skip:
+                result["skipped"][part] = f"--skip {part}"
+        if "library" not in self.options.skip:
+            with self.session() as s:
+                self._configure(s, self.first_cap())
+                for call in library_calls(GRAPH, case.nodes):
+                    self._call(s, result, "library", call)
+        if "communities" in self.options.skip:
+            return
+        for call in community_calls(GRAPH):
+            with self.session() as s:
+                self._configure(s, self.first_cap())
+                before, free = s.run(DISK_SQL)["rows"][0].split("|"), self.free_disk()
+                stage = f"communities: {call.name}"
+                self.stage(result, stage, s.measure(call.sql))
+                if "errors" not in result["stages"][stage]:
+                    self.stage(result, f"{stage} stats", {"rows": s.run(community_stats_sql(GRAPH, call.name))["rows"]})
+                after, free_after = s.run(DISK_SQL)["rows"][0].split("|"), self.free_disk()
+                for sql in call.cleanup:
+                    s.run(sql)
+                s.run(VACUUM_SQL)
+                self.stage(result, f"{stage} disk", {
+                    "segments_written": int(after[0]) - int(before[0]), "wal_written": int(after[1]) - int(before[1]),
+                    "free_disk_before": free, "free_disk_after_run": free_after,
+                    "free_disk_after_vacuum": self.free_disk()})
+
+    def _call(self, s, result, part, call):
+        for sql in call.setup:
+            s.run(sql)
+        self.stage(result, f"{part}: {call.name}", s.measure(call.sql))
+        for sql in call.cleanup:
+            s.run(sql)
 
     def _eigen_steps(self, case, result):
         """warren-core's Lanczos on the same edges (as an undirected graph),
@@ -660,6 +803,8 @@ PICK = {  # verdict key: (stage, field)
 
 
 SKIPPED_BY = {"bfs_cte": "bfs_cte", "diff": "second_version"}  # stage: its key in `skipped`
+SKIPPED_BY |= {f"library: {call.name}": "library" for call in library_calls(GRAPH, 1)}
+SKIPPED_BY |= {f"communities: {call.name}": "communities" for call in community_calls(GRAPH)}
 
 
 def unreached(result, name):
@@ -732,7 +877,30 @@ def summary(result):
                         max_cache_memory=result.get("cache_memory_bytes", DEFAULT_CAP))
     elif why is not None:
         measured["cached_bytes_failed"] = why
+    measured["library"] = calls(result, "library", library_calls(GRAPH, 1))
+    measured["communities"] = calls(result, "communities", community_calls(GRAPH))
+    for name, found in measured["communities"].items():
+        if "failed" in found:
+            continue
+        stage = stages[f"communities: {name}"]
+        found["modularity"] = float(stage["rows"][0])
+        if stats := stages.get(f"communities: {name} stats"):
+            found["levels"], found["communities"] = (int(part) for part in stats["rows"][0].split("|"))
+        disk = stages.get(f"communities: {name} disk", {})
+        found.update({key: disk[key] for key in ("segments_written", "wal_written") if key in disk})
     return measured
+
+
+def calls(result, part, planned):
+    """Each call's seconds and peak private memory, or why it has none."""
+    found = {}
+    for call in planned:
+        stage, why = outcome(result, f"{part}: {call.name}")
+        if stage is not None:
+            found[call.name] = {"seconds": stage["median_seconds"], "peak_rss_anon": stage.get("peak_rss_anon")}
+        elif why is not None:
+            found[call.name] = {"failed": why}
+    return found
 
 
 def git_revision():
@@ -784,7 +952,9 @@ def main(argv):
     options.add_argument("--raised-cache-memory", default="8GB",
                          help="warren.max_cache_memory for the second pass of a case that does not fit")
     options.add_argument("--statement-timeout", help="statement_timeout of the read workloads, e.g. 15min")
-    options.add_argument("--skip", action="append", default=[], choices=["second-version"],
+    options.add_argument("--node-order", choices=["id", "locality"], default="id",
+                         help="create_graph's node_order: how the first build orders dense ids")
+    options.add_argument("--skip", action="append", default=[], choices=["second-version", "library", "communities"],
                          help="leave out a part of each case")
     options.add_argument("--label", default="", help="suffix for the result file name")
     options.add_argument("--disk-floor", type=int, default=4 * GIB, help="bytes of disk to keep free")
