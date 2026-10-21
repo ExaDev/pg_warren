@@ -106,7 +106,7 @@ pub fn local_moving<I: Interrupts>(
         }
     }
     let mut labels = Vector::filled(memory, nodes, 1, 0i64)?;
-    memory.reclaim_for(State::bytes(nodes, graph));
+    memory.reclaim_for(State::bytes(nodes, graph, workers.threads()));
     let outcome = workers.run(interrupts, |cancellation| {
         Ok(run(
             memory,
@@ -150,10 +150,11 @@ fn run(
                 if cancellation.is_cancelled() {
                     return Err(ComputeError::Cancelled.into());
                 }
-                let pending = sweep.take(block);
-                for decision in
-                    state.decide(graph, pending, options.resolution).into_iter().flatten()
-                {
+                let count = sweep.take(block);
+                let (pending, decisions) = sweep.batch(count);
+                state.decide(memory, graph, pending, decisions, options.resolution)?;
+                for at in 0..count {
+                    let Some(decision) = sweep.decisions[at] else { continue };
                     if let Some(gain) = state.apply(graph, decision, options.resolution) {
                         q += gain;
                         moved += 1;
@@ -180,30 +181,49 @@ fn run(
 struct Sweep {
     woken: Vec<bool>,
     pending: Vec<DenseId>,
-    _charges: [MemoryCharge; 2],
+    decisions: Vec<Option<Decision>>,
+    _charges: [MemoryCharge; 3],
 }
 
 impl Sweep {
-    /// The bytes it holds per node.
-    const BYTES_PER_NODE: u64 = (size_of::<bool>() + size_of::<DenseId>()) as u64;
-
-    fn new(memory: &ComputeMemory, nodes: usize) -> Result<Self, CommunityError> {
-        let (woken, woken_charge) = memory.filled(nodes, true)?;
-        let (pending, pending_charge) = memory.filled(NODES_PER_BLOCK.min(nodes), 0 as DenseId)?;
-        Ok(Self { woken, pending, _charges: [woken_charge, pending_charge] })
+    /// The bytes it holds for `nodes` nodes: a flag a node, and a block's
+    /// nodes and decisions.
+    fn bytes(nodes: u64) -> u64 {
+        let block = (NODES_PER_BLOCK as u64).min(nodes);
+        let per_block = (size_of::<DenseId>() + size_of::<Option<Decision>>()) as u64;
+        nodes.saturating_mul(size_of::<bool>() as u64).saturating_add(block * per_block)
     }
 
-    /// The woken nodes of `block`, each put back to sleep. Every node
-    /// starts woken.
-    fn take(&mut self, block: &[DenseId]) -> &[DenseId] {
-        self.pending.clear();
+    fn new(memory: &ComputeMemory, nodes: usize) -> Result<Self, CommunityError> {
+        let block = NODES_PER_BLOCK.min(nodes);
+        let (woken, woken_charge) = memory.filled(nodes, true)?;
+        let (pending, pending_charge) = memory.filled(block, 0 as DenseId)?;
+        let (decisions, decisions_charge) = memory.filled(block, None)?;
+        Ok(Self {
+            woken,
+            pending,
+            decisions,
+            _charges: [woken_charge, pending_charge, decisions_charge],
+        })
+    }
+
+    /// Puts the woken nodes of `block` first in `pending`, each back to
+    /// sleep, and returns how many. Every node starts woken.
+    fn take(&mut self, block: &[DenseId]) -> usize {
+        let mut count = 0;
         for &node in block {
             if self.woken[node as usize] {
                 self.woken[node as usize] = false;
-                self.pending.push(node);
+                self.pending[count] = node;
+                count += 1;
             }
         }
-        &self.pending
+        count
+    }
+
+    /// The first `count` pending nodes, and room for their decisions.
+    fn batch(&mut self, count: usize) -> (&[DenseId], &mut [Option<Decision>]) {
+        (&self.pending[..count], &mut self.decisions[..count])
     }
 
     /// Wakes the neighbours of `decision`'s node outside the community it
@@ -214,6 +234,34 @@ impl Sweep {
                 self.woken[neighbour as usize] = true;
             }
         }
+    }
+}
+
+/// A task's scratch for one row's communities and weights at a time,
+/// charged to the budget as it grows: at most the longest row.
+struct Scratch {
+    rows: Vec<(DenseId, f64)>,
+    charge: MemoryCharge,
+}
+
+impl Scratch {
+    /// The bytes per row entry it holds.
+    const BYTES_PER_ENTRY: u64 = size_of::<(DenseId, f64)>() as u64;
+
+    fn new(memory: &ComputeMemory) -> Result<Self, CommunityError> {
+        Ok(Self { rows: Vec::new(), charge: memory.charge(0)? })
+    }
+
+    /// The scratch, empty, with room for `len` entries.
+    fn room(&mut self, len: usize) -> Result<&mut Vec<(DenseId, f64)>, CommunityError> {
+        self.rows.clear();
+        let capacity = self.rows.capacity();
+        if len > capacity {
+            let bytes = (len - capacity) as u64 * Self::BYTES_PER_ENTRY;
+            self.charge.grow(bytes)?;
+            self.rows.try_reserve_exact(len).map_err(|_| ComputeError::OutOfMemory { bytes })?;
+        }
+        Ok(&mut self.rows)
     }
 }
 
@@ -237,18 +285,25 @@ struct State {
 
 impl State {
     /// The most [`local_moving`] charges at once on the pool for `nodes`
-    /// nodes, with the decisions' scratch at its largest: the state (16 B
-    /// a node) beside the starting modularity's labels and grouping (40 B,
-    /// before the colouring exists), or beside the colouring (24 B) and
-    /// either the sweeps' [`Sweep`] (at most 9 B) or, once that is gone,
-    /// the labelling's least keys (16 B).
-    fn bytes(nodes: u64, graph: &Undirected) -> u64 {
+    /// nodes on `threads` threads: per node, the state (16 B) beside the
+    /// starting modularity's labels and grouping (40 B, before the
+    /// colouring exists), the colouring as it colours (24 B), or the
+    /// colouring it keeps (8 B) with the sweeps' flags (1 B) or, once
+    /// those are gone, the labelling's least keys (16 B); and the
+    /// colouring's per-colour arrays and the sweeps' block, and each
+    /// thread's row scratch, all at their largest.
+    fn bytes(nodes: u64, graph: &Undirected, threads: usize) -> u64 {
         let longest = (0..nodes).map(|node| graph.row(node).len() as u64).max().unwrap_or(0);
         let state = (size_of::<DenseId>() + size_of::<f64>()) as u64;
         let modularity = size_of::<i64>() as u64 + GROUPING_BYTES_PER_NODE;
-        let sweeps = Colouring::BYTES_PER_NODE + Sweep::BYTES_PER_NODE.max(16);
-        let per_node = state + modularity.max(sweeps);
-        nodes.saturating_mul(per_node).saturating_add(longest.saturating_mul(16 * 64))
+        let kept = size_of::<DenseId>() as u64;
+        let later = (kept + size_of::<bool>() as u64).max(kept + 16);
+        let per_node = state + modularity.max(Colouring::BYTES_PER_NODE).max(later);
+        nodes
+            .saturating_mul(per_node)
+            .saturating_add(Colouring::bytes_per_colouring(longest))
+            .saturating_add(Sweep::bytes(nodes) - nodes)
+            .saturating_add((threads as u64).saturating_mul(longest) * Scratch::BYTES_PER_ENTRY)
     }
 
     fn new(
@@ -264,7 +319,7 @@ impl State {
                 // Each community is represented by its member of least dense id.
                 let (mut order, _order_charge) = memory.filled(nodes, 0 as DenseId)?;
                 order.iter_mut().enumerate().for_each(|(node, o)| *o = node as DenseId);
-                order.sort_by_key(|&node| (labels[node as usize], node));
+                order.sort_unstable_by_key(|&node| (labels[node as usize], node));
                 let mut first = 0;
                 for (at, &node) in order.iter().enumerate() {
                     if at == 0 || labels[order[at - 1] as usize] != labels[node as usize] {
@@ -292,25 +347,31 @@ impl State {
         modularity(memory, graph, &labels, resolution)
     }
 
-    /// The best move of each node of `class`, decided against the current
-    /// state, in parallel when the class is large; in `class` order.
+    /// The best move of each node of `nodes` into `decisions`, decided
+    /// against the current state, in parallel when there are many. Each
+    /// task's row scratch is charged to `memory` as it grows.
     fn decide(
         &self,
+        memory: &ComputeMemory,
         graph: &Undirected,
-        class: &[DenseId],
+        nodes: &[DenseId],
+        decisions: &mut [Option<Decision>],
         resolution: f64,
-    ) -> Vec<Option<Decision>> {
-        let decide_chunk = |chunk: &[DenseId]| {
-            let mut scratch = Vec::new();
-            chunk
-                .iter()
-                .map(|&node| self.best(graph, node, resolution, &mut scratch))
-                .collect::<Vec<_>>()
+    ) -> Result<(), CommunityError> {
+        let decide_chunk = |(nodes, decisions): (&[DenseId], &mut [Option<Decision>])| {
+            let mut scratch = Scratch::new(memory)?;
+            for (&node, decision) in nodes.iter().zip(decisions) {
+                *decision = self.best(graph, node, resolution, &mut scratch)?;
+            }
+            Ok::<_, CommunityError>(())
         };
-        if class.len() < NODES_PER_TASK {
-            return decide_chunk(class);
+        if nodes.len() < NODES_PER_TASK {
+            return decide_chunk((nodes, decisions));
         }
-        class.par_chunks(NODES_PER_TASK).flat_map_iter(decide_chunk).collect()
+        nodes
+            .par_chunks(NODES_PER_TASK)
+            .zip(decisions.par_chunks_mut(NODES_PER_TASK))
+            .try_for_each(decide_chunk)
     }
 
     /// Node `node`'s best move, if moving raises modularity: to the
@@ -321,14 +382,14 @@ impl State {
         graph: &Undirected,
         node: DenseId,
         resolution: f64,
-        scratch: &mut Vec<(DenseId, f64)>,
-    ) -> Option<Decision> {
+        scratch: &mut Scratch,
+    ) -> Result<Option<Decision>, CommunityError> {
         let total = graph.total();
         let degree = graph.degree(node);
         if total == 0.0 || degree == 0.0 {
-            return None;
+            return Ok(None);
         }
-        scratch.clear();
+        let scratch = scratch.room(graph.row(node).len())?;
         scratch.extend(
             graph
                 .row(node)
@@ -336,7 +397,7 @@ impl State {
                 .filter(|&&(neighbour, _)| neighbour != node)
                 .map(|&(neighbour, weight)| (self.community[neighbour as usize], weight)),
         );
-        scratch.sort_by_key(|&(community, _)| community);
+        scratch.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
         let own = self.community[node as usize];
         let gain = |to: f64, sum: f64| to - resolution * degree * sum / total;
         let mut to_own = 0.0;
@@ -359,8 +420,9 @@ impl State {
             }
         }
         let stay = gain(to_own, self.sums[own as usize] - degree);
-        let (target, to_target, _) = best.filter(|&(_, _, best_gain)| best_gain > stay)?;
-        Some(Decision { node, target, to_target, to_own })
+        Ok(best
+            .filter(|&(_, _, best_gain)| best_gain > stay)
+            .map(|(target, to_target, _)| Decision { node, target, to_target, to_own }))
     }
 
     /// Applies `decision` if it still raises modularity against the
@@ -411,12 +473,19 @@ impl State {
 struct Colouring {
     starts: Vec<usize>,
     nodes: Vec<DenseId>,
-    _charge: MemoryCharge,
+    _charges: [MemoryCharge; 2],
 }
 
 impl Colouring {
-    /// The bytes per node it holds while it colours.
+    /// The bytes per node it holds while it colours: the order, each
+    /// node's colour and the nodes grouped by colour, which it keeps.
     const BYTES_PER_NODE: u64 = 3 * size_of::<u64>() as u64;
+
+    /// The bytes of its per-colour arrays at most, for rows of at most
+    /// `longest` entries: there are at most `longest + 1` colours.
+    fn bytes_per_colouring(longest: u64) -> u64 {
+        3 * size_of::<u64>() as u64 * longest.saturating_add(2)
+    }
 
     fn new(
         memory: &ComputeMemory,
@@ -425,12 +494,17 @@ impl Colouring {
         seed: u64,
     ) -> Result<Self, CommunityError> {
         let nodes = graph.id_space() as usize;
-        let charge = memory.charge(Self::BYTES_PER_NODE.saturating_mul(nodes as u64))?;
-        let mut order: Vec<DenseId> =
-            (0..nodes as DenseId).filter(|&node| !graph.row(node).is_empty()).collect();
-        order.sort_by_key(|&node| (priority(seed, node), node));
-        let mut colour = vec![usize::MAX; nodes];
-        let mut taken: Vec<DenseId> = Vec::new();
+        let (mut order, _order_charge) = memory.filled(nodes, 0 as DenseId)?;
+        let mut len = 0;
+        for node in (0..nodes as DenseId).filter(|&node| !graph.row(node).is_empty()) {
+            order[len] = node;
+            len += 1;
+        }
+        order.truncate(len);
+        order.sort_unstable_by_key(|&node| (priority(seed, node), node));
+        let longest = order.iter().map(|&node| graph.row(node).len()).max().unwrap_or(0);
+        let (mut colour, _colour_charge) = memory.filled(nodes, usize::MAX)?;
+        let (mut taken, _taken_charge) = memory.filled(longest + 1, DenseId::MAX)?;
         let mut colours = 0;
         for (at, &node) in order.iter().enumerate() {
             if at % 65_536 == 0 && cancellation.is_cancelled() {
@@ -439,31 +513,31 @@ impl Colouring {
             for &(neighbour, _) in graph.row(node) {
                 let c = colour[neighbour as usize];
                 if c != usize::MAX && neighbour != node {
-                    if c >= taken.len() {
-                        taken.resize(c + 1, DenseId::MAX);
-                    }
                     taken[c] = node;
                 }
             }
-            let free = (0..).find(|&c| taken.get(c).is_none_or(|&by| by != node)).unwrap_or(0);
+            // A row of d entries takes at most d colours, so one of the
+            // first d + 1 is free.
+            let free = (0..=longest).find(|&c| taken[c] != node).unwrap_or(0);
             colour[node as usize] = free;
             colours = colours.max(free + 1);
         }
-        let mut starts = vec![0usize; colours + 1];
+        let (mut starts, starts_charge) = memory.filled(colours + 1, 0usize)?;
         for &node in &order {
             starts[colour[node as usize] + 1] += 1;
         }
         for c in 0..colours {
             starts[c + 1] += starts[c];
         }
-        let mut next = starts.clone();
-        let mut grouped = vec![0 as DenseId; order.len()];
+        let (mut next, _next_charge) = memory.filled(colours + 1, 0usize)?;
+        next.copy_from_slice(&starts);
+        let (mut grouped, grouped_charge) = memory.filled(order.len(), 0 as DenseId)?;
         for &node in &order {
             let slot = &mut next[colour[node as usize]];
             grouped[*slot] = node;
             *slot += 1;
         }
-        Ok(Self { starts, nodes: grouped, _charge: charge })
+        Ok(Self { starts, nodes: grouped, _charges: [starts_charge, grouped_charge] })
     }
 
     /// Each colour's nodes, colour by colour.
@@ -599,18 +673,43 @@ mod tests {
     }
 
     #[test]
+    fn it_reclaims_ahead_for_everything_it_charges_on_the_pool() {
+        // A hub of 5,000 leaves, two of them joined, and a path: the row
+        // scratch is the hub's row on each thread.
+        let mut edges: Edges = (1..5_001u64).map(|leaf| (0, 0, leaf, 1.0)).collect();
+        edges.extend((5_001..5_100u64).map(|n| (0, n, n + 1, 1.0)));
+        edges.push((0, 1, 2, 1.0));
+        let graph = undirected(5_101, &edges);
+        let tombstones = Tombstones::new(graph.id_space()).unwrap();
+        let memory = crate::compute::memory::fully_held();
+        let found = local_moving(
+            workers(),
+            &memory,
+            &mut Uninterrupted,
+            &graph,
+            &tombstones,
+            None,
+            None,
+            OPTIONS,
+        );
+        assert!(found.is_ok(), "{found:?}");
+    }
+
+    #[test]
     fn a_later_sweep_decides_only_for_the_woken() {
         // A path 0 – 1 – 2 – 3: node 1 joins 2's community.
         let graph = undirected(4, &vec![(0, 0, 1, 1.0), (0, 1, 2, 1.0), (0, 2, 3, 1.0)]);
         let memory = ComputeMemory::new(u64::MAX);
         let mut state = State::new(&memory, &graph, None).unwrap();
         let mut sweep = Sweep::new(&memory, 4).unwrap();
-        assert_eq!(sweep.take(&[0, 1, 2, 3]), [0, 1, 2, 3], "every node starts woken");
-        assert!(sweep.take(&[0, 1, 2, 3]).is_empty());
+        let count = sweep.take(&[0, 1, 2, 3]);
+        assert_eq!(sweep.batch(count).0, [0, 1, 2, 3], "every node starts woken");
+        assert_eq!(sweep.take(&[0, 1, 2, 3]), 0);
         state.community[1] = 2;
         let decision = Decision { node: 1, target: 2, to_target: 1.0, to_own: 0.0 };
         sweep.wake_neighbours(&graph, &state, decision);
-        assert_eq!(sweep.take(&[0, 1, 2, 3]), [0], "2 is in the community 1 joined");
+        let count = sweep.take(&[0, 1, 2, 3]);
+        assert_eq!(sweep.batch(count).0, [0], "2 is in the community 1 joined");
     }
 
     #[test]

@@ -42,8 +42,8 @@ pub fn modularity(
     // The grouping's order and index, then each community's two sums.
     let _grouping = memory.charge((labels.len() as u64).saturating_mul(GROUPING_BYTES_PER_NODE))?;
     let communities = Communities::of(labels)?;
-    let mut inside = vec![0.0; communities.count];
-    let mut degrees = vec![0.0; communities.count];
+    let mut inside = zeroed(communities.count)?;
+    let mut degrees = zeroed(communities.count)?;
     for node in 0..graph.id_space() {
         let community = communities.index[node as usize];
         let label = labels[node as usize];
@@ -60,6 +60,17 @@ pub fn modularity(
         .zip(&degrees)
         .map(|(&inside, &degree)| inside / total - resolution * (degree / total).powi(2))
         .sum())
+}
+
+/// `len` zeros, allocated with `try_reserve` (the grouping's charge covers
+/// them: at most one community per node).
+fn zeroed(len: usize) -> Result<Vec<f64>, CommunityError> {
+    let mut zeros = Vec::new();
+    zeros
+        .try_reserve_exact(len)
+        .map_err(|_| ComputeError::OutOfMemory { bytes: (len * 8) as u64 })?;
+    zeros.resize(len, 0.0);
+    Ok(zeros)
 }
 
 /// Each node's community as an index `0..count`, communities in ascending
@@ -79,8 +90,12 @@ impl Communities {
             .try_reserve_exact(labels.len())
             .map_err(|_| ComputeError::OutOfMemory { bytes: (labels.len() * 8) as u64 })?;
         order.extend(0..labels.len() as DenseId);
-        order.sort_by_key(|&node| (labels[node as usize], node));
-        let mut index = vec![0; labels.len()];
+        order.sort_unstable_by_key(|&node| (labels[node as usize], node));
+        let mut index = Vec::new();
+        index
+            .try_reserve_exact(labels.len())
+            .map_err(|_| ComputeError::OutOfMemory { bytes: (labels.len() * 8) as u64 })?;
+        index.resize(labels.len(), 0);
         let mut count = 0;
         for (at, &node) in order.iter().enumerate() {
             if at > 0 && labels[order[at - 1] as usize] != labels[node as usize] {

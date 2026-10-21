@@ -85,7 +85,7 @@ impl Undirected {
         if let Some((source, target, weight)) = negative {
             return Err(CommunityError::NegativeWeight { from: source, to: target, weight });
         }
-        fold_rows(&mut offsets, &mut entries, cancellation)?;
+        fold_rows(memory, &mut offsets, &mut entries, cancellation)?;
         let (mut degrees, degrees_charge) = memory.filled(len, 0.0)?;
         for (node, degree) in degrees.iter_mut().enumerate() {
             let row = &entries[offsets[node] as usize..offsets[node + 1] as usize];
@@ -165,42 +165,46 @@ fn each_entry(
 /// Sorts each row by target (stably, so equal targets keep their order)
 /// and folds equal targets into one entry, summing their weights in that
 /// order; then closes the gaps the folding left and fixes the offsets.
+/// The folded lengths (8 B a node) are charged to `memory`.
 fn fold_rows(
+    memory: &ComputeMemory,
     offsets: &mut [u64],
     entries: &mut [(DenseId, f64)],
     cancellation: &Cancellation,
 ) -> Result<(), CommunityError> {
     let nodes = offsets.len() - 1;
-    let mut folded_lengths = vec![0u64; 0];
+    let (mut lengths, _lengths_charge) = memory.filled(nodes, 0u64)?;
+    // Each task's rows, as one slice of `entries`: a task per 4,096 nodes.
     let mut tasks = Vec::new();
+    tasks
+        .try_reserve_exact(nodes.div_ceil(NODES_PER_TASK))
+        .map_err(|_| ComputeError::OutOfMemory { bytes: nodes as u64 })?;
     let mut rest = &mut *entries;
     for first in (0..nodes).step_by(NODES_PER_TASK) {
         let last = nodes.min(first + NODES_PER_TASK);
         let len = (offsets[last] - offsets[first]) as usize;
         let (chunk, tail) = std::mem::take(&mut rest).split_at_mut(len);
-        tasks.push((first..last, chunk));
+        tasks.push(chunk);
         rest = tail;
     }
     let offsets_read = &*offsets;
-    let lengths: Vec<Vec<u64>> = tasks
-        .into_par_iter()
-        .map(|(rows, chunk)| {
+    lengths.par_chunks_mut(NODES_PER_TASK).zip(tasks).enumerate().try_for_each(
+        |(task, (lengths, chunk))| {
             if cancellation.is_cancelled() {
                 return Err(Cancelled);
             }
-            let base = offsets_read[rows.start];
-            Ok(rows
-                .map(|row| {
-                    let range = (offsets_read[row] - base) as usize
-                        ..(offsets_read[row + 1] - base) as usize;
-                    fold_row(&mut chunk[range])
-                })
-                .collect())
-        })
-        .collect::<Result<_, Cancelled>>()?;
-    folded_lengths.extend(lengths.into_iter().flatten());
+            let base = offsets_read[task * NODES_PER_TASK];
+            for (at, length) in lengths.iter_mut().enumerate() {
+                let row = task * NODES_PER_TASK + at;
+                let range =
+                    (offsets_read[row] - base) as usize..(offsets_read[row + 1] - base) as usize;
+                *length = fold_row(&mut chunk[range]);
+            }
+            Ok(())
+        },
+    )?;
     let mut write = 0usize;
-    for (row, &len) in folded_lengths.iter().enumerate() {
+    for (row, &len) in lengths.iter().enumerate() {
         let start = offsets[row] as usize;
         entries.copy_within(start..start + len as usize, write);
         offsets[row] = write as u64;
@@ -308,6 +312,16 @@ mod tests {
             Undirected::new(&small, &Cancellation::new(), &graph, true, true),
             Err(CommunityError::Compute(ComputeError::MemoryLimit { .. }))
         ));
+    }
+
+    #[test]
+    fn it_builds_within_its_bound_as_its_whole_budget() {
+        let edges: Edges = (0..300u64).map(|i| (0, i % 50, (i * 7) % 50, 1.0)).collect();
+        let graph = reference::graph(50, 1, &edges, true, false);
+        for directed in [false, true] {
+            let exact = ComputeMemory::new(Undirected::bytes(&graph, directed));
+            assert!(Undirected::new(&exact, &Cancellation::new(), &graph, true, directed).is_ok());
+        }
     }
 
     proptest! {
