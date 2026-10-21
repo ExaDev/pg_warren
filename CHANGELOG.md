@@ -2,6 +2,46 @@
 
 ## 0.4.0 — in development
 
+### Upgrading
+
+- **Run `ALTER EXTENSION pg_warren UPDATE;` in every database that has the
+  extension**, after installing the new build and *before* calling any
+  `warren.*` function. 0.4.0 changes the schema: the update adds the column
+  `warren.graphs.node_order` (existing graphs are backfilled `'id'`, the
+  order they were built in) and the `node_order` arguments of
+  `create_graph` and `compact`.
+- `create_graph` and `compact` are dropped and re-created by the update
+  (each gains an argument). Unlike 0.3.0's update, this one grants again
+  every privilege that was set on them, so a `GRANT` or `REVOKE` you made
+  on `warren.create_graph` or `warren.compact` survives it (the grants are
+  recorded as made by the functions' owner).
+
+### New
+
+- **Locality ordering of dense ids** (DESIGN.md §14 item 22):
+  `create_graph(…, node_order := 'locality')` (default `'id'`) numbers the
+  first build's nodes so that neighbours get nearby dense ids (Reverse
+  Cuthill–McKee over the undirected view of the edges), so the per-node
+  data a kernel reads at each edge shares cache lines. Ids are ordered only
+  where they may change: the first build and `compact`. Later refreshes keep
+  surviving ids and append new nodes, so locality decays as the graph
+  changes; `compact` restores it. Results are the same in either order,
+  read by external id. `warren.info` reports `node_order`. Measured on
+  4 vCPUs (DESIGN.md §14 item 22): see below under Performance.
+- **`compact(name, node_order DEFAULT NULL)`:** compacts in the given order
+  (NULL: the graph's own); an order given becomes the graph's, so later
+  compactions follow it. This is how an existing graph gets locality order.
+  The order's scratch is charged to `warren.max_build_memory` (53400 past
+  it). Persisted vectors move by node, as before.
+
+### Behaviour changes
+
+- An unknown `node_order` is refused with 22023
+  (`invalid_parameter_value`).
+- `compact` is no longer `STRICT`: `compact(NULL)` raises an error instead
+  of returning NULL. A compaction that runs out of memory now reports
+  53200 (`out_of_memory`) rather than 22023.
+
 ## 0.3.0 — hardening: bounded memory, trusted install, 100M-edge scale (2026-10-20)
 
 Milestone M7 of DESIGN.md §13. A graph of 10M nodes and 100M edges now

@@ -215,15 +215,16 @@ Every SQL example in the README and `docs/` runs in CI, in
   10 minutes on a uniform random graph of that size
   ([docs/limits.md](docs/limits.md)).
 
-- **0.4.0** (in development): locality ordering of dense ids first (DESIGN.md
-  §14 item 22), then the planned library's first groups (§6.7).
+- **0.4.0** (in development): locality ordering of dense ids
+  (`create_graph(…, node_order := 'locality')`, `compact(…, node_order)`;
+  DESIGN.md §14 item 22), then the planned library's first groups (§6.7).
 
 See [CHANGELOG.md](CHANGELOG.md). This is pre-1.0 software: the SQL surface
 may still change between minor versions, with an upgrade script each time.
 
 Not there yet: a shared-memory cache across backends, incremental
 maintenance, contraction (community-level graphs), sparse matrix algebra,
-locality ordering of dense ids (next, DESIGN.md §14 item 22), and text ids
+and text ids
 ([docs/limits.md](docs/limits.md)).
 
 ## Positioning vs prior art
