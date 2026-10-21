@@ -14,8 +14,8 @@
 -- one), or after `max_levels`. A level's local moving stops when a sweep
 -- raises modularity by no more than `tolerance`. Arguments and output as
 -- warren.louvain's; `randomness` is θ of the refinement. The level's
--- graph is named `_warren_leiden_<backend pid>_<level>` and dropped at
--- the end.
+-- graph, a level graph of warren.contract's (`_warren_level_<version>`),
+-- is dropped at the end.
 CREATE FUNCTION warren.leiden(graph text, "out" text, resolution float8 DEFAULT 1.0,
                               seed bigint DEFAULT 0, max_levels int DEFAULT 100,
                               tolerance float8 DEFAULT 1e-7, randomness float8 DEFAULT 0.01,
@@ -89,9 +89,11 @@ BEGIN
         PERFORM warren.lift(g, '_warren_leiden_refined', graph, '_warren_leiden_refined_down',
                             persist := false, version := gv);
       END IF;
-      next_g := format('_warren_leiden_%s_%s', pg_backend_pid(), level);
-      next_v := warren.contract(graph, '_warren_leiden_refined_down', next_g,
+      -- A level graph of its own, named after its version, a name no
+      -- graph can have had.
+      next_v := warren.contract(graph, '_warren_leiden_refined_down', NULL,
                                 weighted := coalesce(weighted, true), version := v);
+      next_g := '_warren_level_' || next_v;
       -- The next level starts from the unrefined partition: every member
       -- of a refined community is in the same community, so min is it.
       PERFORM warren.project(graph, '_warren_leiden_down', next_g, '_warren_leiden_initial', 'min',

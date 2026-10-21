@@ -153,7 +153,10 @@
   version)` and `leiden(…, randomness, …)` write a label vector of
   communities that maximise modularity and return its modularity;
   `levels_prefix` keeps each level's partition. Leiden's communities are
-  always connected. Both are PL/pgSQL over `contract`, `project`, `lift`
+  always connected. Graph names beginning with `_warren_` are now
+  reserved for their level graphs: `create_graph` and `contract` refuse
+  them (42939), and `contract(graph, labels, NULL)` creates a new level
+  graph named after its version. Both are PL/pgSQL over `contract`, `project`, `lift`
   and two new kernels, `local_moving` (a level's moving, parallel and
   deterministic: the same result for any thread count and a given seed)
   and `leiden_refine` (Traag et al.'s refinement). `modularity(graph,

@@ -88,6 +88,38 @@ mod tests {
         Ok(())
     }
 
+    /// The reviewer's two cases: a graph named as a level graph would be
+    /// was given a version and then dropped by a run (data loss), and a
+    /// reader could create one to make other roles' runs fail.
+    #[pg_test]
+    fn level_graph_names_can_be_neither_taken_nor_squatted() -> Result<(), Error> {
+        ring_of_cliques()?;
+        Spi::run("CREATE ROLE squatter; GRANT USAGE ON SCHEMA public TO squatter")?;
+        Spi::run("SELECT warren.grant('rc', 'squatter')")?;
+        for role in ["NONE", "squatter"] {
+            Spi::run(&format!("DROP TABLE IF EXISTS failure; SET ROLE {role}"))?;
+            for call in [
+                "warren.create_graph('_warren_louvain_' || pg_backend_pid() || '_1',
+                                     'SELECT id FROM rc_nodes', 'SELECT src, dst FROM rc_edges')",
+                "warren.contract('rc', 'c', '_warren_leiden_' || pg_backend_pid() || '_1')",
+                "warren.contract('rc', 'c', '_warren_level_1')",
+            ] {
+                Spi::run("SELECT warren.vector_dense_id('rc', 'c', persist := false)")?;
+                let refused = failure(call)?.unwrap_or_default();
+                assert!(
+                    refused.starts_with("42939: graph names beginning with _warren_"),
+                    "{role}: {refused}"
+                );
+            }
+            Spi::run("DROP TABLE IF EXISTS failure; RESET ROLE")?;
+        }
+        let graphs = || rows("SELECT name FROM warren.graphs ORDER BY name");
+        let before = graphs()?;
+        Spi::run("SELECT warren.louvain('rc', 'louvain'), warren.leiden('rc', 'leiden')")?;
+        assert_eq!(graphs()?, before, "a run leaves no graph and adds none");
+        Ok(())
+    }
+
     #[pg_test]
     fn each_levels_partition_can_be_kept() -> Result<(), Error> {
         ring_of_cliques()?;

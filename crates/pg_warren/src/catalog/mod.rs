@@ -19,7 +19,9 @@ mod version;
 
 pub(crate) use error::CatalogError;
 pub(crate) use graph::NewGraph;
-pub(crate) use graph::{parse_node_order, GraphDefinition, GraphSource};
+pub(crate) use graph::{
+    level_graph_name, parse_node_order, require_unreserved, GraphDefinition, GraphSource,
+};
 pub(crate) use version::{
     compaction_between, current_wal_lsn, insert_version, parent_of, promote_version,
     record_contents, require_current_id_space, require_version, version_record, Lineage,

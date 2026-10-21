@@ -14,9 +14,9 @@
 -- id of their members: a level's nodes are keyed by those dense ids. Writes
 -- vector `out` (i64, on version `version`, NULL: the current one), with
 -- each level's partition as `<levels_prefix>_<level>` if `levels_prefix`
--- is given, and returns the partition's modularity. The level's graph,
--- named `_warren_louvain_<backend pid>_<level>`, and the intermediate
--- vectors are dropped at the end.
+-- is given, and returns the partition's modularity. The level's graph, a
+-- level graph of warren.contract's (`_warren_level_<version>`), and the
+-- intermediate vectors are dropped at the end.
 CREATE FUNCTION warren.louvain(graph text, "out" text, resolution float8 DEFAULT 1.0,
                                seed bigint DEFAULT 0, max_levels int DEFAULT 100,
                                tolerance float8 DEFAULT 1e-7, weighted boolean DEFAULT NULL,
@@ -82,9 +82,11 @@ BEGIN
       END IF;
       EXIT WHEN found = nodes OR level >= max_levels OR q_next - q <= tolerance;
       q := q_next;
-      next_g := format('_warren_louvain_%s_%s', pg_backend_pid(), level);
-      next_v := warren.contract(graph, '_warren_louvain_down', next_g,
+      -- A level graph of its own, named after its version, a name no
+      -- graph can have had.
+      next_v := warren.contract(graph, '_warren_louvain_down', NULL,
                                 weighted := coalesce(weighted, true), version := v);
+      next_g := '_warren_level_' || next_v;
       IF g <> graph THEN
         PERFORM warren.drop_vector(g, '_warren_louvain_' || part, gv, true) FROM unnest(parts) part;
         PERFORM warren.drop_graph(g);

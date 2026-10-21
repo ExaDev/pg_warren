@@ -12,7 +12,10 @@ use super::CommunitySqlError;
 use crate::access::{current_user, entry, require_owner, Caller};
 use crate::build::{max_build_memory, RefreshRequest, SpiCatalog};
 use crate::cache::resolve;
-use crate::catalog::{CatalogError, GraphDefinition, GraphSource, Lineage, NewGraph};
+use crate::catalog::{
+    level_graph_name, require_unreserved, CatalogError, GraphDefinition, GraphSource, Lineage,
+    NewGraph,
+};
 use crate::compute_sql::{workers, Vectors};
 use crate::interrupts::PostgresInterrupts;
 use crate::segment::{SpiSegmentStore, CHUNK_SIZE};
@@ -22,7 +25,10 @@ use warren_core::graph::NodeOrder;
 /// `warren.contract`: contracts version `version` (NULL: the current one)
 /// of `graph` by the labels of its vector `label_vector` into a new
 /// version of graph `out_graph`, created if it does not exist, and returns
-/// the new version's id. Each live node belongs to the community of its
+/// the new version's id. Names beginning with `_warren_` are reserved:
+/// with `out_graph` NULL, the version goes into a new *level graph* of
+/// the caller's named `_warren_level_<the version's id>`, a name no graph
+/// can have had (DESIGN.md §6.7: the library's levels). Each live node belongs to the community of its
 /// label, which must be an integer; the quotient's node ids (`bigint`)
 /// are the labels. Edges between communities are summed by weight (or
 /// counted if not `weighted`); edges inside a community make its
@@ -42,12 +48,14 @@ fn contract(
     entry(|caller| {
         let graph = graph.ok_or(CommunitySqlError::NullArgument("graph"))?;
         let label_vector = label_vector.ok_or(CommunitySqlError::NullArgument("label_vector"))?;
-        let out_graph = out_graph.ok_or(CommunitySqlError::NullArgument("out_graph"))?;
+        if let Some(name) = out_graph {
+            require_unreserved(name)?;
+        }
         let weighted = weighted.ok_or(CommunitySqlError::NullArgument("weighted"))?;
         let drop_self_loops =
             drop_self_loops.ok_or(CommunitySqlError::NullArgument("drop_self_loops"))?;
         let promote = promote.ok_or(CommunitySqlError::NullArgument("promote"))?;
-        if graph == out_graph {
+        if out_graph == Some(graph) {
             return Err(CommunitySqlError::InvalidArgument(format!(
                 "out_graph must not be graph \"{graph}\" itself"
             )));
@@ -61,7 +69,9 @@ fn contract(
                 parent_version: vectors.version,
                 label_vector: vectors.persisted_id(label_vector),
             };
-            let mut quotient = quotient_graph(out_graph, &vectors.graph, caller)?;
+            let level = format!("_warren_level_pending_{}", std::process::id());
+            let mut quotient =
+                quotient_graph(out_graph.unwrap_or(&level), out_graph.is_none(), &vectors.graph, caller)?;
             quotient.lock()?;
             quotient.require_sound_current_version()?;
             let request = ContractRequest {
@@ -78,7 +88,7 @@ fn contract(
                 },
                 lineage,
             };
-            contract_version(
+            let built = contract_version(
                 &quotient,
                 &vectors.loaded,
                 &labels,
@@ -86,7 +96,11 @@ fn contract(
                 (&*workers()?, &mut PostgresInterrupts),
                 &mut SpiSegmentStore,
                 &mut SpiCatalog::at_current_wal_lsn()?,
-            )?
+            )?;
+            if out_graph.is_none() {
+                quotient.rename(level_graph_name(built))?;
+            }
+            built
         });
         Ok(Some(built))
     })
@@ -95,9 +109,10 @@ fn contract(
 /// Graph `name`, which a contraction of `parent` adds a version to: an
 /// existing graph derived by contraction, from graphs of the same shape
 /// (direction and relations), whose owner role the caller is a member of;
-/// or a new one, owned by the caller.
+/// or a new one, owned by the caller, which it must be if `fresh`.
 fn quotient_graph(
     name: &str,
+    fresh: bool,
     parent: &GraphDefinition,
     caller: &Caller,
 ) -> Result<GraphDefinition, CommunitySqlError> {
@@ -125,6 +140,9 @@ fn quotient_graph(
         }
         Err(error) => return Err(error.into()),
     };
+    if fresh {
+        return Err(CatalogError::GraphExists(existing.name).into());
+    }
     require_owner(existing.owner, &existing.name, "contract into")?;
     if existing.source != GraphSource::Contraction {
         return Err(CommunitySqlError::NotAContraction(existing.name));
@@ -380,6 +398,47 @@ mod tests {
                 ))
             );
         }
+        Ok(())
+    }
+
+    #[pg_test]
+    fn graph_names_beginning_with_warren_are_reserved() -> Result<(), Error> {
+        labelled()?;
+        let refused = |name: &str| {
+            format!(
+                "42939: graph names beginning with _warren_ are reserved for the library's \
+                 level graphs: \"{name}\""
+            )
+        };
+        assert_eq!(
+            failure(
+                "warren.create_graph('_warren_louvain_1_1', 'SELECT id FROM t_nodes',
+                                     'SELECT src, dst FROM t_edges')"
+            )?,
+            Some(refused("_warren_louvain_1_1"))
+        );
+        assert_eq!(
+            failure("warren.contract('t', 'l', '_warren_level_1')")?,
+            Some(refused("_warren_level_1"))
+        );
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_contraction_without_out_graph_makes_a_level_graph_of_its_own() -> Result<(), Error> {
+        labelled()?;
+        let first = contract("warren.contract('t', 'l', NULL)")?;
+        let second = contract("warren.contract('t', 'l', NULL)")?;
+        let named = rows(
+            "SELECT name || ':' || current_version || ':' || (owner = current_user::regrole)
+             FROM warren.graphs WHERE name LIKE '\\_warren\\_level\\_%' ORDER BY graph_id",
+        )?;
+        assert_eq!(
+            named,
+            Some(format!(
+                "_warren_level_{first}:{first}:true _warren_level_{second}:{second}:true"
+            ))
+        );
         Ok(())
     }
 

@@ -149,7 +149,10 @@ partition `initial` or from each node alone; returns the number of
 communities) and `leiden_refine(graph, communities, out, keys, resolution,
 seed, randomness, weighted, persist, version)`. `louvain` and `leiden` are
 PL/pgSQL over them, `contract`, `project` and `lift`
-(`crates/pg_warren/src/community_sql/library/`).
+(`crates/pg_warren/src/community_sql/library/`). Graph names beginning
+with `_warren_` are reserved for their levels (42939): `contract(graph,
+labels, NULL)` makes a new graph of the caller's named
+`_warren_level_<version id>`, after the id it returns.
 
 At 1M nodes and 5M undirected edges on 4 vCPUs, `louvain` takes 6.6 s and
 `leiden` 13.4 s; at 10M nodes, 95 s and 213 s ([limits.md](limits.md)).

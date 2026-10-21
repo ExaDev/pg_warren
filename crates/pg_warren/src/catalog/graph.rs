@@ -6,6 +6,7 @@ use pgrx::prelude::*;
 use pgrx::spi::OwnedPreparedStatement;
 use pgrx::PgOid;
 
+use super::version::VersionId;
 use super::CatalogError;
 use crate::access::as_catalog_owner;
 use crate::read_only::read_one;
@@ -112,6 +113,24 @@ pub(crate) struct GraphDefinition {
     /// The version `graphs.current_version` names when that is not one of
     /// the graph's versions (then `current_version` is `None`).
     pub(crate) stray_current_version: Option<i64>,
+}
+
+/// Graph names beginning with this are reserved for the library's level
+/// graphs (DESIGN.md §6.7), which only a contraction without `out_graph`
+/// creates, under a name no graph has had.
+const RESERVED_PREFIX: &str = "_warren_";
+
+/// Refuses a reserved graph name for a graph a caller names.
+pub(crate) fn require_unreserved(name: &str) -> Result<(), CatalogError> {
+    if name.starts_with(RESERVED_PREFIX) {
+        return Err(CatalogError::ReservedGraphName(name.to_owned()));
+    }
+    Ok(())
+}
+
+/// The name of the level graph whose first version is `version`.
+pub(crate) fn level_graph_name(version: VersionId) -> String {
+    format!("{RESERVED_PREFIX}level_{version}")
 }
 
 /// A graph definition to record: the arguments of `warren.create_graph`,
@@ -281,6 +300,32 @@ impl GraphDefinition {
 
     /// Records `order` as the graph's node order (DESIGN.md §14 item 22).
     /// Its row must be locked ([`lock`](Self::lock)).
+    /// Renames the graph to `name`, which no graph may have already.
+    pub(crate) fn rename(&mut self, name: String) -> Result<(), CatalogError> {
+        as_catalog_owner(|| {
+            Spi::connect_mut(|client| {
+                let taken = client
+                    .update(
+                        "SELECT 1 FROM warren.graphs WHERE name = $1",
+                        Some(1),
+                        &[name.as_str().into()],
+                    )?
+                    .len();
+                if taken > 0 {
+                    return Err(CatalogError::GraphExists(name.clone()));
+                }
+                client.update(
+                    "UPDATE warren.graphs SET name = $2 WHERE graph_id = $1",
+                    None,
+                    &[self.graph_id.into(), name.as_str().into()],
+                )?;
+                Ok(())
+            })
+        })?;
+        self.name = name;
+        Ok(())
+    }
+
     pub(crate) fn set_node_order(&mut self, order: NodeOrder) -> Result<(), CatalogError> {
         as_catalog_owner(|| {
             Spi::connect_mut(|client| {
