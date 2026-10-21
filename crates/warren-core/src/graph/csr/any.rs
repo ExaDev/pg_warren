@@ -128,8 +128,37 @@ impl Iterator for Neighbours<'_> {
             Row::U64(row) => row.size_hint(),
         }
     }
+
+    /// Skips to the `n`th target in O(1), as the slice iterator does (the
+    /// default would step through every target before it).
+    fn nth(&mut self, n: usize) -> Option<DenseId> {
+        match &mut self.0 {
+            Row::U32(row) => row.nth(n).map(|&target| target.dense()),
+            Row::U64(row) => row.nth(n).copied(),
+        }
+    }
 }
 
 impl ExactSizeIterator for Neighbours<'_> {}
 
 impl FusedIterator for Neighbours<'_> {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nth_skips_ahead_in_a_row_of_either_width() {
+        let narrow =
+            AnyCsr::from(Csr::<u32>::from_parts(3, vec![0, 3, 3, 3], vec![0, 1, 2], None).unwrap());
+        let wide =
+            AnyCsr::from(Csr::<u64>::from_parts(3, vec![0, 3, 3, 3], vec![0, 1, 2], None).unwrap());
+        for csr in [narrow, wide] {
+            let mut row = csr.neighbours(0);
+            assert_eq!(row.nth(1), Some(1));
+            assert_eq!(row.next(), Some(2));
+            assert_eq!(csr.neighbours(0).nth(3), None);
+            assert_eq!(csr.neighbours(1).nth(0), None);
+        }
+    }
+}

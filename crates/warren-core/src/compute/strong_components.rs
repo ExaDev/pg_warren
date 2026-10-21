@@ -244,6 +244,19 @@ mod tests {
     }
 
     #[test]
+    fn a_hub_costs_its_degree_not_its_square() {
+        // Hub 0 joined both ways to leaves 1..=n: one component. Finding
+        // each next edge of the hub's row from its start would take n²
+        // steps.
+        let n: u64 = 300_000;
+        let mut edges: Edges = (1..=n).map(|i| (0, 0, i, 1.0)).collect();
+        edges.extend((1..=n).map(|i| (0, i, 0, 1.0)));
+        let graph = reference::graph(n + 1, 1, &edges, false, false);
+        let found = labels(&graph, RelationSelection::All).unwrap();
+        assert!(found.iter().all(|&label| label == 0));
+    }
+
+    #[test]
     fn an_interrupt_cancels_the_search() {
         struct Stop;
         impl Interrupts for Stop {
