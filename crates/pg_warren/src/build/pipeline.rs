@@ -1,7 +1,8 @@
 //! The build pipeline (DESIGN.md §5.4 steps 2–6), over the build's ports:
 //! stable-id merge against the base version's id map, edge intake, the
-//! locality order of a first build (§14 item 22), CSR build, chunked segment write, version row and optional promotion. Graph
-//! logic is `warren_core::graph`'s; this module only sequences it, with
+//! locality order of a first build (§14 item 22), CSR build, chunked
+//! segment write, version row and optional promotion. Graph logic is
+//! `warren_core::graph`'s; this module only sequences it, with
 //! every graph-sized buffer charged to one `warren.max_build_memory`
 //! budget: a build that would exceed it is refused with 53400 before its
 //! CSRs are built where the plan shows it, else where it reserves.

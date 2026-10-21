@@ -408,7 +408,7 @@ END $$;
 -- crates/pg_warren/src/version_sql/compact.rs:25
 -- pg_warren::version_sql::compact::compact
 CREATE  FUNCTION warren."compact"(
-	"name" TEXT, /* & str */
+	"name" TEXT, /* Option < & str > */
 	"node_order" TEXT DEFAULT NULL /* Option < & str > */
 ) RETURNS bigint /* i64 */
 LANGUAGE c /* Rust */

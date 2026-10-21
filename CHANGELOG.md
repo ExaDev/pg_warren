@@ -40,9 +40,15 @@
 
 - An unknown `node_order` is refused with 22023
   (`invalid_parameter_value`).
-- `compact` is no longer `STRICT`: `compact(NULL)` raises an error instead
-  of returning NULL. A compaction that runs out of memory now reports
-  53200 (`out_of_memory`) rather than 22023.
+- `compact` is no longer `STRICT`: `compact(NULL)` raises 22004
+  (`null_value_not_allowed`, `name must not be NULL`) instead of returning
+  NULL.
+- Errors from `warren-core`'s graph structures in `compact` and `diff` now
+  carry their own SQLSTATE rather than 22023: running out of memory is
+  53200 (`out_of_memory`), the build memory limit 53400, and a corrupt or
+  inconsistent version (an internal error) XX001
+  (`data_corrupted`). `diff`'s refusals across a compaction, and other
+  version mismatches, stay 22023.
 
 ## 0.3.0 — hardening: bounded memory, trusted install, 100M-edge scale (2026-10-20)
 

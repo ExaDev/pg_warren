@@ -23,8 +23,8 @@ use crate::vector::{move_vectors, moved_notice, SpiVectorStore, VectorStore};
 /// id. A `node_order` given becomes the graph's. The caller must be a
 /// member of the owner role.
 #[pg_extern(schema = "warren")]
-fn compact(name: &str, node_order: default!(Option<&str>, "NULL")) -> i64 {
-    entry(|_| compact_graph(name, node_order))
+fn compact(name: Option<&str>, node_order: default!(Option<&str>, "NULL")) -> i64 {
+    entry(|_| compact_graph(name.ok_or(VersionOperationError::NullArgument("name"))?, node_order))
 }
 
 fn compact_graph(name: &str, node_order: Option<&str>) -> Result<VersionId, VersionOperationError> {
@@ -44,7 +44,7 @@ fn compact_graph(name: &str, node_order: Option<&str>) -> Result<VersionId, Vers
         &graph,
         source,
         &carried,
-        &Ordering { order: graph.node_order, memory: &BuildMemory::new(max_build_memory()) },
+        &CompactionOrder { order: graph.node_order, memory: &BuildMemory::new(max_build_memory()) },
         CHUNK_SIZE,
         &mut Stores {
             segments: &mut SpiSegmentStore,
@@ -70,7 +70,7 @@ pub(crate) struct Stores<'a, S, V, C> {
 
 /// The node order of a compaction, and the build memory its scratch is
 /// charged to.
-pub(crate) struct Ordering<'a> {
+pub(crate) struct CompactionOrder<'a> {
     /// The order of the new id space.
     pub(crate) order: NodeOrder,
     /// `warren.max_build_memory`.
@@ -87,7 +87,7 @@ pub(crate) fn compact_version<E: ExternalId>(
     graph: &GraphDefinition,
     source: VersionId,
     carried: &VersionStats,
-    ordering: &Ordering<'_>,
+    ordering: &CompactionOrder<'_>,
     chunk_size: usize,
     stores: &mut Stores<'_, impl SegmentStore, impl VectorStore, impl Catalog>,
 ) -> Result<(VersionId, Vec<String>), VersionOperationError> {
@@ -179,7 +179,7 @@ mod unit {
         let mut vectors = MemoryVectorStore::default();
         let mut stores =
             Stores { segments: &mut store, vectors: &mut vectors, catalog: &mut catalog };
-        let ordering = Ordering { order: NodeOrder::Id, memory: &BuildMemory::unlimited() };
+        let ordering = CompactionOrder { order: NodeOrder::Id, memory: &BuildMemory::unlimited() };
         let compacted =
             compact_version::<i64>(&graph(), source, &carried, &ordering, 16, &mut stores)
                 .unwrap()
@@ -439,6 +439,15 @@ mod tests {
         Spi::run("SELECT warren.compact('c', 'id')")?;
         assert_eq!(node_order("c")?.as_deref(), Some("id"));
         assert_eq!(dense_ids("c")?.as_deref(), Some("1:0 2:1 4:2 5:3"));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn compact_refuses_a_null_name() -> Result<(), Error> {
+        assert_eq!(
+            failure("warren.compact(NULL)")?.as_deref(),
+            Some("22004: name must not be NULL")
+        );
         Ok(())
     }
 
