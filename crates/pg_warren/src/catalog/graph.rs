@@ -28,8 +28,9 @@ const FIND: &str = "SELECT g.graph_id, g.owner::oid, g.readers::oid[], g.node_qu
 const LOCK: &str = "SELECT FROM warren.graphs WHERE graph_id = $1 FOR UPDATE";
 
 /// [`GraphDefinition::lock`]'s re-read once it holds the lock:
-/// `current_version` as in [`FIND`].
-const REREAD: &str = "SELECT g.current_version, v.version_id
+/// `current_version` as in [`FIND`], and `node_order`, which a compaction
+/// that held the lock may have changed.
+const REREAD: &str = "SELECT g.current_version, v.version_id, g.node_order
                       FROM warren.graphs g
                       LEFT JOIN warren.versions v
                              ON v.version_id = g.current_version AND v.graph_id = g.graph_id
@@ -149,8 +150,9 @@ impl GraphDefinition {
 
     /// Locks the graph's row until the end of the transaction, so that
     /// refreshes of one graph run one at a time, and re-reads its current
-    /// version, which a refresh that held the lock may have changed. A
-    /// graph dropped since [`find`](Self::find) is not found.
+    /// version and node order, which a refresh or compaction that held the
+    /// lock may have changed. A graph dropped since [`find`](Self::find) is
+    /// not found.
     pub(crate) fn lock(&mut self) -> Result<(), CatalogError> {
         // A row lock is a write (it assigns a transaction id): only the
         // functions that build or drop versions take it. The lock and the
@@ -159,16 +161,17 @@ impl GraphDefinition {
         // the locked row (EvalPlanQual), so a version joined in the same
         // statement would be the one from before the wait. The re-read,
         // as a statement of its own, takes a snapshot after the lock.
-        let (stored, current) = as_catalog_owner(|| {
+        let (stored, current, node_order) = as_catalog_owner(|| {
             Spi::connect_mut(|client| {
                 let locked = client.update(LOCK, Some(1), &[self.graph_id.into()])?.len();
                 if locked == 0 {
                     return Err(CatalogError::GraphNotFound(self.name.clone()));
                 }
                 let row = client.update(REREAD, Some(1), &[self.graph_id.into()])?.first();
-                Ok((row.get::<i64>(1)?, row.get::<i64>(2)?))
+                Ok((row.get::<i64>(1)?, row.get::<i64>(2)?, row.get::<String>(3)?))
             })
         })?;
+        self.node_order = parse_node_order(&node_order.unwrap_or_default())?;
         self.current_version = current;
         self.stray_current_version = stray(stored, current);
         Ok(())
