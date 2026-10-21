@@ -2,7 +2,7 @@
 //! without tombstones, as a new, promoted version (DESIGN.md §5.2).
 
 use pgrx::prelude::*;
-use warren_core::graph::ExternalId;
+use warren_core::graph::{BuildMemory, ExternalId, NodeOrder};
 use warren_core::version::compact as renumber;
 
 use super::error::VersionOperationError;
@@ -73,7 +73,7 @@ pub(crate) fn compact_version<E: ExternalId>(
 ) -> Result<(VersionId, Vec<String>), VersionOperationError> {
     let Stores { segments, vectors, catalog } = stores;
     let loaded = load::<E>(*segments, source, graph.store_merged)?;
-    let compaction = renumber(&loaded.version()?)?;
+    let compaction = renumber(&loaded.version()?, NodeOrder::Id, &BuildMemory::unlimited())?;
     let stats = VersionStats::measure(
         &compaction.id_map,
         &compaction.graph,
