@@ -1,15 +1,17 @@
 //! Tests: every compute function reading all relations (`spmv`, `spmm`
-//! and `vector_degree` without `rels`, `gather`, `triangles` and the
-//! library) gives the same values, bit for bit, whether the graph stores
-//! its merged CSR or merges the relations' rows on the fly (DESIGN.md
-//! §5.3).
+//! and `vector_degree` without `rels`, `gather`, `triangles`, the
+//! structural kernels and the library) gives the same values, bit for
+//! bit, whether the graph stores its merged CSR or merges the relations'
+//! rows on the fly (DESIGN.md §5.3).
 
 #[pgrx::pg_schema]
 mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{merged_pair, merged_pair_with, on_both, same_with_or_without_merged};
+    use crate::fixture::{
+        merged_pair, merged_pair_with, on_both, same_failure, same_with_or_without_merged,
+    };
 
     fn same(query: &str) -> Result<String, Error> {
         same_with_or_without_merged("cm", query)
@@ -68,6 +70,8 @@ mod tests {
         }
         for (setup, name) in [
             ("SELECT warren.triangles('{g}', 't')", "t"),
+            ("SELECT warren.core_number('{g}', 'k')", "k"),
+            ("SELECT warren.strong_components_vector('{g}', 'scc')", "scc"),
             ("SELECT warren.pagerank('{g}', 'pr')", "pr"),
             ("SELECT warren.components_vector('{g}', 'cc')", "cc"),
             ("SELECT warren.label_propagation('{g}', 'lp')", "lp"),
@@ -77,6 +81,21 @@ mod tests {
         }
         let aggregate = "SELECT warren.aggregate_neighbours('{g}', 'm', 'agg', hops := 2)";
         same_after(aggregate, "matrix_rows", "agg")?;
+        same(
+            "SELECT format('%s %s %s', source, target, weight)
+             FROM warren.minimum_spanning_forest('{g}', NULL::bigint)",
+        )?;
+        for kernel in ["topological_order", "dag_longest_path"] {
+            let refused = same_failure("cm", &format!("warren.{kernel}('{{g}}', 'o')"))?;
+            assert!(
+                refused.is_some_and(|refused| refused.starts_with("22023: the graph has a cycle"))
+            );
+        }
+        // Without the self-loops and the edges from a larger id to a
+        // smaller, every relation's edges form one DAG.
+        on_both("cm", "DELETE FROM cm_edges WHERE src >= dst; SELECT warren.refresh('{g}')")?;
+        same_after("SELECT warren.topological_order('{g}', 'o')", "vector_values", "o")?;
+        same_after("SELECT warren.dag_longest_path('{g}', 'l')", "vector_values", "l")?;
         Ok(())
     }
 
