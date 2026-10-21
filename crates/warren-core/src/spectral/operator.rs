@@ -19,7 +19,8 @@
 
 use std::str::FromStr;
 
-use super::{components, dense, random, Resources, SpectralError};
+use super::{components, dense, Resources, SpectralError};
+use crate::compute::random;
 use crate::compute::{spmv, AnyVector, ComputeError, MemoryCharge, Product, Semiring, Vector};
 use crate::graph::{GraphCsr, RelationSelection};
 use crate::interrupts::Interrupts;

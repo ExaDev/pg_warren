@@ -9,8 +9,9 @@
   `warren.*` function. 0.4.0 changes the schema: the update adds the column
   `warren.graphs.node_order` (existing graphs are backfilled `'id'`, the
   order they were built in) and the `node_order` arguments of
-  `create_graph` and `compact`, creates the new library functions and
-  structural kernels below, and replaces `pagerank` (a fix below). For
+  `create_graph` and `compact`, creates the new library functions,
+  structural kernels, centralities and similarity functions below, and
+  replaces `pagerank` (a fix below). For
   contraction it adds a `CHECK` on `warren.graphs.source`, makes
   `warren.versions.parent_version` `ON DELETE SET NULL`, adds the trigger
   that clears `warren.versions.label_vector` and its index, and creates
@@ -83,6 +84,39 @@
   They run on one compute thread, charge their scratch to
   `warren.max_compute_memory` and can be cancelled. Timings at 1M and 10M
   nodes are in docs/limits.md.
+- **Shortest-path centralities** (DESIGN.md §6.7, planned library group
+  2): `betweenness_centrality(graph, out, k, seed, normalized, endpoints,
+  directed, sources, rels, weighted, persist, version)`,
+  `closeness_centrality(…, wf_improved, …)` and `harmonic_centrality(…)`
+  write an `f64` vector and return their number of sources. Exact with
+  `k := NULL` (every live node a source); otherwise from `k` sources
+  sampled with `seed` (default 0; the same sample on any thread count, and
+  after a refresh unless a new node's key displaces a sampled one or a
+  sampled node is deleted; `compact` re-keys every node), or from the nodes
+  a width-1 vector `sources` selects (non-zero values, as a mask).
+  Brandes' algorithm, breadth-first or (weighted: every edge followed must
+  weigh more than 0 and every distance stay finite, else 22023; self-loops
+  are ignored) Dijkstra, along edges or (`directed := false`) in the
+  undirected simple graph, one source per compute thread at a time, summed
+  in source order so results are bit-identical on any thread count.
+  Betweenness is rescaled exactly as NetworkX 3.7 (including its sampling
+  adjustment); closeness (with `wf_improved`) and harmonic centrality use
+  incoming distances as NetworkX does, and from a sample are estimated from
+  each node's sampled sources (docs/compute.md has the estimator and when
+  its error bound holds). Checked against NetworkX given the same sources
+  (`test/sql/oracle_paths.sql`, `oracle_paths_sampled.sql`).
+- **Neighbourhood similarity for link prediction** (DESIGN.md §6.7):
+  `similarity(graph, pairs, id_type, measure, rels, version)` scores the
+  pairs a query returns, `most_similar(graph, node, k, measure, rels,
+  version)` ranks one node's candidates and `similar_pairs(graph, id_type,
+  k, measure, nodes, rels, version)` each node's, by `jaccard`,
+  `adamic_adar` or `common_neighbours` over the undirected simple graph,
+  as NetworkX's link-prediction functions (`test/sql/oracle_similarity.sql`).
+  Candidates are non-neighbours sharing a neighbour, best first, ties by
+  dense id; no all-pairs form. With reverse CSRs, `similarity` and
+  `most_similar` read only the rows they need. A node paired with itself
+  scores Adamic–Adar +∞ where it shares a degree-1 neighbour (NetworkX
+  raises). Timings at 1M and 10M nodes are in docs/limits.md.
 - **Contraction, projection and lifting** (DESIGN.md §6.6,
   [docs/communities.md](docs/communities.md)):
   - `contract(graph, label_vector, out_graph, weighted, drop_self_loops,

@@ -1728,3 +1728,98 @@ SELECT pg_catalog.pg_extension_config_dump('warren.vectors_vector_id_seq', '');
 SELECT pg_catalog.pg_extension_config_dump('warren.vector_chunks', '');
 /* </end connected objects> */
 
+/* <begin connected objects> */
+-- crates/pg_warren/src/compute_sql/centrality.rs:89
+-- pg_warren::compute_sql::centrality::betweenness_centrality
+CREATE  FUNCTION warren."betweenness_centrality"(
+	"graph" TEXT, /* Option < & str > */
+	"out" TEXT, /* Option < & str > */
+	"k" bigint DEFAULT NULL, /* Option < i64 > */
+	"seed" bigint DEFAULT 0, /* Option < i64 > */
+	"normalized" bool DEFAULT true, /* Option < bool > */
+	"endpoints" bool DEFAULT false, /* Option < bool > */
+	"directed" bool DEFAULT true, /* Option < bool > */
+	"sources" TEXT DEFAULT NULL, /* Option < & str > */
+	"rels" TEXT[] DEFAULT NULL, /* :: std :: option :: Option < Vec < Option < String > > > */
+	"weighted" bool DEFAULT NULL, /* Option < bool > */
+	"persist" bool DEFAULT true, /* Option < bool > */
+	"version" bigint DEFAULT NULL /* Option < i64 > */
+) RETURNS bigint /* Option < i64 > */
+VOLATILE PARALLEL UNSAFE 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'betweenness_centrality_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/compute_sql/centrality.rs:125
+-- pg_warren::compute_sql::centrality::closeness_centrality
+CREATE  FUNCTION warren."closeness_centrality"(
+	"graph" TEXT, /* Option < & str > */
+	"out" TEXT, /* Option < & str > */
+	"k" bigint DEFAULT NULL, /* Option < i64 > */
+	"seed" bigint DEFAULT 0, /* Option < i64 > */
+	"wf_improved" bool DEFAULT true, /* Option < bool > */
+	"directed" bool DEFAULT true, /* Option < bool > */
+	"sources" TEXT DEFAULT NULL, /* Option < & str > */
+	"rels" TEXT[] DEFAULT NULL, /* :: std :: option :: Option < Vec < Option < String > > > */
+	"weighted" bool DEFAULT NULL, /* Option < bool > */
+	"persist" bool DEFAULT true, /* Option < bool > */
+	"version" bigint DEFAULT NULL /* Option < i64 > */
+) RETURNS bigint /* Option < i64 > */
+VOLATILE PARALLEL UNSAFE 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'closeness_centrality_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/compute_sql/centrality.rs:157
+-- pg_warren::compute_sql::centrality::harmonic_centrality
+CREATE  FUNCTION warren."harmonic_centrality"(
+	"graph" TEXT, /* Option < & str > */
+	"out" TEXT, /* Option < & str > */
+	"k" bigint DEFAULT NULL, /* Option < i64 > */
+	"seed" bigint DEFAULT 0, /* Option < i64 > */
+	"directed" bool DEFAULT true, /* Option < bool > */
+	"sources" TEXT DEFAULT NULL, /* Option < & str > */
+	"rels" TEXT[] DEFAULT NULL, /* :: std :: option :: Option < Vec < Option < String > > > */
+	"weighted" bool DEFAULT NULL, /* Option < bool > */
+	"persist" bool DEFAULT true, /* Option < bool > */
+	"version" bigint DEFAULT NULL /* Option < i64 > */
+) RETURNS bigint /* Option < i64 > */
+VOLATILE PARALLEL UNSAFE 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'harmonic_centrality_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/compute_sql/similarity.rs:47
+-- pg_warren::compute_sql::similarity::similarity
+
+CREATE FUNCTION warren.similarity(graph text, pairs text, id_type anyelement,
+                                  measure text DEFAULT 'jaccard', rels text[] DEFAULT NULL,
+                                  version bigint DEFAULT NULL)
+RETURNS TABLE (source anyelement, target anyelement, score float8)
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'similarity_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/compute_sql/similarity.rs:178
+-- pg_warren::compute_sql::similarity::most_similar
+
+CREATE FUNCTION warren.most_similar(graph text, node anyelement, k bigint DEFAULT 10,
+                                    measure text DEFAULT 'jaccard', rels text[] DEFAULT NULL,
+                                    version bigint DEFAULT NULL)
+RETURNS TABLE (node_id anyelement, score float8)
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'most_similar_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/compute_sql/similarity.rs:236
+-- pg_warren::compute_sql::similarity::similar_pairs
+
+CREATE FUNCTION warren.similar_pairs(graph text, id_type anyelement, k bigint DEFAULT 10,
+                                     measure text DEFAULT 'jaccard', nodes text DEFAULT NULL,
+                                     rels text[] DEFAULT NULL, version bigint DEFAULT NULL)
+RETURNS TABLE (source anyelement, target anyelement, score float8)
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'similar_pairs_wrapper';
+/* </end connected objects> */

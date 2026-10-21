@@ -11,13 +11,11 @@
 //! `Σ_u Σ_{v ∈ N(u)} min(d_u, d_v) · log max(d_u, d_v)`, and a task checks
 //! its cancellation flag every 65,536 row entries it visits.
 
-use std::cmp::Ordering;
-
 use rayon::prelude::*;
 
-use super::symmetric::{distinct, selected_rows, Symmetric};
+use super::symmetric::{distinct, selected_rows, shared, Symmetric};
 use super::{ComputeError, ComputeMemory, Vector, Workers};
-use crate::graph::{DenseId, GraphCsr, RelationSelection};
+use crate::graph::{GraphCsr, RelationSelection};
 use crate::interrupts::{Cancellation, Cancelled, Interrupts, Work};
 
 /// The nodes one task handles; a task checks the cancellation flag first.
@@ -69,51 +67,9 @@ fn triangles_of(adjacency: &Symmetric, node: usize, work: &mut Work<'_>) -> Resu
     let row = adjacency.row(node);
     let mut pairs = 0;
     for v in distinct(row) {
-        pairs += common(row, adjacency.row(v as usize), work)?;
+        pairs += shared(row, adjacency.row(v as usize), work, |_| ())?;
     }
     Ok(i64::try_from(pairs / 2).unwrap_or(i64::MAX))
-}
-
-/// How much longer one row must be than the other before the shorter is
-/// searched into the longer instead of merged with it.
-const SKEW: usize = 16;
-
-/// The number of distinct values two sorted rows share: a merge when they
-/// are of similar length, else a binary search of each value of the
-/// shorter in the rest of the longer, so a hub's row costs about its
-/// neighbour's length, not its own. Its work is spent on `work`.
-fn common(a: &[DenseId], b: &[DenseId], work: &mut Work<'_>) -> Result<u64, Cancelled> {
-    let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
-    if short.len().saturating_mul(SKEW) < long.len() {
-        let mut rest = long;
-        let mut shared = 0;
-        for value in distinct(short) {
-            let at = rest.partition_point(|&x| x < value);
-            shared += u64::from(rest.get(at) == Some(&value));
-            rest = &rest[at..];
-            work.spend(1 + (usize::BITS - long.len().leading_zeros()) as u64)?;
-        }
-        return Ok(shared);
-    }
-    let (mut i, mut j, mut shared) = (0, 0, 0);
-    while i < a.len() && j < b.len() {
-        match a[i].cmp(&b[j]) {
-            Ordering::Less => i += 1,
-            Ordering::Greater => j += 1,
-            Ordering::Equal => {
-                let value = a[i];
-                shared += 1;
-                while a.get(i) == Some(&value) {
-                    i += 1;
-                }
-                while b.get(j) == Some(&value) {
-                    j += 1;
-                }
-            }
-        }
-    }
-    work.spend((a.len() + b.len()) as u64)?;
-    Ok(shared)
 }
 
 // Not under Miri: the compute pool's work stealing runs through
@@ -325,22 +281,6 @@ mod tests {
         assert_eq!(triangles_of(&symmetric, 0, &mut Work::new(&cancellation)), Err(Cancelled));
         // A leaf's row is less, and finishes.
         assert_eq!(triangles_of(&symmetric, 2, &mut Work::new(&cancellation)), Ok(2));
-    }
-
-    proptest! {
-        #[test]
-        fn intersections_of_skewed_rows_count_distinct_shared_values(
-            mut a in prop::collection::vec(0u64..400, 0..300),
-            mut b in prop::collection::vec(0u64..400, 0..12),
-        ) {
-            a.sort_unstable();
-            b.sort_unstable();
-            let shared = a.iter().collect::<BTreeSet<_>>().intersection(&b.iter().collect()).count() as u64;
-            let cancellation = Cancellation::new();
-            let mut work = Work::new(&cancellation);
-            prop_assert_eq!(common(&a, &b, &mut work), Ok(shared));
-            prop_assert_eq!(common(&b, &a, &mut work), Ok(shared));
-        }
     }
 
     #[test]

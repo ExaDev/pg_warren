@@ -16,7 +16,7 @@ mod matrix;
 
 use kernel::{PushScratch, Write};
 use matrix::Form;
-pub(crate) use matrix::Matrix;
+pub(crate) use matrix::{Matrix, RowScratch};
 
 use super::{
     AnyVector, BinaryOp, ComputeError, ComputeMemory, Mask, Semiring, SemiringElement, Vector,

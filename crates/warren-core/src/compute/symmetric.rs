@@ -4,13 +4,14 @@
 //! compute budget. `triangles` and `core_number` read it; no reverse CSR
 //! is needed to build it.
 
+use std::cmp::Ordering;
 use std::mem::size_of;
 
 use rayon::prelude::*;
 
 use super::{ComputeError, ComputeMemory, MemoryCharge};
 use crate::graph::{CsrRows, DenseId, GraphCsr, RelationSelection};
-use crate::interrupts::{Cancellation, Cancelled};
+use crate::interrupts::{Cancellation, Cancelled, Work};
 
 /// The nodes one sort task handles; a task checks the cancellation flag
 /// first. Small under test, so tests cross task boundaries.
@@ -137,4 +138,100 @@ impl Symmetric {
 /// The distinct values of a sorted row.
 pub(super) fn distinct(row: &[DenseId]) -> impl Iterator<Item = DenseId> + '_ {
     row.iter().enumerate().filter(|&(i, v)| i == 0 || row[i - 1] != *v).map(|(_, &v)| v)
+}
+
+/// How much longer one row must be than the other before the shorter is
+/// searched into the longer instead of merged with it.
+const SKEW: usize = 16;
+
+/// The number of distinct values two sorted rows share, calling `each`
+/// with each in ascending order: a merge when the rows are of similar
+/// length, else a binary search of each value of the shorter in the rest
+/// of the longer, so a hub's row costs about its neighbour's length, not
+/// its own. Its work is spent on `work`.
+pub(super) fn shared(
+    a: &[DenseId],
+    b: &[DenseId],
+    work: &mut Work<'_>,
+    mut each: impl FnMut(DenseId),
+) -> Result<u64, Cancelled> {
+    let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    if short.len().saturating_mul(SKEW) < long.len() {
+        let mut rest = long;
+        let mut shared = 0;
+        for value in distinct(short) {
+            let at = rest.partition_point(|&x| x < value);
+            if rest.get(at) == Some(&value) {
+                shared += 1;
+                each(value);
+            }
+            rest = &rest[at..];
+            work.spend(1 + (usize::BITS - long.len().leading_zeros()) as u64)?;
+        }
+        return Ok(shared);
+    }
+    let (mut i, mut j, mut shared) = (0, 0, 0);
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            Ordering::Less => i += 1,
+            Ordering::Greater => j += 1,
+            Ordering::Equal => {
+                let value = a[i];
+                shared += 1;
+                each(value);
+                while a.get(i) == Some(&value) {
+                    i += 1;
+                }
+                while b.get(j) == Some(&value) {
+                    j += 1;
+                }
+            }
+        }
+    }
+    work.spend((a.len() + b.len()) as u64)?;
+    Ok(shared)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use proptest::prelude::*;
+
+    use super::*;
+
+    proptest! {
+        #[test]
+        fn intersections_of_skewed_rows_count_distinct_shared_values(
+            mut a in prop::collection::vec(0u64..400, 0..300),
+            mut b in prop::collection::vec(0u64..400, 0..12),
+        ) {
+            a.sort_unstable();
+            b.sort_unstable();
+            let expected = a.iter().collect::<BTreeSet<_>>().intersection(&b.iter().collect()).count() as u64;
+            let cancellation = Cancellation::new();
+            let mut work = Work::new(&cancellation);
+            prop_assert_eq!(shared(&a, &b, &mut work, |_| ()), Ok(expected));
+            prop_assert_eq!(shared(&b, &a, &mut work, |_| ()), Ok(expected));
+        }
+    }
+
+    #[test]
+    fn shared_values_are_given_in_ascending_order() {
+        let cancellation = Cancellation::new();
+        let mut work = Work::new(&cancellation);
+        let long: Vec<DenseId> = (0..400).collect();
+        for (a, b) in [(&[1, 1, 3, 9][..], &[0, 1, 3, 3, 4, 9][..]), (&[2, 7, 399], &long[..])] {
+            let mut found = Vec::new();
+            shared(a, b, &mut work, |value| found.push(value)).unwrap();
+            let expected: Vec<DenseId> = a
+                .iter()
+                .copied()
+                .filter(|v| b.contains(v))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            assert_eq!(found, expected);
+        }
+    }
 }

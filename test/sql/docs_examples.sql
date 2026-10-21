@@ -327,6 +327,25 @@ SELECT assert.equal((SELECT array_agg(value ORDER BY node_id) FROM warren.vector
                     ARRAY[2, 5, 0, 0, 4]::float8[], 'hours before each course ends');
 SELECT assert.equal(warren.strong_components_vector('plan', 'scc'), 5::bigint, 'no cycles');
 SELECT assert.raises($$SELECT warren.topological_order('roads', 'o')$$, 'an undirected graph has cycles', '22023');
+-- compute.md "Shortest-path centralities"
+SELECT assert.equal(warren.betweenness_centrality('roads', 'between', normalized := false, directed := false),
+                    5::bigint, 'every city is a source');
+SELECT assert.equal((SELECT array_agg(value ORDER BY node_id) FROM warren.vector_values('roads', 'between', NULL::int)),
+                    ARRAY[0, 3, 4, 3, 0]::float8[], 'birch, cedar and dale carry the paths');
+SELECT warren.closeness_centrality('roads', 'close');
+SELECT assert.equal((SELECT node_id FROM warren.vector_values('roads', 'close', NULL::int) ORDER BY value DESC LIMIT 1),
+                    3, 'cedar is closest');
+SELECT assert.that((SELECT abs(value - 2.0 / 17) < 1e-15 FROM warren.vector_values('roads', 'close', NULL::int)
+                    WHERE node_id = 3), 'cedar: 4 cities at 34 km');
+SELECT assert.equal(warren.harmonic_centrality('roads', 'reach', k := 3, seed := 42, weighted := false), 3::bigint,
+                    'three sampled sources');
+-- compute.md "Neighbourhood similarity"
+SELECT * FROM warren.most_similar('roads', 1);
+SELECT assert.equal((SELECT array_agg(node_id || ':' || score) FROM warren.most_similar('roads', 1)),
+                    ARRAY['3:1', '5:0.5'], 'cedar shares both of ash''s neighbours');
+SELECT assert.equal((SELECT array_agg(round(score::numeric, 3)) FROM warren.similarity('roads', 'VALUES (2, 4), (1, 5)',
+                                                                                       NULL::int, 'adamic_adar')),
+                    ARRAY[2.885, 0.910], 'Adamic-Adar');
 -- compute.md: intermediates are dropped; the _warren_ prefix is reserved
 SELECT assert.raises($$SELECT warren.vector_values('roads', '_warren_pagerank_one', NULL::int)$$,
                      'no intermediate left behind', '42704');
