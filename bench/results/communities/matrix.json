@@ -6,7 +6,7 @@
   },
   "setup": [
     "DO $$ BEGIN EXECUTE format('ALTER DATABASE %I SET warren.threads = 4', current_database()); END $$",
-    "SELECT warren.create_graph('g', 'SELECT id FROM nodes', 'SELECT n.id, CASE WHEN abs(hashint8(n.id * 8 + k)) % 10 < 9 THEN (n.id - 1) / 1000 * 1000 + 1 + abs(hashint8(-(n.id * 8 + k))) % 1000 ELSE 1 + abs(hashint8(-(n.id * 8 + k))) % (SELECT max(id) FROM nodes) END, CASE WHEN abs(hashint8(n.id * 8 + k)) % 10 < 9 THEN ''in'' ELSE ''out'' END FROM nodes n, generate_series(1, 5) k', directed := false, has_relations := true, build_reverse := false)"
+    "SELECT warren.create_graph('g', 'SELECT id FROM nodes', 'SELECT n.id, CASE WHEN abs(hashint8(n.id * 8 + k)) % 10 < 9 THEN (n.id - 1) / 1000 * 1000 + 1 + abs(hashint8(-(n.id * 8 + k))) % 1000 ELSE 1 + abs(hashint8(-(n.id * 8 + k))) % (SELECT max(id) FROM nodes) END, CASE WHEN abs(hashint8(n.id * 8 + k)) % 10 < 9 THEN ''in'' ELSE ''out'' END FROM nodes n, generate_series(1, 5) k', directed := false, has_relations := true, build_reverse := false, store_merged := false)"
   ],
   "params": "SELECT count(*) AS nodes FROM nodes",
   "workloads": [

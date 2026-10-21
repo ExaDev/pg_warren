@@ -1,0 +1,107 @@
+{
+ "graph": "blocks-1m",
+ "generate": [
+  "random",
+  "--nodes",
+  "1000000",
+  "--edges",
+  "0",
+  "--seed",
+  "1"
+ ],
+ "nodes": 1000000,
+ "edges": 0,
+ "params": {
+  "nodes": "1000000"
+ },
+ "pg_warren": "0.4.0",
+ "postgres": "16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
+ "git": "94ffd68",
+ "cpus": 4,
+ "machine": "x86_64",
+ "recorded_at": "2026-10-21T09:31:35+00:00",
+ "workloads": [
+  {
+   "name": "refresh",
+   "sql": "SELECT warren.refresh('g')",
+   "seconds": [
+    3.062742
+   ],
+   "median": 3.062742
+  },
+  {
+   "name": "prewarm",
+   "sql": "SELECT warren.prewarm('g')",
+   "seconds": [
+    0.128024,
+    0.125606,
+    0.132583
+   ],
+   "median": 0.128024
+  },
+  {
+   "name": "components_vector_in",
+   "sql": "SELECT warren.components_vector('g', 'cc', rels := ARRAY['in'])",
+   "seconds": [
+    0.566884
+   ],
+   "median": 0.566884
+  },
+  {
+   "name": "contract_by_components",
+   "sql": "SELECT warren.contract('g', 'cc', 'q')",
+   "seconds": [
+    0.353655,
+    0.345515,
+    0.421853
+   ],
+   "median": 0.353655
+  },
+  {
+   "name": "project_count",
+   "sql": "SELECT warren.project('g', 'cc', 'q', 'members', 'count')",
+   "seconds": [
+    0.160343,
+    0.144228,
+    0.1587
+   ],
+   "median": 0.1587
+  },
+  {
+   "name": "project_mean",
+   "sql": "SELECT warren.project('g', 'cc', 'q', 'mean_label', 'mean', persist := false)",
+   "seconds": [
+    0.152188,
+    0.144879,
+    0.145211
+   ],
+   "median": 0.145211
+  },
+  {
+   "name": "lift",
+   "sql": "SELECT warren.lift('q', 'members', 'g', 'community_size', persist := false)",
+   "seconds": [
+    0.138688,
+    0.13831,
+    0.139219
+   ],
+   "median": 0.138688
+  },
+  {
+   "name": "dense_ids",
+   "sql": "SELECT warren.vector_dense_id('g', 'ids')",
+   "seconds": [
+    0.179005
+   ],
+   "median": 0.179005
+  },
+  {
+   "name": "contract_by_dense_ids",
+   "sql": "SELECT warren.contract('g', 'ids', 'identity')",
+   "seconds": [
+    1.662343
+   ],
+   "median": 1.662343
+  }
+ ]
+}

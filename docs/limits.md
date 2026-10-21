@@ -381,6 +381,20 @@ in the executor (`unnest`, `GROUP BY`, `DISTINCT ON` over 21M rows), about
 300 times an SpMV iteration. An in-engine `mode` combiner for `gather` would
 make it one kernel call (DESIGN.md §6.7, missing primitives).
 
+**Contraction at scale** (DESIGN.md §6.6, `bench/results/communities/`;
+release build, 4 shared vCPUs, through SQL, each call in a fresh session so
+including the version's load). A block graph of N nodes in blocks of 1,000
+with five undirected edges per node (10N stored), contracted by
+`components_vector` over the blocks' own edges:
+
+| Call | 1M nodes | 10M nodes |
+|---|---|---|
+| `refresh` of the graph (for comparison) | 3.1 s | 36.5 s |
+| `prewarm` (the load every call below includes) | 0.13 s | 1.45 s |
+| `contract` into N / 1,000 communities | 0.35 s | 4.2 s |
+| `contract` by dense id (N communities, the worst case) | 1.7 s | 13.7 s |
+| `project` (`count`, `mean`), `lift` | 0.14–0.16 s | 1.9–2.0 s |
+
 ## Known limitations
 
 **PostgreSQL versions.** 15, 16, 17 and 18. CI runs the in-database tests
