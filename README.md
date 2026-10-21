@@ -242,6 +242,9 @@ Every SQL example in the README and `docs/` runs in CI, in
   the cache, compute and build limits together
   ([docs/limits.md](docs/limits.md)).
 
+- **0.5.0** (in development, M9): the shared cache, one copy of a loaded
+  version per cluster in dynamic shared memory (DESIGN.md §5.6).
+
 See [CHANGELOG.md](CHANGELOG.md). This is pre-1.0 software: the SQL surface
 may still change between minor versions, with an upgrade script each time.
 
