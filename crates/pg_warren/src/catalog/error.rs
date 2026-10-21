@@ -55,6 +55,9 @@ pub(crate) enum CatalogError {
     /// The recorded id type is not one this library supports.
     #[error("graph \"{0}\" has an unsupported id type")]
     UnknownIdType(String),
+    /// The recorded source is not one this library knows.
+    #[error("graph \"{0}\" has an unknown source")]
+    UnknownSource(String),
     /// A count does not fit its `bigint` column.
     #[error("{0} exceeds the range of bigint")]
     TooLarge(&'static str),
@@ -105,7 +108,9 @@ impl SqlError for CatalogError {
             }
             Self::GraphExists(_) => PgSqlErrorCode::ERRCODE_DUPLICATE_OBJECT,
             Self::RetainVersions(_) => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
-            Self::UnknownIdType(_) => PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+            Self::UnknownIdType(_) | Self::UnknownSource(_) => {
+                PgSqlErrorCode::ERRCODE_DATA_CORRUPTED
+            }
             Self::TooLarge(_) => PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
             Self::Access(error) => error.sqlstate(),
             Self::Source(error) => error.sqlstate(),

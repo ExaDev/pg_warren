@@ -117,7 +117,12 @@ pub(crate) fn insert_version(
                              deduplicated_edges, target_width, bytes, label, compacted_from,
                              parent_version, label_vector)
                          SELECT $1, coalesce(max(seq), 0) + 1, now(), $2::pg_lsn, $3, $4,
-                                $5, $6, $7, $8, 0, $9, $10, $11, $12
+                                $5, $6, $7, $8, 0, $9, $10, $11,
+                                -- Locked, so a concurrent delete of the
+                                -- vector waits, and then its trigger clears
+                                -- the link; one deleted already gives NULL.
+                                (SELECT x.vector_id FROM warren.vectors x
+                                 WHERE x.vector_id = $12 FOR KEY SHARE)
                          FROM warren.versions WHERE graph_id = $1
                          RETURNING version_id",
                         None,
@@ -432,6 +437,52 @@ pub(crate) fn drop_version(
 /// `count` as a `bigint` column value.
 fn bigint(count: u64, column: &'static str) -> Result<i64, CatalogError> {
     i64::try_from(count).map_err(|_| CatalogError::TooLarge(column))
+}
+
+#[cfg(any(test, feature = "pg_test"))]
+#[pgrx::pg_schema]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
+mod tests {
+    use pgrx::prelude::*;
+    use pgrx::spi::Error;
+
+    use super::{insert_version, Lineage, NewVersion, VersionStats};
+    use crate::fixture::{refresh, ring};
+
+    /// A version records its label vector only if that vector still
+    /// exists: a vector deleted before the insert is not linked.
+    #[pg_test]
+    fn a_label_vector_gone_before_the_insert_is_not_recorded() -> Result<(), Error> {
+        ring("lv", 3, 2)?;
+        let parent = refresh("lv", true)?;
+        let graph = Spi::get_one::<i32>("SELECT graph_id FROM warren.graphs WHERE name = 'lv'")?
+            .ok_or(Error::InvalidPosition)?;
+        let insert = |label_vector| {
+            insert_version(
+                &NewVersion {
+                    graph_id: graph,
+                    stats: VersionStats { target_width: 4, ..VersionStats::default() },
+                    label: None,
+                    compacted_from: None,
+                    lineage: Some(Lineage { parent_version: parent, label_vector }),
+                },
+                "0/0",
+            )
+            .map_err(|_| Error::InvalidPosition)
+        };
+        let gone = insert(Some(i64::MAX))?;
+        let recorded = Spi::get_one::<i64>(&format!(
+            "SELECT label_vector FROM warren.versions WHERE version_id = {gone}"
+        ))?;
+        assert_eq!(recorded, None);
+        let vector = Spi::get_one::<i64>("SELECT warren.vector_const('lv', 'l', 1)")?;
+        let kept = insert(vector)?;
+        let recorded = Spi::get_one::<i64>(&format!(
+            "SELECT label_vector FROM warren.versions WHERE version_id = {kept}"
+        ))?;
+        assert_eq!(recorded, vector);
+        Ok(())
+    }
 }
 
 #[cfg(test)]

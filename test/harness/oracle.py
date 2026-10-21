@@ -19,7 +19,7 @@ as a table the SQL test compares against.
 | label_propagation_majority | oracle_label_propagation_majority | node_id, label: `warren.label_propagation_majority`'s rule reimplemented, from each node's own id as its label (`--max-iter`, default 100) |
 | clustering | oracle_clustering | node_id, coefficient: `nx.clustering` of the undirected graph without self-loops |
 | louvain | oracle_louvain | node_id, community, modularity: `nx.community.louvain_communities` (`--seed`, default 1; `--resolution`, default 1; weighted when the edges have weights), each community labelled by its smallest node id, with the partition's `nx.community.modularity` on every row |
-| quotient | oracle_quotient | source, target, weight: the edges of `nx.quotient_graph` by the labels of `--labels-sql` (node, label), between labels, each edge's weight the sum of the weights of the edges it joins (the count with `--count`), and a label's self-loop the sum over the edges inside it; an undirected edge counts once and is given both ways (a self-loop once) |
+| quotient | oracle_quotient | source, target, weight: the edges of `nx.quotient_graph` by the labels of `--labels-sql` (node, label), between labels, each edge's weight the sum of the weights of the edges it joins (the count with `--count`), and a label's self-loop the sum over the edges inside it; undirected, an edge between labels is given both ways and an edge inside a label counts twice in its self-loop (a self-loop once), as the stored matrix's `PᵀAP` |
 
 Edges are `--edges-sql`'s first two columns; a third column, if present, is
 the edge's `weight`. A pair given more than once (the same ordered pair if
@@ -144,7 +144,9 @@ def quotient(graph, arguments, labels=None):
     `--labels-sql` by `run`), through `nx.quotient_graph`: its edge data
     sums only the edges from the first block to the second (NetworkX's
     default sums both ways in a directed graph), and a block's self-loop is
-    the size of its subgraph, which `nx.quotient_graph` leaves out."""
+    the size of its subgraph, which `nx.quotient_graph` leaves out; in an
+    undirected graph an edge inside a block counts twice there (both of
+    its stored directions), a self-loop once."""
     options = argparse.ArgumentParser(prog="quotient")
     options.add_argument("--count", action="store_true")
     options.add_argument("--labels-sql")
@@ -159,7 +161,12 @@ def quotient(graph, arguments, labels=None):
                               for u, v, data in graph.edges(b, data=True) if u in b and v in c)}
 
     def inside(b):
-        return {"inside": graph.subgraph(b).size(weight=weight)}
+        subgraph = graph.subgraph(b)
+        total = subgraph.size(weight=weight)
+        if graph.is_directed():
+            return {"inside": total}
+        loops = sum(1 if weight is None else data.get(weight, 1) for _, _, data in nx.selfloop_edges(subgraph, data=True))
+        return {"inside": 2 * total - loops}
 
     q = nx.quotient_graph(graph, list(blocks.values()), edge_data=between, node_data=inside)
     rows = []

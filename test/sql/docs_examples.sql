@@ -601,7 +601,7 @@ SELECT warren.spmv('regions', 'one', 'km_out');       -- each region's summed ed
 SELECT node_id AS region, value AS km FROM warren.vector_values('regions', 'km_out', NULL::bigint);
 SELECT assert.equal((SELECT array_agg(node_id || ':' || value ORDER BY node_id)
                      FROM warren.vector_values('regions', 'km_out', NULL::bigint)),
-                    ARRAY['1:44', '2:43'], 'communities.md km_out');
+                    ARRAY['1:54', '2:52'], 'communities.md km_out');
 SELECT assert.raises($$SELECT warren.refresh('regions')$$, 'a contraction is not refreshed', '42809');
 SELECT warren.vector_from_query('roads', 'pop', 'SELECT id, pop FROM city');
 SELECT warren.project('roads', 'pop', 'regions', 'population');            -- sum

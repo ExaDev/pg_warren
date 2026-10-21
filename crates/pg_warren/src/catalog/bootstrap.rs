@@ -133,6 +133,10 @@ CREATE TRIGGER current_version_is_kept BEFORE DELETE ON warren.versions
 -- on it forget it, so the link never dangles.
 CREATE INDEX versions_label_vector ON warren.versions (label_vector)
     WHERE label_vector IS NOT NULL;
+-- Retention counts the versions contracted from each version, and an
+-- ON DELETE SET NULL finds them: both look versions up by parent.
+CREATE INDEX versions_parent_version ON warren.versions (parent_version)
+    WHERE parent_version IS NOT NULL;
 CREATE FUNCTION warren.label_vector_is_forgotten() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
@@ -224,6 +228,33 @@ mod tests {
             "another graph's version"
         );
         assert_eq!(update("-1")?.as_deref(), Some("23503"), "no version");
+        Ok(())
+    }
+
+    #[pg_test]
+    fn versions_are_indexed_by_parent_and_label_vector() -> Result<(), Error> {
+        let indexes = Spi::get_one::<String>(
+            "SELECT string_agg(indexrelid::regclass::text || ':' || (indpred IS NOT NULL), ' '
+                               ORDER BY indexrelid::regclass::text)
+             FROM pg_index WHERE indrelid = 'warren.versions'::regclass AND NOT indisunique",
+        )?;
+        assert_eq!(
+            indexes.as_deref(),
+            Some("warren.versions_label_vector:true warren.versions_parent_version:true")
+        );
+        Ok(())
+    }
+
+    /// A source the library does not know (a hand-edited row past the
+    /// check) is an error, never read as a query graph.
+    #[pg_test]
+    fn an_unknown_source_is_refused() -> Result<(), Error> {
+        ring("strange", 3, 2)?;
+        Spi::run(
+            "ALTER TABLE warren.graphs DROP CONSTRAINT graphs_source_check;
+             UPDATE warren.graphs SET source = 'other' WHERE name = 'strange'",
+        )?;
+        assert_eq!(sqlstate("PERFORM warren.refresh('strange')")?.as_deref(), Some("XX001"));
         Ok(())
     }
 

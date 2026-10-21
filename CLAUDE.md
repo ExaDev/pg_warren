@@ -57,8 +57,11 @@ before changing code. Commands, toolchain setup and environment gotchas are in
    external id, id map, id space, tombstone, segment, chunk, relation, CSR
    (offsets / targets / weights, forward / reverse / merged), frontier, step,
    walk, vector, matrix, semiring, message, combiner, gather, label,
-   dropped edges, deduplicated edges.* *Merged* means only the all-relations
-   CSR; parallel edges folded at build time are *deduplicated*. Don't invent
+   dropped edges, deduplicated edges, community, quotient, membership,
+   parent version, label vector.* *Merged* means only the all-relations
+   CSR; parallel edges folded at build time are *deduplicated*. A
+   *community label* is a node's value in a label vector; a version's
+   *label* is its `versions.label` text: say which. Don't invent
    synonyms ("node index", "snapshot id", "edge type"). Don't use "version"
    for anything except a graph version or a software version, and say which.
 5. **Small, focused files and functions. No dead code**: nothing unused,

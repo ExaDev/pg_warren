@@ -8,6 +8,7 @@ use pgrx::PgOid;
 
 use super::CatalogError;
 use crate::access::as_catalog_owner;
+use crate::read_only::read_one;
 use crate::source::IdType;
 use warren_core::graph::NodeOrder;
 
@@ -26,6 +27,13 @@ const FIND: &str = "SELECT g.graph_id, g.owner::oid, g.readers::oid[], g.node_qu
 
 /// [`GraphDefinition::lock`]'s lock on the graph's row.
 const LOCK: &str = "SELECT FROM warren.graphs WHERE graph_id = $1 FOR UPDATE";
+
+/// [`GraphDefinition::share`]'s lock on the graph's row.
+const SHARE: &str = "SELECT FROM warren.graphs WHERE graph_id = $1 FOR SHARE";
+
+/// [`GraphDefinition::share`]'s check once it holds the lock.
+const STILL_THERE: &str =
+    "SELECT EXISTS (SELECT FROM warren.versions WHERE version_id = $1 AND graph_id = $2)";
 
 /// [`GraphDefinition::lock`]'s re-read once it holds the lock:
 /// `current_version` as in [`FIND`], and `node_order`, which a compaction
@@ -151,8 +159,9 @@ impl GraphDefinition {
                     .and_then(IdType::from_oid)
                     .ok_or_else(|| CatalogError::UnknownIdType(name.to_owned()))?;
                 let source = match row.get::<String>(17)?.as_deref() {
+                    Some("query") => GraphSource::Query,
                     Some("contraction") => GraphSource::Contraction,
-                    _ => GraphSource::Query,
+                    _ => return Err(CatalogError::UnknownSource(name.to_owned())),
                 };
                 Ok(Self {
                     id_type,
@@ -205,6 +214,45 @@ impl GraphDefinition {
         self.current_version = current;
         self.stray_current_version = stray(stored, current);
         Ok(())
+    }
+
+    /// Locks the graph's row `FOR SHARE` until the end of the transaction,
+    /// so that no promotion (and its retention), refresh, compaction or
+    /// drop of the graph or its versions runs meanwhile, then checks that
+    /// `version` is still one of its versions: a drop that held the lock
+    /// first may have deleted it. A derived version reads its parent
+    /// under this lock (DESIGN.md §6.6).
+    pub(crate) fn share(&self, version: i64) -> Result<(), CatalogError> {
+        let found = as_catalog_owner(|| {
+            Spi::connect_mut(|client| {
+                let locked = client.update(SHARE, Some(1), &[self.graph_id.into()])?.len();
+                if locked == 0 {
+                    return Err(CatalogError::GraphNotFound(self.name.clone()));
+                }
+                // A statement of its own, so its snapshot follows the lock.
+                Ok(client
+                    .update(STILL_THERE, Some(1), &[version.into(), self.graph_id.into()])?
+                    .first()
+                    .get_one::<bool>()?)
+            })
+        })?;
+        match found {
+            Some(true) => Ok(()),
+            _ => Err(CatalogError::VersionNotFound { graph: self.name.clone(), version }),
+        }
+    }
+
+    /// The graph whose versions this contraction's latest linked version
+    /// was contracted from, if any is still linked.
+    pub(crate) fn parent_graph(&self) -> Result<Option<i32>, CatalogError> {
+        as_catalog_owner(|| {
+            Ok(read_one::<i32>(
+                "SELECT p.graph_id FROM warren.versions v
+                 JOIN warren.versions p ON p.version_id = v.parent_version
+                 WHERE v.graph_id = $1 ORDER BY v.seq DESC LIMIT 1",
+                &[self.graph_id.into()],
+            )?)
+        })
     }
 
     /// Checks that the graph is built from its queries: `refresh` and

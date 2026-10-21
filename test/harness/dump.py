@@ -46,6 +46,15 @@ SEED = """
     SET ROLE dump_reader;
     SELECT warren.vector_dense_id('g', 'mine');
     RESET ROLE;
+    SELECT warren.vector_from_query('g', 'community', 'SELECT id, id % 3 FROM public.nodes');
+    SELECT warren.contract('g', 'community', 'q');
+    SELECT warren.project('g', 'deg', 'q', 'members', 'count');
+    -- Each node's community size, lifted through the stored membership.
+    CREATE FUNCTION public.lifted() RETURNS TABLE (node_id bigint, size float8) LANGUAGE plpgsql AS $$
+    BEGIN
+      PERFORM warren.lift('q', 'members', 'g', 'sizes', persist := false);
+      RETURN QUERY SELECT v.node_id, v.value FROM warren.vector_values('g', 'sizes', NULL::bigint) v;
+    END $$;
     INSERT INTO public.nodes VALUES (8);
     SELECT warren.refresh('g', promote := false, label := 'staged');
 """
@@ -69,6 +78,7 @@ STATE = {
         FROM warren.versions v JOIN warren.graphs g USING (graph_id),
              warren.neighbours(g.name, 1, 'both', version := v.version_id) n
         WHERE g.name = 'small' ORDER BY 1, 2""",
+    "lifted": "SELECT * FROM public.lifted() ORDER BY 1",
     "vectors": """
         SELECT v.version_id, v.name, v.created_by::text, x.node_id, x.value
         FROM warren.vectors v JOIN warren.graphs g USING (graph_id),

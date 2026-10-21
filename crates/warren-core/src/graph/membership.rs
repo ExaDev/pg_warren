@@ -18,8 +18,10 @@ pub(crate) const NO_COMMUNITY: u64 = u64::MAX;
 
 impl Membership {
     /// The membership whose node `n` belongs to `communities[n]` (`None`:
-    /// to no community), each a dense id below `quotient_id_space`.
-    pub fn new(
+    /// to no community), each a dense id below `quotient_id_space`; for
+    /// tests (a build makes one from labels, charged to its memory).
+    #[cfg(test)]
+    pub(crate) fn new(
         communities: &[Option<DenseId>],
         quotient_id_space: u64,
     ) -> Result<Self, GraphError> {

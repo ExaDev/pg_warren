@@ -6,7 +6,7 @@ use pgrx::prelude::*;
 use pgrx::JsonB;
 
 use super::{CatalogError, GraphDefinition};
-use crate::access::{as_catalog_owner, entry, require_reader};
+use crate::access::{as_catalog_owner, entry, is_reader, require_reader};
 use crate::read_only::read_one;
 
 /// `warren.info`: graph `name`'s definition, current version, staleness
@@ -57,7 +57,36 @@ fn describe(name: &str) -> Result<JsonB, CatalogError> {
             &[graph.graph_id.into()],
         )?)
     })?;
-    info.ok_or_else(|| CatalogError::GraphNotFound(name.to_owned()))
+    let mut info = info.ok_or_else(|| CatalogError::GraphNotFound(name.to_owned()))?;
+    hide_unreadable_parents(&mut info)?;
+    Ok(info)
+}
+
+/// Clears what a version of a contraction says of its parent (the parent
+/// graph, its version and its label vector) where the caller may not read
+/// the parent graph: a quotient's reader learns nothing of a graph it
+/// cannot read (DESIGN.md §6.6, §7).
+fn hide_unreadable_parents(info: &mut JsonB) -> Result<(), CatalogError> {
+    let Some(versions) = info.0.get_mut("versions").and_then(|v| v.as_array_mut()) else {
+        return Ok(());
+    };
+    for version in versions {
+        let Some(parent) = version.get("parent_graph").and_then(|p| p.as_str()).map(str::to_owned)
+        else {
+            continue;
+        };
+        let readable = match GraphDefinition::find(&parent) {
+            Ok(graph) => is_reader(graph.owner, &graph.readers)?,
+            Err(CatalogError::GraphNotFound(_)) => false,
+            Err(error) => return Err(error),
+        };
+        if !readable {
+            for key in ["parent_graph", "parent_version", "label_vector"] {
+                version[key] = serde_json::Value::Null;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(any(test, feature = "pg_test"))]

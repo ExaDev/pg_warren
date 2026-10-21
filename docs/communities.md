@@ -36,21 +36,30 @@ node; the weight of an edge between two communities is the sum of the
 weights of the edges joining their members (or their count, with
 `weighted := false`), and the edges inside a community make its self-loop
 (left out with `drop_self_loops := true`). An undirected graph gives an
-undirected quotient in which every edge counts once. Relations are kept,
-each contracted on its own.
+undirected quotient. The quotient is the matrix product `PᵀAP` of the
+stored adjacency, so an undirected edge inside a community counts twice
+in its self-loop (both its stored directions) and a self-loop once, as
+each counts in its nodes' degrees: a community's weighted degree is the
+sum of its members', and the total edge weight is kept. Relations are
+kept, each contracted on its own.
 
 ```sql
 SELECT warren.vector_const('regions', 'one', 1);
-SELECT warren.spmv('regions', 'one', 'km_out');       -- each region's summed edge weight
+SELECT warren.spmv('regions', 'one', 'km_out');       -- each region's weighted degree
 SELECT node_id AS region, value AS km FROM warren.vector_values('regions', 'km_out', NULL::bigint);
--- region 1: 44 (10 km inside, ash–birch, + 34 km to region 2); region 2: 43 (9 inside + 34)
+-- region 1: 54 (ash–birch, 10 km, inside: counted both ways, + 34 km to region 2);
+-- region 2: 52 (9 km inside, twice, + 34): each region's members' summed degree
 ```
 
 Contracting again into the same name adds a version (`promote := false`
 leaves it staged). A label seen before keeps its dense id, so vectors on two
 versions of the quotient compare by label. `warren.refresh` and
 `warren.compact` refuse a contraction: run the labelling again and
-`contract` again. A quotient can itself be contracted, which gives a
+`contract` again. So a quotient's id space grows with every label it has
+ever seen (labels that disappear are tombstoned) and cannot be compacted:
+when labels change wholesale, as a fresh labelling's usually do, contract
+into a new graph instead. Only versions of one parent graph can go into a
+quotient. A quotient can itself be contracted, which gives a
 hierarchy of communities.
 
 Labels must be integers: a NaN, an infinity or a fraction is refused
