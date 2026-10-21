@@ -63,7 +63,7 @@ The target users are teams building large, evolving knowledge systems on Postgre
 
 - Incremental/streaming updates to the CSR (§10).
 - Shared-memory (DSM) cache and a dedicated compute background worker (§10 — likely v1.1).
-- Graph contraction / project / lift for community-stateful computation (§6.6 — v1.1; catalog shape fixed in v1).
+- Graph contraction / project / lift for community-stateful computation (§6.6 — done in 0.4.0; catalog shape fixed in v1).
 - User-defined vertex programs via WASM (§6.8 — v1.2+).
 - Node properties beyond vectors the user explicitly materialises.
 - Any query language (Cypher, GQL, Gremlin), pattern matching with selectivity-aware planning.
@@ -157,7 +157,7 @@ CREATE TABLE warren.graphs (
     name             text UNIQUE NOT NULL,
     owner            regrole NOT NULL,  -- set to current_user by create_graph; never user-writable (§7)
     readers          regrole[] NOT NULL DEFAULT '{}',  -- roles (and their members) allowed to query (§7)
-    source           text NOT NULL DEFAULT 'query',   -- 'query' | 'contraction' (§6.6)
+    source           text NOT NULL DEFAULT 'query' CHECK (source IN ('query', 'contraction')),  -- §6.6
     node_query       text,              -- SELECT <id> ...                       (source = 'query')
     edge_query       text,              -- SELECT <src>, <dst> [, <rel>] [, <weight>] ...
     search_path      text NOT NULL,     -- the creator's search_path; the source queries always run under it (§5.4)
@@ -189,14 +189,14 @@ CREATE TABLE warren.versions (
     compacted_from bigint REFERENCES warren.versions ON DELETE SET NULL,  -- set by warren.compact: new ID space (§5.2)
     bytes        bigint NOT NULL,
     label        text,                     -- optional user label, e.g. 'corpus-2026-10-17'
-    parent_version bigint REFERENCES warren.versions,  -- set when derived by warren.contract (§6.6)
-    label_vector   bigint,                    -- the label vector it was contracted on (§6.6; no foreign key, below)
+    parent_version bigint REFERENCES warren.versions ON DELETE SET NULL,  -- set when derived by warren.contract (§6.6)
+    label_vector   bigint,                    -- the label vector it was contracted on (§6.6; no foreign key: a trigger clears it, below)
     UNIQUE (graph_id, seq)
 );
 
 CREATE TABLE warren.segments (
     version_id  bigint NOT NULL REFERENCES warren.versions ON DELETE CASCADE,
-    segment     text   NOT NULL,   -- 'id_map' | 'tombstones' | 'rel_dict' | 'offsets:<r>' | 'targets:<r>' | 'weights:<r>' | 'rev_offsets:<r>' | ...  (<r>: rel_dict index, or 'merged'; §5.3)
+    segment     text   NOT NULL,   -- 'id_map' | 'tombstones' | 'rel_dict' | 'offsets:<r>' | 'targets:<r>' | 'weights:<r>' | 'rev_offsets:<r>' | ...  (<r>: rel_dict index, or 'merged'; §5.3) | 'membership' (a contraction's, §6.6)
     chunk_no    int    NOT NULL,
     data        bytea  NOT NULL,
     PRIMARY KEY (version_id, segment, chunk_no)
@@ -231,7 +231,7 @@ The bootstrap SQL registers every `warren.*` table and sequence with `pg_extensi
 - *Direct DML.* A direct `DELETE FROM warren.versions` now waits on the graph's row (`FOR SHARE`), so it can deadlock with a `promote` or `drop_version` of the same graph. Lock the graph's row first (`SELECT … FROM warren.graphs WHERE graph_id = … FOR UPDATE`), or use `drop_version`.
 - *Locking is the triggers' own.* The update trigger reads the version `FOR KEY SHARE`, as a key's check would, so a concurrent delete waits and then fails. The delete trigger reads the graph's row `FOR SHARE`, so it sees the latest committed `current_version`, not the snapshot's. A promotion committed after a REPEATABLE READ transaction's snapshot then makes its delete fail with `serialization_failure`, and under READ COMMITTED with 23503. An earlier version read the graph from the snapshot, and a REPEATABLE READ delete removed a version promoted after the snapshot (found in the M7 security review; harness test `current_version_race`).
 
-`label_vector` is always NULL until contraction (v1.1), which must protect it without closing a cycle again (`bootstrap.rs` has a test that fails on any cycle). A restore needs no flags, but it does need the roles that `owner`, `readers` and `created_by` name, since `regrole` values are dumped by name (`pg_dumpall --roles-only` first, on another cluster). `pg_dump` still warns `there are circular foreign-key constraints on this table: versions`, for the self-references, and hints at `--disable-triggers`. Ignore that hint: the self-references need no order, and disabling triggers would skip the checks above. `test/dump.py` (CI, every major) fails on any other warning from the dumps or the restores. It builds graphs with promoted, compacted and staged versions and the vectors of two roles. It dumps them in plain and custom formats and restores each through `psql` and `pg_restore`, then compares `info`, `bfs` and `neighbours` on every version and every vector's values, and builds a new version and vector on the restored catalog. A non-superuser's dump is in §7.
+`label_vector` is NULL except on a contraction's versions (0.4.0, §6.6); it is protected without closing a cycle again (`bootstrap.rs` has a test that fails on any cycle): a trigger clears it when its vector is deleted. A restore needs no flags, but it does need the roles that `owner`, `readers` and `created_by` name, since `regrole` values are dumped by name (`pg_dumpall --roles-only` first, on another cluster). `pg_dump` still warns `there are circular foreign-key constraints on this table: versions`, for the self-references, and hints at `--disable-triggers`. Ignore that hint: the self-references need no order, and disabling triggers would skip the checks above. `test/dump.py` (CI, every major) fails on any other warning from the dumps or the restores. It builds graphs with promoted, compacted and staged versions and the vectors of two roles. It dumps them in plain and custom formats and restores each through `psql` and `pg_restore`, then compares `info`, `bfs` and `neighbours` on every version and every vector's values, and builds a new version and vector on the restored catalog. A non-superuser's dump is in §7.
 
 The bootstrap SQL also runs `REVOKE ALL … FROM PUBLIC` on every `warren.*` table and sequence. No role except the catalog owner (the role that owns them, §7) can read or write the catalog, segments or vectors directly; all access goes through `warren.*` functions. This is what makes the access check in §7 meaningful: segment and vector bytes are reachable only through functions that perform it. The schema itself grants `USAGE` to `PUBLIC`, so any role can call `warren.*` functions (each checks access itself).
 
@@ -572,29 +572,46 @@ Per-vertex models — Pregel included — go wrong on **community-stateful** com
 
 **Stage 1 (v1, no engine support needed).** A community is a `GROUP BY` on a label vector produced by tier 1. The community table holds state once per community; broadcasting back to members is a join; member-to-member messaging uses `gather`. State is stored once, which is already better than Pregel.
 
-**Stage 2 (v1.1; API shape fixed now).** Three operations borrowed from multigrid methods make the two-level pattern native, fast and recursive:
+**Stage 2 (0.4.0, done).** Three operations borrowed from multigrid methods make the two-level pattern native, fast and recursive:
 
 ```sql
 -- Quotient graph: one node per distinct label, edges aggregated (weight = edge count or summed weight).
--- Creates a derived graph in the catalog whose id_map is the label values and which stores the
--- membership matrix P (N × K, one non-zero per row) linking it to its parent version.
+-- Creates (or adds a version to) a derived graph in the catalog whose node ids are the label values and
+-- which stores the membership matrix P (N × K, one non-zero per row) linking it to its parent version.
 warren.contract(graph text, label_vector text, out_graph text,
                 weighted bool DEFAULT true, drop_self_loops bool DEFAULT false,
-                version bigint DEFAULT NULL) RETURNS bigint;             -- quotient version_id
+                promote bool DEFAULT true, version bigint DEFAULT NULL) RETURNS bigint;  -- quotient version_id
 
--- vertex → community aggregation (Pᵀ·x, an SpMV): sum | mean | max | min | count
-warren.project(graph text, x text, out_graph text, y text, agg text DEFAULT 'sum') RETURNS void;
+-- vertex → community aggregation (Pᵀ·x): sum | mean | max | min | count
+warren.project(graph text, x text, out_graph text, y text, agg text DEFAULT 'sum',
+               persist bool DEFAULT true, version bigint DEFAULT NULL) RETURNS void;
 
--- community → vertex broadcast (P·y, an SpMV)
-warren.lift(out_graph text, y text, graph text, x text) RETURNS void;
+-- community → vertex broadcast (P·y)
+warren.lift(out_graph text, y text, graph text, x text,
+            persist bool DEFAULT true, version bigint DEFAULT NULL) RETURNS void;
 ```
 
-With these, a community-stateful computation is a tier-1 or tier-2 program *on the quotient graph* with `project`/`lift` at the boundaries. Because `contract` produces a real graph version, it recurses: contracting the quotient gives hierarchical communities, which is exactly Louvain/Leiden and multilevel partitioning — library algorithms rather than special engines. The membership matrix is one more sparse relation in CSR; nothing new is needed in `warren-core`.
+With these, a community-stateful computation is a tier-1 or tier-2 program *on the quotient graph* with `project`/`lift` at the boundaries. Because `contract` produces a real graph version, it recurses: contracting the quotient gives hierarchical communities, which is exactly Louvain/Leiden and multilevel partitioning — library algorithms rather than special engines (§6.7 group 3).
 
-Design obligations imposed now:
+Design obligations imposed in v1, both met in 0.4.0 (below):
 
-1. The catalog's notion of a graph gains a second **source**: derived by contraction, referencing a parent version and a label vector, rather than only built from SQL queries. Versioning, staging, retention and vectors work identically; the quotient's `id_space` is the label range; a `parent_version` column on `warren.versions` records the link.
-2. Vectors are bindable to quotient graphs, and `project`/`lift` validate that the parent and quotient versions correspond. Trivial given stable IDs.
+1. The catalog's notion of a graph gains a second **source**: derived by contraction, referencing a parent version and a label vector, rather than only built from SQL queries. Versioning, staging, retention and vectors work identically; a `parent_version` column on `warren.versions` records the link.
+2. Vectors are bindable to quotient graphs, and `project`/`lift` validate that the parent and quotient versions correspond.
+
+Decisions made in 0.4.0 (`warren_core::community`, `warren_core::graph::Membership`, `pg_warren::community_sql`):
+- **Signatures.** As above. `contract` gained `promote` (staging works as for `refresh`: `promote := false` leaves the version staged) before the trailing `version`, which is the *parent* version to contract (default its current one); `project` and `lift` gained `persist` (the library keeps its intermediates transient, §6.2) and a trailing `version`, which is the *quotient* version (default `out_graph`'s current one). Neither takes a parent version: a quotient version names the version it was contracted from, and `x` is read (`project`) or written (`lift`) at exactly that version, which is how the two always correspond. `contract` and `project`/`lift` are `PARALLEL UNSAFE` (they write).
+- **The derived graph.** `graphs.source` is `'contraction'` (a `CHECK`ed column, `'query'` or `'contraction'`); its `node_query` and `edge_query` are NULL; its `id_type` is `bigint`; `directed`, `has_relations`, `build_reverse` and `store_merged` are its first parent graph's (a later contraction into it from a graph of another direction or relation shape is refused, 22023); it is `weighted` (weights are sums or counts); `retain_versions` is 2 and `node_order` `'id'`. The first `contract` into a name creates it, owned by the caller; later ones add versions. A graph built from queries cannot receive a contraction (42809), and `out_graph` cannot be `graph` (22023).
+- **Ids.** The quotient's node ids are the distinct label values of the parent's live nodes, so `vector_values('q', …, NULL::bigint)` joins back to the labels. Its dense ids are assigned as a refresh's are (§5.2): a label already in its current version keeps its dense id, new labels are appended in label order, and labels gone are tombstoned. So `id_space` is the number of labels ever seen since the quotient's first version (the obligation's "label range" was a dense-id-equals-label reading; labels such as `components_vector`'s smallest dense ids are sparse, so it was not adopted). Vectors on two versions of a quotient compare by label (`vector_norm_diff`, `diff`, `distance`).
+- **Labels.** A width-1 vector of `i64`, `f64` or `f32`. Each live node's label must be an integer within `bigint`'s range: NaN, an infinity, a fraction or a value out of range is refused with 22023 (`label vector: the label of dense id 3 is 0.5, which is not an integer`), and a `bool` vector with 42804, before anything is written. Tombstoned nodes are in no community. A transient label vector works; it is recorded as NULL.
+- **Edges (`PᵀAP`).** For a directed parent, the edge `c → d` sums the weights (or, with `weighted := false`, counts) of the stored edges from members of `c` to members of `d`: exactly `PᵀAP`. For an undirected parent the quotient is undirected, and each undirected edge counts once: between two communities as its weight (stored both ways), and inside one as part of that community's self-loop (stored once). That is the graph quotient (NetworkX's `quotient_graph` with each block's internal edges as its self-loop), not `PᵀAP` of the stored matrix, which would count an internal edge twice; it keeps Louvain's convention closed under contraction (§6.7). `drop_self_loops` leaves out the edges inside communities. Relations are kept: each of the parent's relations is contracted on its own into the quotient relation of the same name, and the quotient's all-relations CSR sums them as any merged CSR does (so with `weighted := false` an edge present in two relations counts twice there). Parallel edges were folded by the parent's build, so a count is of distinct (source, target) pairs per relation. A parent's weight of NaN propagates into the sum.
+- **The kernel.** `warren_core::community::contract` is Gustavson's row-by-row SpGEMM specialised to one non-zero per row of `P`: the parent's nodes are counting-sorted by community, then each community in turn accumulates its members' rows (ascending dense id, each row in order) into a dense row of the quotient, emitted into the build's `EdgeList`. Sums are therefore taken in one order whatever the thread count. It runs as one job on the compute pool (a single thread: the rows are not split; parallelising by community needs a dense row per thread, K per thread, or hashing), checks its cancellation flag every 65,536 row entries, and charges its scratch (8 B per community plus 8 B per node for the grouping, 9 B per community for the dense row, the touched list) and its output to `warren.max_build_memory`. The quotient's CSRs, reverse CSRs and merged CSR then come from the normal build path (`build::write_contents`: `BuildPlan` within the budget, refused before any write; the streamed segment writer; the version row, statistics and promotion with retention), with the membership written as one more segment. `deduplicated_edges` and `dropped_edges` are 0.
+- **The membership.** `warren_core::graph::Membership` holds each parent node's community (a quotient dense id; `u64::MAX` for none), stored as the quotient version's `membership` segment (kind 7, `u64` elements, one per parent dense id), so `P` is frozen with the version whatever happens to the label vector later. Decoding checks every community lies in the quotient's id space; `project` and `lift` also check that exactly the parent version's live nodes have one (a mismatch is `data_corrupted`, XX001).
+- **Lineage.** `versions.parent_version` (a self-reference, so dump order is unaffected, §5.1) is now `ON DELETE SET NULL`; `versions.label_vector` holds the persisted label vector's id, and a trigger on `warren.vectors` (`label_vector_is_forgotten`, `AFTER DELETE`, with a partial index on the column) clears it when that vector is deleted, so neither link dangles. `label_vector` cannot be a foreign key: with `vectors.version_id` it would close a cycle (§5.1). `warren.info` reports `source`, and per version `parent_version`, `parent_graph` and `label_vector`.
+- **Retention and drops.** A promoted version that a quotient version was contracted from is kept beyond `retain_versions`, as a version with bound vectors is, with a `NOTICE` (`… 1 contracted version derives from it`), so `project`/`lift` keep working on the quotient. `drop_version` of such a version, or `drop_graph` of the parent, is allowed: the quotient's versions keep their graph, CSRs and vectors but lose the link, and `project`/`lift` on them then fail with 55000 (`… was contracted from a version that has since been dropped`). Dropping the quotient graph frees the parent versions it held.
+- **`refresh` and `compact` of a derived graph are refused** (42809, `cannot refresh graph "q": it is derived by contraction; warren.contract makes its versions`). Re-contracting from the parent's current version was the alternative, but a label vector is bound to one parent version (§6.2): on a newer version the named vector usually does not exist, or holds labels computed on older data, so a refresh would either fail or silently contract by stale labels. New labels come from running the labelling again, so `contract` is the one way to make a version. Compaction would have to renumber the membership's targets and carry the lineage; a quotient's tombstones are labels that disappeared, and contracting into a new graph gives dense ids without them.
+- **Access (§7).** `contract` reads the parent: the caller must be a reader (or owner) of `graph`. A new quotient is owned by the caller, like `create_graph`, so a reader may derive a community graph of its own and grant it (exposing aggregated topology the reader could already read). Contracting into an existing quotient is a management action: the caller must be a member of its owner role (42501). `project` and `lift` read one graph and write a vector on the other: the caller must be a reader of both, and the vector written follows the ownership rule of §7.
+- **`project` and `lift`.** `project` reads `x` (any dtype, read as `double precision`, `bool` as 0/1; any width) at the parent version and writes `y` on the quotient version with `x`'s width: `f64` for `sum`, `mean`, `max`, `min` (SQL order, NaN greatest), `i64` for `count` (the member count, in every column). Members are folded in ascending dense id, so sums are deterministic; a community with no member (a tombstoned quotient node) holds 0. `mean` of a matrix is the centroid of each community's rows (pgvector embeddings to community centroids). `lift` writes `x` on the parent version with `y`'s dtype and width, each live node holding its community's row, tombstoned nodes 0. Both are single passes, one thread, charged to `warren.max_compute_memory` (the membership as read and decoded, and the result); both versions are opened through the cache (not as a pair: they have different id types).
+- **Tests.** Property tests of the kernel against dense matrices (`PᵀAP`, and for undirected `PᵀUP + (PᵀUP)ᵀ − diag(PᵀUP)` with `U` the edges once), of `project` and `lift` against their definitions, of labels and the membership segment; unit tests of the pipeline over the build's in-memory ports; pg_tests for the SQL surface, errors, access, lineage, retention and the trigger; `test/sql/oracle_contraction.sql` (undirected, weighted, self-loops, parallel edges, a tombstone) and `oracle_contraction_directed.sql` (directed, two relations, counts) against NetworkX's `quotient_graph`, and `project`/`lift` against SQL `GROUP BY` and joins.
 
 ### 6.7 Algorithm library (v1)
 

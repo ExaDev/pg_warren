@@ -1,0 +1,23 @@
+{
+  "graphs": {
+    "smoke": {"generate": ["random", "--nodes", "20000", "--edges", "0", "--seed", "1"]},
+    "blocks-1m": {"generate": ["random", "--nodes", "1000000", "--edges", "0", "--seed", "1"]},
+    "blocks-10m": {"generate": ["random", "--nodes", "10000000", "--edges", "0", "--seed", "1"]}
+  },
+  "setup": [
+    "DO $$ BEGIN EXECUTE format('ALTER DATABASE %I SET warren.threads = 4', current_database()); END $$",
+    "SELECT warren.create_graph('g', 'SELECT id FROM nodes', 'SELECT n.id, CASE WHEN abs(hashint8(n.id * 8 + k)) % 10 < 9 THEN (n.id - 1) / 1000 * 1000 + 1 + abs(hashint8(-(n.id * 8 + k))) % 1000 ELSE 1 + abs(hashint8(-(n.id * 8 + k))) % (SELECT max(id) FROM nodes) END, CASE WHEN abs(hashint8(n.id * 8 + k)) % 10 < 9 THEN ''in'' ELSE ''out'' END FROM nodes n, generate_series(1, 5) k', directed := false, has_relations := true, build_reverse := false)"
+  ],
+  "params": "SELECT count(*) AS nodes FROM nodes",
+  "workloads": [
+    {"name": "refresh", "sql": "SELECT warren.refresh('g')", "repeat": 1},
+    {"name": "prewarm", "sql": "SELECT warren.prewarm('g')"},
+    {"name": "components_vector_in", "requires": ["warren.components_vector"], "sql": "SELECT warren.components_vector('g', 'cc', rels := ARRAY['in'])", "repeat": 1},
+    {"name": "contract_by_components", "requires": ["warren.contract"], "sql": "SELECT warren.contract('g', 'cc', 'q')"},
+    {"name": "project_count", "requires": ["warren.project"], "sql": "SELECT warren.project('g', 'cc', 'q', 'members', 'count')"},
+    {"name": "project_mean", "requires": ["warren.project"], "sql": "SELECT warren.project('g', 'cc', 'q', 'mean_label', 'mean', persist := false)"},
+    {"name": "lift", "requires": ["warren.lift"], "sql": "SELECT warren.lift('q', 'members', 'g', 'community_size', persist := false)"},
+    {"name": "dense_ids", "requires": ["warren.vector_dense_id"], "sql": "SELECT warren.vector_dense_id('g', 'ids')", "repeat": 1},
+    {"name": "contract_by_dense_ids", "requires": ["warren.contract"], "sql": "SELECT warren.contract('g', 'ids', 'identity')", "repeat": 1}
+  ]
+}

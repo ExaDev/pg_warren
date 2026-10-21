@@ -439,8 +439,8 @@ warren.vector_reduce(…)`, so the call runs once.
 reads ([memory model](#memory-model)), within `warren.max_cache_memory`.
 
 **Not yet supported:** `text` node ids; incremental maintenance (every
-`refresh` is a full rebuild); contraction, `project`, `lift` and Louvain
-(DESIGN.md §6.6); edge properties beyond one weight; ownership transfer;
+`refresh` is a full rebuild); `refresh` or `compact` of a graph derived by
+contraction (contract again); edge properties beyond one weight; ownership transfer;
 cleanup of graphs and vectors when their owner role is dropped (a superuser
 can still `drop_graph`); per-role quotas on readers' vectors.
 
@@ -454,7 +454,15 @@ can still `drop_graph`); per-role quotas on readers' vectors.
   `minimum_spanning_forest` costs a pass over the edges per Borůvka round,
   at most log₂ N rounds. All five run on one thread.
 - `gather(…, 'collect')` of growing sets costs memory O(N × neighbourhood);
-  it suits local neighbourhoods, not community-wide state.
+  it suits local neighbourhoods, not community-wide state; contract to a
+  quotient graph for that ([communities.md](communities.md)).
+- `contract` is linear: a counting sort of the nodes by community, then one
+  pass over the stored edges, on one thread, plus a build of the quotient
+  (its edges, at most the parent's). Its scratch, charged to
+  `warren.max_build_memory`, is 8 bytes per node and about 17 bytes per
+  community, beside the parent version (cached) and the label vector
+  (charged to `warren.max_compute_memory`). `project` and `lift` are one
+  pass over the nodes and read the 8-byte-per-node membership.
 - A persisted vector write costs WAL (8 bytes × id_space per `f64` column)
   on every call; keep iterative scratch transient (`persist := false`).
 - `walk` in `paths` mode can be exponential in the number of hops; it is

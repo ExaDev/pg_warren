@@ -589,3 +589,28 @@ SELECT assert.equal((SELECT count(*) FROM big WHERE g < (SELECT warren.vector_re
 SELECT assert.equal((SELECT count(*) FROM big b JOIN warren.vector_values('roads', 'pop', NULL::int) v ON v.node_id = b.g),
                     5::bigint, 'a join with a vector read in a parallel plan');
 RESET parallel_setup_cost; RESET parallel_tuple_cost; RESET min_parallel_table_scan_size;
+
+------------------------------------------------------------------------
+-- docs/communities.md
+------------------------------------------------------------------------
+SELECT warren.vector_from_query('roads', 'region',
+  'SELECT id, CASE WHEN id <= 2 THEN 1 ELSE 2 END FROM city');
+SELECT warren.contract('roads', 'region', 'regions');   -- returns the new version's id
+SELECT warren.vector_const('regions', 'one', 1);
+SELECT warren.spmv('regions', 'one', 'km_out');       -- each region's summed edge weight
+SELECT node_id AS region, value AS km FROM warren.vector_values('regions', 'km_out', NULL::bigint);
+SELECT assert.equal((SELECT array_agg(node_id || ':' || value ORDER BY node_id)
+                     FROM warren.vector_values('regions', 'km_out', NULL::bigint)),
+                    ARRAY['1:44', '2:43'], 'communities.md km_out');
+SELECT assert.raises($$SELECT warren.refresh('regions')$$, 'a contraction is not refreshed', '42809');
+SELECT warren.vector_from_query('roads', 'pop', 'SELECT id, pop FROM city');
+SELECT warren.project('roads', 'pop', 'regions', 'population');            -- sum
+SELECT warren.project('roads', 'pop', 'regions', 'largest', agg := 'max');
+SELECT warren.lift('regions', 'population', 'roads', 'region_population');
+SELECT node_id, value FROM warren.vector_values('roads', 'region_population', NULL::int);
+SELECT assert.equal((SELECT array_agg(node_id || ':' || value ORDER BY node_id)
+                     FROM warren.vector_values('roads', 'region_population', NULL::int)),
+                    ARRAY['1:150', '2:150', '3:110', '4:110', '5:110'], 'communities.md lift');
+SELECT assert.equal((SELECT array_agg(value ORDER BY node_id) FROM warren.vector_values('regions', 'largest', NULL::bigint)),
+                    ARRAY[100, 80]::float8[], 'communities.md max');
+SELECT assert.equal(warren.info('regions') ->> 'source', 'contraction', 'communities.md info');
