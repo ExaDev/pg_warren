@@ -47,8 +47,10 @@
   synchronous majority-vote label propagation (smallest label on a tie;
   NetworkX's is random or semi-synchronous, so it is checked against a
   Python reimplementation of its rule). Where NetworkX raises on
-  non-convergence, these write the last iterate with a `WARNING`. On 1M
-  nodes and 10M undirected edges (4 vCPUs): see docs/limits.md.
+  non-convergence, these write the last iterate with a `WARNING`. At 1M
+  nodes and 10M undirected edges on 4 vCPUs the SpMV centralities take
+  40–90 ms an iteration and `clustering` 4.5 s; majority-vote label
+  propagation, a tier-2 program, ~20 s an iteration (docs/limits.md).
 
 ### Fixes
 
