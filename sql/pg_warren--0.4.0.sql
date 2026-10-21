@@ -938,7 +938,7 @@ BEGIN
                                   'CASE WHEN _warren_leiden_down = _warren_leiden_prev THEN 0 ELSE 1 END', false, v);
         EXIT WHEN warren.vector_reduce(graph, '_warren_leiden_changed', 'sum', v) = 0;
       END IF;
-      IF iteration = 100 THEN
+      IF iterations < 0 AND iteration = 100 THEN
         RAISE WARNING 'leiden did not stabilise in 100 iterations';
         EXIT;
       END IF;
