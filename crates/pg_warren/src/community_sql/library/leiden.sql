@@ -5,10 +5,12 @@
 -- (warren.leiden_refine), and contracts the level's graph by the refined
 -- partition (warren.contract); the next level starts from the unrefined
 -- one, projected onto it (warren.project, min). Every community found is
--- connected. It stops when a level leaves every node alone, when a level
--- raises modularity by no more than `tolerance`, or after `max_levels`.
--- Arguments and output as warren.louvain's; `randomness` is θ of the
--- refinement. The levels' graphs are named
+-- connected. As Traag et al.'s, it goes on while there is something to
+-- aggregate: it stops when a level's local moving leaves every node alone,
+-- when the refinement leaves every node alone (the next level's graph
+-- would be this one), or after `max_levels`. A level's local moving stops
+-- when a sweep raises modularity by no more than `tolerance`. Arguments
+-- and output as warren.louvain's; `randomness` is θ of the refinement. The levels' graphs are named
 -- `_warren_leiden_<backend pid>_<level>` and dropped at the end.
 CREATE FUNCTION warren.leiden(graph text, "out" text, resolution float8 DEFAULT 1.0,
                               seed bigint DEFAULT 0, max_levels int DEFAULT 100,
@@ -18,7 +20,7 @@ CREATE FUNCTION warren.leiden(graph text, "out" text, resolution float8 DEFAULT 
 RETURNS float8 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   v bigint := coalesce(version, (warren.info(graph) ->> 'current_version')::bigint);
-  parts text[] := ARRAY['single', 'moved', 'refined', 'initial', 'keys', 'down'];
+  parts text[] := ARRAY['moved', 'refined', 'initial', 'keys', 'down'];
   levels text[] := ARRAY[graph];
   versions bigint[] := ARRAY[v];
   g text := graph;
@@ -26,8 +28,8 @@ DECLARE
   level int := 0;
   nodes bigint;
   found bigint;
+  refined bigint;
   q float8;
-  q_next float8;
   i int;
 BEGIN
   IF "out" IS NULL OR resolution IS NULL OR seed IS NULL OR max_levels IS NULL OR tolerance IS NULL
@@ -46,8 +48,6 @@ BEGIN
     RAISE EXCEPTION 'max_levels must be at least 1, not %', max_levels USING ERRCODE = 'invalid_parameter_value';
   END IF;
   BEGIN
-    PERFORM warren.vector_dense_id(graph, '_warren_leiden_single', persist := false, version := v);
-    q := warren.modularity(graph, '_warren_leiden_single', resolution, weighted, v);
     LOOP
       level := level + 1;
       nodes := (SELECT (e ->> 'node_count')::bigint FROM jsonb_array_elements(warren.info(g) -> 'versions') e
@@ -60,11 +60,9 @@ BEGIN
       found := warren.local_moving(g, '_warren_leiden_moved',
                                    initial := CASE WHEN level > 1 THEN '_warren_leiden_initial' END,
                                    keys := CASE WHEN level > 1 THEN '_warren_leiden_keys' END,
-                                   resolution := resolution, seed := seed, tolerance := 0,
+                                   resolution := resolution, seed := seed, tolerance := tolerance,
                                    weighted := CASE WHEN level = 1 THEN weighted ELSE true END,
                                    persist := false, version := gv);
-      q_next := warren.modularity(g, '_warren_leiden_moved', resolution,
-                                  CASE WHEN level = 1 THEN weighted ELSE true END, gv);
       PERFORM warren.vector_map(g, '_warren_leiden_down', '_warren_leiden_moved', false, gv);
       FOR i IN REVERSE level - 1 .. 1 LOOP
         PERFORM warren.lift(levels[i + 1], '_warren_leiden_down', levels[i], '_warren_leiden_down',
@@ -73,13 +71,13 @@ BEGIN
       IF levels_prefix IS NOT NULL THEN
         PERFORM warren.vector_map(graph, format('%s_%s', levels_prefix, level), '_warren_leiden_down', true, v);
       END IF;
-      EXIT WHEN found = nodes OR level >= max_levels OR q_next - q <= tolerance;
-      q := q_next;
-      PERFORM warren.leiden_refine(g, '_warren_leiden_moved', '_warren_leiden_refined',
+      EXIT WHEN found = nodes OR level >= max_levels;
+      refined := warren.leiden_refine(g, '_warren_leiden_moved', '_warren_leiden_refined',
                                    keys := CASE WHEN level > 1 THEN '_warren_leiden_keys' END,
                                    resolution := resolution, seed := seed, randomness := randomness,
                                    weighted := CASE WHEN level = 1 THEN weighted ELSE true END,
                                    persist := false, version := gv);
+      EXIT WHEN refined = nodes;
       levels := levels || format('_warren_leiden_%s_%s', pg_backend_pid(), level);
       versions := versions || warren.contract(g, '_warren_leiden_refined', levels[level + 1],
                                               weighted := CASE WHEN level = 1 THEN coalesce(weighted, true) ELSE true END,

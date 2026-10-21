@@ -63,6 +63,31 @@ mod tests {
         Ok(())
     }
 
+    /// Leiden aggregates while its refinement merges nodes, as Traag et
+    /// al.'s does, rather than stopping at the first level whose local
+    /// moving gains nothing: on sparse blocks (20 blocks of 500 nodes,
+    /// four edges a node, nine in ten inside the block) that stop left it
+    /// below Louvain (0.79 against 0.80 on the bench's larger blocks).
+    #[pg_test]
+    fn leiden_aggregates_while_its_refinement_merges() -> Result<(), Error> {
+        Spi::run(
+            "CREATE TABLE sb_nodes AS SELECT generate_series(1, 10000)::bigint AS id;
+             CREATE TABLE sb_edges AS
+             SELECT n.id AS src,
+                    CASE WHEN abs(hashint8(n.id * 8 + k)) % 10 < 9
+                         THEN (n.id - 1) / 500 * 500 + 1 + abs(hashint8(-(n.id * 8 + k))) % 500
+                         ELSE 1 + abs(hashint8(-(n.id * 8 + k))) % 10000 END AS dst
+             FROM sb_nodes n, generate_series(1, 4) k;
+             SELECT warren.create_graph('sb', 'SELECT id FROM sb_nodes', 'SELECT src, dst FROM sb_edges',
+                                        directed := false);
+             SELECT warren.refresh('sb')",
+        )?;
+        let louvain = Spi::get_one::<f64>("SELECT warren.louvain('sb', 'louvain')")?;
+        let leiden = Spi::get_one::<f64>("SELECT warren.leiden('sb', 'leiden')")?;
+        assert!(leiden > louvain, "leiden {leiden:?}, louvain {louvain:?}");
+        Ok(())
+    }
+
     #[pg_test]
     fn each_levels_partition_can_be_kept() -> Result<(), Error> {
         ring_of_cliques()?;
