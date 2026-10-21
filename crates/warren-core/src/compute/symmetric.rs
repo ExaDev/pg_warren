@@ -1,0 +1,140 @@
+//! The symmetric adjacency of the undirected simple graph underlying the
+//! selected relations (DESIGN.md §6.7): each node's neighbours in either
+//! direction, self-loops dropped, rows sorted, in a CSR charged to the
+//! compute budget. `triangles` and `core_number` read it; no reverse CSR
+//! is needed to build it.
+
+use std::mem::size_of;
+
+use rayon::prelude::*;
+
+use super::{ComputeError, ComputeMemory, MemoryCharge};
+use crate::graph::{CsrRows, DenseId, GraphCsr, RelationSelection};
+use crate::interrupts::{Cancellation, Cancelled};
+
+/// The nodes one sort task handles; a task checks the cancellation flag
+/// first. Small under test, so tests cross task boundaries.
+const NODES_PER_TASK: usize = if cfg!(test) { 3 } else { 4096 };
+
+/// How often the sequential build checks the cancellation flag, in nodes.
+const NODES_PER_CHECK: u64 = 1 << 16;
+
+/// The forward rows of the selected relations: every relation is read
+/// through its all-relations rows (stored or merged on the fly), so an
+/// edge in several relations is one entry and the scratch charged does not
+/// depend on whether the merged CSR is stored; a selection through each
+/// relation's CSR.
+pub(super) fn selected_rows<'g>(
+    graph: &'g GraphCsr,
+    relations: RelationSelection<'_>,
+) -> Result<Vec<CsrRows<'g>>, ComputeError> {
+    Ok(match relations {
+        RelationSelection::All => vec![graph.all_relations().forward()],
+        RelationSelection::Only(_) => graph
+            .selected(relations)
+            .map_err(|relation| ComputeError::UnknownRelation { relation: relation.index() })?
+            .into_iter()
+            .map(|relation| relation.forward().into())
+            .collect(),
+    })
+}
+
+/// Each node's neighbours in either direction (self-loops dropped), each
+/// row sorted; a neighbour in several relations or both directions
+/// repeats.
+pub(super) struct Symmetric {
+    /// `id_space + 1` positions into `targets`.
+    offsets: Vec<u64>,
+    targets: Vec<DenseId>,
+    _charges: [MemoryCharge; 2],
+}
+
+impl Symmetric {
+    /// At most the bytes [`Self::new`] charges over `forward`: the offsets,
+    /// and both directions of every stored edge (self-loops, which it
+    /// drops, included).
+    pub(super) fn bytes(forward: &[CsrRows<'_>], id_space: u64) -> u64 {
+        let edges = forward.iter().map(CsrRows::stored_edges).fold(0, u64::saturating_add);
+        let offsets = id_space.saturating_add(1).saturating_mul(size_of::<u64>() as u64);
+        offsets.saturating_add(edges.saturating_mul(2 * size_of::<DenseId>() as u64))
+    }
+
+    pub(super) fn new(
+        memory: &ComputeMemory,
+        cancellation: &Cancellation,
+        forward: &[CsrRows<'_>],
+        id_space: u64,
+    ) -> Result<Self, ComputeError> {
+        let each_edge = |f: &mut dyn FnMut(DenseId, DenseId)| -> Result<(), Cancelled> {
+            for u in 0..id_space {
+                if u % NODES_PER_CHECK == 0 && cancellation.is_cancelled() {
+                    return Err(Cancelled);
+                }
+                for csr in forward {
+                    csr.neighbours(u).filter(|&v| v != u).for_each(|v| f(u, v));
+                }
+            }
+            Ok(())
+        };
+        let (mut offsets, offsets_charge) = memory.filled(id_space as usize + 1, 0u64)?;
+        each_edge(&mut |u, v| {
+            offsets[u as usize] += 1;
+            offsets[v as usize] += 1;
+        })?;
+        // Running ends; placing each entry then moves a row's end to its
+        // start.
+        let mut end = 0;
+        for offset in &mut offsets[..id_space as usize] {
+            end += *offset;
+            *offset = end;
+        }
+        offsets[id_space as usize] = end;
+        let (mut targets, targets_charge) = memory.filled(end as usize, 0 as DenseId)?;
+        each_edge(&mut |u, v| {
+            for (row, target) in [(u, v), (v, u)] {
+                let offset = &mut offsets[row as usize];
+                *offset -= 1;
+                targets[*offset as usize] = target;
+            }
+        })?;
+        let mut symmetric = Self { offsets, targets, _charges: [offsets_charge, targets_charge] };
+        symmetric.sort(cancellation)?;
+        Ok(symmetric)
+    }
+
+    /// The row of `node`.
+    pub(super) fn row(&self, node: usize) -> &[DenseId] {
+        &self.targets[self.offsets[node] as usize..self.offsets[node + 1] as usize]
+    }
+
+    /// Sorts every row, in parallel tasks of whole rows.
+    fn sort(&mut self, cancellation: &Cancellation) -> Result<(), Cancelled> {
+        let offsets = &self.offsets;
+        let nodes = offsets.len() - 1;
+        let mut tasks = Vec::new();
+        let mut rest = self.targets.as_mut_slice();
+        for first in (0..nodes).step_by(NODES_PER_TASK) {
+            let last = nodes.min(first + NODES_PER_TASK);
+            let len = (offsets[last] - offsets[first]) as usize;
+            let (chunk, tail) = std::mem::take(&mut rest).split_at_mut(len);
+            tasks.push((first..last, chunk));
+            rest = tail;
+        }
+        tasks.into_par_iter().try_for_each(|(nodes, chunk)| {
+            if cancellation.is_cancelled() {
+                return Err(Cancelled);
+            }
+            let base = offsets[nodes.start];
+            for node in nodes {
+                let row = (offsets[node] - base) as usize..(offsets[node + 1] - base) as usize;
+                chunk[row].sort_unstable();
+            }
+            Ok(())
+        })
+    }
+}
+
+/// The distinct values of a sorted row.
+pub(super) fn distinct(row: &[DenseId]) -> impl Iterator<Item = DenseId> + '_ {
+    row.iter().enumerate().filter(|&(i, v)| i == 0 || row[i - 1] != *v).map(|(_, &v)| v)
+}

@@ -22,6 +22,7 @@ mod reduce;
 pub(crate) mod reference;
 mod semiring;
 mod summary;
+mod symmetric;
 mod triangles;
 mod vector;
 mod workers;
