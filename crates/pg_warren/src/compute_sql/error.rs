@@ -178,6 +178,7 @@ pub(crate) fn compute_sqlstate(error: &ComputeError) -> PgSqlErrorCode {
         | ComputeError::UnknownReduction(_)
         | ComputeError::UnknownNorm(_)
         | ComputeError::UnknownCombiner(_)
+        | ComputeError::UnknownSimilarity(_)
         | ComputeError::ZeroWidth
         | ComputeError::WidthMismatch { .. }
         | ComputeError::Cycle { .. }

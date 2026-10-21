@@ -25,6 +25,7 @@ mod reduce;
 #[cfg(not(miri))]
 pub(crate) mod reference;
 mod semiring;
+mod similarity;
 mod spanning_forest;
 mod strong_components;
 mod summary;
@@ -56,6 +57,10 @@ pub use product::{spmm, spmv, Product};
 pub use ranking::top_k;
 pub use reduce::{norm_diff, reduce, reduce_live, Norm, Reduction};
 pub use semiring::{BinaryOp, Monoid, Semiring, SemiringElement};
+pub use similarity::{
+    most_similar, similar_pairs, similarity_of_pairs, Neighbourhood, Scores, Similar, SimilarPairs,
+    Similarity,
+};
 pub use spanning_forest::{minimum_spanning_forest, ForestEdge, SpanningForest};
 pub use strong_components::strong_components;
 pub use summary::{summarise, Summary};
