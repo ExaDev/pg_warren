@@ -26,6 +26,19 @@
   (version, graph and vector ids restart). A backend now drops what it
   cached when pg_warren is installed again.
 
+### Performance
+
+- **Multi-source BFS for unweighted closeness and harmonic centrality**
+  (`warren-core`'s `compute::centrality`; DESIGN.md §6.7). Sources are
+  searched 64 at a time, one bit per source, each step in parallel over
+  the frontier, with 40 B of scratch per node.
+  - Measured at 1M nodes / 10M edges on 4 threads
+    (`benches/centrality.rs`): roughly 5–20× faster, e.g. 64 sources of
+    closeness in 0.73–1.05 s instead of 10–17 s.
+  - Closeness is bit-identical to before. Harmonic sums in a new,
+    deterministic order, within 1e-12 relative of the old result.
+  - Weighted graphs (Dijkstra) and betweenness are unchanged.
+
 ## 0.4.0 — locality, the library, and communities (2026-10-22)
 
 Milestone M8 of DESIGN.md §13. Dense ids can be ordered for locality; the
