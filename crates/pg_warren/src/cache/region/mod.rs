@@ -13,7 +13,6 @@ mod heap;
 mod in_place;
 mod layout;
 
-use std::marker::PhantomData;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -91,31 +90,39 @@ impl Region {
         // Checks the alignment for `T` and the bounds, once.
         let found = self.bytes().len() as u64;
         let short = RegionError::Short { needed: entry.range().end as u64, found };
-        let bytes = self.bytes().get(entry.range()).ok_or(short)?;
-        typed::<T>(bytes)?;
-        let view = View::<T> { region: Arc::clone(self), entry: *entry, elements: PhantomData };
+        let elements = typed::<T>(self.bytes().get(entry.range()).ok_or(short)?)?;
+        let view =
+            View { _region: Arc::clone(self), start: elements.as_ptr(), len: elements.len() };
         Ok(Some(SegmentBuffer::shared(Arc::new(view))))
     }
 }
 
-/// One array of a region as elements of `T`.
+/// One array of a region as elements of `T`: where they start, kept so
+/// that reading them, on every access to a loaded version's arrays, costs
+/// no more than the one virtual call of `SharedSegment::elements`.
 struct View<T> {
-    region: Arc<Region>,
-    entry: Entry,
-    elements: PhantomData<fn() -> T>,
+    /// Keeps the region, and so `start`, alive; never read.
+    _region: Arc<Region>,
+    start: *const T,
+    len: usize,
 }
+
+// SAFETY: `start` points into the region's memory, which `_region` keeps
+// alive and which is only read (`RegionMemory` is `Send + Sync`); `T` is
+// `InPlace`, so `Send + Sync`.
+unsafe impl<T: InPlace> Send for View<T> {}
+// SAFETY: as for `Send`.
+unsafe impl<T: InPlace> Sync for View<T> {}
 
 impl<T: InPlace> SharedSegment<T> for View<T> {
     fn elements(&self) -> &[T] {
-        let start = self.region.bytes().as_ptr().wrapping_add(self.entry.offset);
-        // SAFETY: `Region::view` checked, when it made this view, that the
-        // entry's bytes lie inside the region and are aligned for `T` and
-        // `elements` elements of `T` long (`in_place::typed`); the region's
-        // memory keeps the same initialized bytes at the same address while
-        // it lives (`RegionMemory`'s contract), which is at least as long
-        // as `self.region`, and so as the slice borrowed from `self`; any
-        // initialized bytes are a valid `T` (`InPlace`).
-        unsafe { std::slice::from_raw_parts(start.cast::<T>(), self.entry.elements) }
+        // SAFETY: `start` and `len` are a slice `Region::view` formed with
+        // `in_place::typed` (aligned for `T`, inside the region, any
+        // initialized bytes a valid `T`); the region's memory keeps the same
+        // bytes at the same address while it lives (`RegionMemory`'s
+        // contract), which is at least as long as `self._region`, and so as
+        // the slice borrowed from `self`.
+        unsafe { std::slice::from_raw_parts(self.start, self.len) }
     }
 }
 
