@@ -150,8 +150,8 @@ mod tests {
     fn membership_agrees_with_pg_has_role() -> Result<(), Error> {
         Spi::run(
             "CREATE ROLE m_owner; CREATE ROLE m_reader; CREATE ROLE m_nested;
-             CREATE ROLE m_stranger; CREATE ROLE m_gone;
-             GRANT m_reader TO m_nested; GRANT m_owner TO m_nested",
+             CREATE ROLE m_stranger; CREATE ROLE m_gone; CREATE ROLE m_noinh NOINHERIT;
+             GRANT m_reader TO m_nested; GRANT m_owner TO m_nested; GRANT m_owner TO m_noinh",
         )?;
         let (owner, reader, gone) = (oid("m_owner")?, oid("m_reader")?, oid("m_gone")?);
         Spi::run("DROP ROLE m_gone")?;
@@ -163,7 +163,9 @@ mod tests {
             (gone, vec![reader]),
             (gone, vec![]),
         ];
-        for user in ["m_owner", "m_reader", "m_nested", "m_stranger", "m_superuser"] {
+        // m_noinh is a member of m_owner without inheriting its privileges:
+        // membership is MEMBER (`is_member_of_role`), not USAGE.
+        for user in ["m_owner", "m_reader", "m_nested", "m_noinh", "m_stranger", "m_superuser"] {
             match user {
                 "m_superuser" => Spi::run("RESET ROLE")?,
                 _ => Spi::run(&format!("SET ROLE {user}"))?,

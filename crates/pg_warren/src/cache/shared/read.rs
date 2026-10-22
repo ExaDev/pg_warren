@@ -300,7 +300,7 @@ pub(super) fn through<E: IdDatum + Send + Sync>(
 /// cause is configuration.
 fn notice_refusal(refusal: Refusal, what: &str) {
     let (cap, store) = (setting::cap(), store_name());
-    if let Some(message) = refusal_notice(refusal, what, cap, store) {
+    if let Some(message) = refusal_notice(refusal, what, cap, store, setting::at_default()) {
         if shared_notice_due() {
             ereport!(NOTICE, PgSqlErrorCode::ERRCODE_SUCCESSFUL_COMPLETION, message);
         }
@@ -389,8 +389,18 @@ fn created_here(xmin_of: &str, id: i64) -> Result<bool, CacheError> {
 /// The `NOTICE` for `what` (a graph version or a vector) refused for a
 /// reason of configuration (`cap`, the cap in bytes; `store`, where
 /// segments are created), or `None` for one that is not (no slot or DSM
-/// control slot free now, the cap at 0).
-fn refusal_notice(refusal: Refusal, what: &str, cap: u64, store: &str) -> Option<String> {
+/// control slot free now, the cap at 0). A short store is noticed only
+/// where the cap was set by hand, not `at_default`: a container's
+/// `/dev/shm` would otherwise speak in every statement of a cluster whose
+/// owner configured nothing (§14 item 32; `warren.shared_cache()` shows
+/// what is shared).
+fn refusal_notice(
+    refusal: Refusal,
+    what: &str,
+    cap: u64,
+    store: &str,
+    at_default: bool,
+) -> Option<String> {
     let private = "so this backend loads its own copy, within warren.max_cache_memory";
     match refusal {
         Refusal::TooLarge => Some(format!(
@@ -400,6 +410,7 @@ fn refusal_notice(refusal: Refusal, what: &str, cap: u64, store: &str) -> Option
             "{what} does not fit in warren.shared_cache_memory ({cap} bytes) beside the shared \
              versions and vectors in use, {private}"
         )),
+        Refusal::StoreFull if at_default => None,
         Refusal::StoreFull => Some(format!(
             "{what} does not fit in the free space of {store} for shared memory, {private}; \
              raise the container's --shm-size"
@@ -414,17 +425,32 @@ mod tests {
 
     #[test]
     fn only_refusals_of_configuration_are_noticed() {
+        let notice = |refusal, at_default| {
+            refusal_notice(refusal, "graph version 7", 1024, "/dev/shm", at_default)
+        };
         for refusal in [Refusal::TooLarge, Refusal::NoRoom] {
-            let notice = refusal_notice(refusal, "graph version 7", 1024, "/dev/shm").unwrap();
-            assert!(notice.starts_with("graph version 7 "), "{notice}");
-            assert!(notice.contains("warren.shared_cache_memory (1024 bytes)"), "{notice}");
+            for at_default in [true, false] {
+                let notice = notice(refusal, at_default).unwrap();
+                assert!(notice.starts_with("graph version 7 "), "{notice}");
+                assert!(notice.contains("warren.shared_cache_memory (1024 bytes)"), "{notice}");
+            }
         }
         let store_full =
-            refusal_notice(Refusal::StoreFull, "vector \"x\" (3)", 1024, "/dev/shm").unwrap();
+            refusal_notice(Refusal::StoreFull, "vector \"x\" (3)", 1024, "/dev/shm", false)
+                .unwrap();
         assert!(store_full.starts_with("vector \"x\" (3) "), "{store_full}");
         assert!(store_full.contains("/dev/shm") && store_full.contains("--shm-size"));
         for refusal in [Refusal::Disabled, Refusal::NoSlot, Refusal::NoSegment] {
-            assert_eq!(refusal_notice(refusal, "graph version 7", 1024, "/dev/shm"), None);
+            assert_eq!(notice(refusal, false), None);
         }
+    }
+
+    #[test]
+    fn a_short_store_is_noticed_only_where_the_cap_was_set_by_hand() {
+        let store_full = |at_default| {
+            refusal_notice(Refusal::StoreFull, "graph version 7", 1024, "/dev/shm", at_default)
+        };
+        assert_eq!(store_full(true), None, "a container's /dev/shm, nothing configured");
+        assert!(store_full(false).is_some());
     }
 }

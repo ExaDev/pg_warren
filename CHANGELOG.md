@@ -13,8 +13,9 @@
   `shared_preload_libraries = 'pg_warren'` and a restart; without it,
   backends load their own copies as in 0.4.0, silently at the default cap.
   Shared versions are files in `/dev/shm`: a version that does not fit
-  there with a quarter of it left free is loaded privately, with a
-  `NOTICE`, so in a Docker container (64 MB by default) raise
+  there with a quarter of it left free is loaded privately (with a
+  `NOTICE` only if you set the cap yourself; `warren.shared_cache()` shows
+  what is shared), so in a Docker container (64 MB by default) raise
   `--shm-size` (docs/limits.md, "The shared cache"). An idle cluster keeps
   up to the cap of shared versions until they are evicted or it restarts.
 

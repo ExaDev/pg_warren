@@ -199,20 +199,20 @@ fn encode(key: Key) -> [u8; PREFIX] {
 /// `pg_dynshmem` for `mmap` ones; unbounded for `sysv`. 0 if it cannot be
 /// read, which loads privately.
 pub(super) fn store_room() -> u64 {
+    store_space().map_or(0, |(available, size)| beside_reserve(available, size))
+}
+
+/// The bytes available where segments are created, reserve included, and
+/// the store's size: `/dev/shm`'s for `posix` segments, `pg_dynshmem`'s
+/// for `mmap` ones, unbounded for `sysv`; `None` if they cannot be read.
+pub(super) fn store_space() -> Option<(u64, u64)> {
     // SAFETY: reads a setting on the main thread.
     let kind = unsafe { pg_sys::dynamic_shared_memory_type } as u32;
     match kind {
-        pg_sys::DSM_IMPL_POSIX => room(c"/dev/shm"),
-        pg_sys::DSM_IMPL_MMAP => room(c"pg_dynshmem"),
-        _ => u64::MAX,
+        pg_sys::DSM_IMPL_POSIX => space(c"/dev/shm"),
+        pg_sys::DSM_IMPL_MMAP => space(c"pg_dynshmem"),
+        _ => Some((u64::MAX, u64::MAX)),
     }
-}
-
-/// The bytes segments may take in the file system of `path`: those
-/// available to an unprivileged process beside the reserve, or 0 if it
-/// cannot be read.
-fn room(path: &CStr) -> u64 {
-    space(path).map_or(0, |(available, size)| beside_reserve(available, size))
 }
 
 /// The bytes available to an unprivileged process in the file system of
@@ -235,7 +235,7 @@ fn space(path: &CStr) -> Option<(u64, u64)> {
 /// bytes: all but a quarter of the store, which is left to Postgres's own
 /// segments (parallel query's), so that sharing versions never makes
 /// another query fail for room (DESIGN.md §5.6, Size checks).
-fn beside_reserve(available: u64, size: u64) -> u64 {
+pub(super) fn beside_reserve(available: u64, size: u64) -> u64 {
     available.saturating_sub(size / 4)
 }
 
@@ -295,6 +295,5 @@ mod tests {
         let (available, size) = space(c"/").unwrap();
         assert!(size > 0 && available <= size);
         assert_eq!(space(c"/no/such/directory"), None);
-        assert_eq!(room(c"/no/such/directory"), 0);
     }
 }

@@ -235,8 +235,12 @@ backend's own.
   (`dynamic_shared_memory_type = posix`, the default), and its pages are
   memory. A version is shared only if it fits there with a quarter of
   `/dev/shm` left free for Postgres's own segments (parallel query uses
-  them too); otherwise it is loaded privately, with a `NOTICE` naming the
-  container's `--shm-size`. A host's `/dev/shm` is usually half its RAM.
+  them too); otherwise it is loaded privately. That is silent at the
+  default cap, so that a container nobody configured does not say so in
+  every statement; with the cap set by hand, a `NOTICE` per statement
+  names the container's `--shm-size`. Either way `warren.shared_cache()`
+  (below) lists what is shared, and a version missing from it was loaded
+  privately. A host's `/dev/shm` is usually half its RAM.
   **Docker gives a container 64 MB**, so only versions up to 48 MB in all
   are shared there: run the container with `--shm-size` at least the cap
   plus a third (`docker run --shm-size=6g …` for the default 4GB; in
@@ -247,8 +251,9 @@ backend's own.
 - **What can still fail.** On PostgreSQL 17 and 18 the cache's registry is
   created by the cluster's first read of a graph (after each start, and
   after an upgrade that changes its format). If `/dev/shm` then lacks a
-  few megabytes beside its reserve, the cache is unavailable and reads load
-  privately, silently at the default cap; it is tried again at each read.
+  few megabytes (the reserve counts: a cache filled to its reserve does
+  not stop it), the cache is unavailable and reads load privately,
+  silently at the default cap; it is tried again at each read.
   Two errors are left to Postgres, which pg_warren cannot turn into a
   fallback: another process filling `/dev/shm` between pg_warren's check
   and a segment's creation (`could not resize shared memory segment`,
