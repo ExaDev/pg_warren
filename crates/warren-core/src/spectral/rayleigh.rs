@@ -33,7 +33,7 @@ pub fn rayleigh_quotients<I: Interrupts>(
         if vector.width() != 1 {
             return Err(ComputeError::WidthMismatch { expected: 1, found: vector.width() }.into());
         }
-        let input = operator.input_mut();
+        let input = operator.input_mut()?;
         match vector {
             AnyVector::F32(v) => copy(v.values(), input),
             AnyVector::F64(v) => copy(v.values(), input),

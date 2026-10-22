@@ -370,7 +370,7 @@ where
         resources: &mut Resources<'_, I>,
     ) -> Result<Option<f64>, SpectralError> {
         let j = self.basis.len() - 1;
-        self.basis.column(resources, j, self.operator.input_mut())?;
+        self.basis.column(resources, j, self.operator.input_mut()?)?;
         let w = self.operator.apply(resources)?;
         self.iterations += 1;
         let Orthogonalized { coefficients, norm: beta } =
@@ -395,7 +395,7 @@ where
     ) -> Result<bool, SpectralError> {
         match beta {
             Some(beta) => {
-                let w = self.operator.output_mut();
+                let w = self.operator.output_mut()?;
                 self.basis.push(resources, w, beta)?;
                 self.previous = Some(beta);
                 Ok(true)
@@ -480,14 +480,14 @@ where
         let mut pairs = Vec::new();
         for l in 0..self.options.k {
             let coordinates: Vec<f64> = ritz.vectors.column(l).iter().copied().collect();
-            self.basis.combine(resources, &coordinates, self.operator.input_mut())?;
-            settle::<E, I>(resources, self.operator.input_mut())?;
+            self.basis.combine(resources, &coordinates, self.operator.input_mut()?)?;
+            settle::<E, I>(resources, self.operator.input_mut()?)?;
             let value = ritz.values[l];
             let residual = self.operator.residual(resources, value)?;
             if self.operator.map_eigenvector(resources)? {
-                settle::<E, I>(resources, self.operator.input_mut())?;
+                settle::<E, I>(resources, self.operator.input_mut()?)?;
             }
-            let x = self.operator.input_mut();
+            let x = self.operator.input_mut()?;
             let mut vector = Vector::filled(resources.memory, x.len() as u64, 1, E::default())?;
             for (stored, &value) in vector.values_mut()?.iter_mut().zip(x.iter()) {
                 *stored = E::from_f64(value);
