@@ -26,8 +26,18 @@ runs:
         # pg_warren's vector_map tests exercise JIT, so install it explicitly.
         jit=()
         if [ "$PG_MAJOR" -ge 18 ]; then jit=("postgresql-${PG_MAJOR}-jit"); fi
-        sudo apt-get install -y -qq --no-install-recommends \
-          "postgresql-${PG_MAJOR}" "${jit[@]}" "postgresql-server-dev-${PG_MAJOR}" libclang-dev clang
+        # The install itself has stalled for the whole step (2026-10-22, PG 17)
+        # with no output: show apt's progress, never wait on a prompt, and give
+        # each attempt ten minutes before trying again.
+        export DEBIAN_FRONTEND=noninteractive
+        for attempt in 1 2 3; do
+          if sudo --preserve-env=DEBIAN_FRONTEND timeout 600 apt-get install -y --no-install-recommends \
+            "postgresql-${PG_MAJOR}" "${jit[@]}" "postgresql-server-dev-${PG_MAJOR}" libclang-dev clang; then
+            break
+          fi
+          if [ "$attempt" -eq 3 ]; then exit 1; fi
+          sudo dpkg --configure -a || true
+        done
         test -f "$("/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config" --pkglibdir)/llvmjit.so"
         PG_CONFIG="/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config"
         "$PG_CONFIG" --version
