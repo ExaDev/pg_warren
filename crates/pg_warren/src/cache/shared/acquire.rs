@@ -98,7 +98,7 @@ mod tests {
         let memory = cluster(100);
         let mut loader = memory.backend();
         let loads = AtomicUsize::new(0);
-        let mut counted = |region: &mut Loading| {
+        let counted = |region: &mut Loading| {
             loads.fetch_add(1, Ordering::SeqCst);
             fill(region)
         };

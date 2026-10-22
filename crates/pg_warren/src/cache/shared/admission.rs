@@ -279,7 +279,7 @@ mod tests {
     /// `limits`.
     fn drain(table: &[(Slot, u32)], bytes: u64, limits: Limits) -> Vec<usize> {
         let (slots, pins): (Vec<Slot>, Vec<u32>) = table.iter().copied().unzip();
-        let refusal = super::admit(&slots, &pins, bytes, limits).err().expect("refused");
+        let refusal = super::admit(&slots, &pins, bytes, limits).expect_err("refused");
         super::to_drain(&slots, &pins, bytes, refusal, limits.cap)
     }
 

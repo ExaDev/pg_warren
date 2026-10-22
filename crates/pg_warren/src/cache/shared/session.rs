@@ -222,6 +222,8 @@ impl<M> Session<M> {
 mod tests {
     use pgrx::pg_sys::Oid;
 
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use super::*;
     use crate::cache::shared::registry::Lookup;
     use crate::cache::shared::slot::Slot;
@@ -344,11 +346,11 @@ mod tests {
     }
 
     /// A mapping that calls may hold apart from its `Arc`.
-    struct Reading(std::cell::Cell<bool>);
+    struct Reading(AtomicBool);
 
     impl Mapped for Reading {
         fn in_use(&self) -> bool {
-            self.0.get()
+            self.0.load(Ordering::Relaxed)
         }
     }
 
@@ -359,7 +361,7 @@ mod tests {
         let Ok(Use::Attach(_)) = session.open(&mut registry, tickets[0]) else {
             panic!("not attached");
         };
-        let reading = Arc::new(Reading(std::cell::Cell::new(true)));
+        let reading = Arc::new(Reading(AtomicBool::new(true)));
         drop(session.mapped(&mut registry, tickets[0], Arc::clone(&reading)).unwrap());
         drop(reading);
         session.unpin(registry.pin_table());
@@ -368,7 +370,7 @@ mod tests {
         let Some(Use::Mapped(mapping)) = session.open(&mut registry, tickets[0]).ok() else {
             panic!("not mapped");
         };
-        mapping.0.set(false);
+        mapping.0.store(false, Ordering::Relaxed);
         drop(mapping);
         session.unpin(registry.pin_table());
         let mut released = 0;
