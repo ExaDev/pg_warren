@@ -83,10 +83,14 @@ FROM dblink('b', $$SELECT workers_launched('SELECT count(*) FROM pairs WHERE war
 
 -- A traversal a worker runs records nothing: last_stats() still
 -- describes the leader's last call.
-SELECT assert.equal(stats, 'reachable', 'a worker''s bfs is not the leader''s last call')
+SELECT assert.equal(launched, 1::bigint, 'the bfs ran in a worker')
 FROM dblink('a', format($$RESET %1$s; SELECT warren.reachable('g', 1::bigint, 3::bigint);
-                          SET %1$s = on; SELECT count(*) FROM warren.bfs('g', ARRAY[1::bigint], 3);
-                          RESET %1$s; SELECT warren.last_stats() ->> 'function'$$, :'force'))
+                          SET %1$s = on;
+                          SELECT workers_launched('SELECT count(*) FROM warren.bfs(''g'', ARRAY[1::bigint], 3)')$$,
+                        :'force'))
+     AS t(launched bigint);
+SELECT assert.equal(stats, 'reachable', 'a worker''s bfs is not the leader''s last call')
+FROM dblink('a', format($$RESET %s; SELECT warren.last_stats() ->> 'function'$$, :'force'))
      AS t(stats text);
 
 SELECT dblink_disconnect(session) FROM unnest(ARRAY['a', 'b']) AS session;

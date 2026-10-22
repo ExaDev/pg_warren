@@ -331,21 +331,29 @@ mod tests {
     fn a_traversal_in_a_worker_records_no_last_stats() -> Result<(), Error> {
         graph_with_a_vector()?;
         // A function that claims to be safe, so that it runs in the worker
-        // and reads the worker's own last_stats() after a traversal there.
+        // and reads the worker's own last_stats() after a traversal there;
+        // it says whether it ran in another process than the leader (a
+        // worker's pg_backend_pid() is its own).
         Spi::run(
-            "CREATE FUNCTION stats_in_a_worker() RETURNS text LANGUAGE plpgsql PARALLEL SAFE AS $$
+            "CREATE FUNCTION stats_in_a_worker(leader int) RETURNS text
+             LANGUAGE plpgsql PARALLEL SAFE AS $$
              BEGIN
                  PERFORM count(*) FROM warren.bfs('pp', ARRAY[1::bigint], 2);
-                 RETURN coalesce(warren.last_stats() ->> 'function', 'nothing');
+                 RETURN coalesce(warren.last_stats() ->> 'function', 'nothing')
+                        || CASE WHEN pg_backend_pid() <> leader THEN ' in a worker' ELSE '' END;
              END $$",
         )?;
         Spi::run("SELECT warren.reachable('pp', 1::bigint, 4::bigint)")?;
+        // A constant: pg_backend_pid() is restricted, so in the query it
+        // would keep the call in the leader.
+        let leader = text_of("SELECT pg_backend_pid()::text")?.unwrap_or_default();
         Spi::run(&format!("SET {FORCE_PARALLEL} = on"))?;
-        assert_eq!(workers_launched("SELECT stats_in_a_worker()")?, 1);
-        let in_worker = text_of("SELECT stats_in_a_worker()")?;
-        let bfs = text_of("SELECT count(*)::text FROM warren.bfs('pp', ARRAY[1::bigint], 2)")?;
+        let in_worker = text_of(&format!("SELECT stats_in_a_worker({leader})"))?;
+        let bfs = "SELECT count(*)::text FROM warren.bfs('pp', ARRAY[1::bigint], 2)";
+        assert_eq!(workers_launched(bfs)?, 1, "bfs did not run in a worker");
+        let bfs = text_of(bfs)?;
         Spi::run(&format!("RESET {FORCE_PARALLEL}"))?;
-        assert_eq!(in_worker.as_deref(), Some("nothing"));
+        assert_eq!(in_worker.as_deref(), Some("nothing in a worker"));
         assert_eq!(bfs.as_deref(), Some("3"));
         let in_leader = Spi::get_one::<String>("SELECT warren.last_stats() ->> 'function'")?;
         assert_eq!(in_leader.as_deref(), Some("reachable"), "a worker's bfs reached the leader");
