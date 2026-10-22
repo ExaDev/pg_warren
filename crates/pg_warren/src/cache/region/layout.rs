@@ -6,7 +6,7 @@
 //! | Bytes | Header field |
 //! |---|---|
 //! | 0..4 | magic `WRRG` |
-//! | 4..8 | layout version (`u32`) |
+//! | 4..8 | format (`u32`) |
 //! | 8..16 | the version id (`i64`) |
 //! | 16..24 | the region's length in bytes (`u64`) |
 //! | 24..32 | the number of entries in the table (`u64`) |
@@ -25,8 +25,8 @@ use crate::segment::{CsrPart, CsrScope, Direction};
 
 /// The alignment of a region and of every array in it.
 pub(crate) const ALIGNMENT: usize = 64;
-/// The layout version, changed whenever the layout does.
-pub(crate) const LAYOUT_VERSION: u32 = 1;
+/// The format, changed whenever the layout does.
+pub(crate) const FORMAT: u32 = 1;
 const MAGIC: [u8; 4] = *b"WRRG";
 const HEADER_LEN: usize = 64;
 const ENTRY_LEN: usize = 32;
@@ -134,7 +134,7 @@ impl RegionLayout {
     pub(crate) fn write_header(&self, region: &mut [u8]) {
         let mut out = Writer { region, at: 0 };
         out.bytes(&MAGIC);
-        out.bytes(&LAYOUT_VERSION.to_le_bytes());
+        out.bytes(&FORMAT.to_le_bytes());
         out.bytes(&self.version.to_le_bytes());
         out.u64(self.len as u64);
         out.u64(self.entries.len() as u64);
@@ -150,7 +150,7 @@ impl RegionLayout {
     }
 
     /// Reads the layout at the start of `region` and checks it: written in
-    /// this layout version for `version`, no longer than `region`, and
+    /// this format for `version`, no longer than `region`, and
     /// every array aligned and inside it, after the table of contents,
     /// and named by one entry.
     pub(crate) fn read(region: &[u8], version: VersionId) -> Result<Self, RegionError> {
@@ -159,8 +159,8 @@ impl RegionLayout {
             return Err(RegionError::Magic);
         }
         let found = u32::from_le_bytes(array_at(header, 4));
-        if found != LAYOUT_VERSION {
-            return Err(RegionError::LayoutVersion { found });
+        if found != FORMAT {
+            return Err(RegionError::Format { found });
         }
         let found = i64::from_le_bytes(array_at(header, 8));
         if found != version {
@@ -289,7 +289,6 @@ impl Writer<'_> {
 }
 
 #[cfg(test)]
-#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod tests {
     use super::*;
 
@@ -337,7 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn a_region_of_another_version_or_layout_is_refused() {
+    fn a_region_of_another_version_or_format_is_refused() {
         let layout = RegionLayout::plan(7, &arrays()).unwrap();
         let mut region = vec![0u8; layout.len()];
         layout.write_header(&mut region);
@@ -350,7 +349,7 @@ mod tests {
         assert_eq!(RegionLayout::read(&bad, 7), Err(RegionError::Magic));
         let mut bad = region;
         bad[4] = 99;
-        assert_eq!(RegionLayout::read(&bad, 7), Err(RegionError::LayoutVersion { found: 99 }));
+        assert_eq!(RegionLayout::read(&bad, 7), Err(RegionError::Format { found: 99 }));
     }
 
     #[test]

@@ -14,7 +14,7 @@ use crate::source::IdDatum;
 
 /// The version `region` holds, checked as `load` checks a version: each
 /// array's invariants, then that they agree.
-pub(super) fn open<E: IdDatum>(region: &Arc<Region>) -> Result<LoadedVersion<E>, LoadError> {
+pub(super) fn loaded<E: IdDatum>(region: &Arc<Region>) -> Result<LoadedVersion<E>, LoadError> {
     let missing = RegionError::MissingArray;
     let pairs = region.view::<IdPair<E>>(Array::IdPairs)?.ok_or(missing("id map"))?;
     let by_dense = region.view::<E>(Array::ByDense)?.ok_or(missing("id map by dense id"))?;

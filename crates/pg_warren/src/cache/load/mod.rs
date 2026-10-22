@@ -1,11 +1,11 @@
 //! Loading a version: its segments copied into one aligned region by exact
 //! size (`plan`, `fill`), and read through shared views of it into the
-//! structures `warren-core` computes on, checked to agree (`open`;
+//! structures `warren-core` computes on, checked to agree (`views`;
 //! DESIGN.md §5.3, §5.5, §5.6).
 
 mod fill;
-mod open;
 mod plan;
+mod views;
 
 use pgrx::PgSqlErrorCode;
 use thiserror::Error;
@@ -130,7 +130,7 @@ pub(crate) fn load<E: IdDatum>(
     let plan = plan::plan::<E>(segments, version, store_merged)?;
     let mut memory = HeapMemory::zeroed(plan.layout.len())?;
     fill::fill::<E>(segments, version, &plan, &mut memory)?;
-    open::open(&Region::open(Box::new(memory), version)?)
+    views::loaded(&Region::open(Box::new(memory), version)?)
 }
 
 #[cfg(test)]

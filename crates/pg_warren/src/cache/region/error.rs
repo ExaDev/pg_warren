@@ -45,13 +45,10 @@ pub(crate) enum RegionError {
     /// The region does not start with a region header.
     #[error("memory does not hold a loaded version's region")]
     Magic,
-    /// The region was written in another layout.
-    #[error(
-        "a loaded version's region has layout version {found}, not {}",
-        super::layout::LAYOUT_VERSION
-    )]
-    LayoutVersion {
-        /// Its layout version.
+    /// The region was written in another format.
+    #[error("a loaded version's region has format {found}, not {}", super::layout::FORMAT)]
+    Format {
+        /// Its format.
         found: u32,
     },
     /// The region holds another version.
@@ -92,7 +89,7 @@ impl SqlError for RegionError {
             }
             Self::Short { .. }
             | Self::Magic
-            | Self::LayoutVersion { .. }
+            | Self::Format { .. }
             | Self::Version { .. }
             | Self::Entry { .. }
             | Self::MissingArray(_) => PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
