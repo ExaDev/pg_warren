@@ -59,7 +59,7 @@ mod tests {
     use pgrx::pg_sys::Oid;
 
     use super::*;
-    use crate::cache::shared::memory::{Loading, Memory, Region};
+    use crate::cache::shared::memory::{Loading, Mapping, Memory};
     use crate::cache::shared::slot::State;
 
     const KEY: Key = Key { database: Oid::INVALID, extension: Oid::INVALID, version: 7 };
@@ -74,7 +74,7 @@ mod tests {
         Ok(())
     }
 
-    fn shared(acquired: Acquired<Region>) -> Arc<Region> {
+    fn shared(acquired: Acquired<Mapping>) -> Arc<Mapping> {
         match acquired {
             Acquired::Shared(view) => view,
             Acquired::Private(refusal) => panic!("refused: {refusal:?}"),
@@ -94,7 +94,7 @@ mod tests {
         assert_eq!(view.bytes(), [7; 10]);
         let mut reader = memory.backend();
         let found = shared(acquire(&mut reader, KEY, 10, &mut counted).unwrap());
-        assert!(Arc::ptr_eq(&view, &found), "one region");
+        assert_eq!(view.bytes().as_ptr(), found.bytes().as_ptr(), "one region");
         assert_eq!(loads.load(Ordering::SeqCst), 1);
     }
 

@@ -2,7 +2,9 @@
 //! `Memory` is a cluster (a registry in a `Mutex`, a condition variable,
 //! and heap regions standing in for DSM segments, freed when their last
 //! `Arc` drops) and each `Backend` is one backend of it, usually on its own
-//! thread.
+//! thread. A backend reads a region through its own `Mapping`, as each
+//! backend has its own mapping of a DSM segment, so that its session's
+//! count of a mapping's holders is this backend's alone.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -32,7 +34,8 @@ struct Cluster {
 /// What the registry's lock guards.
 struct Store {
     registry: Registry<Vec<Slot>>,
-    /// The published regions the registry pins, by handle.
+    /// The published regions the registry pins, by handle: the
+    /// segment's pin, apart from every backend's mapping.
     pinned: HashMap<Handle, Arc<Region>>,
     last_handle: u32,
     cap: u64,
@@ -65,6 +68,24 @@ impl Drop for Region {
     }
 }
 
+/// A backend's mapping of a published region.
+#[derive(Debug)]
+pub(crate) struct Mapping {
+    region: Arc<Region>,
+}
+
+impl Mapping {
+    /// Maps `region` in a backend.
+    fn of(region: &Arc<Region>) -> Arc<Self> {
+        Arc::new(Self { region: Arc::clone(region) })
+    }
+
+    /// The region's bytes.
+    pub(crate) fn bytes(&self) -> &[u8] {
+        self.region.bytes()
+    }
+}
+
 /// A region claimed to load a version into.
 #[derive(Debug)]
 pub(crate) struct Loading {
@@ -82,7 +103,7 @@ impl Loading {
 /// One backend of a `Memory` cluster.
 pub(crate) struct Backend {
     cluster: Arc<Cluster>,
-    session: Session<Region>,
+    session: Session<Mapping>,
 }
 
 impl Memory {
@@ -139,7 +160,7 @@ impl Store {
 
 impl Backend {
     /// The backend's session.
-    pub(crate) fn session(&self) -> &Session<Region> {
+    pub(crate) fn session(&self) -> &Session<Mapping> {
         &self.session
     }
 
@@ -152,9 +173,9 @@ impl Backend {
 
 impl SharedVersions for Backend {
     type Region = Loading;
-    type View = Region;
+    type View = Mapping;
 
-    fn lookup(&mut self, key: Key) -> Found<Region> {
+    fn lookup(&mut self, key: Key) -> Found<Mapping> {
         let mut store = self.cluster.lock();
         let ticket = match store.registry.lookup(key) {
             Lookup::Ready(ticket) => ticket,
@@ -164,8 +185,8 @@ impl SharedVersions for Backend {
         match self.session.open(&mut store.registry, ticket) {
             Ok(Use::Mapped(view)) => Found::Ready(view),
             Ok(Use::Attach(handle)) => {
-                let region = Arc::clone(&store.pinned[&handle]);
-                Found::Ready(self.session.mapped(ticket, region))
+                let mapping = Mapping::of(&store.pinned[&handle]);
+                Found::Ready(self.session.mapped(ticket, mapping))
             }
             Err(Gone) => Found::Missing,
         }
@@ -189,13 +210,14 @@ impl SharedVersions for Backend {
         }
     }
 
-    fn publish(&mut self, loading: Loading) -> Result<Arc<Region>, Gone> {
+    fn publish(&mut self, loading: Loading) -> Result<Arc<Mapping>, Gone> {
         let mut store = self.cluster.lock();
         store.last_handle += 1;
         let handle = Handle(store.last_handle);
         let region = Arc::new(loading.region);
-        let view = self.session.publish(&mut store.registry, loading.ticket, handle, region)?;
-        store.pinned.insert(handle, Arc::clone(&view));
+        let mapping = Mapping::of(&region);
+        let view = self.session.publish(&mut store.registry, loading.ticket, handle, mapping)?;
+        store.pinned.insert(handle, region);
         self.cluster.changed.notify_all();
         Ok(view)
     }
@@ -246,5 +268,62 @@ impl SharedVersions for Backend {
         self.session.exit(&mut store.registry, drop);
         store.live.remove(&self.session.pid());
         self.cluster.changed.notify_all();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pgrx::pg_sys::Oid;
+
+    use super::*;
+
+    fn key(version: i64) -> Key {
+        Key { database: Oid::from(1), extension: Oid::from(2), version }
+    }
+
+    fn cluster() -> Memory {
+        Memory::new(2, 100, u64::MAX, Duration::ZERO)
+    }
+
+    /// Claims and publishes `version` in `backend`; the view its call
+    /// holds.
+    fn published(backend: &mut Backend, version: i64) -> Arc<Mapping> {
+        let Claimed::Load(region) = backend.claim(key(version), 10) else {
+            panic!("not claimed");
+        };
+        backend.publish(region).unwrap()
+    }
+
+    fn mappers(memory: &Memory) -> u32 {
+        memory.slots()[0].mappers
+    }
+
+    #[test]
+    fn an_unheld_mapping_of_a_ready_version_is_released() {
+        let memory = cluster();
+        let mut backend = memory.backend();
+        drop(published(&mut backend, 1));
+        backend.unpin();
+        backend.release(Release::Unheld);
+        assert_eq!(mappers(&memory), 0);
+        assert_eq!(backend.session().mapped_slots().count(), 0);
+    }
+
+    #[test]
+    fn a_draining_version_mapped_by_two_backends_empties_once_both_release() {
+        let memory = cluster();
+        let (mut first, mut second) = (memory.backend(), memory.backend());
+        drop(published(&mut first, 1));
+        let Found::Ready(view) = second.lookup(key(1)) else {
+            panic!("not found");
+        };
+        drop(view);
+        first.unpin();
+        second.unpin();
+        assert_eq!(first.evict(&|_| true), 1);
+        first.release(Release::Evicted);
+        second.release(Release::Evicted);
+        assert!(memory.slots().iter().all(|slot| slot.state == State::Empty));
+        assert_eq!(memory.allocated(), 0, "its region is freed");
     }
 }

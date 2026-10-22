@@ -15,7 +15,7 @@ use pgrx::pg_sys::Oid;
 use proptest::prelude::*;
 
 use super::admission::Refusal;
-use super::memory::{Backend, Loading, Memory, Region};
+use super::memory::{Backend, Loading, Mapping, Memory};
 use super::session::Release;
 use super::slot::{Key, Slot, State, Ticket};
 use super::{Claimed, Found, SharedVersions};
@@ -68,7 +68,7 @@ fn key(version: usize) -> Key {
 struct Simulated {
     port: Backend,
     /// The regions its calls read, by version.
-    views: Vec<(usize, Arc<Region>)>,
+    views: Vec<(usize, Arc<Mapping>)>,
     /// The version it is loading.
     pending: Option<(usize, Loading)>,
 }
