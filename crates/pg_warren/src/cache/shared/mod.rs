@@ -11,9 +11,7 @@
 
 mod acquire;
 mod admission;
-#[cfg(test)]
 mod memory;
-#[cfg(test)]
 mod model;
 mod registry;
 mod session;

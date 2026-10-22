@@ -172,7 +172,6 @@ impl<M> Session<M> {
     }
 }
 
-#[cfg(test)]
 impl<M> Session<M> {
     /// The slots the current statement pins.
     pub(crate) fn pinned(&self) -> &[Ticket] {
