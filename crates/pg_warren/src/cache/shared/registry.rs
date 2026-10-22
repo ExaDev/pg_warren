@@ -99,6 +99,17 @@ pub(crate) enum Claim {
     Refused { refusal: Refusal, drained: Vec<Handle> },
 }
 
+/// The slots in use, each with its pins, and the registry's clock: a
+/// snapshot taken under its lock.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Listing {
+    /// The loading, ready and draining slots, with their pins.
+    pub(crate) slots: Vec<(Slot, u32)>,
+    /// The clock that orders uses: a slot's `last_used` is its value when
+    /// the slot was last pinned.
+    pub(crate) clock: u64,
+}
+
 /// The slot no longer holds the use a ticket names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Gone;
@@ -270,6 +281,17 @@ impl<S: SlotTable, P: PinTable> Registry<S, P> {
     /// The keys of the occupied slots.
     pub(crate) fn keys(&self) -> Vec<Key> {
         self.slots().iter().filter(|slot| slot.occupied()).map(|slot| slot.key).collect()
+    }
+
+    /// Every slot in use (loading, ready or draining) with its pins, and
+    /// the clock now: what `warren.shared_cache()` shows (DESIGN.md §14
+    /// item 37).
+    pub(crate) fn listing(&self) -> Listing {
+        let slots = self.slots().iter().copied().zip(self.pins());
+        Listing {
+            slots: slots.filter(|(slot, _)| slot.occupied()).collect(),
+            clock: self.clocks.clock,
+        }
     }
 
     /// The state of the use `ticket` names, if the slot still holds it.

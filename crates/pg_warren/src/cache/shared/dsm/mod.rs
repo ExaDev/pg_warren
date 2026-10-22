@@ -25,7 +25,7 @@ use pgrx::{ereport, pg_sys, PgSqlErrorCode};
 use warren_core::compute::AnyVector;
 
 use super::admission::{Limits, Refusal};
-use super::registry::{Claim, Gone, Lookup, Registry};
+use super::registry::{Claim, Gone, Listing, Lookup, Registry};
 use super::session::{Mapped, Release, Session, Unattached, Use};
 use super::slot::{Handle, Key, Process, Slot, State, Ticket};
 use super::unavailable::Unavailable;
@@ -420,6 +420,10 @@ impl SharedVersions for Dsm {
 
     fn keys(&mut self) -> Vec<Key> {
         with_backend(|backend| backend.locked(|registry, _| registry.keys())).unwrap_or_default()
+    }
+
+    fn listing(&mut self) -> Listing {
+        with_backend(|backend| backend.locked(|registry, _| registry.listing())).unwrap_or_default()
     }
 
     fn evict(&mut self, which: &dyn Fn(&Key) -> bool) -> usize {

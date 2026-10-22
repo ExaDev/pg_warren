@@ -13,7 +13,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
 use super::admission::Limits;
-use super::registry::{Claim, Gone, Lookup, Registry};
+use super::registry::{Claim, Gone, Listing, Lookup, Registry};
 use super::session::{Mapped, Release, Session, Unattached, Use};
 use super::slot::{Handle, Key, Process, Slot, Started, State, Ticket};
 use super::{Claimed, Found, SharedVersions};
@@ -334,6 +334,10 @@ impl SharedVersions for Backend {
 
     fn keys(&mut self) -> Vec<Key> {
         self.cluster.lock().registry.keys()
+    }
+
+    fn listing(&mut self) -> Listing {
+        self.cluster.lock().registry.listing()
     }
 
     fn exit(&mut self) {

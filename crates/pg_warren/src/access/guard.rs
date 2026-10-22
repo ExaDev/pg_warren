@@ -294,6 +294,7 @@ mod tests {
         ("refresh", "warren.refresh('victim')"),
         ("revoke", "warren.revoke('victim', 'eve')"),
         ("s", "warren.s(NULL)"),
+        ("shared_cache", "warren.shared_cache()"),
         ("shortest_path", "warren.shortest_path('victim', 1::bigint, 2::bigint)"),
         ("similar_pairs", "warren.similar_pairs('victim', NULL::bigint)"),
         ("similarity", "warren.similarity('victim', 'SELECT 1, 2', NULL::bigint)"),

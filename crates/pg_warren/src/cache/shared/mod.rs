@@ -12,12 +12,14 @@
 //! where it cannot work (PG 15 and 16 without the preload, a big-endian
 //! target), which loads privately; and `Memory`, an in-process fake whose
 //! backends are threads. `read` is how `cache::open` asks it first;
-//! `setting` is `warren.shared_cache_memory`.
+//! `setting` is `warren.shared_cache_memory`; `introspection` is
+//! `warren.shared_cache()`, what the registry holds.
 
 mod acquire;
 mod admission;
 mod dsm;
 mod eviction;
+mod introspection;
 #[cfg(test)]
 mod memory;
 #[cfg(test)]
@@ -56,7 +58,7 @@ pub(crate) fn end_message() {
 use std::sync::Arc;
 
 use admission::Refusal;
-use registry::Gone;
+use registry::{Gone, Listing};
 use session::Release;
 use slot::{Key, Ticket};
 
@@ -105,6 +107,9 @@ pub(crate) trait SharedVersions {
 
     /// The keys of the versions the registry holds, in any state.
     fn keys(&mut self) -> Vec<Key>;
+
+    /// The slots in use and the registry's clock (`warren.shared_cache()`).
+    fn listing(&mut self) -> Listing;
 
     /// Gives back everything this backend holds, as it exits.
     fn exit(&mut self);

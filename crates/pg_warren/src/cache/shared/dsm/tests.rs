@@ -112,7 +112,7 @@ mod tests {
     use crate::cache::statement::end_statement;
     use crate::fixture::{refresh, ring};
     use crate::segment::SpiSegmentStore;
-    use crate::vector::{read_vector, SpiVectorStore, VectorRecord};
+    use crate::vector::{read_vector, SpiVectorStore, VectorRecord, VectorStore};
     use warren_core::compute::AnyVector;
 
     #[pg_test]
@@ -512,6 +512,51 @@ mod tests {
         assert_eq!(slot(key), Some((State::Ready, 0, 1)));
         prune().map_err(|_| Error::InvalidPosition)?;
         assert_eq!(slot(key), None, "evicted, and released by this backend");
+        Ok(())
+    }
+
+    /// What `warren.shared_cache()` lists of graph `graph`, as kind and
+    /// state, and its `cluster` row's bytes.
+    fn listed(graph: &str) -> Result<(Option<String>, Option<i64>), Error> {
+        let entries = Spi::get_one::<String>(&format!(
+            "SELECT string_agg(kind || ':' || state, ',' ORDER BY kind)
+             FROM warren.shared_cache() WHERE graph = '{graph}'"
+        ))?;
+        let cluster = Spi::get_one::<i64>(
+            "SELECT bytes FROM warren.shared_cache() WHERE kind = 'cluster' AND cap IS NOT NULL",
+        )?;
+        Ok((entries, cluster))
+    }
+
+    #[pg_test]
+    fn the_view_lists_shared_versions_and_vectors_to_their_graphs_readers() -> Result<(), Error> {
+        set_cap(c"64MB")?;
+        let (version, resolved) = graph("listed", 100)?;
+        drop(through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?);
+        Spi::run("SELECT warren.vector_const('listed', 'x', 1)")?;
+        let bound = SpiVectorStore.bound(version.id).map_err(|_| Error::InvalidPosition)?;
+        let record = bound.into_iter().next().ok_or(Error::InvalidPosition)?;
+        drop(shared_vector(&record)?);
+        let (entries, cluster) = listed("listed")?;
+        assert_eq!(entries.as_deref(), Some("vector:ready,version:ready"));
+        assert!(cluster.is_some_and(|bytes| bytes > 0), "{cluster:?}");
+        let pins = Spi::get_one::<i32>(
+            "SELECT pins FROM warren.shared_cache() WHERE graph = 'listed' AND kind = 'version'",
+        )?;
+        assert_eq!(pins, Some(1), "its statement pins it");
+        Spi::run("CREATE ROLE view_stranger; SET ROLE view_stranger")?;
+        let (hidden, totals) = listed("listed")?;
+        Spi::run("RESET ROLE; SELECT warren.grant('listed', 'view_stranger')")?;
+        assert_eq!(hidden, None, "a role that cannot read the graph sees none of it");
+        assert_eq!(totals, cluster, "but sees the cluster's totals");
+        Spi::run("SET ROLE view_stranger")?;
+        let (granted, _) = listed("listed")?;
+        Spi::run("RESET ROLE")?;
+        assert_eq!(granted, entries, "a reader sees it");
+        end_statement();
+        forget(super::vector_key(record.vector).ok_or(Error::InvalidPosition)?)?;
+        forget(version)?;
+        assert_eq!(listed("listed")?.0, None, "evicted");
         Ok(())
     }
 }
