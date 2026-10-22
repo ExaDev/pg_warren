@@ -2,8 +2,9 @@ use std::sync::OnceLock;
 
 use proptest::prelude::*;
 
-use super::arithmetic;
+use super::eval::Chunk;
 use super::*;
+use super::{arithmetic, eval, not_null};
 use crate::compute::{ArithmeticError, Dtype, Element, Vector};
 use crate::interrupts::{Cancelled, Uninterrupted};
 
@@ -520,8 +521,8 @@ fn condition(inner: BoxedStrategy<Expr<f64>>) -> impl Strategy<Value = Expr<bool
     })
 }
 
-fn doubles() -> impl Strategy<Value = Expr<f64>> {
-    let functions = prop::sample::select(vec![
+fn functions() -> impl Strategy<Value = Function> + Clone {
+    prop::sample::select(vec![
         Function::Abs,
         Function::Sqrt,
         Function::Exp,
@@ -531,13 +532,20 @@ fn doubles() -> impl Strategy<Value = Expr<f64>> {
         Function::Ceil,
         Function::Round,
         Function::Sign,
-    ]);
-    let arithmetic = prop::sample::select(vec![
+    ])
+}
+
+fn arithmetics() -> impl Strategy<Value = Arithmetic> + Clone {
+    prop::sample::select(vec![
         Arithmetic::Add,
         Arithmetic::Subtract,
         Arithmetic::Multiply,
         Arithmetic::Divide,
-    ]);
+    ])
+}
+
+fn doubles() -> impl Strategy<Value = Expr<f64>> {
+    let (functions, arithmetic) = (functions(), arithmetics());
     double_leaf().prop_recursive(4, 24, 3, move |inner| {
         let b = || inner.clone().prop_map(Box::new);
         prop_oneof![
@@ -563,12 +571,7 @@ fn bigints() -> impl Strategy<Value = Expr<i64>> {
         Just(Expr::Literal(None)),
         Just(Expr::Vector(2)),
     ];
-    let arithmetic = prop::sample::select(vec![
-        Arithmetic::Add,
-        Arithmetic::Subtract,
-        Arithmetic::Multiply,
-        Arithmetic::Divide,
-    ]);
+    let arithmetic = arithmetics();
     leaf.prop_recursive(3, 12, 2, move |inner| {
         let b = || inner.clone().prop_map(Box::new);
         prop_oneof![
@@ -578,6 +581,58 @@ fn bigints() -> impl Strategy<Value = Expr<i64>> {
             (arithmetic.clone(), b(), b())
                 .prop_map(|(o, a, b)| Expr::Op(I64Op::Arithmetic(o, a, b))),
             prop::collection::vec(inner.clone(), 0..3).prop_map(Expr::Coalesce),
+        ]
+    })
+}
+
+/// A condition that is never NULL: comparisons, non-NULL literals and NOT.
+fn not_null_condition(inner: BoxedStrategy<Expr<f64>>) -> impl Strategy<Value = Expr<bool>> {
+    let compare = (comparisons(), inner.clone(), inner)
+        .prop_map(|(c, a, b)| Expr::Op(BoolOp::Compare(c, Box::new(Comparands::F64(a, b)))));
+    let leaf = prop_oneof![compare, any::<bool>().prop_map(|v| Expr::Literal(Some(v)))];
+    leaf.prop_recursive(2, 4, 1, |inner| inner.prop_map(|a| Expr::Op(BoolOp::Not(Box::new(a)))))
+}
+
+/// `double precision` expressions with no NULL anywhere: the no-NULL
+/// path's whole subset.
+fn not_null_doubles() -> impl Strategy<Value = Expr<f64>> {
+    let leaf = prop_oneof![
+        3 => special_f64().prop_map(|v| Expr::Literal(Some(v))),
+        3 => (0usize..2).prop_map(Expr::Vector),
+        1 => Just(Expr::Cast(Box::new(AnyExpr::I64(Expr::Vector(2))))),
+    ];
+    let (functions, arithmetic) = (functions(), arithmetics());
+    leaf.prop_recursive(4, 24, 3, move |inner| {
+        let b = || inner.clone().prop_map(Box::new);
+        prop_oneof![
+            b().prop_map(|a| Expr::Op(F64Op::Negate(a))),
+            (arithmetic.clone(), b(), b())
+                .prop_map(|(o, a, b)| Expr::Op(F64Op::Arithmetic(o, a, b))),
+            (functions.clone(), b()).prop_map(|(f, a)| Expr::Op(F64Op::Call(f, a))),
+            (b(), b()).prop_map(|(a, b)| Expr::Op(F64Op::Power(a, b))),
+            (not_null_condition(inner.clone().boxed()), inner.clone(), b()).prop_map(
+                |(c, v, otherwise)| Expr::Case { when: vec![(c, v)], otherwise: Some(otherwise) }
+            ),
+        ]
+    })
+}
+
+/// `bigint` expressions with no NULL anywhere.
+fn not_null_bigints() -> impl Strategy<Value = Expr<i64>> {
+    let leaf = prop_oneof![
+        prop_oneof![Just(0i64), Just(-1), Just(3), Just(i64::MIN), Just(i64::MAX)]
+            .prop_map(|v| Expr::Literal(Some(v))),
+        Just(Expr::Vector(2)),
+    ];
+    let arithmetic = arithmetics();
+    leaf.prop_recursive(3, 12, 2, move |inner| {
+        let b = || inner.clone().prop_map(Box::new);
+        prop_oneof![
+            b().prop_map(|a| Expr::Op(I64Op::Negate(a))),
+            b().prop_map(|a| Expr::Op(I64Op::Abs(a))),
+            (b(), b()).prop_map(|(a, b)| Expr::Op(I64Op::Modulo(a, b))),
+            (arithmetic.clone(), b(), b())
+                .prop_map(|(o, a, b)| Expr::Op(I64Op::Arithmetic(o, a, b))),
         ]
     })
 }
@@ -618,7 +673,7 @@ fn expected<T: Value>(
 proptest! {
     #[test]
     fn double_expressions_match_a_row_at_a_time_reference(
-        (n, d, a, b, c) in operands(), expr in doubles()
+        (n, d, a, b, c) in operands(), expr in prop_oneof![doubles(), not_null_doubles()]
     ) {
         let (a, b, c) = (vector(d, a), vector(1, b), vector(1, c));
         let operands = [&a, &b, &c];
@@ -636,7 +691,7 @@ proptest! {
 
     #[test]
     fn bigint_expressions_match_a_row_at_a_time_reference(
-        (n, d, a, b, c) in operands(), expr in bigints()
+        (n, d, a, b, c) in operands(), expr in prop_oneof![bigints(), not_null_bigints()]
     ) {
         let (a, b, c) = (vector(d, a), vector(1, b), vector(1, c));
         let operands = [&a, &b, &c];
@@ -644,5 +699,112 @@ proptest! {
         let found = run(n as u64, &AnyExpr::I64(expr.clone()), &[&a, &b, &c][..])
             .map(|v| i64::vector(&v).unwrap().values().to_vec());
         prop_assert_eq!(found, want);
+    }
+}
+
+#[test]
+fn pagerank_s_maps_take_the_no_null_path() {
+    // CASE WHEN out > 0 THEN x / out ELSE 0 END, and the update
+    // damping * (y + dangling * p) + teleport * p.
+    let message = Expr::Case {
+        when: vec![(cmp(x(1), Comparison::Gt, lit(0.0)), div(x(0), x(1)))],
+        otherwise: Some(Box::new(lit(0.0))),
+    };
+    assert!(not_null::covers(&message));
+    let damped = op(x(0), Arithmetic::Multiply, op(x(1), Arithmetic::Add, x(2)));
+    assert!(not_null::covers(&op(damped, Arithmetic::Add, x(3))));
+    assert!(not_null::covers(&Expr::<f64>::Cast(Box::new(AnyExpr::F32(Expr::Vector(0))))));
+}
+
+#[test]
+fn expressions_that_can_be_null_take_the_columnar_path() {
+    let null = || Expr::<f64>::Literal(None);
+    let positive = || cmp(x(0), Comparison::Gt, lit(0.0));
+    let no_else = Expr::Case { when: vec![(positive(), x(0))], otherwise: None };
+    let and = Expr::Op(BoolOp::And(vec![positive()]));
+    let unknown = Expr::Case { when: vec![(and, x(0))], otherwise: Some(Box::new(x(0))) };
+    for expr in [
+        null(),
+        op(x(0), Arithmetic::Add, null()),
+        Expr::NullIf(Box::new(x(0)), Box::new(lit(0.0))),
+        Expr::Coalesce(vec![x(0)]),
+        Expr::Least(vec![x(0)]),
+        no_else,
+        unknown,
+    ] {
+        assert!(!not_null::covers(&expr), "{expr:?}");
+    }
+}
+
+/// Whether each element of a `len`-element chunk is active: all of them
+/// unless `masked`, else as `mask` says, cycled.
+fn activity(len: usize, mask: &[bool], masked: bool) -> Vec<bool> {
+    (0..len).map(|i| !masked || mask[i % mask.len()]).collect()
+}
+
+/// The no-NULL path and the columnar path agree on `expr` over `chunk`:
+/// both fail, or both succeed with the same bits at every active element,
+/// where the columnar path found no NULL.
+fn agree<T: not_null::NotNull, B: PartialEq + std::fmt::Debug>(
+    expr: &Expr<T>,
+    chunk: &Chunk<'_>,
+    active: &[bool],
+    masked: bool,
+    bits: impl Fn(T) -> B,
+) -> Result<(), TestCaseError> {
+    if !not_null::covers(expr) {
+        return Ok(());
+    }
+    let columnar = eval::eval(expr, chunk, active);
+    let fast = not_null::eval(expr, chunk, masked.then_some(active));
+    match (columnar, fast) {
+        (Ok(columnar), Ok(fast)) => {
+            prop_assert_eq!(fast.len(), chunk.len);
+            for (i, _) in active.iter().enumerate().filter(|(_, &active)| active) {
+                prop_assert!(!columnar.nulls[i], "NULL at {} of {:?}", i, expr);
+                let (want, found) = (bits(columnar.values[i]), bits(fast[i]));
+                prop_assert_eq!(want, found, "at {} of {:?}", i, expr);
+            }
+        }
+        (Err(_), Err(_)) => {}
+        (columnar, fast) => prop_assert!(
+            false,
+            "columnar {:?}, no-NULL path failed: {}",
+            columnar.map(|c| c.values),
+            fast.is_err()
+        ),
+    }
+    Ok(())
+}
+
+proptest! {
+    #[test]
+    fn the_no_null_path_matches_the_columnar_path_on_doubles(
+        (n, d, a, b, c) in operands(), expr in prop_oneof![doubles(), not_null_doubles()],
+        (start, len) in (any::<prop::sample::Index>(), any::<prop::sample::Index>()),
+        mask in prop::collection::vec(any::<bool>(), 1..8), masked in any::<bool>()
+    ) {
+        let (a, b, c) = (vector(d, a), vector(1, b), vector(1, c));
+        let operands = [&a, &b, &c];
+        let start = start.index(n * d + 1);
+        let len = len.index(n * d - start + 1);
+        let chunk = Chunk { operands: &operands, width: d, start, len };
+        let active = activity(len, &mask, masked);
+        agree(&expr, &chunk, &active, masked, f64::to_bits)?;
+    }
+
+    #[test]
+    fn the_no_null_path_matches_the_columnar_path_on_bigints(
+        (n, d, a, b, c) in operands(), expr in prop_oneof![bigints(), not_null_bigints()],
+        (start, len) in (any::<prop::sample::Index>(), any::<prop::sample::Index>()),
+        mask in prop::collection::vec(any::<bool>(), 1..8), masked in any::<bool>()
+    ) {
+        let (a, b, c) = (vector(d, a), vector(1, b), vector(1, c));
+        let operands = [&a, &b, &c];
+        let start = start.index(n * d + 1);
+        let len = len.index(n * d - start + 1);
+        let chunk = Chunk { operands: &operands, width: d, start, len };
+        let active = activity(len, &mask, masked);
+        agree(&expr, &chunk, &active, masked, |v: i64| v)?;
     }
 }
