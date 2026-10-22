@@ -147,6 +147,45 @@ fn model_refusal(slots: &[(Slot, u32)], bytes: u64, cap: u64) -> Option<Refusal>
     }
 }
 
+/// What a claim refused with `refusal` changed, from `before` to `after`:
+/// only mapped, unpinned ready slots drained, and only for `NoRoom` (enough
+/// that the version of `bytes` fits once they are released) or `NoSlot`
+/// (one slot).
+fn drained_as_modelled(
+    before: &[(Slot, u32)],
+    after: &[(Slot, u32)],
+    bytes: u64,
+    refusal: Refusal,
+    cap: u64,
+) -> Result<(), TestCaseError> {
+    let mut drained = 0;
+    for ((was, pins), (now, _)) in before.iter().zip(after) {
+        if was == now {
+            continue;
+        }
+        prop_assert!(was.state == State::Ready && *pins == 0 && was.mappers > 0);
+        prop_assert_eq!(now.state, State::Draining);
+        drained += 1;
+    }
+    match refusal {
+        Refusal::NoRoom if drained > 0 => {
+            let staying: u64 = after
+                .iter()
+                .filter(|(slot, pins)| {
+                    let reclaimable = slot.state == State::Ready && *pins == 0 && slot.mappers == 0;
+                    matches!(slot.state, State::Loading | State::Ready) && !reclaimable
+                })
+                .map(|(slot, _)| slot.bytes)
+                .sum();
+            prop_assert!(staying + bytes <= cap, "draining left no room");
+        }
+        Refusal::NoRoom => {}
+        Refusal::NoSlot => prop_assert!(drained <= 1),
+        _ => prop_assert_eq!(drained, 0),
+    }
+    Ok(())
+}
+
 /// `backend` reads `version`.
 fn read(
     memory: &Memory,
@@ -177,7 +216,10 @@ fn read(
                     prop_assert_eq!(expected, None);
                     prop_assert!(bytes > config.capacity.saturating_sub(allocated));
                 }
-                Claimed::Refused(refusal) => prop_assert_eq!(expected, Some(refusal)),
+                Claimed::Refused(refusal) => {
+                    prop_assert_eq!(expected, Some(refusal));
+                    drained_as_modelled(&before, &table(memory), bytes, refusal, config.cap)?;
+                }
             }
         }
     }

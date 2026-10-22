@@ -232,7 +232,12 @@ impl SharedVersions for Backend {
                 Claimed::Load(Loading { ticket, region })
             }
             Claim::Taken => Claimed::Taken,
-            Claim::Refused(refusal) => Claimed::Refused(refusal),
+            Claim::Refused { refusal, drained } => {
+                for handle in drained {
+                    store.pinned.remove(&handle);
+                }
+                Claimed::Refused(refusal)
+            }
         }
     }
 

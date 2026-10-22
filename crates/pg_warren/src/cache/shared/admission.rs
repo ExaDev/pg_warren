@@ -93,6 +93,58 @@ pub(crate) fn admit(
     Ok(Plan { slot, evict })
 }
 
+/// The slots to drain after a refusal of a version of `bytes` over
+/// `slots`, whose pins are `pins`, under `cap`, so that room appears for it
+/// once their mappers release them (DESIGN.md §5.6, §14 item 28): a mapped
+/// slot makes no room at once, but backends keep their mappings across
+/// statements and release those of draining slots at their next message.
+/// For `NoRoom`, the least recently used mapped unpinned ready slots whose
+/// bytes, gone, would let the version fit, or none if all of them would
+/// not; for `NoSlot`, the least recently used such slot; for any other
+/// refusal, none.
+pub(crate) fn to_drain(
+    slots: &[Slot],
+    pins: &[u32],
+    bytes: u64,
+    refusal: Refusal,
+    cap: u64,
+) -> Vec<usize> {
+    let mut mapped: Vec<(usize, &Slot)> = slots
+        .iter()
+        .zip(pins)
+        .enumerate()
+        .filter(|(_, (slot, &pins))| slot.evictable(pins) && slot.mappers > 0)
+        .map(|(index, (slot, _))| (index, slot))
+        .collect();
+    mapped.sort_by_key(|(_, slot)| slot.last_used);
+    match refusal {
+        Refusal::NoRoom => {
+            let mut staying = slots
+                .iter()
+                .zip(pins)
+                .filter(|(slot, &pins)| slot.occupied() && !slot.reclaimable(pins))
+                .map(|(slot, _)| slot.bytes)
+                .fold(bytes, u64::saturating_add);
+            let chosen: Vec<usize> = mapped
+                .into_iter()
+                .take_while(|(_, slot)| {
+                    let over = staying > cap;
+                    staying -= slot.bytes;
+                    over
+                })
+                .map(|(index, _)| index)
+                .collect();
+            if staying > cap {
+                Vec::new()
+            } else {
+                chosen
+            }
+        }
+        Refusal::NoSlot => mapped.first().map(|&(index, _)| vec![index]).unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
 /// The reclaimable slots to evict, least recently used first, so that
 /// they and the `staying` bytes fit in `cap` (`cache::lru`'s policy).
 fn to_fit(slots: &[Slot], pins: &[u32], staying: u64, cap: u64) -> Vec<usize> {
@@ -221,6 +273,54 @@ mod tests {
             slot(State::Draining, 10, 3, 0, 1),
         ];
         assert_eq!(admit(&slots, 10, limits(100)), Err(Refusal::NoSlot));
+    }
+
+    /// The slots `table` drains for a version of `bytes` refused under
+    /// `limits`.
+    fn drain(table: &[(Slot, u32)], bytes: u64, limits: Limits) -> Vec<usize> {
+        let (slots, pins): (Vec<Slot>, Vec<u32>) = table.iter().copied().unzip();
+        let refusal = super::admit(&slots, &pins, bytes, limits).err().expect("refused");
+        super::to_drain(&slots, &pins, bytes, refusal, limits.cap)
+    }
+
+    #[test]
+    fn a_refusal_for_room_drains_the_least_recently_used_mapped_versions_that_make_it() {
+        let slots = [
+            slot(State::Ready, 40, 3, 0, 1),
+            slot(State::Ready, 40, 1, 0, 2),
+            slot(State::Ready, 20, 2, 1, 1),
+            slot(State::Ready, 30, 0, 0, 0),
+        ];
+        assert_eq!(admit(&slots, 40, limits(100)), Err(Refusal::NoRoom));
+        assert_eq!(drain(&slots, 40, limits(100)), vec![1]);
+        assert_eq!(drain(&slots, 80, limits(100)), vec![1, 0]);
+        assert_eq!(
+            drain(&slots, 81, limits(100)),
+            Vec::<usize>::new(),
+            "draining every mapped version would not make room beside the pinned one"
+        );
+    }
+
+    #[test]
+    fn a_full_table_drains_the_least_recently_used_mapped_slot() {
+        let slots = [
+            slot(State::Ready, 10, 2, 0, 1),
+            slot(State::Ready, 10, 1, 0, 1),
+            slot(State::Ready, 10, 3, 1, 1),
+        ];
+        assert_eq!(admit(&slots, 10, limits(100)), Err(Refusal::NoSlot));
+        assert_eq!(drain(&slots, 10, limits(100)), vec![1]);
+        let pinned = [slot(State::Ready, 10, 1, 1, 1), slot(State::Loading, 10, 0, 0, 0)];
+        assert_eq!(drain(&pinned, 10, limits(100)), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn other_refusals_drain_nothing() {
+        let slots = [slot(State::Ready, 30, 1, 0, 1), EMPTY];
+        assert_eq!(drain(&slots, 10, limits(0)), Vec::<usize>::new(), "disabled");
+        assert_eq!(drain(&slots, 101, limits(100)), Vec::<usize>::new(), "too large");
+        let store = Limits { cap: 100, store_room: 10 };
+        assert_eq!(drain(&slots, 20, store), Vec::<usize>::new(), "store full");
     }
 
     #[test]

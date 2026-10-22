@@ -22,7 +22,7 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use super::admission::{admit, Limits, Refusal};
+use super::admission::{admit, to_drain, Limits, Refusal};
 use super::slot::{Handle, Key, Process, Slot, State, Ticket};
 
 /// A table of slots: a `Vec` in the `Memory` fake, an array in shared
@@ -68,8 +68,9 @@ pub(crate) enum Claim {
     Load { ticket: Ticket, evicted: Vec<Handle> },
     /// Another backend has claimed it since the lookup: look again.
     Taken,
-    /// Load it privately.
-    Refused(Refusal),
+    /// Load it privately. `drained` are the mapped regions drained so that
+    /// room appears once their mappers release them, to unpin.
+    Refused { refusal: Refusal, drained: Vec<Handle> },
 }
 
 /// The slot no longer holds the use a ticket names.
@@ -126,14 +127,20 @@ impl<S: SlotTable, P: PinTable> Registry<S, P> {
     }
 
     /// Claims a slot for `loader` to load `key`'s version of `bytes` into,
-    /// evicting what admission chooses; nothing changes if it is refused.
+    /// evicting what admission chooses. If it is refused, only the mapped
+    /// versions `admission::to_drain` chooses are evicted, to drain.
     pub(crate) fn claim(&mut self, key: Key, bytes: u64, loader: Process, limits: Limits) -> Claim {
         if self.lookup(key) != Lookup::Missing {
             return Claim::Taken;
         }
-        let plan = match admit(self.slots(), &self.pins(), bytes, limits) {
+        let pins = self.pins();
+        let plan = match admit(self.slots(), &pins, bytes, limits) {
             Ok(plan) => plan,
-            Err(refusal) => return Claim::Refused(refusal),
+            Err(refusal) => {
+                let chosen = to_drain(self.slots(), &pins, bytes, refusal, limits.cap);
+                let drained = chosen.into_iter().map(|index| self.retire(index)).collect();
+                return Claim::Refused { refusal, drained };
+            }
         };
         let evicted = plan.evict.into_iter().map(|index| self.retire(index)).collect();
         self.generation += 1;
@@ -432,23 +439,33 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_claim_changes_nothing() {
+    fn a_claim_refused_for_room_drains_mapped_versions_for_the_next() {
+        let mut registry = registry(3);
+        let older = loaded(&mut registry, 1, 40);
+        let newer = loaded(&mut registry, 2, 40);
+        assert_eq!(
+            registry.claim(key(3), 40, LOADER, limits(100)),
+            Claim::Refused { refusal: Refusal::NoRoom, drained: vec![Handle(1)] }
+        );
+        assert_eq!(registry.state(older), Some(State::Draining));
+        assert_eq!(registry.state(newer), Some(State::Ready));
+        registry.release(older);
+        assert!(
+            matches!(registry.claim(key(3), 40, LOADER, limits(100)), Claim::Load { .. }),
+            "admitted once the drained version's mapper releases it"
+        );
+    }
+
+    #[test]
+    fn a_refused_claim_that_cannot_drain_changes_nothing() {
         let mut registry = registry(2);
         let held = loaded(&mut registry, 1, 60);
         let before = registry.slots().to_vec();
-        assert_eq!(
-            registry.claim(key(2), 50, LOADER, limits(0)),
-            Claim::Refused(Refusal::Disabled)
-        );
-        assert_eq!(
-            registry.claim(key(2), 101, LOADER, limits(100)),
-            Claim::Refused(Refusal::TooLarge)
-        );
+        let refused = |refusal| Claim::Refused { refusal, drained: vec![] };
+        assert_eq!(registry.claim(key(2), 50, LOADER, limits(0)), refused(Refusal::Disabled));
+        assert_eq!(registry.claim(key(2), 101, LOADER, limits(100)), refused(Refusal::TooLarge));
         registry.pin(held).unwrap();
-        assert_eq!(
-            registry.claim(key(2), 50, LOADER, limits(100)),
-            Claim::Refused(Refusal::NoRoom)
-        );
+        assert_eq!(registry.claim(key(2), 50, LOADER, limits(100)), refused(Refusal::NoRoom));
         unpin(registry.pin_table(), held);
         assert_eq!(registry.pins()[0], 0);
         assert_eq!(registry.slots()[0].state, before[0].state);
