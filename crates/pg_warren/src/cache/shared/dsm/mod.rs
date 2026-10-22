@@ -156,7 +156,8 @@ impl Backend {
 
     /// Runs `f` on the registry and this backend's session under the
     /// registry's lock, held exclusively. `f` is pure Rust, or calls only
-    /// Postgres functions that check for no interrupts (`dsm_detach`).
+    /// Postgres functions that check for no interrupts (`dsm_detach`, and
+    /// `dsm_attach` and `dsm_pin_segment` to revive a draining version).
     fn locked<R>(
         &mut self,
         f: impl FnOnce(
@@ -206,6 +207,7 @@ impl SharedVersions for Dsm {
             backend.locked(|registry, session| match registry.lookup(key) {
                 Lookup::Missing => Step::Found(Found::Missing),
                 Lookup::Loading(ticket) => Step::Found(Found::Loading(ticket)),
+                Lookup::Draining(ticket) => Step::Found(revive(registry, session, key, ticket)),
                 Lookup::Ready(ticket) => match session.open(registry, ticket) {
                     Ok(Use::Mapped(view)) => Step::Found(Found::Ready(view)),
                     Ok(Use::Attach(handle)) => Step::Attach(ticket, handle),
@@ -374,6 +376,42 @@ impl SharedVersions for Dsm {
             backend.locked(|registry, session| session.exit(registry, drop));
             loading.iter().for_each(|ticket| backend.broadcast(ticket.slot));
         });
+    }
+}
+
+/// Revives the draining slot `ticket` names, which holds `key`'s version,
+/// and reads it in this statement, under the registry's lock: the slot is
+/// draining, so some backend still maps its segment, and none can detach
+/// it while the lock is held (backends detach under it; one that exits
+/// has given its mapping back first), so this backend's mapping, its own
+/// or one it attaches now, keeps the segment whole while it pins it again.
+fn revive(
+    registry: &mut Registry<&mut [Slot; SLOTS], &[AtomicU32; SLOTS]>,
+    session: &mut Session<Attached>,
+    key: Key,
+    ticket: Ticket,
+) -> Found<Attached> {
+    let attached = match session.mapping(ticket) {
+        Some(attached) => Arc::clone(attached),
+        None => {
+            let handle = registry.slots()[ticket.slot].handle;
+            let Some(segment) = segment::attach(handle, key) else {
+                broken("a draining version's segment cannot be attached or holds another version")
+            };
+            Arc::new(Attached { segment, held: Mutex::default() })
+        }
+    };
+    attached.segment.repin();
+    if registry.revive(ticket).is_err() {
+        broken("a draining version stopped draining under the registry's lock");
+    }
+    match session.open(registry, ticket) {
+        Ok(Use::Mapped(view)) => Found::Ready(view),
+        Ok(Use::Attach(_)) => match session.mapped(registry, ticket, attached) {
+            Ok(view) => Found::Ready(view),
+            Err(_) => broken("a revived version stopped being ready under the registry's lock"),
+        },
+        Err(Gone) => broken("a revived version stopped being ready under the registry's lock"),
     }
 }
 

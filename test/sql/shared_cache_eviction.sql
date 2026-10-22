@@ -2,8 +2,9 @@
 -- that does not fit beside the shared versions in use is loaded privately,
 -- never waited for, and admission drains the least recently used version
 -- that backends map but no statement pins, so that it is freed once they
--- release it, at their next read of the shared cache; a version a
--- statement pins is never evicted. The cap here fits one of two equal
+-- release it, at their next read of the shared cache, unless a backend
+-- reads it first, which revives it; a version a statement pins is never
+-- evicted. The cap here fits one of two equal
 -- versions. Where the shared cache is off or unavailable, every load is
 -- private and no segment is created.
 \ir include/shared_cache.sql
@@ -39,9 +40,22 @@ SELECT assert.equal(shared_segments(:v1), :one, 'g1 stays while a maps it');
 SELECT assert.equal(evicted, 1::bigint, 'b holds g2 in its own cache')
 FROM dblink('b', $$SELECT warren.evict('g2')$$) AS t(evicted bigint);
 
--- a's next read releases g1, which is freed, and then g2 fits.
+-- c reads g1 again: it is revived, not loaded beside g2, so nothing
+-- else drains for it, and c maps the same segment.
+SELECT * FROM dblink('c', $$SELECT warren.prewarm('g1')$$) AS t(version bigint);
+SELECT assert.equal(shared_segments(:v1), :one, 'g1 is revived, not loaded again');
+SELECT assert.equal(evicted, 1 - :one, 'c reads the shared g1')
+FROM dblink('c', $$SELECT warren.evict('g1')$$) AS t(evicted bigint);
+
+-- b's next load of g2 drains g1 again; once a and c have each released
+-- it at their next read, it is freed and then g2 fits.
+SELECT * FROM dblink('b', $$SELECT warren.prewarm('g2')$$) AS t(version bigint);
+SELECT assert.equal(shared_segments(:v2), 0::bigint, 'g2 is loaded privately again');
 SELECT * FROM dblink('a', $$SELECT warren.prewarm('g2')$$) AS t(version bigint);
-SELECT assert.equal(shared_segments(:v1), 0::bigint, 'g1 is freed once a releases it');
+SELECT assert.equal(shared_segments(:v1), :one, 'g1 stays while c maps it');
+SELECT assert.equal(shared_segments(:v2), 0::bigint, 'g2 does not fit beside it');
+SELECT * FROM dblink('c', $$SELECT warren.prewarm('g2')$$) AS t(version bigint);
+SELECT assert.equal(shared_segments(:v1), 0::bigint, 'g1 is freed once c releases it');
 SELECT assert.equal(shared_segments(:v2), :one, 'g2 is shared');
 
 -- While c's statement pins g2, d's g1 does not fit and nothing is evicted.

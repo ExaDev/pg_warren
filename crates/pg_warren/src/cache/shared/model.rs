@@ -6,7 +6,8 @@
 //! each step that the cap holds, that no pinned version is evicted, that
 //! each version has at most one loading or ready slot, that every loading
 //! slot has a loader (live, or vanished until a waiter takes it over),
-//! that the registry's pins and mappers are what the backends hold, and
+//! that the registry's pins and mappers are what the backends hold, that
+//! a read of a draining version revives it rather than load it again, and
 //! that refusals are those of a simple model of admission. At the end of
 //! each case, once every live backend has released what it holds, every
 //! slot that no vanished backend holds is reclaimable and no draining slot
@@ -199,7 +200,17 @@ fn read(
     backend.waiting = None;
     let before = table(memory);
     let allocated = memory.allocated();
-    match backend.port.lookup(key(version)) {
+    let of_version = |slot: &Slot| slot.key == key(version);
+    let draining = before.iter().any(|(slot, _)| of_version(slot) && slot.state == State::Draining);
+    let live = before
+        .iter()
+        .any(|(slot, _)| of_version(slot) && matches!(slot.state, State::Loading | State::Ready));
+    let found = backend.port.lookup(key(version));
+    if draining && !live {
+        prop_assert!(matches!(found, Found::Ready(_)), "a draining version is revived");
+        prop_assert_eq!(memory.allocated(), allocated, "and not loaded again");
+    }
+    match found {
         Found::Ready(view) => backend.views.push((version, view)),
         Found::Loading(loading) => backend.waiting = Some((version, loading)),
         Found::Missing => {

@@ -156,6 +156,25 @@ mod tests {
     }
 
     #[pg_test]
+    fn a_draining_version_read_again_is_revived() -> Result<(), Error> {
+        set_cap(c"64MB");
+        let (key, resolved) = graph("revived", 100)?;
+        let read =
+            || through::<i64>(port()?, &resolved).ok().flatten().ok_or(Error::InvalidPosition);
+        let first = read()?;
+        end_statement();
+        assert_eq!(port()?.evict(&|evicted| *evicted == key), 1);
+        assert_eq!(slot(key), Some((State::Draining, 0, 1)));
+        let again = read()?;
+        assert!(Arc::ptr_eq(&first, &again), "through the same mapping");
+        assert_eq!(slot(key), Some((State::Ready, 1, 1)), "ready again, and pinned");
+        drop((first, again));
+        forget(key)?;
+        assert_eq!(slot(key), None, "evicted again: its segment was pinned again");
+        Ok(())
+    }
+
+    #[pg_test]
     fn a_piece_of_a_version_held_past_it_keeps_the_mapping() -> Result<(), Error> {
         set_cap(c"64MB");
         let (key, resolved) = graph("piece", 100)?;

@@ -8,16 +8,18 @@
 //! read unpinned stays unpinned until the lock is released.
 //!
 //! ```text
-//!            claim            publish
-//!   empty ---------> loading ---------> ready --evict--> draining
-//!     ^                 |                 |                 |
+//!            claim            publish            evict
+//!   empty ---------> loading ---------> ready ---------> draining
+//!     ^                 |                 |  <--revive--    |
 //!     +---- abandon ----+                 |                 |
 //!     +------ evict (no mapper) ----------+                 |
 //!     +---------------- release (last mapper) --------------+
 //! ```
 //!
 //! An evicted region is only unpinned: its memory is freed when its last
-//! mapper detaches. Every transition after a claim names the claim's
+//! mapper detaches. Until then a lookup of its key finds it, and the
+//! reader revives it (pinning its region again) rather than load the
+//! version anew beside it, which could only drain another version. Every transition after a claim names the claim's
 //! `Ticket`, so one on a slot since emptied and claimed again does nothing.
 
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -69,6 +71,9 @@ pub(crate) enum Lookup {
     Ready(Ticket),
     /// Being loaded: wait for it.
     Loading(Ticket),
+    /// Evicted but still mapped: pin its region again, revive it, then
+    /// read it as a ready one.
+    Draining(Ticket),
     /// Neither: claim it.
     Missing,
 }
@@ -132,22 +137,33 @@ impl<S: SlotTable, P: PinTable> Registry<S, P> {
         self.pin_table().iter().map(|count| count.load(Ordering::Acquire)).collect()
     }
 
-    /// What it holds for `key`.
+    /// What it holds for `key`: its loading or ready slot, or else its
+    /// most recently claimed draining one.
     pub(crate) fn lookup(&self, key: Key) -> Lookup {
-        let found = self.slots().iter().enumerate().find(|(_, slot)| {
-            slot.key == key && matches!(slot.state, State::Loading | State::Ready)
-        });
-        match found {
-            Some((index, slot)) => {
-                let ticket = Ticket { slot: index, generation: slot.generation };
-                if slot.state == State::Ready {
-                    Lookup::Ready(ticket)
-                } else {
-                    Lookup::Loading(ticket)
+        let ticket =
+            |index: usize, slot: &Slot| Ticket { slot: index, generation: slot.generation };
+        let mut draining: Option<Ticket> = None;
+        for (index, slot) in self.slots().iter().enumerate().filter(|(_, slot)| slot.key == key) {
+            match slot.state {
+                State::Ready => return Lookup::Ready(ticket(index, slot)),
+                State::Loading => return Lookup::Loading(ticket(index, slot)),
+                State::Draining if draining.is_none_or(|d| d.generation < slot.generation) => {
+                    draining = Some(ticket(index, slot));
                 }
+                _ => {}
             }
-            None => Lookup::Missing,
         }
+        draining.map_or(Lookup::Missing, Lookup::Draining)
+    }
+
+    /// Makes a draining slot ready again, once its reader has pinned its
+    /// region again (it is still mapped, so still whole).
+    pub(crate) fn revive(&mut self, ticket: Ticket) -> Result<(), Gone> {
+        let tick = self.tick();
+        let slot = self.held(ticket, State::Draining).ok_or(Gone)?;
+        slot.state = State::Ready;
+        slot.last_used = tick;
+        Ok(())
     }
 
     /// Claims a slot for `loader` to load `key`'s version of `bytes` into,
@@ -427,7 +443,7 @@ mod tests {
         assert_eq!(registry.state(pinned), Some(State::Ready));
         assert_eq!(registry.state(mapped), Some(State::Draining));
         assert_eq!(registry.state(unmapped), None, "nobody maps it: empty at once");
-        assert_eq!(registry.lookup(key(2)), Lookup::Missing, "a draining version is not found");
+        assert_eq!(registry.lookup(key(2)), Lookup::Draining(mapped), "found, to revive");
         assert_eq!(registry.pin(mapped), Err(Gone));
         assert_eq!(registry.handle(mapped), Err(Gone));
         assert_eq!(registry.attach(mapped), Err(Gone));
@@ -494,6 +510,27 @@ mod tests {
             matches!(registry.claim(key(3), 40, LOADER, limits(100)), Claim::Load { .. }),
             "admitted once the drained version's mapper releases it"
         );
+    }
+
+    #[test]
+    fn a_draining_version_found_again_is_revived() {
+        let mut registry = registry(3);
+        let older = loaded(&mut registry, 1, 40);
+        let newer = loaded(&mut registry, 2, 40);
+        let refused = registry.claim(key(3), 40, LOADER, limits(100));
+        assert!(matches!(refused, Claim::Refused { refusal: Refusal::NoRoom, .. }));
+        assert_eq!(registry.lookup(key(1)), Lookup::Draining(older));
+        assert_eq!(
+            registry.claim(key(1), 40, LOADER, limits(100)),
+            Claim::Taken,
+            "a claim finds it too, and looks again"
+        );
+        assert_eq!(registry.revive(older), Ok(()));
+        assert_eq!(registry.lookup(key(1)), Lookup::Ready(older));
+        assert_eq!(registry.state(newer), Some(State::Ready), "nothing else drained");
+        assert_eq!(registry.revive(older), Err(Gone), "only a draining slot revives");
+        registry.release(older);
+        assert_eq!(registry.state(older), Some(State::Ready), "ready with no mapper");
     }
 
     #[test]

@@ -229,6 +229,11 @@ impl<M> Session<M> {
         &self.pins
     }
 
+    /// This backend's mapping of the slot `ticket` names, if it has one.
+    pub(crate) fn mapping(&self, ticket: Ticket) -> Option<&Arc<M>> {
+        self.mappings.iter().find(|(mapped, _)| *mapped == ticket).map(|(_, mapping)| mapping)
+    }
+
     /// The slots this backend maps.
     pub(crate) fn mapped_slots(&self) -> impl Iterator<Item = Ticket> + '_ {
         self.mappings.iter().map(|(ticket, _)| *ticket)

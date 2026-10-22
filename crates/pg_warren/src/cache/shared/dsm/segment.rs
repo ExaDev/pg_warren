@@ -70,6 +70,15 @@ impl Segment {
         }
     }
 
+    /// Pins an evicted segment again, which this backend maps: it is kept
+    /// until it is unpinned again.
+    pub(super) fn repin(self) {
+        // SAFETY: a segment this backend maps, unpinned when it was
+        // evicted and pinned only here since (under the registry's lock,
+        // with its slot revived only after).
+        unsafe { pg_sys::dsm_pin_segment(self.0.as_ptr()) };
+    }
+
     /// Detaches this backend's mapping, freeing the segment if it was the
     /// last and the segment is unpinned. Postgres reports a failure to
     /// unmap or destroy it at WARNING.
