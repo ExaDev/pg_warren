@@ -73,8 +73,9 @@ impl<E: ExternalId> LoadedVersion<E> {
     /// `warren.max_cache_memory`. For a version loaded into a region, the
     /// bytes of its arrays there and of its decoded relation dictionary,
     /// the same as when each array was a buffer of its own; the region's
-    /// header, table of contents, alignment padding (under 64 bytes an
-    /// array) and encoded relation dictionary are not counted.
+    /// 64-byte header, 32 bytes of table of contents and under 64 bytes of
+    /// alignment padding per array, and its encoded relation dictionary,
+    /// are not counted.
     pub(crate) fn bytes(&self) -> u64 {
         self.id_map.bytes() + self.relations.bytes() + self.graph.bytes()
     }
