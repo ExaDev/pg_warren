@@ -37,6 +37,8 @@ use placement::{Located, Shared, SLOTS};
 use segment::{Segment, SegmentRegion};
 
 pub(crate) use placement::request_preload;
+#[cfg(any(feature = "pg17", feature = "pg18", test))]
+pub(in crate::cache::shared) use placement::FORMAT;
 pub(in crate::cache::shared) use segment::{store_name, PREFIX};
 
 /// When this backend releases the mappings no call holds (DESIGN.md §14
@@ -110,7 +112,7 @@ impl Dsm {
         }
         let known = BACKEND.with_borrow(Option::is_some);
         if !known {
-            let located = placement::locate().ok_or(Unavailable::NotPreloaded)?;
+            let located = placement::locate()?;
             let process = Process {
                 // SAFETY: this backend's pid and start, set before any query.
                 pid: unsafe { pg_sys::MyProcPid },
