@@ -230,7 +230,10 @@ fn fold_row(row: &mut [(DenseId, f64)]) -> u64 {
     kept as u64
 }
 
+// Not under Miri: the compute pool's work stealing runs through
+// crossbeam-epoch, which Miri's Stacked Borrows model rejects.
 #[cfg(test)]
+#[cfg(not(miri))]
 mod tests {
     use proptest::prelude::*;
 
