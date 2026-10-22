@@ -16,6 +16,7 @@
 //! array, its direction, part and scope) and gives its element width,
 //! offset and element count.
 
+use std::collections::HashMap;
 use std::ops::Range;
 
 use super::RegionError;
@@ -72,8 +73,15 @@ impl Entry {
 pub(crate) struct RegionLayout {
     version: VersionId,
     entries: Vec<Entry>,
+    /// Each entry's index in `entries`, by its array's encoding: a version
+    /// has an entry per relation and direction, so a scan per lookup, one
+    /// per array loaded, would be quadratic in its relations.
+    index: HashMap<ArrayKey, usize>,
     len: usize,
 }
+
+/// An array as (kind, direction, part, scope), as its entry records it.
+type ArrayKey = (u8, u8, u8, u64);
 
 impl RegionLayout {
     /// The layout of `version`'s arrays, each given as (array, element
@@ -96,7 +104,19 @@ impl RegionLayout {
         if len > isize::MAX as usize - ALIGNMENT {
             return Err(RegionError::TooLarge);
         }
-        Ok(Self { version, entries, len })
+        Self::indexed(version, entries, len)
+    }
+
+    /// The layout of `entries`, indexed by array: an `Entry` error for the
+    /// first entry of an array that already has one.
+    fn indexed(version: VersionId, entries: Vec<Entry>, len: usize) -> Result<Self, RegionError> {
+        let mut index = HashMap::with_capacity(entries.len());
+        for (at, entry) in entries.iter().enumerate() {
+            if index.insert(encode_array(entry.array), at).is_some() {
+                return Err(RegionError::Entry { index: at });
+            }
+        }
+        Ok(Self { version, entries, index, len })
     }
 
     /// The region's length in bytes.
@@ -106,7 +126,7 @@ impl RegionLayout {
 
     /// Where `array` lies, if the region holds it.
     pub(crate) fn entry(&self, array: Array) -> Option<&Entry> {
-        self.entries.iter().find(|entry| entry.array == array)
+        self.index.get(&encode_array(array)).map(|&at| &self.entries[at])
     }
 
     /// Writes the header and table of contents at the start of `region`,
@@ -131,7 +151,8 @@ impl RegionLayout {
 
     /// Reads the layout at the start of `region` and checks it: written in
     /// this layout version for `version`, no longer than `region`, and
-    /// every array aligned and inside it, after the table of contents.
+    /// every array aligned and inside it, after the table of contents,
+    /// and named by one entry.
     pub(crate) fn read(region: &[u8], version: VersionId) -> Result<Self, RegionError> {
         let header = prefix(region, HEADER_LEN)?;
         if header[..4] != MAGIC {
@@ -162,7 +183,7 @@ impl RegionLayout {
                     .ok_or(RegionError::Entry { index })
             })
             .collect::<Result<_, _>>()?;
-        Ok(Self { version, entries, len })
+        Self::indexed(version, entries, len)
     }
 }
 
@@ -196,7 +217,7 @@ fn read_entry(bytes: &[u8]) -> Option<Entry> {
 }
 
 /// An array as (kind, direction, part, scope).
-fn encode_array(array: Array) -> (u8, u8, u8, u64) {
+fn encode_array(array: Array) -> ArrayKey {
     match array {
         Array::IdPairs => (1, 0, 0, 0),
         Array::ByDense => (2, 0, 0, 0),
@@ -364,6 +385,43 @@ mod tests {
         let mut bad = region;
         bad[64 + 32] = 0;
         assert_eq!(RegionLayout::read(&bad, 7), Err(RegionError::Entry { index: 1 }));
+    }
+
+    #[test]
+    fn every_entry_is_found_by_its_array() {
+        let many: Vec<_> = (0..1000)
+            .flat_map(|index| {
+                let scope = CsrScope::Relation(index);
+                [Direction::Forward, Direction::Reverse]
+                    .map(|direction| (Array::Csr(direction, CsrPart::Targets, scope), 4, index % 7))
+            })
+            .chain(arrays())
+            .collect();
+        let layout = RegionLayout::plan(7, &many).unwrap();
+        let mut region = vec![0u8; layout.len()];
+        layout.write_header(&mut region);
+        let read = RegionLayout::read(&region, 7).unwrap();
+        for layout in [layout, read] {
+            for (index, &(array, ..)) in many.iter().enumerate() {
+                assert_eq!(layout.entry(array), Some(&layout.entries[index]));
+            }
+            let absent = Array::Csr(Direction::Forward, CsrPart::Targets, CsrScope::Merged);
+            assert_eq!(layout.entry(absent), None);
+        }
+    }
+
+    #[test]
+    fn an_array_with_two_entries_is_refused() {
+        let mut twice = arrays();
+        twice.push(twice[1]);
+        assert_eq!(RegionLayout::plan(7, &twice), Err(RegionError::Entry { index: 6 }));
+        let layout = RegionLayout::plan(7, &arrays()).unwrap();
+        let mut region = vec![0u8; layout.len()];
+        layout.write_header(&mut region);
+        // The third entry renamed as the second: tombstones as `ByDense`.
+        region[64 + 2 * 32] = 2;
+        region[64 + 2 * 32 + 4] = 4;
+        assert_eq!(RegionLayout::read(&region, 7), Err(RegionError::Entry { index: 2 }));
     }
 
     #[test]

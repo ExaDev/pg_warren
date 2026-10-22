@@ -62,8 +62,8 @@ pub(crate) enum RegionError {
         /// The version it holds.
         found: VersionId,
     },
-    /// An entry of the table of contents names no array, or an array that
-    /// is misaligned or outside the region.
+    /// An entry of the table of contents names no array, an array that is
+    /// misaligned or outside the region, or one an earlier entry names.
     #[error("entry {index} of a loaded version's region is invalid")]
     Entry {
         /// The entry's index.
