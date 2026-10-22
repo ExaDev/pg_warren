@@ -69,18 +69,40 @@ pub(crate) fn evict_graph(graph: i32, owner: bool) -> Result<usize, CacheError> 
     let Some(mut port) = port else {
         return Ok(0);
     };
+    Ok(evict_versions(&mut port, &graph_keys(graph, None)?, owner))
+}
+
+/// The keys of graph `graph`'s versions as of the statement's snapshot,
+/// but `except`.
+fn graph_keys(graph: i32, except: Option<VersionId>) -> Result<Vec<Key>, CacheError> {
     let versions = as_catalog_owner(|| {
         Ok::<_, CacheError>(
             read_one::<Vec<VersionId>>(
                 "SELECT coalesce(array_agg(version_id), '{}') FROM warren.versions
-                 WHERE graph_id = $1",
-                &[graph.into()],
+                 WHERE graph_id = $1 AND version_id IS DISTINCT FROM $2",
+                &[graph.into(), except.into()],
             )?
             .unwrap_or_default(),
         )
     })?;
-    let keys: Vec<Key> = versions.into_iter().filter_map(key).collect();
-    Ok(evict_versions(&mut port, &keys, owner))
+    Ok(versions.into_iter().filter_map(key).collect())
+}
+
+/// Before a miss of `resolved` loads it: evicts what no longer exists, and,
+/// if it is its graph's current version, the graph's other versions, as
+/// the private cache drops them (DESIGN.md §5.5, §5.6); unpinned ones only,
+/// so other backends reading one on purpose (a REPEATABLE READ snapshot,
+/// an explicit `version :=`) reload it if they need it again.
+fn make_room(resolved: &Resolved) -> Result<(), CacheError> {
+    prune()?;
+    let (graph, version) = (&resolved.graph, resolved.version);
+    if graph.current_version == Some(version) {
+        let superseded = graph_keys(graph.graph_id, Some(version))?;
+        if !superseded.is_empty() {
+            evict_versions(&mut Dsm::here(), &superseded, true);
+        }
+    }
+    Ok(())
 }
 
 /// With `warren.shared_cache_memory` set to 0 (the setting is reloaded,
@@ -127,8 +149,7 @@ pub(super) fn through<E: IdDatum + Send + Sync>(
         &mut port,
         key,
         || {
-            // A miss: make room by evicting what no longer exists first.
-            prune()?;
+            make_room(resolved)?;
             let plan = plan::<E>(&mut SpiSegmentStore, version, store_merged)?;
             Ok((PREFIX as u64 + plan.len() as u64, plan))
         },

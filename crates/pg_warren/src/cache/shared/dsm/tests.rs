@@ -95,7 +95,7 @@ mod tests {
     use crate::cache::shared::slot::State;
     use crate::cache::shared::{end_message, SharedVersions};
     use crate::cache::statement::end_statement;
-    use crate::fixture::refresh;
+    use crate::fixture::{refresh, ring};
     use crate::segment::SpiSegmentStore;
 
     #[pg_test]
@@ -328,5 +328,55 @@ mod tests {
         assert_eq!(slot(key), None, "evicted, and released by this backend");
         drop(current);
         forget(super::key(resolved.version).ok_or(Error::InvalidPosition)?)
+    }
+
+    /// Graph `name`, a ring that retains two versions, its first version
+    /// shared and its second promoted: their keys and resolutions.
+    fn promoted(name: &str) -> Result<[(Key, Resolved); 2], Error> {
+        ring(name, 100, 2)?;
+        let first = refresh(name, true)?;
+        refresh(name, true)?;
+        let opened = |version| -> Result<(Key, Resolved), Error> {
+            let resolved = resolve(name, version, "read").map_err(|_| Error::InvalidPosition)?;
+            Ok((super::key(resolved.version).ok_or(Error::InvalidPosition)?, resolved))
+        };
+        Ok([opened(Some(first))?, opened(None)?])
+    }
+
+    #[pg_test]
+    fn loading_the_current_version_evicts_the_graphs_other_unpinned_versions() -> Result<(), Error>
+    {
+        set_cap(c"64MB")?;
+        let [(old, old_read), (current, current_read)] = promoted("promoted")?;
+        drop(through::<i64>(port()?, &old_read).map_err(|_| Error::InvalidPosition)?);
+        end_statement();
+        drop(through::<i64>(port()?, &current_read).map_err(|_| Error::InvalidPosition)?);
+        assert_eq!(slot(old), None, "evicted, and released by this backend");
+        assert_eq!(slot(current), Some((State::Ready, 1, 1)));
+        forget(current)
+    }
+
+    #[pg_test]
+    fn loading_the_current_version_spares_the_versions_a_statement_pins() -> Result<(), Error> {
+        set_cap(c"64MB")?;
+        let [(old, old_read), (current, current_read)] = promoted("promoted_pinned")?;
+        let held = through::<i64>(port()?, &old_read).map_err(|_| Error::InvalidPosition)?;
+        drop(through::<i64>(port()?, &current_read).map_err(|_| Error::InvalidPosition)?);
+        assert_eq!(slot(old), Some((State::Ready, 1, 1)), "its statement pins it");
+        drop(held);
+        forget(old)?;
+        forget(current)
+    }
+
+    #[pg_test]
+    fn loading_another_version_evicts_nothing() -> Result<(), Error> {
+        set_cap(c"64MB")?;
+        let [(old, old_read), (current, current_read)] = promoted("promoted_other")?;
+        drop(through::<i64>(port()?, &current_read).map_err(|_| Error::InvalidPosition)?);
+        end_statement();
+        drop(through::<i64>(port()?, &old_read).map_err(|_| Error::InvalidPosition)?);
+        assert_eq!(slot(current), Some((State::Ready, 0, 1)));
+        forget(old)?;
+        forget(current)
     }
 }
