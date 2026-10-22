@@ -83,7 +83,9 @@ mod tests {
     use pgrx::spi::Error;
 
     use super::{forget, graph, port, set_cap, slot, with_backend};
+    use crate::cache::compute_memory;
     use crate::cache::load::load;
+    use crate::cache::open::cached;
     use crate::cache::open::{resolve, Resolved};
     use crate::cache::shared::acquire::acquire;
     use crate::cache::shared::admission::Limits;
@@ -378,5 +380,24 @@ mod tests {
         assert_eq!(slot(current), Some((State::Ready, 0, 1)));
         forget(old)?;
         forget(current)
+    }
+
+    #[pg_test]
+    fn a_shared_version_is_charged_to_no_call_and_reclaimed_by_none() -> Result<(), Error> {
+        set_cap(c"64MB")?;
+        let (key, resolved) = graph("uncharged", 2000)?;
+        Spi::run("SET LOCAL warren.max_cache_memory = '64kB'")?;
+        let shared = through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?;
+        assert!(shared.is_some(), "about 94 kB, larger than the private cap");
+        assert_eq!(compute_memory().in_use(), 0, "nothing of the shared version is charged");
+        let budget = compute_memory();
+        budget.reclaim_for(u64::MAX);
+        assert_eq!(slot(key), Some((State::Ready, 1, 1)), "nor evicted by a budget's reclaim");
+        // The same version read privately (it is uncommitted) is charged
+        // past the cap while the call holds it.
+        let private = cached::<i64>(&resolved).map_err(|_| Error::InvalidPosition)?;
+        assert!(compute_memory().in_use() > 0, "a private version past the cap is charged");
+        drop((shared, private));
+        forget(key)
     }
 }
