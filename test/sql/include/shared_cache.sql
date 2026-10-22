@@ -52,8 +52,13 @@ BEGIN
 END
 $$;
 CREATE FUNCTION own_evictions(graph text) RETURNS bigint LANGUAGE plpgsql AS $$
+DECLARE
+    role text := pg_catalog.current_setting('role');
+    evicted bigint;
 BEGIN
     PERFORM pg_catalog.set_config('role', 'warren_stranger', true);
-    RETURN warren.evict(graph);
+    evicted := warren.evict(graph);
+    PERFORM pg_catalog.set_config('role', role, true);
+    RETURN evicted;
 END
 $$;

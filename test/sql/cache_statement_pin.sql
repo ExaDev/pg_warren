@@ -2,15 +2,15 @@
 -- the statement ends, past warren.max_cache_memory if need be; when the
 -- statement ends, normally or with an error, the cap holds again. Two
 -- rings of 2,000 nodes, about 94 kB loaded each: one fits a 150kB cap,
--- both do not. Where versions are shared (test/run.py --shared-cache), the
--- shared cache holds them and pins them per statement instead (its
--- #[pg_test]s and test/sql/shared_cache_*), so this test has nothing to see.
-SELECT coalesce(current_setting('warren.shared_cache_memory', true), '0') <> '0'
-       AND (current_setting('server_version_num')::int >= 170000
-            OR current_setting('shared_preload_libraries') ~ 'pg_warren') AS shared \gset
-\if :shared
-\quit
-\endif
+-- both do not. This tests the private cache's pin, so where versions are
+-- shared (test/run.py --shared-cache) the shared cache is turned off while
+-- it runs; test/sql/shared_cache_statement_pin.sql tests the pin over
+-- shared versions in every mode.
+-- (pg_warren is loaded first, which defines the setting.)
+SELECT warren.version() IS NOT NULL AS loaded;
+ALTER SYSTEM SET warren.shared_cache_memory = 0;
+SELECT pg_reload_conf();
+SELECT pg_sleep(0.5);
 CREATE TABLE a_nodes AS SELECT generate_series(1, 2000)::bigint AS id;
 SELECT warren.create_graph('a', 'SELECT id FROM a_nodes', 'SELECT id, id % 2000 + 1 FROM a_nodes');
 SELECT warren.create_graph('b', 'SELECT id FROM a_nodes', 'SELECT id, id % 2000 + 1 FROM a_nodes');
@@ -94,3 +94,7 @@ SELECT warren.evict('a');
 SELECT warren.pagerank('a', 'pr');
 SELECT assert.equal(segment_reads() - :before, 2 * :one_load, 'pagerank loaded the version once');
 COMMIT;
+
+ALTER SYSTEM RESET warren.shared_cache_memory;
+SELECT pg_reload_conf();
+SELECT pg_sleep(0.2);
