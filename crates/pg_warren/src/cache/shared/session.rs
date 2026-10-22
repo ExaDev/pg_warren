@@ -39,6 +39,11 @@ pub(crate) enum Use<M> {
     Attach(Handle),
 }
 
+/// A mapping of a slot the registry no longer has ready: the caller
+/// detaches it.
+#[derive(Debug)]
+pub(crate) struct Unattached<M>(pub(crate) Arc<M>);
+
 /// A backend's mapping of a published region.
 pub(crate) trait Mapped {
     /// Whether a call holds what was read through it apart from its `Arc`
@@ -92,16 +97,19 @@ impl<M> Session<M> {
     }
 
     /// Records the mapping of a slot `open` said to attach, counting this
-    /// backend a mapper. The statement's pin keeps the slot ready, so it is
-    /// `Gone` only if the slot was not opened: then detach the mapping.
+    /// backend a mapper. The statement's pin keeps the slot ready, so the
+    /// registry refuses it only if the slot was not opened: then the
+    /// mapping comes back, to detach.
     pub(crate) fn mapped<S: SlotTable, P: PinTable>(
         &mut self,
         registry: &mut Registry<S, P>,
         ticket: Ticket,
         mapping: Arc<M>,
-    ) -> Result<Arc<M>, Gone> {
-        registry.attach(ticket)?;
-        Ok(self.held(ticket, mapping))
+    ) -> Result<Arc<M>, Unattached<M>> {
+        match registry.attach(ticket) {
+            Ok(()) => Ok(self.held(ticket, mapping)),
+            Err(Gone) => Err(Unattached(mapping)),
+        }
     }
 
     /// Records a mapping the registry already counts.
@@ -360,6 +368,7 @@ mod tests {
     }
 
     /// A mapping that calls may hold apart from its `Arc`.
+    #[derive(Debug)]
     struct Reading(AtomicBool);
 
     impl Mapped for Reading {
@@ -433,6 +442,18 @@ mod tests {
             let mappers = registry.slots()[ticket.slot].mappers;
             assert_eq!(mappers, u32::from(mapped.contains(&ticket)), "{ticket:?}");
         }
+    }
+
+    #[test]
+    fn a_mapping_the_registry_does_not_count_is_given_back_to_detach() {
+        let (mut registry, tickets) = published(&[1]);
+        let mut session = Session::new(PROCESS);
+        registry.release(tickets[0]);
+        registry.evict(|_| true);
+        let mapping = Arc::new(1);
+        let refused = session.mapped(&mut registry, tickets[0], Arc::clone(&mapping));
+        assert!(matches!(refused, Err(Unattached(given)) if Arc::ptr_eq(&given, &mapping)));
+        assert_eq!(session.mapped_slots().count(), 0);
     }
 
     #[test]

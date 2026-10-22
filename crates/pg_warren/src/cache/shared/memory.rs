@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use super::admission::Limits;
 use super::registry::{Claim, Gone, Lookup, Registry};
-use super::session::{Mapped, Release, Session, Use};
+use super::session::{Mapped, Release, Session, Unattached, Use};
 use super::slot::{Handle, Key, Process, Slot, Started, State, Ticket};
 use super::{Claimed, Found, SharedVersions};
 
@@ -218,7 +218,8 @@ impl SharedVersions for Backend {
                 let mapping = Mapping::of(&store.pinned[&handle]);
                 match self.session.mapped(&mut store.registry, ticket, mapping) {
                     Ok(view) => Found::Ready(view),
-                    Err(Gone) => Found::Missing,
+                    // Its region is freed with its last `Arc`.
+                    Err(Unattached(_)) => Found::Missing,
                 }
             }
             Err(Gone) => Found::Missing,

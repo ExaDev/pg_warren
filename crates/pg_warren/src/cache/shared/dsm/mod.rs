@@ -25,7 +25,7 @@ use pgrx::{ereport, pg_sys, PgSqlErrorCode};
 
 use super::admission::{Limits, Refusal};
 use super::registry::{Claim, Gone, Lookup, Registry};
-use super::session::{Mapped, Release, Session, Use};
+use super::session::{Mapped, Release, Session, Unattached, Use};
 use super::slot::{Handle, Key, Process, Slot, State, Ticket};
 use super::unavailable::Unavailable;
 use super::{setting, Claimed, Found, SharedVersions};
@@ -226,7 +226,12 @@ impl SharedVersions for Dsm {
         });
         match mapped {
             Some(Ok(view)) => Found::Ready(view),
-            _ => broken("a version pinned by this statement stopped being ready"),
+            Some(Err(Unattached(attached))) => {
+                // Detached first: an ERROR leaves no mapping behind.
+                attached.detach();
+                broken("a version pinned by this statement stopped being ready")
+            }
+            None => broken("this backend's state is in use"),
         }
     }
 
