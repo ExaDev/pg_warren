@@ -51,7 +51,8 @@ impl Tombstones {
     }
 
     /// Tombstones `id`. Ids outside the id space are ignored. A shared
-    /// bitmap is copied first.
+    /// bitmap is copied first, uncharged: a rebuild changes only its own
+    /// charged copy (`try_clone`).
     pub fn insert(&mut self, id: DenseId) -> Result<(), GraphError> {
         if id < self.id_space {
             self.words.make_mut()?[word_index(id)] |= bit(id);
@@ -60,7 +61,8 @@ impl Tombstones {
     }
 
     /// Clears the tombstone on `id`, if any. A shared bitmap is copied
-    /// first.
+    /// first, uncharged: a rebuild changes only its own charged copy
+    /// (`try_clone`).
     pub fn remove(&mut self, id: DenseId) -> Result<(), GraphError> {
         if id < self.id_space {
             self.words.make_mut()?[word_index(id)] &= !bit(id);
@@ -97,7 +99,9 @@ impl Tombstones {
         Ok(Self { id_space, words })
     }
 
-    /// Extends the id space to `id_space`; the new ids are live.
+    /// Extends the id space to `id_space`; the new ids are live. A shared
+    /// bitmap is copied first, uncharged: a rebuild grows only its own
+    /// charged copy (`try_clone`).
     pub fn grow_to(&mut self, id_space: u64) -> Result<(), GraphError> {
         if id_space <= self.id_space {
             return Ok(());

@@ -242,7 +242,8 @@ impl<E: ExternalId> IdMap<E> {
     /// Renumbers every dense id, tombstones included, by `permutation`,
     /// which must permute this id map's id space; else changes nothing.
     /// The renumbered tombstones, if there are any, are charged to `memory`
-    /// while they are built.
+    /// while they are built. A shared id map's copy is not charged: only a
+    /// first build renumbers, and its id map is one it built and owns.
     pub fn renumber(
         &mut self,
         permutation: &Permutation,
