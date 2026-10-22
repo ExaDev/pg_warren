@@ -96,6 +96,31 @@ mod tests {
     }
 
     #[pg_test]
+    fn a_call_through_the_0_4_0_definition_does_not_include_self() -> Result<(), Error> {
+        small("t")?;
+        // Between installing this library and `ALTER EXTENSION pg_warren
+        // UPDATE`, 0.4.0's definition, without include_self, calls it.
+        Spi::run(
+            "CREATE SCHEMA released;
+             CREATE FUNCTION released.gather(graph text, messages text, id_type anyelement,
+                                             value_type anycompatible,
+                                             combine text DEFAULT 'collect',
+                                             direction text DEFAULT 'in', rels text[] DEFAULT NULL,
+                                             mask text DEFAULT NULL,
+                                             mask_complement boolean DEFAULT false,
+                                             version bigint DEFAULT NULL)
+             RETURNS TABLE (node_id anyelement, value anycompatible)
+             VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'pg_warren', 'gather_wrapper'",
+        )?;
+        let released = rows(&format!(
+            "SELECT node_id || ':' || value::text
+             FROM released.gather('t', $m${TENS}$m$, NULL::bigint, NULL::bigint[])"
+        ))?;
+        assert_eq!(released, gathered(TENS, "bigint[]", "")?);
+        Ok(())
+    }
+
+    #[pg_test]
     fn any_type_travels_and_text_concatenates() -> Result<(), Error> {
         small("t")?;
         let names = "SELECT id, 'n' || id FROM t_nodes";

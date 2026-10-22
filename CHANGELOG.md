@@ -2,6 +2,22 @@
 
 ## 0.5.0 — in development
 
+### Upgrading
+
+- **Run `ALTER EXTENSION pg_warren UPDATE;` in every database that has the
+  extension**, after installing the new build and before using the new
+  version: the update creates `warren.shared_cache()` and replaces
+  `warren.gather`.
+- The update drops and recreates `warren.gather` (it gains
+  `include_self`; grants on it are kept). A view or a `BEGIN ATOMIC` SQL
+  function that calls `warren.gather` depends on it and makes `ALTER
+  EXTENSION pg_warren UPDATE` fail: drop it before the update and create
+  it again after. Functions with a string body (PL/pgSQL, or SQL written
+  as `AS $$ … $$`) do not depend on it and need nothing.
+- Until the update, `warren.gather` keeps its 0.4.0 definition, which
+  calls the new library without `include_self`; such a call behaves as
+  `include_self := false`, as in 0.4.0.
+
 ### Added
 
 - `warren.shared_cache()` (`PARALLEL SAFE`): what the shared cache
@@ -26,9 +42,10 @@
 ### Changed
 
 - `label_propagation_majority` counts its votes in-engine, with one
-  `gather` (`mode`, `include_self`) per iteration instead of counting every
-  received label in the executor: at 1M nodes and 20M stored edges an iteration takes ~3 s, against ~37 s before on the same machine. Its results are
-  unchanged.
+  `gather` (`mode`, `include_self`) per iteration instead of counting
+  every received label in the executor: at 1M nodes and 20M stored edges
+  an iteration takes ~3 s, against ~37 s before on the same machine. Its
+  results are unchanged.
 
 ### Fixed
 
