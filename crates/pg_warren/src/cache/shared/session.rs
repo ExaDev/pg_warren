@@ -21,8 +21,8 @@ use super::slot::{Handle, Key, Process, State, Ticket};
 #[derive(Debug)]
 pub(crate) struct Session<M> {
     process: Process,
-    /// The slots the current statement pins.
-    pins: Vec<Ticket>,
+    /// The slots the current statement pins, with their keys.
+    pins: Vec<(Ticket, Key)>,
     /// The regions this backend maps.
     mappings: Vec<(Ticket, Arc<M>)>,
     /// The slots this backend claimed and is loading.
@@ -39,12 +39,28 @@ pub(crate) enum Use<M> {
     Attach(Handle),
 }
 
+/// A mapping of a slot the registry no longer has ready: the caller
+/// detaches it.
+#[derive(Debug)]
+pub(crate) struct Unattached<M>(pub(crate) Arc<M>);
+
+/// A backend's mapping of a published region.
+pub(crate) trait Mapped {
+    /// Whether a call holds what was read through it apart from its `Arc`
+    /// (a loaded version built over it, which the mapping keeps): such a
+    /// mapping is held, and never released.
+    fn in_use(&self) -> bool;
+}
+
 /// Which mappings to release. Neither releases a mapping a call holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Release {
     /// Those of slots evicted (draining) since they were mapped.
     Evicted,
     /// Every one.
+    // DESIGN.md §14 item 28's other answer, pending the owner: `dsm::DETACH`
+    // switches to it in one line.
+    #[cfg_attr(not(test), allow(dead_code))]
     Unheld,
 }
 
@@ -55,6 +71,7 @@ impl<M> Session<M> {
     }
 
     /// The backend's process.
+    #[cfg(test)]
     pub(crate) fn process(&self) -> Process {
         self.process
     }
@@ -69,9 +86,9 @@ impl<M> Session<M> {
         if registry.state(ticket) != Some(State::Ready) {
             return Err(Gone);
         }
-        if !self.pins.contains(&ticket) {
+        if !self.pins.iter().any(|(pinned, _)| *pinned == ticket) {
             registry.pin(ticket)?;
-            self.pins.push(ticket);
+            self.pins.push((ticket, registry.slots()[ticket.slot].key));
         }
         match self.mappings.iter().find(|(mapped, _)| *mapped == ticket) {
             Some((_, mapping)) => Ok(Use::Mapped(Arc::clone(mapping))),
@@ -80,16 +97,19 @@ impl<M> Session<M> {
     }
 
     /// Records the mapping of a slot `open` said to attach, counting this
-    /// backend a mapper. The statement's pin keeps the slot ready, so it is
-    /// `Gone` only if the slot was not opened: then detach the mapping.
+    /// backend a mapper. The statement's pin keeps the slot ready, so the
+    /// registry refuses it only if the slot was not opened: then the
+    /// mapping comes back, to detach.
     pub(crate) fn mapped<S: SlotTable, P: PinTable>(
         &mut self,
         registry: &mut Registry<S, P>,
         ticket: Ticket,
         mapping: Arc<M>,
-    ) -> Result<Arc<M>, Gone> {
-        registry.attach(ticket)?;
-        Ok(self.held(ticket, mapping))
+    ) -> Result<Arc<M>, Unattached<M>> {
+        match registry.attach(ticket) {
+            Ok(()) => Ok(self.held(ticket, mapping)),
+            Err(Gone) => Err(Unattached(mapping)),
+        }
     }
 
     /// Records a mapping the registry already counts.
@@ -124,7 +144,7 @@ impl<M> Session<M> {
     ) -> Result<Arc<M>, Gone> {
         self.loading.retain(|&loading| loading != ticket);
         registry.publish(ticket, handle)?;
-        self.pins.push(ticket);
+        self.pins.push((ticket, registry.slots()[ticket.slot].key));
         Ok(self.held(ticket, mapping))
     }
 
@@ -140,29 +160,34 @@ impl<M> Session<M> {
 
     /// Ends the current statement's pins, without the registry's lock.
     pub(crate) fn unpin(&mut self, pins: &[AtomicU32]) {
-        for ticket in self.pins.drain(..) {
+        for (ticket, _) in self.pins.drain(..) {
             unpin(pins, ticket);
         }
     }
 
-    /// Releases the mappings `which` selects that no call holds, passing
-    /// each to `detach` before the registry counts it gone.
+    /// Releases the mappings `which` selects that no call holds, through
+    /// their `Arc` or what was read through them, one at a time (see
+    /// `release_one`).
     pub(crate) fn release<S: SlotTable, P: PinTable>(
         &mut self,
         registry: &mut Registry<S, P>,
         which: Release,
-        detach: impl FnMut(Arc<M>),
-    ) {
-        let (released, kept) =
-            std::mem::take(&mut self.mappings).into_iter().partition(|(ticket, mapping)| {
-                let selected = match which {
-                    Release::Evicted => registry.state(*ticket) != Some(State::Ready),
-                    Release::Unheld => true,
-                };
-                selected && Arc::strong_count(mapping) == 1
-            });
-        self.mappings = kept;
-        Self::detach_all(registry, released, detach);
+        mut detach: impl FnMut(Arc<M>),
+    ) where
+        M: Mapped,
+    {
+        let mut index = 0;
+        while let Some((ticket, mapping)) = self.mappings.get(index) {
+            let selected = match which {
+                Release::Evicted => registry.state(*ticket) != Some(State::Ready),
+                Release::Unheld => true,
+            };
+            if selected && Arc::strong_count(mapping) == 1 && !mapping.in_use() {
+                self.release_one(registry, index, &mut detach);
+            } else {
+                index += 1;
+            }
+        }
     }
 
     /// Gives back everything the backend holds as it exits: its pins, its
@@ -170,30 +195,51 @@ impl<M> Session<M> {
     pub(crate) fn exit<S: SlotTable, P: PinTable>(
         &mut self,
         registry: &mut Registry<S, P>,
-        detach: impl FnMut(Arc<M>),
+        mut detach: impl FnMut(Arc<M>),
     ) {
         self.unpin(registry.pin_table());
         self.abort(registry);
-        Self::detach_all(registry, std::mem::take(&mut self.mappings), detach);
+        while !self.mappings.is_empty() {
+            self.release_one(registry, 0, &mut detach);
+        }
     }
 
-    /// Detaches each of `mappings`, then counts it gone in the registry.
-    fn detach_all<S: SlotTable, P: PinTable>(
+    /// Releases the mapping at `index`: the registry counts it gone, then
+    /// `detach` detaches it. One at a time, so that an ERROR in a detach
+    /// leaves every other mapping both held here and counted there; the
+    /// one it interrupts is counted gone already (a mapper counted forever
+    /// would keep its slot draining), and at worst stays mapped until the
+    /// backend exits.
+    fn release_one<S: SlotTable, P: PinTable>(
+        &mut self,
         registry: &mut Registry<S, P>,
-        mappings: Vec<(Ticket, Arc<M>)>,
-        mut detach: impl FnMut(Arc<M>),
+        index: usize,
+        detach: &mut impl FnMut(Arc<M>),
     ) {
-        for (ticket, mapping) in mappings {
-            detach(mapping);
-            registry.release(ticket);
-        }
+        let (ticket, mapping) = self.mappings.swap_remove(index);
+        registry.release(ticket);
+        detach(mapping);
     }
 }
 
 impl<M> Session<M> {
     /// The slots the current statement pins.
-    pub(crate) fn pinned(&self) -> &[Ticket] {
-        &self.pins
+    #[cfg(test)]
+    pub(crate) fn pinned(&self) -> Vec<Ticket> {
+        self.pins.iter().map(|(ticket, _)| *ticket).collect()
+    }
+
+    /// This backend's mapping of `key`'s version, if the current statement
+    /// pins it: its pin keeps the slot ready, so it is read again without
+    /// the registry.
+    pub(crate) fn pinned_mapping(&self, key: Key) -> Option<&Arc<M>> {
+        let (ticket, _) = self.pins.iter().find(|(_, pinned)| *pinned == key)?;
+        self.mapping(*ticket)
+    }
+
+    /// This backend's mapping of the slot `ticket` names, if it has one.
+    pub(crate) fn mapping(&self, ticket: Ticket) -> Option<&Arc<M>> {
+        self.mappings.iter().find(|(mapped, _)| *mapped == ticket).map(|(_, mapping)| mapping)
     }
 
     /// The slots this backend maps.
@@ -211,11 +257,19 @@ impl<M> Session<M> {
 mod tests {
     use pgrx::pg_sys::Oid;
 
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use super::*;
     use crate::cache::shared::registry::Lookup;
     use crate::cache::shared::slot::Slot;
 
     const PROCESS: Process = Process { pid: 7, started: 1 };
+
+    impl Mapped for u32 {
+        fn in_use(&self) -> bool {
+            false
+        }
+    }
     const OTHER: Process = Process { pid: 1, started: 2 };
 
     fn key(version: i64) -> Key {
@@ -326,6 +380,40 @@ mod tests {
         assert_eq!(detached, [2, 1]);
     }
 
+    /// A mapping that calls may hold apart from its `Arc`.
+    #[derive(Debug)]
+    struct Reading(AtomicBool);
+
+    impl Mapped for Reading {
+        fn in_use(&self) -> bool {
+            self.0.load(Ordering::Relaxed)
+        }
+    }
+
+    #[test]
+    fn a_mapping_in_use_apart_from_its_arc_is_not_released() {
+        let (mut registry, tickets) = published(&[1]);
+        let mut session = Session::new(PROCESS);
+        let Ok(Use::Attach(_)) = session.open(&mut registry, tickets[0]) else {
+            panic!("not attached");
+        };
+        let reading = Arc::new(Reading(AtomicBool::new(true)));
+        drop(session.mapped(&mut registry, tickets[0], Arc::clone(&reading)).unwrap());
+        drop(reading);
+        session.unpin(registry.pin_table());
+        session.release(&mut registry, Release::Unheld, |_| panic!("in use"));
+        assert_eq!(counts(&registry, tickets[0]), (0, 2));
+        let Some(Use::Mapped(mapping)) = session.open(&mut registry, tickets[0]).ok() else {
+            panic!("not mapped");
+        };
+        mapping.0.store(false, Ordering::Relaxed);
+        drop(mapping);
+        session.unpin(registry.pin_table());
+        let mut released = 0;
+        session.release(&mut registry, Release::Unheld, |_| released += 1);
+        assert_eq!((released, counts(&registry, tickets[0])), (1, (0, 1)));
+    }
+
     #[test]
     fn evicted_releases_only_mappings_of_draining_slots() {
         let (mut registry, tickets) = published(&[1, 2]);
@@ -341,6 +429,57 @@ mod tests {
         assert_eq!(detached, [2]);
         assert_eq!(registry.state(tickets[1]), None, "its last mapper emptied it");
         assert_eq!(counts(&registry, tickets[0]), (0, 2), "a ready slot stays mapped");
+    }
+
+    #[test]
+    fn an_error_in_a_detach_leaves_the_other_mappings_counted() {
+        let (mut registry, tickets) = published(&[1, 2, 3]);
+        let mut session = Session::new(PROCESS);
+        for &ticket in &tickets {
+            drop(read(&mut session, &mut registry, ticket));
+            registry.release(ticket);
+        }
+        session.unpin(registry.pin_table());
+        registry.evict(|_| true);
+        let mut detaches = 0;
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            session.release(&mut registry, Release::Evicted, |_| {
+                detaches += 1;
+                assert!(detaches < 2, "an ERROR in dsm_detach");
+            });
+        }));
+        assert!(failed.is_err());
+        let mapped: Vec<Ticket> = session.mapped_slots().collect();
+        assert_eq!(mapped.len(), 1, "the mapping not yet released is still held");
+        for &ticket in &tickets {
+            let mappers = registry.slots()[ticket.slot].mappers;
+            assert_eq!(mappers, u32::from(mapped.contains(&ticket)), "{ticket:?}");
+        }
+    }
+
+    #[test]
+    fn a_mapping_the_registry_does_not_count_is_given_back_to_detach() {
+        let (mut registry, tickets) = published(&[1]);
+        let mut session = Session::new(PROCESS);
+        registry.release(tickets[0]);
+        registry.evict(|_| true);
+        let mapping = Arc::new(1);
+        let refused = session.mapped(&mut registry, tickets[0], Arc::clone(&mapping));
+        assert!(matches!(refused, Err(Unattached(given)) if Arc::ptr_eq(&given, &mapping)));
+        assert_eq!(session.mapped_slots().count(), 0);
+    }
+
+    #[test]
+    fn a_version_the_statement_pins_is_read_again_without_the_registry() {
+        let (mut registry, tickets) = published(&[1, 2]);
+        let mut session = Session::new(PROCESS);
+        assert!(session.pinned_mapping(key(1)).is_none(), "not read yet");
+        let mapping = read(&mut session, &mut registry, tickets[0]);
+        let again = session.pinned_mapping(key(1)).expect("pinned and mapped");
+        assert!(Arc::ptr_eq(&mapping, again));
+        assert!(session.pinned_mapping(key(2)).is_none(), "another version");
+        session.unpin(registry.pin_table());
+        assert!(session.pinned_mapping(key(1)).is_none(), "the next statement pins again");
     }
 
     #[test]

@@ -7,8 +7,15 @@
 //! its [`Interrupts`] hook. When the poll says stop, or unwinds (a Postgres
 //! ERROR raised by `check_for_interrupts!`), the caller raises the job's
 //! [`Cancellation`] flag, which worker loops check at least every 64K rows.
+//!
+//! A poll may also never return: a Postgres FATAL exits the process from
+//! inside it, without unwinding, while the job's threads still read the
+//! caller's data (which may be shared memory the exit unmaps). The
+//! adapter's exit callback, which runs inside that poll before Postgres
+//! unmaps anything, calls [`Workers::stop`] to cancel the job and wait
+//! for it.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Duration;
 
@@ -24,6 +31,26 @@ const POLL_INTERVAL: Duration = Duration::from_millis(1);
 #[derive(Debug)]
 pub struct Workers {
     pool: ThreadPool,
+    /// The job running on the pool, if any, for [`Workers::stop`].
+    running: Mutex<Option<Arc<Running>>>,
+}
+
+/// A job on the pool: its cancellation, and whether it has finished.
+#[derive(Debug, Default)]
+struct Running {
+    cancellation: Cancellation,
+    finished: Mutex<bool>,
+    changed: Condvar,
+}
+
+impl Running {
+    fn finished(&self) -> MutexGuard<'_, bool> {
+        self.finished.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn is_finished(&self) -> bool {
+        *self.finished()
+    }
 }
 
 impl Workers {
@@ -37,12 +64,28 @@ impl Workers {
             .thread_name(|index| format!("warren-compute-{index}"))
             .build()
             .map_err(|error| ComputeError::Threads(error.to_string()))?;
-        Ok(Self { pool })
+        Ok(Self { pool, running: Mutex::new(None) })
     }
 
     /// The number of compute threads.
     pub fn threads(&self) -> usize {
         self.pool.current_num_threads()
+    }
+
+    /// Cancels the job running on the pool, if any, and returns once it
+    /// has finished: no thread of the pool then reads what the job was
+    /// given. For a caller that is about to free that data without
+    /// returning to [`Workers::run`] (a process exiting from inside a poll).
+    pub fn stop(&self) {
+        let running = self.running.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        let Some(running) = running else {
+            return;
+        };
+        running.cancellation.cancel();
+        let mut finished = running.finished();
+        while !*finished {
+            finished = running.changed.wait(finished).unwrap_or_else(PoisonError::into_inner);
+        }
     }
 
     /// Runs `job` on the pool. The caller's thread polls `interrupts` until
@@ -54,8 +97,9 @@ impl Workers {
         job: impl FnOnce(&Cancellation) -> Result<R, ComputeError> + Send,
     ) -> Result<R, ComputeError> {
         interrupts.check()?;
-        let cancellation = Cancellation::new();
-        let finished = AtomicBool::new(false);
+        let running = Arc::new(Running::default());
+        let _running = RunningOn::start(&self.running, Arc::clone(&running));
+        let cancellation = &running.cancellation;
         let caller = thread::current();
         let mut result = Err(ComputeError::Cancelled);
         let mut interrupted = false;
@@ -64,14 +108,14 @@ impl Workers {
         // resumes the unwind. That is sound only because nothing between
         // the catch and the resume calls into Postgres: keep it that way.
         self.pool.in_place_scope(|scope| {
-            let raise_on_unwind = RaiseOnDrop(&cancellation);
+            let raise_on_unwind = RaiseOnDrop(cancellation);
             scope.spawn(|_| {
                 // Set on return and on unwind, so a panicking job does not
                 // leave the caller polling until an interrupt.
-                let _finished = Finished { finished: &finished, caller: &caller };
-                result = job(&cancellation);
+                let _finished = Finished { running: &running, caller: &caller };
+                result = job(cancellation);
             });
-            while !finished.load(Ordering::Acquire) {
+            while !running.is_finished() {
                 if interrupts.check().is_err() {
                     interrupted = true;
                     break;
@@ -90,16 +134,37 @@ impl Workers {
     }
 }
 
-/// Marks the job finished and wakes the caller when dropped, including
-/// while unwinding.
+/// Records the job as the pool's running one, and restores the previous
+/// record (none, unless a run is nested) when dropped.
+struct RunningOn<'a> {
+    record: &'a Mutex<Option<Arc<Running>>>,
+    previous: Option<Arc<Running>>,
+}
+
+impl<'a> RunningOn<'a> {
+    fn start(record: &'a Mutex<Option<Arc<Running>>>, running: Arc<Running>) -> Self {
+        let previous = record.lock().unwrap_or_else(PoisonError::into_inner).replace(running);
+        Self { record, previous }
+    }
+}
+
+impl Drop for RunningOn<'_> {
+    fn drop(&mut self) {
+        *self.record.lock().unwrap_or_else(PoisonError::into_inner) = self.previous.take();
+    }
+}
+
+/// Marks the job finished and wakes the caller and any [`Workers::stop`]
+/// when dropped, including while unwinding.
 struct Finished<'a> {
-    finished: &'a AtomicBool,
+    running: &'a Running,
     caller: &'a thread::Thread,
 }
 
 impl Drop for Finished<'_> {
     fn drop(&mut self) {
-        self.finished.store(true, Ordering::Release);
+        *self.running.finished() = true;
+        self.running.changed.notify_all();
         self.caller.unpark();
     }
 }
@@ -122,6 +187,7 @@ mod tests {
     use super::*;
     use crate::interrupts::{Cancelled, Uninterrupted};
     use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Instant;
 
     /// Waits until `cancellation` is raised, giving up after ten seconds.
@@ -223,6 +289,53 @@ mod tests {
             let _ = sender.send(unwound.is_err());
         });
         assert_eq!(receiver.recv_timeout(Duration::from_secs(5)), Ok(true));
+    }
+
+    /// Stops the pool from its `n`th poll, as the backend's exit callback
+    /// does from inside a poll that raises a FATAL (which never returns to
+    /// the caller), and records whether the job had finished by then.
+    struct ExitAfter<'a> {
+        workers: &'a Workers,
+        polls: usize,
+        job_finished: &'a AtomicBool,
+        finished_when_stopped: Option<bool>,
+    }
+
+    impl Interrupts for ExitAfter<'_> {
+        fn check(&mut self) -> Result<(), Cancelled> {
+            self.polls = self.polls.saturating_sub(1);
+            if self.polls == 0 {
+                self.workers.stop();
+                self.finished_when_stopped = Some(self.job_finished.load(Ordering::Acquire));
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn stopping_the_pool_cancels_the_running_job_and_waits_for_it() {
+        let workers = Workers::new(2).unwrap();
+        let job_finished = AtomicBool::new(false);
+        let mut exit = ExitAfter {
+            workers: &workers,
+            polls: 3,
+            job_finished: &job_finished,
+            finished_when_stopped: None,
+        };
+        let _ = workers.run(&mut exit, |cancellation| {
+            assert!(wait_for(cancellation));
+            thread::sleep(Duration::from_millis(50));
+            job_finished.store(true, Ordering::Release);
+            Ok(())
+        });
+        assert_eq!(exit.finished_when_stopped, Some(true));
+    }
+
+    #[test]
+    fn stopping_an_idle_pool_returns_at_once() {
+        let workers = Workers::new(1).unwrap();
+        workers.stop();
+        assert_eq!(workers.run(&mut Uninterrupted, |_| Ok(1)), Ok(1));
     }
 
     /// Passes the first `n - 1` polls, then unwinds.

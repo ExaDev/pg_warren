@@ -30,7 +30,7 @@ use std::collections::HashSet;
 
 use pgrx::{pg_sys, PgMemoryContexts};
 
-use super::trim;
+use super::{shared, trim};
 use crate::catalog::VersionId;
 use crate::vector::VectorId;
 
@@ -52,6 +52,11 @@ struct Statement {
     vectors: HashSet<VectorId>,
     /// Whether the notice that a version does not fit has been raised.
     noticed: bool,
+    /// Whether the notice that the shared cache refused a version has
+    /// been raised.
+    noticed_shared: bool,
+    /// Whether it evicted the shared cache, its cap set to 0.
+    retired_shared: bool,
 }
 
 /// Pins version `version` until the statement or transaction ends.
@@ -83,27 +88,56 @@ pub(super) fn notice_due() -> bool {
     !STATEMENT.with_borrow_mut(|statement| std::mem::replace(&mut statement.noticed, true))
 }
 
-/// Ends the pin: releases what it holds and trims the cache to
-/// `warren.max_cache_memory`.
+/// Notes that the statement reads the shared cache, whose pins end with it
+/// (`shared::end_statement`).
+pub(super) fn pin_shared() {
+    register();
+}
+
+/// Whether the notice that the shared cache refused a version for a
+/// reason of configuration is due: once per pin.
+pub(super) fn shared_notice_due() -> bool {
+    register();
+    !STATEMENT.with_borrow_mut(|statement| std::mem::replace(&mut statement.noticed_shared, true))
+}
+
+/// Whether evicting the shared cache, its cap set to 0, is due: once per
+/// pin.
+pub(super) fn retire_due() -> bool {
+    register();
+    !STATEMENT.with_borrow_mut(|statement| std::mem::replace(&mut statement.retired_shared, true))
+}
+
+/// Ends the pin: releases what it holds, ends the statement's pins of
+/// shared versions, and trims the cache to `warren.max_cache_memory`.
 pub(crate) fn end_statement() {
     STATEMENT.take();
+    shared::end_statement();
     trim();
 }
 
 /// Ends the pin when dropped, by the reset or deletion of the memory
 /// context it was registered on, and clears that context's registration.
 ///
-/// It must never call into Postgres and never panic: at the end of every
-/// transaction that pinned, in any backend, it runs inside
-/// `AtCommit_Memory`, after the commit record is written, where an ERROR is
-/// promoted to PANIC. `end_statement` and `trim` are pure
-/// Rust over this backend's own maps.
+/// At a transaction's end it must never call into Postgres and never
+/// panic: at the end of every transaction that pinned, in any backend, it
+/// runs inside `AtCommit_Memory`, after the commit record is written, where
+/// an ERROR is promoted to PANIC. `end_statement` and `trim` are pure Rust
+/// over this backend's own maps and the shared cache's pins. Only at a
+/// message's end does it also release mappings, which takes the shared
+/// cache's lock.
 struct StatementEnd(&'static std::thread::LocalKey<Cell<bool>>);
 
 impl Drop for StatementEnd {
     fn drop(&mut self) {
         self.0.set(false);
         end_statement();
+        if std::ptr::eq(self.0, &MESSAGE_END) {
+            // The message's end, between messages and outside the commit
+            // path (DESIGN.md §5.6), where taking the registry's lock and
+            // detaching segments is allowed.
+            shared::end_message();
+        }
     }
 }
 

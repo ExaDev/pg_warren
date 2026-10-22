@@ -28,11 +28,13 @@ mod traversal_sql;
 mod vector;
 mod version_sql;
 
-/// Library initialisation: registers the GUCs.
+/// Library initialisation: registers the GUCs and, when preloaded on
+/// PG 15 and 16, the hooks that place the shared cache's registry.
 #[pgrx::pg_guard]
 pub extern "C-unwind" fn _PG_init() {
     build::define_max_build_memory();
     cache::define_memory_settings();
+    cache::define_shared_cache();
     traversal_sql::define_max_walk_paths();
     compute_sql::define_compute_settings();
 }
@@ -42,8 +44,11 @@ pub extern "C-unwind" fn _PG_init() {
 pub mod pg_test {
     pub fn setup(_options: Vec<&str>) {}
 
+    /// The preload places the shared cache's registry on PG 15 and 16
+    /// (DESIGN.md §5.6); `warren.shared_cache_memory` stays 0, so only the
+    /// shared cache's own tests use it.
     #[must_use]
     pub fn postgresql_conf_options() -> Vec<&'static str> {
-        vec![]
+        vec!["shared_preload_libraries = 'pg_warren'"]
     }
 }

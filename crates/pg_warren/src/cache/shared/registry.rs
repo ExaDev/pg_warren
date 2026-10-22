@@ -8,21 +8,23 @@
 //! read unpinned stays unpinned until the lock is released.
 //!
 //! ```text
-//!            claim            publish
-//!   empty ---------> loading ---------> ready --evict--> draining
-//!     ^                 |                 |                 |
+//!            claim            publish            evict
+//!   empty ---------> loading ---------> ready ---------> draining
+//!     ^                 |                 |  <--revive--    |
 //!     +---- abandon ----+                 |                 |
 //!     +------ evict (no mapper) ----------+                 |
 //!     +---------------- release (last mapper) --------------+
 //! ```
 //!
 //! An evicted region is only unpinned: its memory is freed when its last
-//! mapper detaches. Every transition after a claim names the claim's
+//! mapper detaches. Until then a lookup of its key finds it, and the
+//! reader revives it (pinning its region again) rather than load the
+//! version anew beside it, which could only drain another version. Every transition after a claim names the claim's
 //! `Ticket`, so one on a slot since emptied and claimed again does nothing.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use super::admission::{admit, Limits, Refusal};
+use super::admission::{admit, to_drain, Limits, Refusal};
 use super::slot::{Handle, Key, Process, Slot, State, Ticket};
 
 /// A table of slots: a `Vec` in the `Memory` fake, an array in shared
@@ -41,12 +43,33 @@ impl<T: AsRef<[AtomicU32]>> PinTable for T {}
 /// The slot table, its pins and its clocks.
 #[derive(Debug)]
 pub(crate) struct Registry<S, P> {
+    clocks: Clocks,
+    slots: S,
+    pins: P,
+}
+
+/// A registry's clocks, kept in shared memory beside its slots by the
+/// `Dsm` adapter, which resumes a registry over them under its lock.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Clocks {
     /// The logical clock that orders uses for eviction.
     clock: u64,
     /// The last claim's generation.
     generation: u64,
-    slots: S,
-    pins: P,
+    /// How many slots have started draining: a backend that maps nothing
+    /// evicted since it last looked need not take the lock to release.
+    drains: u64,
+}
+
+impl Clocks {
+    /// The clocks of a new registry.
+    pub(crate) const NEW: Self = Self { clock: 0, generation: 0, drains: 0 };
+
+    /// How many slots have started draining.
+    pub(crate) fn drains(self) -> u64 {
+        self.drains
+    }
 }
 
 /// What the registry holds for a key.
@@ -56,6 +79,9 @@ pub(crate) enum Lookup {
     Ready(Ticket),
     /// Being loaded: wait for it.
     Loading(Ticket),
+    /// Evicted but still mapped: pin its region again, revive it, then
+    /// read it as a ready one.
+    Draining(Ticket),
     /// Neither: claim it.
     Missing,
 }
@@ -68,8 +94,9 @@ pub(crate) enum Claim {
     Load { ticket: Ticket, evicted: Vec<Handle> },
     /// Another backend has claimed it since the lookup: look again.
     Taken,
-    /// Load it privately.
-    Refused(Refusal),
+    /// Load it privately. `drained` are the mapped regions drained so that
+    /// room appears once their mappers release them, to unpin.
+    Refused { refusal: Refusal, drained: Vec<Handle> },
 }
 
 /// The slot no longer holds the use a ticket names.
@@ -88,8 +115,19 @@ pub(crate) fn unpin(pins: &[AtomicU32], ticket: Ticket) {
 
 impl<S: SlotTable, P: PinTable> Registry<S, P> {
     /// A registry over `slots`, all empty, and their `pins`, all 0.
+    #[cfg(test)]
     pub(crate) fn new(slots: S, pins: P) -> Self {
-        Self { clock: 0, generation: 0, slots, pins }
+        Self::resume(Clocks::NEW, slots, pins)
+    }
+
+    /// The registry whose state is `clocks`, `slots` and `pins`.
+    pub(crate) fn resume(clocks: Clocks, slots: S, pins: P) -> Self {
+        Self { clocks, slots, pins }
+    }
+
+    /// Its clocks now, to keep for `resume`.
+    pub(crate) fn clocks(&self) -> Clocks {
+        self.clocks
     }
 
     /// Its slots.
@@ -107,37 +145,54 @@ impl<S: SlotTable, P: PinTable> Registry<S, P> {
         self.pin_table().iter().map(|count| count.load(Ordering::Acquire)).collect()
     }
 
-    /// What it holds for `key`.
+    /// What it holds for `key`: its loading or ready slot, or else its
+    /// most recently claimed draining one.
     pub(crate) fn lookup(&self, key: Key) -> Lookup {
-        let found = self.slots().iter().enumerate().find(|(_, slot)| {
-            slot.key == key && matches!(slot.state, State::Loading | State::Ready)
-        });
-        match found {
-            Some((index, slot)) => {
-                let ticket = Ticket { slot: index, generation: slot.generation };
-                if slot.state == State::Ready {
-                    Lookup::Ready(ticket)
-                } else {
-                    Lookup::Loading(ticket)
+        let ticket =
+            |index: usize, slot: &Slot| Ticket { slot: index, generation: slot.generation };
+        let mut draining: Option<Ticket> = None;
+        for (index, slot) in self.slots().iter().enumerate().filter(|(_, slot)| slot.key == key) {
+            match slot.state {
+                State::Ready => return Lookup::Ready(ticket(index, slot)),
+                State::Loading => return Lookup::Loading(ticket(index, slot)),
+                State::Draining if draining.is_none_or(|d| d.generation < slot.generation) => {
+                    draining = Some(ticket(index, slot));
                 }
+                _ => {}
             }
-            None => Lookup::Missing,
         }
+        draining.map_or(Lookup::Missing, Lookup::Draining)
+    }
+
+    /// Makes a draining slot ready again, once its reader has pinned its
+    /// region again (it is still mapped, so still whole).
+    pub(crate) fn revive(&mut self, ticket: Ticket) -> Result<(), Gone> {
+        let tick = self.tick();
+        let slot = self.held(ticket, State::Draining).ok_or(Gone)?;
+        slot.state = State::Ready;
+        slot.last_used = tick;
+        Ok(())
     }
 
     /// Claims a slot for `loader` to load `key`'s version of `bytes` into,
-    /// evicting what admission chooses; nothing changes if it is refused.
+    /// evicting what admission chooses. If it is refused, only the mapped
+    /// versions `admission::to_drain` chooses are evicted, to drain.
     pub(crate) fn claim(&mut self, key: Key, bytes: u64, loader: Process, limits: Limits) -> Claim {
         if self.lookup(key) != Lookup::Missing {
             return Claim::Taken;
         }
-        let plan = match admit(self.slots(), &self.pins(), bytes, limits) {
+        let pins = self.pins();
+        let plan = match admit(self.slots(), &pins, bytes, limits) {
             Ok(plan) => plan,
-            Err(refusal) => return Claim::Refused(refusal),
+            Err(refusal) => {
+                let chosen = to_drain(self.slots(), &pins, bytes, refusal, limits.cap);
+                let drained = chosen.into_iter().map(|index| self.retire(index)).collect();
+                return Claim::Refused { refusal, drained };
+            }
         };
         let evicted = plan.evict.into_iter().map(|index| self.retire(index)).collect();
-        self.generation += 1;
-        let generation = self.generation;
+        self.clocks.generation += 1;
+        let generation = self.clocks.generation;
         self.slots.as_mut()[plan.slot] =
             Slot { state: State::Loading, key, bytes, loader, generation, ..Slot::EMPTY };
         Claim::Load { ticket: Ticket { slot: plan.slot, generation }, evicted }
@@ -229,7 +284,11 @@ impl<S: SlotTable, P: PinTable> Registry<S, P> {
     fn retire(&mut self, index: usize) -> Handle {
         let slot = &mut self.slots.as_mut()[index];
         slot.state = if slot.mappers == 0 { State::Empty } else { State::Draining };
-        slot.handle
+        let handle = slot.handle;
+        if slot.state == State::Draining {
+            self.clocks.drains += 1;
+        }
+        handle
     }
 
     /// The slot holding the use `ticket` names, if it does.
@@ -245,8 +304,8 @@ impl<S: SlotTable, P: PinTable> Registry<S, P> {
 
     /// The next tick of the clock.
     fn tick(&mut self) -> u64 {
-        self.clock += 1;
-        self.clock
+        self.clocks.clock += 1;
+        self.clocks.clock
     }
 }
 
@@ -305,6 +364,21 @@ mod tests {
         );
         assert_eq!(registry.state(ticket), Some(State::Loading));
         assert_eq!(registry.slots()[ticket.slot].bytes, 10);
+    }
+
+    #[test]
+    fn a_registry_resumed_from_its_clocks_continues_them() {
+        let mut first = registry(2);
+        let ticket = loaded(&mut first, 1, 10);
+        let (clocks, slots) = (first.clocks(), first.slots().to_vec());
+        let used = slots[ticket.slot].last_used;
+        let pins: Vec<AtomicU32> = first.pins().into_iter().map(AtomicU32::new).collect();
+        let mut resumed = Registry::resume(clocks, slots, pins);
+        assert_eq!(resumed.lookup(key(1)), Lookup::Ready(ticket));
+        let again = claimed(&mut resumed, 2, 10);
+        assert_eq!(again.generation, ticket.generation + 1);
+        resumed.pin(ticket).unwrap();
+        assert!(resumed.slots()[ticket.slot].last_used > used, "its clock goes on");
     }
 
     #[test]
@@ -380,13 +454,28 @@ mod tests {
         assert_eq!(registry.state(pinned), Some(State::Ready));
         assert_eq!(registry.state(mapped), Some(State::Draining));
         assert_eq!(registry.state(unmapped), None, "nobody maps it: empty at once");
-        assert_eq!(registry.lookup(key(2)), Lookup::Missing, "a draining version is not found");
+        assert_eq!(registry.lookup(key(2)), Lookup::Draining(mapped), "found, to revive");
         assert_eq!(registry.pin(mapped), Err(Gone));
         assert_eq!(registry.handle(mapped), Err(Gone));
         assert_eq!(registry.attach(mapped), Err(Gone));
         assert_eq!(registry.evict(|_| true), vec![], "evicted once");
         registry.release(mapped);
         assert_eq!(registry.state(mapped), None, "its last mapper empties it");
+    }
+
+    #[test]
+    fn the_drain_count_counts_slots_that_start_draining() {
+        let mut registry = registry(3);
+        let mapped = loaded(&mut registry, 1, 10);
+        let unmapped = loaded(&mut registry, 2, 10);
+        registry.release(unmapped);
+        assert_eq!(registry.clocks().drains(), 0);
+        registry.evict(|key| key.version == 2);
+        assert_eq!(registry.clocks().drains(), 0, "emptied at once, not drained");
+        registry.evict(|key| key.version == 1);
+        assert_eq!(registry.clocks().drains(), 1);
+        registry.release(mapped);
+        assert_eq!(registry.clocks().drains(), 1, "its end is not counted");
     }
 
     #[test]
@@ -432,23 +521,54 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_claim_changes_nothing() {
+    fn a_claim_refused_for_room_drains_mapped_versions_for_the_next() {
+        let mut registry = registry(3);
+        let older = loaded(&mut registry, 1, 40);
+        let newer = loaded(&mut registry, 2, 40);
+        assert_eq!(
+            registry.claim(key(3), 40, LOADER, limits(100)),
+            Claim::Refused { refusal: Refusal::NoRoom, drained: vec![Handle(1)] }
+        );
+        assert_eq!(registry.state(older), Some(State::Draining));
+        assert_eq!(registry.state(newer), Some(State::Ready));
+        registry.release(older);
+        assert!(
+            matches!(registry.claim(key(3), 40, LOADER, limits(100)), Claim::Load { .. }),
+            "admitted once the drained version's mapper releases it"
+        );
+    }
+
+    #[test]
+    fn a_draining_version_found_again_is_revived() {
+        let mut registry = registry(3);
+        let older = loaded(&mut registry, 1, 40);
+        let newer = loaded(&mut registry, 2, 40);
+        let refused = registry.claim(key(3), 40, LOADER, limits(100));
+        assert!(matches!(refused, Claim::Refused { refusal: Refusal::NoRoom, .. }));
+        assert_eq!(registry.lookup(key(1)), Lookup::Draining(older));
+        assert_eq!(
+            registry.claim(key(1), 40, LOADER, limits(100)),
+            Claim::Taken,
+            "a claim finds it too, and looks again"
+        );
+        assert_eq!(registry.revive(older), Ok(()));
+        assert_eq!(registry.lookup(key(1)), Lookup::Ready(older));
+        assert_eq!(registry.state(newer), Some(State::Ready), "nothing else drained");
+        assert_eq!(registry.revive(older), Err(Gone), "only a draining slot revives");
+        registry.release(older);
+        assert_eq!(registry.state(older), Some(State::Ready), "ready with no mapper");
+    }
+
+    #[test]
+    fn a_refused_claim_that_cannot_drain_changes_nothing() {
         let mut registry = registry(2);
         let held = loaded(&mut registry, 1, 60);
         let before = registry.slots().to_vec();
-        assert_eq!(
-            registry.claim(key(2), 50, LOADER, limits(0)),
-            Claim::Refused(Refusal::Disabled)
-        );
-        assert_eq!(
-            registry.claim(key(2), 101, LOADER, limits(100)),
-            Claim::Refused(Refusal::TooLarge)
-        );
+        let refused = |refusal| Claim::Refused { refusal, drained: vec![] };
+        assert_eq!(registry.claim(key(2), 50, LOADER, limits(0)), refused(Refusal::Disabled));
+        assert_eq!(registry.claim(key(2), 101, LOADER, limits(100)), refused(Refusal::TooLarge));
         registry.pin(held).unwrap();
-        assert_eq!(
-            registry.claim(key(2), 50, LOADER, limits(100)),
-            Claim::Refused(Refusal::NoRoom)
-        );
+        assert_eq!(registry.claim(key(2), 50, LOADER, limits(100)), refused(Refusal::NoRoom));
         unpin(registry.pin_table(), held);
         assert_eq!(registry.pins()[0], 0);
         assert_eq!(registry.slots()[0].state, before[0].state);

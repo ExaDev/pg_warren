@@ -9,12 +9,12 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
 use super::admission::Limits;
 use super::registry::{Claim, Gone, Lookup, Registry};
-use super::session::{Release, Session, Use};
+use super::session::{Mapped, Release, Session, Unattached, Use};
 use super::slot::{Handle, Key, Process, Slot, Started, State, Ticket};
 use super::{Claimed, Found, SharedVersions};
 
@@ -40,6 +40,9 @@ struct Store {
     /// The published regions the registry pins, by handle: the
     /// segment's pin, apart from every backend's mapping.
     pinned: HashMap<Handle, Arc<Region>>,
+    /// The regions evicted while mapped, alive until their last mapping
+    /// drops, by handle: a reader revives one by pinning it again.
+    unpinned: HashMap<Handle, Weak<Region>>,
     last_handle: u32,
     cap: u64,
     /// Where regions are created: how many bytes it holds.
@@ -91,6 +94,13 @@ impl Mapping {
     }
 }
 
+impl Mapped for Mapping {
+    /// Calls hold a `Memory` mapping only through its `Arc`.
+    fn in_use(&self) -> bool {
+        false
+    }
+}
+
 /// A region claimed to load a version into.
 #[derive(Debug)]
 pub(crate) struct Loading {
@@ -120,6 +130,7 @@ impl Memory {
         let store = Store {
             registry: Registry::new(vec![Slot::EMPTY; slots], Arc::clone(&pins)),
             pinned: HashMap::new(),
+            unpinned: HashMap::new(),
             last_handle: 0,
             cap,
             capacity,
@@ -164,6 +175,23 @@ impl Cluster {
 }
 
 impl Store {
+    /// Unpins an evicted region: it lives while a mapping holds it.
+    fn unpin(&mut self, handle: Handle) {
+        if let Some(region) = self.pinned.remove(&handle) {
+            self.unpinned.insert(handle, Arc::downgrade(&region));
+        }
+    }
+
+    /// Pins a draining slot's region again and revives the slot.
+    fn revive(&mut self, ticket: Ticket) -> Result<(), Gone> {
+        let handle = self.registry.slots()[ticket.slot].handle;
+        let region = self.unpinned.remove(&handle).and_then(|region| region.upgrade());
+        let region = region.expect("a draining region is mapped, so alive");
+        self.registry.revive(ticket)?;
+        self.pinned.insert(handle, region);
+        Ok(())
+    }
+
     fn limits(&self) -> Limits {
         let allocated = self.allocated.load(Ordering::SeqCst);
         Limits { cap: self.cap, store_room: self.capacity.saturating_sub(allocated) }
@@ -202,6 +230,10 @@ impl SharedVersions for Backend {
         let mut store = self.cluster.lock();
         let ticket = match store.registry.lookup(key) {
             Lookup::Ready(ticket) => ticket,
+            Lookup::Draining(ticket) => match store.revive(ticket) {
+                Ok(()) => ticket,
+                Err(Gone) => return Found::Missing,
+            },
             Lookup::Loading(ticket) => return Found::Loading(ticket),
             Lookup::Missing => return Found::Missing,
         };
@@ -211,7 +243,8 @@ impl SharedVersions for Backend {
                 let mapping = Mapping::of(&store.pinned[&handle]);
                 match self.session.mapped(&mut store.registry, ticket, mapping) {
                     Ok(view) => Found::Ready(view),
-                    Err(Gone) => Found::Missing,
+                    // Its region is freed with its last `Arc`.
+                    Err(Unattached(_)) => Found::Missing,
                 }
             }
             Err(Gone) => Found::Missing,
@@ -224,7 +257,7 @@ impl SharedVersions for Backend {
         match self.session.claim(&mut store.registry, key, bytes, limits) {
             Claim::Load { ticket, evicted } => {
                 for handle in evicted {
-                    store.pinned.remove(&handle);
+                    store.unpin(handle);
                 }
                 store.allocated.fetch_add(bytes, Ordering::SeqCst);
                 let allocated = Arc::clone(&store.allocated);
@@ -232,7 +265,12 @@ impl SharedVersions for Backend {
                 Claimed::Load(Loading { ticket, region })
             }
             Claim::Taken => Claimed::Taken,
-            Claim::Refused(refusal) => Claimed::Refused(refusal),
+            Claim::Refused { refusal, drained } => {
+                for handle in drained {
+                    store.unpin(handle);
+                }
+                Claimed::Refused(refusal)
+            }
         }
     }
 
@@ -283,8 +321,8 @@ impl SharedVersions for Backend {
     fn evict(&mut self, which: &dyn Fn(&Key) -> bool) -> usize {
         let mut store = self.cluster.lock();
         let evicted = store.registry.evict(which);
-        for handle in &evicted {
-            store.pinned.remove(handle);
+        for &handle in &evicted {
+            store.unpin(handle);
         }
         evicted.len()
     }
@@ -391,5 +429,29 @@ mod tests {
         second.release(Release::Evicted);
         assert!(memory.slots().iter().all(|slot| slot.state == State::Empty));
         assert_eq!(memory.allocated(), 0, "its region is freed");
+    }
+
+    #[test]
+    fn a_draining_version_read_again_is_revived_not_reloaded() {
+        // A cap of two versions: a third refused drains the older, which
+        // its next reader revives instead of draining the newer to load it.
+        let memory = Memory::new(3, 25, u64::MAX, Duration::ZERO);
+        let (mut first, mut second) = (memory.backend(), memory.backend());
+        drop(published(&mut first, 1));
+        drop(published(&mut first, 2));
+        first.unpin();
+        assert!(matches!(second.claim(key(3), 10), Claimed::Refused(_)));
+        assert_eq!(memory.slots()[0].state, State::Draining);
+        let Found::Ready(view) = second.lookup(key(1)) else {
+            panic!("not revived");
+        };
+        assert_eq!(view.bytes().len(), 10);
+        let states: Vec<State> = memory.slots().iter().map(|slot| slot.state).collect();
+        assert_eq!(states, [State::Ready, State::Ready, State::Empty]);
+        assert_eq!(memory.allocated(), 20, "nothing reloaded");
+        drop(view);
+        second.unpin();
+        first.release(Release::Evicted);
+        assert_eq!(memory.slots()[0].mappers, 2, "a ready version stays mapped");
     }
 }

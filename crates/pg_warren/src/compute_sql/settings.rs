@@ -6,12 +6,20 @@
 //! The pool is built once per backend and rebuilt when `warren.threads`
 //! changes. Its threads block every signal: Postgres's handlers must run
 //! on the main thread, which is the only one that may touch backend state.
+//!
+//! A FATAL raised while a kernel runs (`pg_terminate_backend`) exits the
+//! process from the main thread's poll without unwinding, so nothing waits
+//! for the pool's threads, which may still read a shared version's
+//! segment: Postgres unmaps every segment as it exits, and a thread
+//! reading one would crash the backend and restart the cluster. So the
+//! first pool registers a `before_shmem_exit` callback, which runs before
+//! that, and stops every pool of the backend still in use (DESIGN.md §6.9).
 
 use std::cell::RefCell;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::thread::available_parallelism;
 
-use pgrx::{GucContext, GucFlags, GucRegistry, GucSetting};
+use pgrx::{pg_sys, GucContext, GucFlags, GucRegistry, GucSetting};
 use warren_core::compute::{ComputeError, Workers};
 
 /// The most compute threads a backend may run.
@@ -48,6 +56,10 @@ pub(crate) fn define_compute_settings() {
 thread_local! {
     /// The backend's compute pool, if built.
     static WORKERS: RefCell<Option<Rc<Workers>>> = const { RefCell::new(None) };
+    /// Every pool the backend has built, for the exit callback: a pool
+    /// replaced after a change of `warren.threads` may still run a job for
+    /// a caller holding it.
+    static BUILT: RefCell<Vec<Weak<Workers>>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The compute pool of `warren.threads` threads, built (or rebuilt) on
@@ -59,7 +71,28 @@ pub(crate) fn workers() -> Result<Rc<Workers>, ComputeError> {
     }
     let workers = Rc::new(with_signals_blocked(|| Workers::new(threads))?);
     WORKERS.set(Some(Rc::clone(&workers)));
+    BUILT.with_borrow_mut(|built| {
+        if built.is_empty() {
+            // SAFETY: on the main thread, once per backend (no pool was
+            // built before); the callback is a function of the library.
+            unsafe { pg_sys::before_shmem_exit(Some(stop_at_exit), pg_sys::Datum::from(0)) };
+        }
+        built.retain(|pool| pool.strong_count() > 0);
+        built.push(Rc::downgrade(&workers));
+    });
     Ok(workers)
+}
+
+/// As the backend exits, cancels the kernel its pools run, if any, and
+/// waits for their threads. Pure Rust, as an exit callback must be.
+#[pgrx::pg_guard]
+unsafe extern "C-unwind" fn stop_at_exit(_code: i32, _arg: pg_sys::Datum) {
+    let Ok(built) = BUILT.try_with(|built| built.try_borrow().map(|b| b.clone())) else {
+        return;
+    };
+    for pool in built.into_iter().flatten().filter_map(|pool| pool.upgrade()) {
+        pool.stop();
+    }
 }
 
 /// Runs `f` with every signal blocked on this thread, so threads it starts

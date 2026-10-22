@@ -13,7 +13,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from harness import extension, runner
+from harness import extension, runner, shared_cache
 from harness.cluster import Cluster
 from harness.installer import Installer
 from harness.sql_test import SqlTest
@@ -30,6 +30,9 @@ def main(argv):
     options.add_argument("--keep", action="store_true", help="keep the cluster directory for inspection")
     options.add_argument("--trusted", action="store_true",
                          help="install pg_warren as a non-superuser that owns each test database")
+    options.add_argument("--shared-cache", choices=sorted(shared_cache.MODES), default="off",
+                         help="the cluster's shared cache (DESIGN.md §5.6): off (default); preload "
+                              "(shared_preload_libraries and a cap); on (a cap: shared on PG 17+)")
     args = options.parse_args(argv)
     tests = [SqlTest.load(p) for p in (args.tests or sorted(TESTS.glob("*.sql")))]
     installer = Installer.trusted() if args.trusted else Installer()
@@ -39,7 +42,8 @@ def main(argv):
             extension.install(args.pg_config)
         fixtures = tempfile.mkdtemp(prefix="warren-fixtures-")
         try:
-            with Cluster(args.pg_config, args.runas, args.keep) as cluster:
+            settings = shared_cache.settings(args.shared_cache)
+            with Cluster(args.pg_config, args.runas, args.keep, settings=settings) as cluster:
                 installer.prepare(cluster)
                 outcomes = []
                 for test in tests:

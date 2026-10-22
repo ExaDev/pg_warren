@@ -32,7 +32,7 @@ pub(super) struct Placed {
 }
 
 /// What a version's region holds and where.
-pub(super) struct Plan {
+pub(in crate::cache) struct Plan {
     /// The region's layout.
     pub(super) layout: RegionLayout,
     /// The segments copied into it, in order.
@@ -43,12 +43,19 @@ pub(super) struct Plan {
     pub(super) id_space: u64,
 }
 
+impl Plan {
+    /// The bytes of the region it lays out.
+    pub(in crate::cache) fn len(&self) -> usize {
+        self.layout.len()
+    }
+}
+
 /// The plan of `version`'s region: the id map's pairs and second
 /// direction, the tombstones and relation dictionary, then each
 /// relation's CSRs and the merged CSR's, if stored (it must be where the
 /// graph stores it, `store_merged`, or has no relations), each forward
 /// and, if stored, reverse.
-pub(super) fn plan<E: IdDatum>(
+pub(in crate::cache) fn plan<E: IdDatum>(
     segments: &mut impl SegmentStore,
     version: VersionId,
     store_merged: bool,
