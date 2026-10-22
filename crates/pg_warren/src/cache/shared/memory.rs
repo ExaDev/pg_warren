@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use super::admission::Limits;
 use super::registry::{Claim, Gone, Lookup, Registry};
-use super::session::{Release, Session, Use};
+use super::session::{Mapped, Release, Session, Use};
 use super::slot::{Handle, Key, Process, Slot, Started, State, Ticket};
 use super::{Claimed, Found, SharedVersions};
 
@@ -88,6 +88,13 @@ impl Mapping {
     /// The region's bytes.
     pub(crate) fn bytes(&self) -> &[u8] {
         self.region.bytes()
+    }
+}
+
+impl Mapped for Mapping {
+    /// Calls hold a `Memory` mapping only through its `Arc`.
+    fn in_use(&self) -> bool {
+        false
     }
 }
 

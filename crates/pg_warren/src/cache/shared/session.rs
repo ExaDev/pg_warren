@@ -39,6 +39,14 @@ pub(crate) enum Use<M> {
     Attach(Handle),
 }
 
+/// A backend's mapping of a published region.
+pub(crate) trait Mapped {
+    /// Whether a call holds what was read through it apart from its `Arc`
+    /// (a loaded version built over it, which the mapping keeps): such a
+    /// mapping is held, and never released.
+    fn in_use(&self) -> bool;
+}
+
 /// Which mappings to release. Neither releases a mapping a call holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Release {
@@ -145,21 +153,24 @@ impl<M> Session<M> {
         }
     }
 
-    /// Releases the mappings `which` selects that no call holds, passing
-    /// each to `detach` before the registry counts it gone.
+    /// Releases the mappings `which` selects that no call holds, through
+    /// their `Arc` or what was read through them, passing each to `detach`
+    /// before the registry counts it gone.
     pub(crate) fn release<S: SlotTable, P: PinTable>(
         &mut self,
         registry: &mut Registry<S, P>,
         which: Release,
         detach: impl FnMut(Arc<M>),
-    ) {
+    ) where
+        M: Mapped,
+    {
         let (released, kept) =
             std::mem::take(&mut self.mappings).into_iter().partition(|(ticket, mapping)| {
                 let selected = match which {
                     Release::Evicted => registry.state(*ticket) != Some(State::Ready),
                     Release::Unheld => true,
                 };
-                selected && Arc::strong_count(mapping) == 1
+                selected && Arc::strong_count(mapping) == 1 && !mapping.in_use()
             });
         self.mappings = kept;
         Self::detach_all(registry, released, detach);
@@ -216,6 +227,12 @@ mod tests {
     use crate::cache::shared::slot::Slot;
 
     const PROCESS: Process = Process { pid: 7, started: 1 };
+
+    impl Mapped for u32 {
+        fn in_use(&self) -> bool {
+            false
+        }
+    }
     const OTHER: Process = Process { pid: 1, started: 2 };
 
     fn key(version: i64) -> Key {
@@ -324,6 +341,39 @@ mod tests {
         drop(held);
         session.release(&mut registry, Release::Unheld, |mapping| detached.push(*mapping));
         assert_eq!(detached, [2, 1]);
+    }
+
+    /// A mapping that calls may hold apart from its `Arc`.
+    struct Reading(std::cell::Cell<bool>);
+
+    impl Mapped for Reading {
+        fn in_use(&self) -> bool {
+            self.0.get()
+        }
+    }
+
+    #[test]
+    fn a_mapping_in_use_apart_from_its_arc_is_not_released() {
+        let (mut registry, tickets) = published(&[1]);
+        let mut session = Session::new(PROCESS);
+        let Ok(Use::Attach(_)) = session.open(&mut registry, tickets[0]) else {
+            panic!("not attached");
+        };
+        let reading = Arc::new(Reading(std::cell::Cell::new(true)));
+        drop(session.mapped(&mut registry, tickets[0], Arc::clone(&reading)).unwrap());
+        drop(reading);
+        session.unpin(registry.pin_table());
+        session.release(&mut registry, Release::Unheld, |_| panic!("in use"));
+        assert_eq!(counts(&registry, tickets[0]), (0, 2));
+        let Some(Use::Mapped(mapping)) = session.open(&mut registry, tickets[0]).ok() else {
+            panic!("not mapped");
+        };
+        mapping.0.set(false);
+        drop(mapping);
+        session.unpin(registry.pin_table());
+        let mut released = 0;
+        session.release(&mut registry, Release::Unheld, |_| released += 1);
+        assert_eq!((released, counts(&registry, tickets[0])), (1, (0, 1)));
     }
 
     #[test]
