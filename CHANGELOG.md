@@ -8,8 +8,9 @@
   (`warren.shared_cache_memory`) holds. A row per shared version and
   persisted vector of a graph the caller may read (its state, bytes, pins,
   mappers and last use), then one `cluster` row of totals across every
-  database, with the cap. Other graphs' entries are listed to no one, not
-  even superusers. `ALTER EXTENSION pg_warren UPDATE` creates it.
+  database, with the cap. A role sees only graphs it may read (superusers
+  read all); dropped entries are listed to no one. `ALTER EXTENSION
+  pg_warren UPDATE` creates it.
 - Persisted vectors are shared across backends like versions: loaded once,
   mapped by every backend that reads them, and charged to no call's
   `warren.max_compute_memory`. `bool` vectors and vectors written by the
