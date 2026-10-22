@@ -12,7 +12,7 @@ use pgrx::notice;
 use warren_core::compute::{AnyVector, ComputeMemory};
 
 use super::bound::{admit_load, make_room, unfit, unfit_notice};
-use super::shared::{prune as prune_shared, shared, shared_hit};
+use super::shared::{evict_vector, prune as prune_shared, shared, shared_hit};
 use super::statement::{notice_due, pin_vector, pin_version, version_pinned};
 use super::versions::{VersionCache, CACHE};
 use super::{installation, load, trim, CacheError, LoadedVersion};
@@ -198,6 +198,15 @@ pub(crate) fn cached_vector(
     pin_vector(record.vector);
     trim();
     Ok(vector)
+}
+
+/// Drops persisted vector `id` from this backend's cache and evicts it
+/// from the shared cache (DESIGN.md §14 item 38): its row was just deleted
+/// (dropped or replaced) by its creator or a member of its graph's owner
+/// role. A deletion that rolls back costs only a reload.
+pub(crate) fn forget_vector(id: VectorId) {
+    forget(id);
+    evict_vector(id);
 }
 
 /// Caches persisted vector `vector`, just written as `id` of graph

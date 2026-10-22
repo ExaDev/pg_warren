@@ -354,7 +354,7 @@ mod tests {
     use super::*;
 
     fn key(version: i64) -> Key {
-        Key { database: Oid::from(1), extension: Oid::from(2), version }
+        Key::version(Oid::from(1), Oid::from(2), version)
     }
 
     fn cluster() -> Memory {

@@ -9,7 +9,8 @@
 //! `warren.max_compute_memory`, which together bound a backend's peak; the
 //! statement pin, which keeps what a top-level statement has read cached
 //! until it ends; `warren.prewarm` / `warren.evict`; and the shared cache
-//! (`shared`, §5.6), one copy of a version per cluster.
+//! (`shared`, §5.6), one copy of a version or persisted vector per
+//! cluster.
 //!
 //! Depends on `segment` (to read chunks), `catalog` (graphs and versions),
 //! `access` (reader checks), `source` (id types) and `vector` (evict and
@@ -33,8 +34,9 @@ pub(crate) use bound::{admit_transient, compute_memory, define_memory_settings, 
 pub(crate) use error::CacheError;
 pub(crate) use load::{load, load_identity, Identity, LoadError, LoadedVersion};
 pub(crate) use open::{
-    cached, cached_pair, cached_vector, cached_vector_hit, keep_vector, resolve, Resolved,
+    cached, cached_pair, cached_vector, cached_vector_hit, forget_vector, keep_vector, resolve,
+    Resolved,
 };
-pub(crate) use shared::define_shared_cache;
+pub(crate) use shared::{define_shared_cache, shared_vector};
 #[cfg(any(test, feature = "pg_test"))]
 pub(crate) use statement::end_statement;

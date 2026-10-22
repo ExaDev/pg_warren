@@ -1,54 +1,53 @@
-//! Evicting shared versions besides admission (DESIGN.md §5.6, §14 item
-//! 34): `warren.evict` (the graph's versions, by a member of its owner
-//! role), the load of a graph's current version (the graph's other
-//! versions), and the prune of versions dropped since they were loaded.
+//! Evicting shared versions and persisted vectors besides admission
+//! (DESIGN.md §5.6, §14 items 34 and 38): `warren.evict` (the graph's
+//! versions and vectors, by a member of its owner role), the load of a
+//! graph's current version (the graph's other versions), dropping or
+//! replacing a vector, and the prune of versions and vectors deleted since
+//! they were loaded.
 //! Each evicts only unpinned versions (a mapped one drains until its
 //! mappers release it), and releases this backend's own mappings of them
 //! that no call holds.
 
 use pgrx::pg_sys::Oid;
 
-use super::slot::Key;
+use super::slot::{Key, Kind};
 use super::SharedVersions;
-use crate::catalog::VersionId;
 
-/// Evicts `versions` if `owner` (the caller is a member of their graph's
-/// owner role; a reader cannot evict what other sessions use), and
-/// releases this backend's mappings of them either way. How many it
-/// evicted.
-pub(crate) fn evict_versions<P: SharedVersions>(
-    port: &mut P,
-    versions: &[Key],
-    owner: bool,
-) -> usize {
-    let selected = |key: &Key| versions.contains(key);
+/// Evicts the shared versions and vectors `keys` names if `owner` (the
+/// caller is a member of their graph's owner role, or a vector's creator;
+/// a reader cannot evict what other sessions use), and releases this
+/// backend's mappings of them either way. How many it evicted.
+pub(crate) fn evict_shared<P: SharedVersions>(port: &mut P, keys: &[Key], owner: bool) -> usize {
+    let selected = |key: &Key| keys.contains(key);
     let evicted = if owner { port.evict(&selected) } else { 0 };
     port.forget(&selected);
     evicted
 }
 
-/// Evicts the shared versions of database `database` that no longer
-/// exist: those of pg_warren's installation `extension` that `existing`
-/// (given their ids) does not return, and every one of an earlier
-/// installation, dropped with its extension. How many it evicted.
+/// Evicts the shared versions and persisted vectors of database
+/// `database` that no longer exist: those of pg_warren's installation
+/// `extension` that `existing` (given their kind and ids, one call per
+/// kind held) does not return, and every one of an earlier installation,
+/// dropped with its extension. How many it evicted.
 pub(crate) fn prune<P: SharedVersions, E>(
     port: &mut P,
     database: Oid,
     extension: Oid,
-    existing: impl FnOnce(&[VersionId]) -> Result<Vec<VersionId>, E>,
+    mut existing: impl FnMut(Kind, &[i64]) -> Result<Vec<i64>, E>,
 ) -> Result<usize, E> {
     let held: Vec<Key> = port.keys().into_iter().filter(|key| key.database == database).collect();
-    if held.is_empty() {
-        return Ok(0);
+    let mut gone: Vec<Key> =
+        held.iter().filter(|key| key.extension != extension).copied().collect();
+    for kind in [Kind::Version, Kind::Vector] {
+        let ours = |key: &&Key| key.extension == extension && key.kind == kind;
+        let ids: Vec<i64> = held.iter().filter(ours).map(|key| key.id).collect();
+        if ids.is_empty() {
+            continue;
+        }
+        let existing = existing(kind, &ids)?;
+        gone.extend(held.iter().filter(ours).filter(|key| !existing.contains(&key.id)));
     }
-    let ours: Vec<VersionId> =
-        held.iter().filter(|key| key.extension == extension).map(|key| key.version).collect();
-    let existing = if ours.is_empty() { Vec::new() } else { existing(&ours)? };
-    let gone: Vec<Key> = held
-        .into_iter()
-        .filter(|key| key.extension != extension || !existing.contains(&key.version))
-        .collect();
-    Ok(if gone.is_empty() { 0 } else { evict_versions(port, &gone, true) })
+    Ok(if gone.is_empty() { 0 } else { evict_shared(port, &gone, true) })
 }
 
 #[cfg(test)]
@@ -62,7 +61,7 @@ mod tests {
     use crate::cache::shared::{Claimed, Found};
 
     fn key(extension: u32, version: i64) -> Key {
-        Key { database: Oid::from(1), extension: Oid::from(extension), version }
+        Key::version(Oid::from(1), Oid::from(extension), version)
     }
 
     /// Claims and publishes `key`'s version in `backend`; the view its
@@ -79,7 +78,7 @@ mod tests {
             .slots()
             .iter()
             .filter(|slot| slot.state != State::Empty)
-            .map(|slot| (slot.key.version, slot.state, slot.mappers))
+            .map(|slot| (slot.key.id, slot.state, slot.mappers))
             .collect();
         states.sort_unstable_by_key(|(version, _, _)| *version);
         states
@@ -96,13 +95,13 @@ mod tests {
         let Found::Ready(view) = reader.lookup(key(2, 1)) else { panic!("not found") };
         drop(view);
         reader.unpin();
-        assert_eq!(evict_versions(&mut reader, &[key(2, 1), key(2, 2)], false), 0);
+        assert_eq!(evict_shared(&mut reader, &[key(2, 1), key(2, 2)], false), 0);
         assert_eq!(
             states(&memory),
             [(1, State::Ready, 1), (2, State::Ready, 1), (3, State::Ready, 1)]
         );
         let Found::Ready(pinned) = reader.lookup(key(2, 2)) else { panic!("not found") };
-        assert_eq!(evict_versions(&mut loader, &[key(2, 1), key(2, 2)], true), 1);
+        assert_eq!(evict_shared(&mut loader, &[key(2, 1), key(2, 2)], true), 1);
         assert_eq!(
             states(&memory),
             [(2, State::Ready, 1), (3, State::Ready, 1)],
@@ -113,36 +112,45 @@ mod tests {
 
     #[test]
     fn a_prune_evicts_what_no_longer_exists_and_earlier_installations() {
-        let memory = Memory::new(6, 100, u64::MAX, Duration::ZERO);
+        let memory = Memory::new(8, 100, u64::MAX, Duration::ZERO);
         let mut backend = memory.backend();
         let other_database = Key { database: Oid::from(9), ..key(2, 1) };
-        for key in [key(1, 1), key(2, 1), key(2, 2), key(2, 3), other_database] {
+        let vector = |id| Key::vector(Oid::from(1), Oid::from(2), id);
+        let keys =
+            [key(1, 1), key(2, 1), key(2, 2), key(2, 3), other_database, vector(2), vector(4)];
+        for key in keys {
             drop(published(&mut backend, key));
         }
         backend.unpin();
         let mut asked = Vec::new();
-        let pruned = prune(&mut backend, Oid::from(1), Oid::from(2), |versions| {
-            asked = versions.to_vec();
+        let pruned = prune(&mut backend, Oid::from(1), Oid::from(2), |kind, ids| {
+            let mut ids = ids.to_vec();
+            ids.sort_unstable();
+            asked.push((kind, ids));
             Ok::<_, ()>(vec![2])
         });
-        asked.sort_unstable();
-        assert_eq!(asked, [1, 2, 3], "only this installation's versions are looked up");
-        assert_eq!(pruned, Ok(3));
+        assert_eq!(
+            asked,
+            [(Kind::Version, vec![1, 2, 3]), (Kind::Vector, vec![2, 4])],
+            "only this installation's versions and vectors are looked up, by kind"
+        );
+        assert_eq!(pruned, Ok(4));
         let left: Vec<Key> = memory
             .slots()
             .iter()
             .filter(|slot| slot.state != State::Empty)
             .map(|slot| slot.key)
             .collect();
-        assert_eq!(left.len(), 2);
+        assert_eq!(left.len(), 3);
         assert!(left.contains(&key(2, 2)) && left.contains(&other_database));
+        assert!(left.contains(&vector(2)), "vector 2 exists; version 2's key is another's");
     }
 
     #[test]
     fn a_prune_with_nothing_shared_reads_nothing() {
         let memory = Memory::new(2, 100, u64::MAX, Duration::ZERO);
         let pruned =
-            prune(&mut memory.backend(), Oid::from(1), Oid::from(2), |_| -> Result<_, ()> {
+            prune(&mut memory.backend(), Oid::from(1), Oid::from(2), |_, _| -> Result<_, ()> {
                 panic!("looked up")
             });
         assert_eq!(pruned, Ok(0));

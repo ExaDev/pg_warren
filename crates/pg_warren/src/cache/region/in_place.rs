@@ -27,6 +27,8 @@ unsafe impl InPlace for u32 {}
 // SAFETY: as for `u32`.
 unsafe impl InPlace for u64 {}
 // SAFETY: as for `u32`.
+unsafe impl InPlace for f32 {}
+// SAFETY: as for `u32`.
 unsafe impl InPlace for f64 {}
 // SAFETY: `IdDatum`'s contract: any bits are an external id, aligned ≤ 8.
 unsafe impl<E: IdDatum> InPlace for E {}

@@ -1,7 +1,8 @@
 //! The vectors bound to one version, as one compute call sees them: the
 //! session's transient vectors of the version first, then its persisted
-//! ones, read through the backend's vector cache and charged to the call's
-//! compute memory budget, and written back with tombstoned rows cleared.
+//! ones, read through the backend's vector cache (charged to the call's
+//! compute memory budget) or the shared cache (charged to none), and
+//! written back with tombstoned rows cleared.
 //! Each read or write into the backend's cache pins what it read or wrote
 //! until the statement ends, then trims the cache to
 //! `warren.max_cache_memory` (DESIGN.md §5.5).
@@ -17,14 +18,14 @@ use super::ComputeSqlError;
 use crate::access::require_creator_or_owner;
 use crate::cache::{
     admit_transient, cached, cached_pair, cached_vector, cached_vector_hit, compute_memory,
-    keep_vector, trim, LoadedVersion, Resolved,
+    forget_vector, keep_vector, shared_vector, trim, LoadedVersion, Resolved,
 };
 use crate::catalog::{GraphDefinition, VersionId};
 use crate::segment::CHUNK_SIZE;
 use crate::source::IdDatum;
 use crate::vector::{
-    drop_transient, forget, keep_transient, transient, transients, write_vector, Binding,
-    SpiVectorStore, VectorError, VectorId, VectorRecord, VectorStore,
+    drop_transient, keep_transient, transient, transients, write_vector, Binding, SpiVectorStore,
+    VectorError, VectorId, VectorRecord, VectorStore,
 };
 
 /// The budget cached vectors are charged to while cached: unlimited, since
@@ -185,7 +186,9 @@ impl<E: IdDatum> Vectors<E> {
     /// name, else the persisted one. A persisted vector read into the
     /// cache is charged to the call's budget before it is read; one the
     /// cache already holds, like a transient vector, is memory the cache
-    /// counts (DESIGN.md §5.5, §6.2), so it is not charged again. The call
+    /// counts (DESIGN.md §5.5, §6.2), so it is not charged again, and one
+    /// the shared cache holds or loads is charged to no call (§14 item
+    /// 38). The call
     /// then holds it, so reading it again returns the same vector even if
     /// the cache has evicted it.
     pub(super) fn find(&mut self, name: &str) -> Result<Option<Arc<AnyVector>>, ComputeSqlError> {
@@ -201,11 +204,14 @@ impl<E: IdDatum> Vectors<E> {
                 };
                 match cached_vector_hit(record.vector) {
                     Some(vector) => (None, vector),
-                    None => {
-                        let bytes = vector_bytes(record.dtype, record.width, record.length);
-                        let charge = self.memory.charge(bytes)?;
-                        (Some(charge), cached_vector(cache_memory(), graph_id, &record)?)
-                    }
+                    None => match shared_vector(&record)? {
+                        Some(vector) => (None, vector),
+                        None => {
+                            let bytes = vector_bytes(record.dtype, record.width, record.length);
+                            let charge = self.memory.charge(bytes)?;
+                            (Some(charge), cached_vector(cache_memory(), graph_id, &record)?)
+                        }
+                    },
                 }
             }
         };
@@ -291,7 +297,7 @@ impl<E: IdDatum> Vectors<E> {
                     }
                     .into());
                 }
-                forget(old);
+                forget_vector(old);
                 self.records.retain(|bound| bound.name != name);
             }
             keep_transient(graph_id, self.version, name, Arc::new(vector));
@@ -303,7 +309,7 @@ impl<E: IdDatum> Vectors<E> {
         let binding = Binding::new(graph_id, self.version, name, caller).replacing(replacing);
         let record = write_vector(&mut SpiVectorStore, &binding, &vector, CHUNK_SIZE)?;
         if let Some(old) = replacing {
-            forget(old);
+            forget_vector(old);
         }
         drop_transient(graph_id, self.version, name);
         let id = record.vector;

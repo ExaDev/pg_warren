@@ -1,14 +1,18 @@
 //! Loading a version: its segments copied into one aligned region by exact
 //! size (`plan`, `fill`), and read through shared views of it into the
 //! structures `warren-core` computes on, checked to agree (`views`;
-//! DESIGN.md §5.3, §5.5, §5.6).
+//! DESIGN.md §5.3, §5.5, §5.6). A persisted vector shared through the
+//! shared cache is loaded into a region of its own (`vector`, §14 item
+//! 38).
 
 mod fill;
 mod plan;
+mod vector;
 mod views;
 
 pub(super) use fill::fill;
 pub(super) use plan::plan;
+pub(super) use vector::{fill_vector, plan_vector, read_vector};
 
 use std::sync::{Arc, Weak};
 
@@ -27,6 +31,7 @@ use crate::segment::{
     read_segment_within, SegmentError, SegmentStore, ID_MAP, RELATION_DICTIONARY, TOMBSTONES,
 };
 use crate::source::IdDatum;
+use crate::vector::VectorError;
 
 /// Why a version could not be loaded.
 #[derive(Debug, Error)]
@@ -43,6 +48,9 @@ pub(crate) enum LoadError {
     /// The region could not be allocated, or does not hold its layout.
     #[error(transparent)]
     Region(#[from] RegionError),
+    /// A persisted vector could not be read into its region.
+    #[error(transparent)]
+    Vector(#[from] VectorError),
 }
 
 impl SqlError for LoadError {
@@ -52,6 +60,7 @@ impl SqlError for LoadError {
             Self::Graph(error) => graph_sqlstate(error),
             Self::Version(_) => PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
             Self::Region(error) => error.sqlstate(),
+            Self::Vector(error) => error.sqlstate(),
         }
     }
 }

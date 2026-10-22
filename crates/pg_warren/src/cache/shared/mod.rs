@@ -1,5 +1,6 @@
-//! The shared cache (DESIGN.md §5.6): one copy of a loaded version per
-//! cluster, mapped by every backend that reads it. Owns the registry's
+//! The shared cache (DESIGN.md §5.6): one copy of a loaded version, or of
+//! a persisted vector (§14 item 38), per cluster, mapped by every backend
+//! that reads it; a slot's key says which kind it holds. Owns the registry's
 //! slot table and its state machine (claim, publish, abandon, pin, unpin,
 //! attach, release, evict, drain), admission under
 //! `warren.shared_cache_memory` and its fallbacks (a refusal means a
@@ -28,7 +29,7 @@ mod setting;
 mod slot;
 mod unavailable;
 
-pub(crate) use read::{evict_graph, prune, shared, shared_hit};
+pub(crate) use read::{evict_graph, evict_vector, prune, shared, shared_hit, shared_vector};
 
 /// Registers `warren.shared_cache_memory` and, while
 /// `shared_preload_libraries` loads pg_warren on PG 15 and 16, the hooks

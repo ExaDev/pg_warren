@@ -80,7 +80,7 @@ mod tests {
     use crate::cache::shared::memory::{Loading, Mapping, Memory};
     use crate::cache::shared::slot::State;
 
-    const KEY: Key = Key { database: Oid::INVALID, extension: Oid::INVALID, version: 7 };
+    const KEY: Key = Key::version(Oid::INVALID, Oid::INVALID, 7);
 
     fn cluster(cap: u64) -> Memory {
         Memory::new(4, cap, u64::MAX, Duration::from_millis(10))

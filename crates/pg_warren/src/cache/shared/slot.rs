@@ -4,6 +4,7 @@
 use pgrx::pg_sys::Oid;
 
 use crate::catalog::VersionId;
+use crate::vector::VectorId;
 
 /// A backend's process id.
 pub(crate) type Pid = i32;
@@ -26,9 +27,19 @@ impl Process {
     const NONE: Self = Self { pid: 0, started: 0 };
 }
 
-/// What a slot holds: a version of one installation of pg_warren in one
-/// database. `version_id` restarts after `DROP EXTENSION` and `CREATE
-/// EXTENSION`, whose extension oid differs.
+/// What kind of thing a slot holds (DESIGN.md §5.6, §14 item 38).
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum Kind {
+    /// A loaded graph version, by `version_id`.
+    Version = 1,
+    /// A persisted vector, by `vector_id`: immutable, as a version is.
+    Vector = 2,
+}
+
+/// What a slot holds: a version or a persisted vector of one installation
+/// of pg_warren in one database. Version and vector ids restart after
+/// `DROP EXTENSION` and `CREATE EXTENSION`, whose extension oid differs.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Key {
@@ -36,13 +47,28 @@ pub(crate) struct Key {
     pub(crate) database: Oid,
     /// pg_warren's `pg_extension` oid in that database.
     pub(crate) extension: Oid,
-    /// The version.
-    pub(crate) version: VersionId,
+    /// Whether `id` is a version's or a vector's.
+    pub(crate) kind: Kind,
+    /// The `version_id` or `vector_id`.
+    pub(crate) id: i64,
 }
 
 impl Key {
-    /// The key of an empty slot, which no version has.
-    const NONE: Self = Self { database: Oid::INVALID, extension: Oid::INVALID, version: 0 };
+    /// The key of an empty slot, which nothing has.
+    const NONE: Self =
+        Self { database: Oid::INVALID, extension: Oid::INVALID, kind: Kind::Version, id: 0 };
+
+    /// The key of version `version` of installation `extension` in
+    /// database `database`.
+    pub(crate) const fn version(database: Oid, extension: Oid, version: VersionId) -> Self {
+        Self { database, extension, kind: Kind::Version, id: version }
+    }
+
+    /// The key of persisted vector `vector` of installation `extension` in
+    /// database `database`.
+    pub(crate) const fn vector(database: Oid, extension: Oid, vector: VectorId) -> Self {
+        Self { database, extension, kind: Kind::Vector, id: vector }
+    }
 }
 
 /// Where a slot is in its life.

@@ -26,7 +26,8 @@ use super::slot::{Key, Process, Slot, State, Ticket};
 use super::{Claimed, Found, SharedVersions};
 
 const BACKENDS: usize = 3;
-const VERSIONS: usize = 4;
+/// The versions and vectors read: two of each, alternating (`key`).
+const ENTRIES: usize = 4;
 
 /// What one backend does next.
 #[derive(Debug, Clone)]
@@ -63,7 +64,7 @@ enum Op {
 
 fn op() -> impl Strategy<Value = Op> {
     let backend = 0..BACKENDS;
-    let version = 0..VERSIONS;
+    let version = 0..ENTRIES;
     let release = prop_oneof![Just(Release::Evicted), Just(Release::Unheld)];
     prop_oneof![
         5 => (backend.clone(), version.clone()).prop_map(|(b, v)| Op::Read(b, v)),
@@ -81,8 +82,14 @@ fn op() -> impl Strategy<Value = Op> {
     ]
 }
 
-fn key(version: usize) -> Key {
-    Key { database: Oid::from(1), extension: Oid::from(2), version: version as i64 }
+/// The key of entry `entry`: versions and vectors alternate, so a version
+/// and a vector share each id (DESIGN.md §14 item 38).
+fn key(entry: usize) -> Key {
+    let id = (entry / 2) as i64;
+    match entry % 2 {
+        0 => Key::version(Oid::from(1), Oid::from(2), id),
+        _ => Key::vector(Oid::from(1), Oid::from(2), id),
+    }
 }
 
 /// A backend and what its calls hold.
@@ -347,7 +354,7 @@ impl World {
                 prop_assert_eq!(*pins, 0, "slot {} was evicted while pinned", index);
             }
         }
-        for version in 0..VERSIONS {
+        for version in 0..ENTRIES {
             let live = slots
                 .iter()
                 .filter(|slot| {
@@ -435,7 +442,7 @@ proptest! {
         slots in 1usize..6,
         cap in prop_oneof![1 => Just(0u64), 9 => 20u64..200],
         capacity in prop_oneof![3 => Just(1000u64), 1 => 0u64..300],
-        sizes in prop::collection::vec(1u64..70, VERSIONS),
+        sizes in prop::collection::vec(1u64..70, ENTRIES),
         ops in prop::collection::vec(op(), 1..80),
     ) {
         let memory = Memory::new(slots, cap, capacity, Duration::ZERO);

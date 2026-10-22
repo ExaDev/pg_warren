@@ -300,7 +300,7 @@ mod tests {
     const OTHER: Process = Process { pid: 1, started: 2 };
 
     fn key(version: i64) -> Key {
-        Key { database: Oid::from(1), extension: Oid::from(2), version }
+        Key::version(Oid::from(1), Oid::from(2), version)
     }
 
     fn limits() -> Limits {
@@ -449,7 +449,7 @@ mod tests {
         drop(read(&mut session, &mut registry, tickets[1]));
         session.unpin(registry.pin_table());
         registry.release(tickets[1]);
-        registry.evict(|key| key.version == 2);
+        registry.evict(|key| key.id == 2);
         assert_eq!(registry.state(tickets[1]), Some(State::Draining));
         let mut detached = Vec::new();
         session.release(&mut registry, Release::Evicted, |mapping| detached.push(*mapping));
@@ -467,12 +467,12 @@ mod tests {
         drop(read(&mut session, &mut registry, tickets[2]));
         session.unpin(registry.pin_table());
         let mut detached = Vec::new();
-        session.forget(&mut registry, &|key| key.version != 3, |mapping| detached.push(*mapping));
+        session.forget(&mut registry, &|key| key.id != 3, |mapping| detached.push(*mapping));
         assert_eq!(detached, [2], "neither a held mapping nor one not selected");
         assert_eq!(registry.state(tickets[1]), Some(State::Ready), "forgetting evicts nothing");
         assert_eq!(counts(&registry, tickets[1]), (0, 1), "mapped by its loader alone");
         drop(held);
-        session.forget(&mut registry, &|key| key.version == 1, |mapping| detached.push(*mapping));
+        session.forget(&mut registry, &|key| key.id == 1, |mapping| detached.push(*mapping));
         assert_eq!(detached, [2, 1]);
     }
 

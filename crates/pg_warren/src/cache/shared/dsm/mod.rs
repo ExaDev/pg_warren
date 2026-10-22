@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use pgrx::{ereport, pg_sys, PgSqlErrorCode};
+use warren_core::compute::AnyVector;
 
 use super::admission::{Limits, Refusal};
 use super::registry::{Claim, Gone, Lookup, Registry};
@@ -29,10 +30,11 @@ use super::session::{Mapped, Release, Session, Unattached, Use};
 use super::slot::{Handle, Key, Process, Slot, State, Ticket};
 use super::unavailable::Unavailable;
 use super::{setting, Claimed, Found, SharedVersions};
-use crate::cache::load::{read, LoadError, LoadedVersion};
+use crate::cache::load::{read, read_vector, LoadError, LoadedVersion};
 use crate::cache::region::Region;
 use crate::catalog::VersionId;
 use crate::source::IdDatum;
+use crate::vector::VectorRecord;
 use placement::{Located, Shared, SLOTS};
 use segment::{Segment, SegmentRegion};
 
@@ -75,8 +77,9 @@ struct Backend {
 #[derive(Debug)]
 pub(crate) struct Dsm(());
 
-/// This backend's mapping of a published version's segment, and the
-/// loaded version built over it, kept while the mapping is.
+/// This backend's mapping of a published version's (or persisted
+/// vector's) segment, and the loaded version (or vector) built over it,
+/// kept while the mapping is.
 pub(crate) struct Attached {
     segment: Segment,
     held: Mutex<Held>,
@@ -548,6 +551,22 @@ impl Attached {
         Ok(loaded)
     }
 
+    /// The persisted vector `record` describes, which this mapping holds:
+    /// read in place the first time, then kept with the mapping, as
+    /// [`Attached::version`] keeps a version.
+    pub(crate) fn vector(&self, record: &VectorRecord) -> Result<Arc<AnyVector>, LoadError> {
+        let mut held = self.held();
+        if let Some(loaded) = &held.loaded {
+            return Arc::clone(loaded)
+                .downcast()
+                .map_err(|_| broken("a shared vector was read as something else"));
+        }
+        let (vector, region) = read_vector(Box::new(self.segment.region()), record)?;
+        let vector = Arc::new(vector);
+        *held = Held { loaded: Some(vector.clone()), region };
+        Ok(vector)
+    }
+
     fn held(&self) -> MutexGuard<'_, Held> {
         self.held.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -580,6 +599,14 @@ impl Loading {
         let (loaded, region) = read::<E>(Box::new(self.region), version)?;
         let loaded: Arc<LoadedVersion<E>> = Arc::new(loaded);
         self.held = Held { loaded: Some(loaded), region };
+        Ok(())
+    }
+
+    /// Reads the filled region as the persisted vector `record` describes,
+    /// and keeps it for the published mapping.
+    pub(crate) fn validate_vector(&mut self, record: &VectorRecord) -> Result<(), LoadError> {
+        let (vector, region) = read_vector(Box::new(self.region), record)?;
+        self.held = Held { loaded: Some(Arc::new(vector)), region };
         Ok(())
     }
 }

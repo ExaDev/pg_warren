@@ -5,9 +5,9 @@ use pgrx::prelude::*;
 
 use super::{entry, ComputeSqlError};
 use crate::access::require_creator_or_owner;
-use crate::cache::resolve;
+use crate::cache::{forget_vector, resolve};
 use crate::catalog::{GraphDefinition, VersionId};
-use crate::vector::{drop_transient, forget, SpiVectorStore, VectorError, VectorStore};
+use crate::vector::{drop_transient, SpiVectorStore, VectorError, VectorStore};
 
 /// `warren.drop_vector`: deletes vector `name` bound to `version` (the
 /// current version if NULL): the session's transient vector of that name
@@ -58,7 +58,7 @@ pub(crate) fn drop_named(
     if !store.delete(record.vector)? {
         return Err(VectorError::WrittenConcurrently { name: name.to_owned(), version }.into());
     }
-    forget(record.vector);
+    forget_vector(record.vector);
     Ok(true)
 }
 
