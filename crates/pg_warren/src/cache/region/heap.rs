@@ -36,8 +36,9 @@ impl HeapMemory {
         // SAFETY: `layout` has a non-zero size (more than `ALIGNMENT`).
         let allocation = unsafe { alloc_zeroed(layout) };
         let allocation = NonNull::new(allocation).ok_or(RegionError::OutOfMemory { bytes: len })?;
-        // At most `ALIGNMENT - 1`, so `start + len` is inside the allocation.
-        let start = allocation.as_ptr().align_offset(ALIGNMENT);
+        // At most `ALIGNMENT - 1`, so `start + len` is inside the allocation
+        // (`align_offset` may decline to answer, so the address is used).
+        let start = (allocation.as_ptr() as usize).wrapping_neg() % ALIGNMENT;
         Ok(Self { allocation, start, len })
     }
 
