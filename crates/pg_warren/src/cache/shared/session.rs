@@ -158,26 +158,28 @@ impl<M> Session<M> {
     }
 
     /// Releases the mappings `which` selects that no call holds, through
-    /// their `Arc` or what was read through them, passing each to `detach`
-    /// before the registry counts it gone.
+    /// their `Arc` or what was read through them, one at a time (see
+    /// `release_one`).
     pub(crate) fn release<S: SlotTable, P: PinTable>(
         &mut self,
         registry: &mut Registry<S, P>,
         which: Release,
-        detach: impl FnMut(Arc<M>),
+        mut detach: impl FnMut(Arc<M>),
     ) where
         M: Mapped,
     {
-        let (released, kept) =
-            std::mem::take(&mut self.mappings).into_iter().partition(|(ticket, mapping)| {
-                let selected = match which {
-                    Release::Evicted => registry.state(*ticket) != Some(State::Ready),
-                    Release::Unheld => true,
-                };
-                selected && Arc::strong_count(mapping) == 1 && !mapping.in_use()
-            });
-        self.mappings = kept;
-        Self::detach_all(registry, released, detach);
+        let mut index = 0;
+        while let Some((ticket, mapping)) = self.mappings.get(index) {
+            let selected = match which {
+                Release::Evicted => registry.state(*ticket) != Some(State::Ready),
+                Release::Unheld => true,
+            };
+            if selected && Arc::strong_count(mapping) == 1 && !mapping.in_use() {
+                self.release_one(registry, index, &mut detach);
+            } else {
+                index += 1;
+            }
+        }
     }
 
     /// Gives back everything the backend holds as it exits: its pins, its
@@ -185,23 +187,30 @@ impl<M> Session<M> {
     pub(crate) fn exit<S: SlotTable, P: PinTable>(
         &mut self,
         registry: &mut Registry<S, P>,
-        detach: impl FnMut(Arc<M>),
+        mut detach: impl FnMut(Arc<M>),
     ) {
         self.unpin(registry.pin_table());
         self.abort(registry);
-        Self::detach_all(registry, std::mem::take(&mut self.mappings), detach);
+        while !self.mappings.is_empty() {
+            self.release_one(registry, 0, &mut detach);
+        }
     }
 
-    /// Detaches each of `mappings`, then counts it gone in the registry.
-    fn detach_all<S: SlotTable, P: PinTable>(
+    /// Releases the mapping at `index`: the registry counts it gone, then
+    /// `detach` detaches it. One at a time, so that an ERROR in a detach
+    /// leaves every other mapping both held here and counted there; the
+    /// one it interrupts is counted gone already (a mapper counted forever
+    /// would keep its slot draining), and at worst stays mapped until the
+    /// backend exits.
+    fn release_one<S: SlotTable, P: PinTable>(
+        &mut self,
         registry: &mut Registry<S, P>,
-        mappings: Vec<(Ticket, Arc<M>)>,
-        mut detach: impl FnMut(Arc<M>),
+        index: usize,
+        detach: &mut impl FnMut(Arc<M>),
     ) {
-        for (ticket, mapping) in mappings {
-            detach(mapping);
-            registry.release(ticket);
-        }
+        let (ticket, mapping) = self.mappings.swap_remove(index);
+        registry.release(ticket);
+        detach(mapping);
     }
 }
 
@@ -398,6 +407,32 @@ mod tests {
         assert_eq!(detached, [2]);
         assert_eq!(registry.state(tickets[1]), None, "its last mapper emptied it");
         assert_eq!(counts(&registry, tickets[0]), (0, 2), "a ready slot stays mapped");
+    }
+
+    #[test]
+    fn an_error_in_a_detach_leaves_the_other_mappings_counted() {
+        let (mut registry, tickets) = published(&[1, 2, 3]);
+        let mut session = Session::new(PROCESS);
+        for &ticket in &tickets {
+            drop(read(&mut session, &mut registry, ticket));
+            registry.release(ticket);
+        }
+        session.unpin(registry.pin_table());
+        registry.evict(|_| true);
+        let mut detaches = 0;
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            session.release(&mut registry, Release::Evicted, |_| {
+                detaches += 1;
+                assert!(detaches < 2, "an ERROR in dsm_detach");
+            });
+        }));
+        assert!(failed.is_err());
+        let mapped: Vec<Ticket> = session.mapped_slots().collect();
+        assert_eq!(mapped.len(), 1, "the mapping not yet released is still held");
+        for &ticket in &tickets {
+            let mappers = registry.slots()[ticket.slot].mappers;
+            assert_eq!(mappers, u32::from(mapped.contains(&ticket)), "{ticket:?}");
+        }
     }
 
     #[test]
