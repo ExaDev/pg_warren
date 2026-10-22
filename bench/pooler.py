@@ -193,8 +193,8 @@ class Pooler:
             f"SELECT pid FROM pg_stat_activity WHERE datname = '{DATABASE}' AND backend_type = 'client backend' "
             "AND pid <> pg_backend_pid()")]
 
-    def reset(self, names):
-        """A cold cache: every other backend ended, and the graphs' shared
+    def reset(self):
+        """A cold cache: every other backend ended, and every graph's shared
         versions evicted (the caller owns them); waits until none is left."""
         self.admin.execute(f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{DATABASE}' "
                            "AND backend_type = 'client backend' AND pid <> pg_backend_pid()")
@@ -202,8 +202,7 @@ class Pooler:
             if not self.backend_pids():
                 break
             time.sleep(0.1)
-        for name in names:
-            self.admin.execute(f"SELECT warren.evict('{name}')")
+        self.admin.execute("SELECT warren.evict(name) FROM warren.graphs")
         for _ in range(100):
             if self.shared_bytes() == 0:
                 return
@@ -328,10 +327,10 @@ class Pooler:
             return {**result, "skipped": skipped}
         print(f"  {mode} {scenario} N={connections}", flush=True)
         nodes = case.nodes if scenario == "one-graph" else case.scaled(self.options.own_scale).nodes
-        self.reset(names)
+        self.reset()
         result["memory_before"] = self.memory()["totals"]
         result["cold_first_calls"] = self.cold_first_calls(names, connections)
-        self.reset(names)
+        self.reset()
         pooled = scenario == "one-graph"
         if pooled:
             self.start_pooler(connections)
