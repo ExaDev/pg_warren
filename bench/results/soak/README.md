@@ -324,3 +324,30 @@ writes again; `calloc`'s large allocations are fresh zero pages.
 The cold load is 5–13% faster; its peak is unchanged, since the fill
 writes every page of the region either way. The other stages are within
 run-to-run noise.
+
+## The shared cache (M9, §5.6 step 8)
+
+`a-m9-shared.json` and `b-merged-m9-shared.json`: full scale (10M nodes,
+100M edges) with the shared cache on, PostgreSQL 16.15 from a private tree
+preloading pg_warren, a release build of e32dd67 (`pg_warren.so` sha256
+460de8f3…), on the same 4-vCPU Xeon, harness d06fafd, one after the other
+on 2026-10-22, load average 0.7–1.3 at each start:
+
+    bench/soak.py a --label=-m9-shared --shared-cache-memory 4GB \
+        --disk-floor 5368709120 --no-eigen-steps --eigen-max-iter 200 \
+        --pg-config /var/tmp/m9-pgtree/usr/lib/postgresql/16/bin/pg_config --parent /var/tmp \
+        --extension-revision e32dd67 --extension-profile release --threads 4 --statement-timeout 20min
+    bench/soak.py b-merged --label=-m9-shared --shared-cache-memory 8GB \
+        --skip second-version --skip library --skip communities …   # otherwise as case a
+
+Case a's version (1.20 GB) fits the default cap of 4GB. b-merged's
+(6.00 GB) needs a raised cap. Its second version, library and community
+runs were left out, for the disk and because the 0.4.0 run's two-version
+calls and community runs were refused at these limits anyway. b-merged's
+file records its harness as dirty only because `a-m9-shared.json` was not
+yet committed. A stage's `rss_shmem_after` counts the shared buffers the
+backend touched (about 1.1 GB) as well as the shared version.
+
+An earlier attempt at case a was discarded: a second copy of the harness
+had been started by mistake on the same machine, and one of the two was
+killed for memory during `louvain`.
