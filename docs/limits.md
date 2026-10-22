@@ -244,6 +244,19 @@ backend's own.
   mounted at `/dev/shm`). With `dynamic_shared_memory_type = mmap` the
   files are in the data directory's `pg_dynshmem` (backed by disk) and
   the same check applies there; `sysv` segments are not limited this way.
+- **What can still fail.** On PostgreSQL 17 and 18 the cache's registry is
+  created by the cluster's first read of a graph (after each start, and
+  after an upgrade that changes its format). If `/dev/shm` then lacks a
+  few megabytes beside its reserve, the cache is unavailable and reads load
+  privately, silently at the default cap; it is tried again at each read.
+  Two errors are left to Postgres, which pg_warren cannot turn into a
+  fallback: another process filling `/dev/shm` between pg_warren's check
+  and a segment's creation (`could not resize shared memory segment`,
+  53100), and, while the registry is being created, every one of the
+  cluster's dynamic shared memory slots (64 plus 5 per allowed connection)
+  already in use by other segments (`too many dynamic shared memory
+  segments`, 53000). Either fails that one statement; the next one, once
+  the room or a slot is free, works.
 - **`min_dynamic_shared_memory`** (a restart setting) reserves part of
   Postgres's main shared memory for dynamic segments, backed by huge pages
   when `huge_pages` is on, and segments are taken from it first. Shared

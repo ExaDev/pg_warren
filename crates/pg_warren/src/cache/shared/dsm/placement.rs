@@ -90,15 +90,44 @@ fn checked(found: u32) -> Result<(), Unavailable> {
     }
 }
 
+/// The size of the first segment of a DSA area: Postgres's DSM registry
+/// keeps its index of named segments in one (`dsa_create`), created with
+/// the cluster's first named segment.
+#[cfg(any(feature = "pg17", feature = "pg18", test))]
+const DSA_INITIAL_SEGMENT: usize = 1024 * 1024;
+
+/// The room `GetNamedDSMSegment` may take to create the registry: its own
+/// segment, the DSM registry's area if no other extension created it
+/// first, and as much again to spare.
+#[cfg(any(feature = "pg17", feature = "pg18", test))]
+const REGISTRY_ROOM: u64 = (std::mem::size_of::<Shared>() + 2 * DSA_INITIAL_SEGMENT) as u64;
+
+/// Whether the registry may be created with `room` bytes free for
+/// segments in `store` (`segment::store_room`): without it,
+/// `GetNamedDSMSegment` would raise an ERROR where the shared cache must
+/// instead be unavailable (DESIGN.md §5.6, Size checks). Checked before
+/// every lookup, found or not: the lookup cannot tell first which it is.
+#[cfg(any(feature = "pg17", feature = "pg18", test))]
+fn room_for_registry(room: u64, store: &'static str) -> Result<(), Unavailable> {
+    if room >= REGISTRY_ROOM {
+        Ok(())
+    } else {
+        Err(Unavailable::NoRegistryRoom { store })
+    }
+}
+
 /// The registry, found or created on first use (PG 17 and 18), unless it
-/// has another format.
+/// has another format or the store has no room to create it.
 #[cfg(any(feature = "pg17", feature = "pg18"))]
 pub(super) fn locate() -> Result<Located, Unavailable> {
+    room_for_registry(super::segment::store_room(), super::segment::store_name())?;
     let mut found = false;
     // SAFETY: called on the main thread inside a transaction; the name is
     // a static C string; `create` sets up a new segment of the size asked
     // before any backend can find it (`GetNamedDSMSegment` holds its lock
-    // while it runs). An ERROR (no DSM control slot) unwinds as usual.
+    // while it runs). The room was checked above; an ERROR that is left
+    // (no DSM control slot, or a race for the store's room) unwinds as
+    // usual (DESIGN.md §5.6, Fallback).
     let shared = unsafe {
         let size = std::mem::size_of::<Shared>();
         pg_sys::GetNamedDSMSegment(NAME.as_ptr(), size, Some(create), &mut found)
@@ -247,6 +276,21 @@ mod tests {
     fn a_registry_of_another_format_is_unavailable() {
         assert_eq!(checked(FORMAT), Ok(()));
         assert_eq!(checked(FORMAT + 1), Err(Unavailable::OtherFormat { found: FORMAT + 1 }));
+    }
+
+    #[test]
+    fn the_registry_is_created_only_where_it_and_the_dsm_registrys_area_fit() {
+        assert!(REGISTRY_ROOM >= (std::mem::size_of::<Shared>() + DSA_INITIAL_SEGMENT) as u64);
+        assert_eq!(room_for_registry(REGISTRY_ROOM, "/dev/shm"), Ok(()));
+        assert_eq!(room_for_registry(u64::MAX, "/dev/shm"), Ok(()), "sysv");
+        assert_eq!(
+            room_for_registry(REGISTRY_ROOM - 1, "/dev/shm"),
+            Err(Unavailable::NoRegistryRoom { store: "/dev/shm" })
+        );
+        assert_eq!(
+            room_for_registry(0, "pg_dynshmem"),
+            Err(Unavailable::NoRegistryRoom { store: "pg_dynshmem" })
+        );
     }
 
     #[test]

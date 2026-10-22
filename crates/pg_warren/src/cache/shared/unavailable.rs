@@ -3,8 +3,9 @@
 //! every version is loaded into the backend's own cache, as in 0.4.0, and
 //! never an error; a `NOTICE`, once per backend, says why. At the default
 //! cap (§14 item 32) only a registry of another format is noticed: PG 15
-//! and 16 without the preload, and big-endian targets, are configurations
-//! the default cannot change, and their every backend would say so.
+//! and 16 without the preload, big-endian targets and a `/dev/shm` too
+//! small for the registry are configurations the default cannot change,
+//! and their every backend would say so.
 
 use std::cell::Cell;
 
@@ -30,6 +31,11 @@ pub(crate) enum Unavailable {
     /// a restart drops it, backends of this build load privately.
     #[cfg(any(feature = "pg17", feature = "pg18", test))]
     OtherFormat { found: u32 },
+    /// PG 17 or 18, where `store` (`/dev/shm`, or `pg_dynshmem`) has too
+    /// little room beside its reserve for `GetNamedDSMSegment` to create
+    /// the registry; it is checked again at the next read.
+    #[cfg(any(feature = "pg17", feature = "pg18", test))]
+    NoRegistryRoom { store: &'static str },
 }
 
 thread_local! {
@@ -76,6 +82,11 @@ impl Unavailable {
                  build of pg_warren with registry format {found}, not {FORMAT}; restart \
                  PostgreSQL to share graph versions again: {private}"
             ),
+            #[cfg(any(feature = "pg17", feature = "pg18", test))]
+            Self::NoRegistryRoom { store } => format!(
+                "warren.shared_cache_memory is set, but {store} has no room for the shared \
+                 cache's registry; free it, or raise the container's --shm-size: {private}"
+            ),
         }
     }
 }
@@ -104,6 +115,15 @@ mod tests {
         ] {
             assert!(unavailable.noticed(false), "{unavailable:?}, the cap set by hand");
         }
+    }
+
+    #[test]
+    fn a_store_without_room_for_the_registry_names_it_and_is_silent_at_the_default() {
+        let unavailable = Unavailable::NoRegistryRoom { store: "/dev/shm" };
+        assert!(!unavailable.noticed(true));
+        assert!(unavailable.noticed(false));
+        let message = unavailable.message();
+        assert!(message.contains("/dev/shm") && message.contains("--shm-size"), "{message}");
     }
 
     #[test]

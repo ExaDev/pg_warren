@@ -112,7 +112,7 @@ shared_preload_libraries = 'pg_warren'
 ```
 
 Without that, or where `/dev/shm` is too small, each backend loads its own
-copy, as before 0.5.0: nothing fails. Sizing, containers and the other
+copy, as before 0.5.0, rather than fail. Sizing, containers and the other
 settings are in [docs/limits.md](docs/limits.md#the-shared-cache).
 
 **Upgrading** from an earlier release: install the new build, then run
