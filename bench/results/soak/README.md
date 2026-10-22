@@ -261,3 +261,40 @@ runs at a peak of 1.083 GB, 15 MB (1.4%) past their 1.065 GB sum and
 no warren setting covers. So nothing warren holds is uncharged, and the
 part of the peak past cache and compute is `contract`'s build scratch: a
 statement that runs `contract` is bounded by the three limits together.
+
+## The region loader at a tenth of the scale (M9 step 3)
+
+`a-scale10-step3-506b5c3-{1,2,3}.json` (main before step 3, `pg_warren.so`
+sha256 fb99e1ab…) and `a-scale10-step3-3613402-{1,2,3}.json` (the region
+loader, DESIGN.md §5.6 step 3, sha256 6e2e61d3…): case `a` at `--scale 10`
+(1M nodes, 10M edges, a 120.1 MB version), release builds, PostgreSQL
+16.15, the same 4-vCPU Xeon, run alternately (main first) under
+`/tmp/pgrx-test.lock`, load average 0.6–1.3:
+
+    bench/soak.py a --scale 10 --pg-config /usr/bin/pg_config --parent /var/tmp \
+        --extension-revision <rev> --extension-profile release --threads 4 --no-cte \
+        --no-eigen --skip second-version --skip library --skip communities \
+        --disk-floor 4294967296
+
+Seconds, runs 1 / 2 / 3, the private peak (RssAnon) over the three, and
+the ratio of the medians:
+
+| Stage | 506b5c3 | 3613402 | ratio |
+|---|---|---|---|
+| cold load (`prewarm`) | 0.196 / 0.185 / 0.188, 164.8 MiB | 0.160 / 0.161 / 0.155, **126.6 MiB** | 0.85 |
+| cold load probe (64kB cap) | 0.193 / 0.190 / 0.183, 164.6 MiB | 0.182 / 0.153 / 0.151, 126.3 MiB | 0.81 |
+| BFS depth 6 | 0.066 / 0.062 / 0.065 | 0.075 / 0.068 / 0.063 | 1.04 |
+| `reachable_set` | 0.274 / 0.261 / 0.278 | 0.283 / 0.268 / 0.273 | 0.99 |
+| `components` | 0.357 / 0.318 / 0.316 | 0.325 / 0.331 / 0.323 | 1.02 |
+| `pagerank` | 1.194 / 1.230 / 1.190 | 1.161 / 1.220 / 1.202 | 1.01 |
+| `pagerank` from cold | 1.342 / 1.322 / 1.248 | 1.294 / 1.278 / 1.284 | 0.97 |
+
+A cold load copies each chunk straight into the version's region instead
+of assembling each segment and then decoding it, so it is about 15%
+faster and its peak is the version (114.6 MiB) plus 12 MiB, not plus
+50 MiB (most of it one CSR's raw segments: 38 MiB of targets and 8 MiB of
+offsets). Before the product kernels borrowed each CSR's
+arrays once (3613402's parent, 5a07152), `pagerank` ran 25–30% slower
+over the region's shared views (1.42–1.56 s), since every access to a
+shared view is a virtual call; the other stages are within run-to-run
+noise.
