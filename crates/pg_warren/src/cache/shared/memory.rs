@@ -1,9 +1,9 @@
 //! The `Memory` adapter: an in-process fake of the shared cache. A
 //! `Memory` is a cluster (a registry in a `Mutex`, its pin table outside
-//! it, which a statement's end updates without the lock, a condition variable,
-//! and heap regions standing in for DSM segments, freed when their last
-//! `Arc` drops) and each `Backend` is one backend of it, usually on its own
-//! thread. A backend reads a region through its own `Mapping`, as each
+//! it, which a statement's end updates without the lock, a condition
+//! variable, and heap regions standing in for DSM segments, freed when
+//! their last `Arc` drops) and each `Backend` is one backend of it, usually
+//! on its own thread. A backend reads a region through its own `Mapping`, as each
 //! backend has its own mapping of a DSM segment, so that its session's
 //! count of a mapping's holders is this backend's alone.
 

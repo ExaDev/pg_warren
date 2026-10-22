@@ -10,11 +10,10 @@
 //! §14 item 28): every unheld mapping (`Release::Unheld`), or only those of
 //! evicted slots (`Release::Evicted`).
 
+use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 
 use super::admission::Limits;
-use std::sync::atomic::AtomicU32;
-
 use super::registry::{unpin, Claim, Gone, PinTable, Registry, SlotTable};
 use super::slot::{Handle, Key, Process, State, Ticket};
 
