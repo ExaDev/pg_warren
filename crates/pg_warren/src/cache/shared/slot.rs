@@ -14,6 +14,7 @@ pub(crate) type Started = i64;
 
 /// A backend's process: its pid and when it started, since a pid is
 /// reused once its process exits.
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Process {
     pub(crate) pid: Pid,
@@ -28,6 +29,7 @@ impl Process {
 /// What a slot holds: a version of one installation of pg_warren in one
 /// database. `version_id` restarts after `DROP EXTENSION` and `CREATE
 /// EXTENSION`, whose extension oid differs.
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Key {
     /// The database's oid.
@@ -44,6 +46,7 @@ impl Key {
 }
 
 /// Where a slot is in its life.
+#[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum State {
     /// Free.
@@ -57,7 +60,9 @@ pub(crate) enum State {
     Draining,
 }
 
-/// A published region's handle, by which backends attach it.
+/// A published region's handle, by which backends attach it: a
+/// `dsm_handle` in the `Dsm` adapter.
+#[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Handle(pub(crate) u32);
 
@@ -74,7 +79,10 @@ pub(crate) struct Ticket {
 
 /// A slot of the registry. Only the registry changes it, under its lock.
 /// Its pins are counted apart, in the registry's pin table, since a
-/// statement ends them without the lock.
+/// statement ends them without the lock. It lives in shared memory in the
+/// `Dsm` adapter, so its layout is fixed (`#[repr(C)]`), as is that of
+/// everything in it.
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Slot {
     pub(super) state: State,

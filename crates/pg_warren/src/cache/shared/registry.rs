@@ -41,12 +41,25 @@ impl<T: AsRef<[AtomicU32]>> PinTable for T {}
 /// The slot table, its pins and its clocks.
 #[derive(Debug)]
 pub(crate) struct Registry<S, P> {
+    clocks: Clocks,
+    slots: S,
+    pins: P,
+}
+
+/// A registry's clocks, kept in shared memory beside its slots by the
+/// `Dsm` adapter, which resumes a registry over them under its lock.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Clocks {
     /// The logical clock that orders uses for eviction.
     clock: u64,
     /// The last claim's generation.
     generation: u64,
-    slots: S,
-    pins: P,
+}
+
+impl Clocks {
+    /// The clocks of a new registry.
+    pub(crate) const NEW: Self = Self { clock: 0, generation: 0 };
 }
 
 /// What the registry holds for a key.
@@ -90,7 +103,17 @@ pub(crate) fn unpin(pins: &[AtomicU32], ticket: Ticket) {
 impl<S: SlotTable, P: PinTable> Registry<S, P> {
     /// A registry over `slots`, all empty, and their `pins`, all 0.
     pub(crate) fn new(slots: S, pins: P) -> Self {
-        Self { clock: 0, generation: 0, slots, pins }
+        Self::resume(Clocks::NEW, slots, pins)
+    }
+
+    /// The registry whose state is `clocks`, `slots` and `pins`.
+    pub(crate) fn resume(clocks: Clocks, slots: S, pins: P) -> Self {
+        Self { clocks, slots, pins }
+    }
+
+    /// Its clocks now, to keep for `resume`.
+    pub(crate) fn clocks(&self) -> Clocks {
+        self.clocks
     }
 
     /// Its slots.
@@ -143,8 +166,8 @@ impl<S: SlotTable, P: PinTable> Registry<S, P> {
             }
         };
         let evicted = plan.evict.into_iter().map(|index| self.retire(index)).collect();
-        self.generation += 1;
-        let generation = self.generation;
+        self.clocks.generation += 1;
+        let generation = self.clocks.generation;
         self.slots.as_mut()[plan.slot] =
             Slot { state: State::Loading, key, bytes, loader, generation, ..Slot::EMPTY };
         Claim::Load { ticket: Ticket { slot: plan.slot, generation }, evicted }
@@ -252,8 +275,8 @@ impl<S: SlotTable, P: PinTable> Registry<S, P> {
 
     /// The next tick of the clock.
     fn tick(&mut self) -> u64 {
-        self.clock += 1;
-        self.clock
+        self.clocks.clock += 1;
+        self.clocks.clock
     }
 }
 
@@ -312,6 +335,21 @@ mod tests {
         );
         assert_eq!(registry.state(ticket), Some(State::Loading));
         assert_eq!(registry.slots()[ticket.slot].bytes, 10);
+    }
+
+    #[test]
+    fn a_registry_resumed_from_its_clocks_continues_them() {
+        let mut first = registry(2);
+        let ticket = loaded(&mut first, 1, 10);
+        let (clocks, slots) = (first.clocks(), first.slots().to_vec());
+        let used = slots[ticket.slot].last_used;
+        let pins: Vec<AtomicU32> = first.pins().into_iter().map(AtomicU32::new).collect();
+        let mut resumed = Registry::resume(clocks, slots, pins);
+        assert_eq!(resumed.lookup(key(1)), Lookup::Ready(ticket));
+        let again = claimed(&mut resumed, 2, 10);
+        assert_eq!(again.generation, ticket.generation + 1);
+        resumed.pin(ticket).unwrap();
+        assert!(resumed.slots()[ticket.slot].last_used > used, "its clock goes on");
     }
 
     #[test]
