@@ -7,7 +7,8 @@
 //! and vectors least recently used first (a pure policy in `lru`), with
 //! `warren.max_compute_memory`, which together bound a backend's peak; the
 //! statement pin, which keeps what a top-level statement has read cached
-//! until it ends; and `warren.prewarm` / `warren.evict`.
+//! until it ends; `warren.prewarm` / `warren.evict`; and the shared cache
+//! (`shared`, §5.6), one copy of a version per cluster.
 //!
 //! Depends on `segment` (to read chunks), `catalog` (graphs and versions),
 //! `access` (reader checks), `source` (id types) and `vector` (evict and
@@ -20,6 +21,10 @@ mod error;
 mod load;
 mod lru;
 mod open;
+// The `Dsm` adapter (DESIGN.md §5.6, step 5) wires it to Postgres; until
+// then only its tests, through the `Memory` fake, use it.
+#[cfg(test)]
+mod shared;
 mod statement;
 mod versions;
 mod warm;
