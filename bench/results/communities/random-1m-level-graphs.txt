@@ -1,0 +1,172 @@
+# Louvain's and Leiden's levels on the soak's random graph at a tenth of the
+# scale (DESIGN.md §14 item 40): 1M nodes, 10M uniform random directed edges
+# (bench/soak.py's case a generator, setseed(0.25)), unweighted, one relation,
+# store_merged, build_reverse (111 MB of segments). PostgreSQL 16.15, release
+# builds installed with `cargo pgrx install --release`, a scratch cluster with
+# the soak's settings, warren.threads = 4, default memory limits, the 4-vCPU
+# Xeon shared with other work. Each function ran as an instrumented copy of
+# crates/pg_warren/src/community_sql/library/{louvain,leiden}.sql (the same
+# calls, plus a NOTICE per phase with clock_timestamp() deltas and each new
+# level graph's warren.versions row), with levels_prefix, in one session;
+# VACUUM between the two. "disk" lines are pg_total_relation_size of
+# warren.segments and the WAL position, before and after each call.
+#
+# before: 0038ad5 (main), load average ~1.
+# after:  level graphs store forward CSRs only, and the refinement charges
+#         its peak (the commit adding this file); load average 8-10 (other
+#         jobs), so its times are not comparable; its segments, levels and
+#         results are. Its Leiden ran in a second session (the first ran out
+#         of the machine's disk, which other jobs had filled).
+== before: louvain, then leiden
+disk (segments | WAL position):
+ 111 MB | 136 MB
+[37.7s] SET warren.threads = 4; SELECT public.xlouvain('g', 'lv', levels_prefix := 'lvl')
+ 0.1404501485885839
+NOTICE:  L1 nodes 1000000 found 448022 moving 6.023629s
+NOTICE:  L1 modularity 0.05523344932512784 (+0.0552336993049676) 1.188745s
+NOTICE:  L1 lift+contract 3.233396s; quotient nodes 448022 edges 9895540 bytes 259885852 width 4
+NOTICE:  L2 nodes 448022 found 173402 moving 5.591248s
+NOTICE:  L2 modularity 0.08294440255362359 (+0.027710953228495754) 1.153390s
+NOTICE:  L2 lift+contract 3.452467s; quotient nodes 173402 edges 9343254 bytes 237808820 width 4
+NOTICE:  L3 nodes 173402 found 17305 moving 12.576807s
+NOTICE:  L3 modularity 0.13264971158310487 (+0.04970530902948128) 0.943682s
+NOTICE:  L3 lift+contract 0.683647s; quotient nodes 17305 edges 786511 bytes 27432372 width 4
+NOTICE:  L4 nodes 17305 found 20 moving 0.800316s
+NOTICE:  L4 modularity 0.14044944383415878 (+0.0077997322510539036) 0.036840s
+NOTICE:  L4 lift+contract 0.371296s; quotient nodes 20 edges 288 bytes 8007740 width 4
+NOTICE:  L5 nodes 20 found 14 moving 0.012603s
+NOTICE:  L5 modularity 0.1404501485885839 (+7.047544251237436e-07) 0.000518s
+NOTICE:  L5 lift+contract 0.353819s; quotient nodes 14 edges 175 bytes 8004836 width 4
+NOTICE:  L6 nodes 14 found 14 moving 0.007109s
+disk (segments | WAL position):
+ 647 MB | 752 MB
+disk (segments | WAL position):
+ 117 MB | 766 MB
+[84.4s] SET warren.threads = 4; SELECT public.xleiden('g', 'ld', levels_prefix := 'ldl')
+ 0.20211816302201674
+NOTICE:  I1 L1 nodes 1000000 found 448022 moving 3.955568s
+NOTICE:  I1 L1 refined 448177 1.346959s
+NOTICE:  I1 L1 lift+contract 3.279002s; quotient nodes 448177 edges 9895868 bytes 259898700 width 4
+NOTICE:  I1 L2 nodes 448177 found 173674 moving 3.491806s
+NOTICE:  I1 L2 refined 174212 1.063862s
+NOTICE:  I1 L2 lift+contract 3.500540s; quotient nodes 174212 edges 9345231 bytes 237882292 width 4
+NOTICE:  I1 L3 nodes 174212 found 5418 moving 14.658848s
+NOTICE:  I1 L3 refined 56010 1.432438s
+NOTICE:  I1 L3 lift+contract 2.818088s; quotient nodes 56010 edges 9090040 bytes 227960468 width 4
+NOTICE:  I1 L4 nodes 56010 found 172 moving 8.138889s
+NOTICE:  I1 L4 refined 17773 1.118803s
+NOTICE:  I1 L4 lift+contract 2.773964s; quotient nodes 17773 edges 8696470 bytes 217286420 width 4
+NOTICE:  I1 L5 nodes 17773 found 84 moving 2.005315s
+NOTICE:  I1 L5 refined 2520 1.053681s
+NOTICE:  I1 L5 lift+contract 0.773710s; quotient nodes 2520 edges 1014933 bytes 32439532 width 4
+NOTICE:  I1 L6 nodes 2520 found 35 moving 0.414304s
+NOTICE:  I1 L6 refined 125 0.114814s
+NOTICE:  I1 L6 lift+contract 0.378650s; quotient nodes 125 edges 8211 bytes 8201260 width 4
+NOTICE:  I1 L7 nodes 125 found 28 moving 0.047180s
+NOTICE:  I1 L7 refined 33 0.018479s
+NOTICE:  I1 L7 lift+contract 0.368401s; quotient nodes 33 edges 574 bytes 8015020 width 4
+NOTICE:  I1 L8 nodes 33 found 27 moving 0.022708s
+NOTICE:  I1 L8 refined 30 0.018467s
+NOTICE:  I1 L8 lift+contract 0.376619s; quotient nodes 30 edges 452 bytes 8011996 width 4
+NOTICE:  I1 L9 nodes 30 found 27 moving 0.021073s
+NOTICE:  I1 L9 refined 30 0.013676s
+NOTICE:  I2 L1 nodes 1000000 found 29 moving 5.348121s
+NOTICE:  I2 L1 refined 316289 2.149753s
+NOTICE:  I2 L1 lift+contract 3.582354s; quotient nodes 316289 edges 9631761 bytes 249323236 width 4
+NOTICE:  I2 L2 nodes 316289 found 26 moving 2.520463s
+NOTICE:  I2 L2 refined 96535 1.417424s
+NOTICE:  I2 L2 lift+contract 2.755755s; quotient nodes 96535 edges 9183616 bytes 231508156 width 4
+NOTICE:  I2 L3 nodes 96535 found 20 moving 2.018382s
+NOTICE:  I2 L3 refined 29771 1.036073s
+NOTICE:  I2 L3 lift+contract 3.084468s; quotient nodes 29771 edges 8956780 bytes 223919300 width 4
+NOTICE:  I2 L4 nodes 29771 found 20 moving 1.860857s
+NOTICE:  I2 L4 refined 5414 1.203657s
+NOTICE:  I2 L4 lift+contract 0.991536s; quotient nodes 5414 edges 2107220 bytes 58747388 width 4
+NOTICE:  I2 L5 nodes 5414 found 20 moving 0.540011s
+NOTICE:  I2 L5 refined 45 0.248635s
+NOTICE:  I2 L5 lift+contract 0.459899s; quotient nodes 45 edges 649 bytes 8017204 width 4
+NOTICE:  I2 L6 nodes 45 found 20 moving 0.094308s
+NOTICE:  I2 L6 refined 36 0.013794s
+NOTICE:  I2 L6 lift+contract 0.381980s; quotient nodes 36 edges 435 bytes 8011780 width 4
+NOTICE:  I2 L7 nodes 36 found 20 moving 0.022199s
+NOTICE:  I2 L7 refined 36 0.013550s
+disk (segments | WAL position):
+ 1878 MB | 2768 MB
+== after: louvain
+disk (segments | WAL position):
+ 111 MB | 136 MB
+[46.0s] SET warren.threads = 4; SELECT public.xlouvain('g', 'lv', levels_prefix := 'lvl')
+ 0.1404501485885839
+NOTICE:  L1 nodes 1000000 found 448022 moving 6.361966s
+NOTICE:  L1 modularity 0.05523344932512784 (+0.0552336993049676) 1.235165s
+NOTICE:  L1 lift+contract 2.082767s; quotient nodes 448022 edges 9895540 bytes 137555140 width 4
+NOTICE:  L2 nodes 448022 found 173402 moving 5.296045s
+NOTICE:  L2 modularity 0.08294440255362359 (+0.027710953228495754) 1.189036s
+NOTICE:  L2 lift+contract 2.431306s; quotient nodes 173402 edges 9343254 bytes 124302500 width 4
+NOTICE:  L3 nodes 173402 found 17305 moving 21.479362s
+NOTICE:  L3 modularity 0.13264971158310487 (+0.04970530902948128) 1.018893s
+NOTICE:  L3 lift+contract 0.663327s; quotient nodes 17305 edges 786511 bytes 17855744 width 4
+NOTICE:  L4 nodes 17305 found 20 moving 1.150216s
+NOTICE:  L4 modularity 0.14044944383415878 (+0.0077997322510539036) 0.081782s
+NOTICE:  L4 lift+contract 0.781317s; quotient nodes 20 edges 288 bytes 8004068 width 4
+NOTICE:  L5 nodes 20 found 14 moving 0.022778s
+NOTICE:  L5 modularity 0.1404501485885839 (+7.047544251237436e-07) 0.000707s
+NOTICE:  L5 lift+contract 0.429678s; quotient nodes 14 edges 175 bytes 8002568 width 4
+NOTICE:  L6 nodes 14 found 14 moving 0.006738s
+disk (segments | WAL position):
+ 404 MB | 495 MB
+disk (segments | WAL position):
+ 114 MB | 503 MB
+== after: leiden (a fresh cluster)
+disk (segments | WAL position):
+ 111 MB | 136 MB
+[116.1s] SET warren.threads = 4; SELECT public.xleiden('g', 'ld', levels_prefix := 'ldl')
+ 0.20211816302201674
+NOTICE:  I1 L1 nodes 1000000 found 448022 moving 6.931716s
+NOTICE:  I1 L1 refined 448177 2.238342s
+NOTICE:  I1 L1 lift+contract 2.357981s; quotient nodes 448177 edges 9895868 bytes 137562812 width 4
+NOTICE:  I1 L2 nodes 448177 found 173674 moving 6.526850s
+NOTICE:  I1 L2 refined 174212 1.948669s
+NOTICE:  I1 L2 lift+contract 4.476460s; quotient nodes 174212 edges 9345231 bytes 124345768 width 4
+NOTICE:  I1 L3 nodes 174212 found 5418 moving 28.593001s
+NOTICE:  I1 L3 refined 56010 2.031625s
+NOTICE:  I1 L3 lift+contract 3.194573s; quotient nodes 56010 edges 9090040 bytes 118431852 width 4
+NOTICE:  I1 L4 nodes 56010 found 172 moving 9.864666s
+NOTICE:  I1 L4 refined 17773 1.244746s
+NOTICE:  I1 L4 lift+contract 2.066812s; quotient nodes 17773 edges 8696470 bytes 112786540 width 4
+NOTICE:  I1 L5 nodes 17773 found 84 moving 2.394176s
+NOTICE:  I1 L5 refined 2520 1.322597s
+NOTICE:  I1 L5 lift+contract 1.031250s; quotient nodes 2520 edges 1014933 bytes 20240120 width 4
+NOTICE:  I1 L6 nodes 2520 found 35 moving 0.360796s
+NOTICE:  I1 L6 refined 125 0.153443s
+NOTICE:  I1 L6 lift+contract 0.815494s; quotient nodes 125 edges 8211 bytes 8101672 width 4
+NOTICE:  I1 L7 nodes 125 found 28 moving 0.073680s
+NOTICE:  I1 L7 refined 33 0.033745s
+NOTICE:  I1 L7 lift+contract 0.688848s; quotient nodes 33 edges 574 bytes 8007812 width 4
+NOTICE:  I1 L8 nodes 33 found 27 moving 0.176947s
+NOTICE:  I1 L8 refined 30 0.019111s
+NOTICE:  I1 L8 lift+contract 0.465199s; quotient nodes 30 edges 452 bytes 8006276 width 4
+NOTICE:  I1 L9 nodes 30 found 27 moving 0.026284s
+NOTICE:  I1 L9 refined 30 0.023373s
+NOTICE:  I2 L1 nodes 1000000 found 29 moving 8.625337s
+NOTICE:  I2 L1 refined 316289 2.795557s
+NOTICE:  I2 L1 lift+contract 2.774151s; quotient nodes 316289 edges 9631761 bytes 131211736 width 4
+NOTICE:  I2 L2 nodes 316289 found 26 moving 3.084823s
+NOTICE:  I2 L2 refined 96535 1.854871s
+NOTICE:  I2 L2 lift+contract 2.509466s; quotient nodes 96535 edges 9183616 bytes 120532428 width 4
+NOTICE:  I2 L3 nodes 96535 found 20 moving 2.690730s
+NOTICE:  I2 L3 refined 29771 1.792208s
+NOTICE:  I2 L3 lift+contract 2.225922s; quotient nodes 29771 edges 8956780 bytes 116199716 width 4
+NOTICE:  I2 L4 nodes 29771 found 20 moving 1.822704s
+NOTICE:  I2 L4 refined 5414 1.245327s
+NOTICE:  I2 L4 lift+contract 1.079426s; quotient nodes 5414 edges 2107220 bytes 33417380 width 4
+NOTICE:  I2 L5 nodes 5414 found 20 moving 0.463379s
+NOTICE:  I2 L5 refined 45 0.296917s
+NOTICE:  I2 L5 lift+contract 0.377304s; quotient nodes 45 edges 649 bytes 8009000 width 4
+NOTICE:  I2 L6 nodes 45 found 20 moving 0.045761s
+NOTICE:  I2 L6 refined 36 0.015044s
+NOTICE:  I2 L6 lift+contract 0.488850s; quotient nodes 36 edges 435 bytes 8006216 width 4
+NOTICE:  I2 L7 nodes 36 found 20 moving 0.023079s
+NOTICE:  I2 L7 refined 36 0.013359s
+disk (segments | WAL position):
+ 1056 MB | 1275 MB

@@ -79,28 +79,77 @@ pub fn refine<I: Interrupts>(
     }
     let mut labels = Vector::filled(memory, nodes, 1, 0i64)?;
     let longest = (0..nodes).map(|node| graph.row(node).len() as u64).max().unwrap_or(0);
-    let scratch = memory.charge(scratch_bytes(nodes, longest, workers.threads()))?;
+    let threads = workers.threads();
+    let scratch = memory.charge(scratch_bytes(nodes, longest, threads))?;
+    memory.reclaim_for(Grouping::BYTES_PER_NODE.saturating_mul(nodes.saturating_add(1)));
+    let pool = Pool { memory, threads };
     let count = workers.run(interrupts, |cancellation| {
-        Ok(run(cancellation, graph, tombstones, communities, keys, options, labels.values_mut()?))
+        Ok(run(
+            cancellation,
+            pool,
+            graph,
+            tombstones,
+            communities,
+            keys,
+            options,
+            labels.values_mut()?,
+        ))
     })??;
     drop(scratch);
     Ok(Refined { labels, communities: count })
 }
 
 /// What [`refine`] holds on the pool for `nodes` nodes, rows of at most
-/// `longest` entries and `threads` threads, all charged on the calling
-/// thread before it starts: per node its order, place and refined
-/// community (24 B) and, for the communities being refined, their state
-/// (24 B); per community, at most one a node, its start and its refined
-/// communities' list (32 B); per thread, a row's weights and candidates.
+/// `longest` entries and `threads` threads, charged on the calling thread
+/// before it starts: per node its order, place and refined community
+/// (24 B); per thread, a row's weights and candidates. What depends on the
+/// communities is charged once they are known ([`Grouping`]).
 fn scratch_bytes(nodes: u64, longest: u64, threads: usize) -> u64 {
-    let per_node = 3 * size_of::<u64>() as u64 + Group::BYTES_PER_MEMBER;
-    let per_community = (size_of::<usize>() + size_of::<Vec<usize>>()) as u64;
+    let per_node = 3 * size_of::<u64>() as u64;
     let per_entry = (size_of::<(usize, f64)>() + size_of::<(usize, f64, f64)>()) as u64;
     nodes
         .saturating_add(1)
-        .saturating_mul(per_node + per_community)
+        .saturating_mul(per_node)
         .saturating_add((threads as u64).saturating_mul(longest.saturating_add(1) * per_entry))
+}
+
+/// The budget [`run`] charges on the pool, and the threads that refine
+/// communities at once.
+#[derive(Clone, Copy)]
+struct Pool<'a> {
+    memory: &'a ComputeMemory,
+    threads: usize,
+}
+
+/// A community's refined communities, or why it could not be refined.
+type Refining = Result<Vec<usize>, CommunityError>;
+
+/// What [`run`] holds once the communities are known, charged on the
+/// pool (reclaimed for ahead, at most [`Grouping::BYTES_PER_NODE`] a
+/// node): per community its start and its refined communities' list
+/// ([`Refining`]); the state of the communities being refined, at most one per
+/// thread and each at most the largest ([`Group::BYTES_PER_MEMBER`] a
+/// member); and the least key of each refined community of one community
+/// at a time (8 B a member of the largest).
+struct Grouping;
+
+impl Grouping {
+    const BYTES_PER_COMMUNITY: u64 = (size_of::<usize>() + size_of::<Refining>()) as u64;
+    const BYTES_PER_LEAST: u64 = size_of::<i64>() as u64;
+    /// The most it charges a node: every node a community of its own, or
+    /// every node in one community.
+    const BYTES_PER_NODE: u64 =
+        Self::BYTES_PER_COMMUNITY + Group::BYTES_PER_MEMBER + Self::BYTES_PER_LEAST;
+
+    /// The bytes for `communities` communities of `members` live nodes,
+    /// the largest of `largest`, refined by `threads` threads.
+    fn bytes(communities: usize, members: usize, largest: usize, threads: usize) -> u64 {
+        let refining = members.min(threads.saturating_mul(largest)) as u64;
+        (communities as u64)
+            .saturating_mul(Self::BYTES_PER_COMMUNITY)
+            .saturating_add(refining.saturating_mul(Group::BYTES_PER_MEMBER))
+            .saturating_add((largest as u64).saturating_mul(Self::BYTES_PER_LEAST))
+    }
 }
 
 /// `len` copies of `value`, reserved fallibly; [`refine`] charged them.
@@ -115,8 +164,10 @@ fn reserved<T: Clone>(len: usize, value: T) -> Result<Vec<T>, CommunityError> {
 
 /// [`refine`]'s work on the pool: writes the labels and returns the
 /// number of refined communities.
+#[allow(clippy::too_many_arguments)] // refine's inputs, and the pool's budget
 fn run(
     cancellation: &Cancellation,
+    pool: Pool<'_>,
     graph: &Undirected,
     tombstones: &Tombstones,
     communities: &[i64],
@@ -131,21 +182,20 @@ fn run(
     members.sort_unstable_by_key(|&node| {
         (communities[node as usize], priority(options.seed, node), node)
     });
+    let starts_community =
+        |at: usize| communities[members[at - 1] as usize] != communities[members[at] as usize];
+    let (mut distinct, mut largest, mut first) = (1, 0, 0);
+    for at in (1..members.len()).filter(|&at| starts_community(at)) {
+        (distinct, largest, first) = (distinct + 1, largest.max(at - first), at);
+    }
+    let largest = largest.max(members.len() - first);
+    let _grouping =
+        pool.memory.charge(Grouping::bytes(distinct, members.len(), largest, pool.threads))?;
     let mut starts = reserved(1, 0usize)?;
-    let distinct = 1
-        + (1..members.len())
-            .filter(|&at| {
-                communities[members[at - 1] as usize] != communities[members[at] as usize]
-            })
-            .count();
     starts
         .try_reserve_exact(distinct + 1)
         .map_err(|_| ComputeError::OutOfMemory { bytes: (distinct * 8) as u64 })?;
-    for at in 1..members.len() {
-        if communities[members[at - 1] as usize] != communities[members[at] as usize] {
-            starts.push(at);
-        }
-    }
+    starts.extend((1..members.len()).filter(|&at| starts_community(at)));
     starts.push(members.len());
     let mut place = reserved(nodes as usize, usize::MAX)?;
     for range in starts.windows(2) {
@@ -153,18 +203,25 @@ fn run(
             place[node as usize] = at;
         }
     }
-    let refined: Vec<Vec<usize>> = starts
+    // Collected indexed, in place: a `Result` collect would gather the
+    // communities' lists in pieces before copying them into one.
+    let mut refined: Vec<Refining> = Vec::new();
+    refined.try_reserve_exact(distinct).map_err(|_| ComputeError::OutOfMemory {
+        bytes: (distinct * size_of::<Refining>()) as u64,
+    })?;
+    starts
         .par_windows(2)
         .map(|range| {
             let mut work = Work::new(cancellation);
             work.check()?;
             Group::new(graph, &members[range[0]..range[1]], &place)?.refine(options, &mut work)
         })
-        .collect::<Result<_, CommunityError>>()?;
+        .collect_into_vec(&mut refined);
     let key = |node: DenseId| keys.map_or(node as i64, |keys| keys[node as usize]);
     let mut count = 0;
     let mut least = Vec::new();
-    for (range, roots) in starts.windows(2).zip(&refined) {
+    for (range, roots) in starts.windows(2).zip(refined) {
+        let roots = roots?;
         let members = &members[range[0]..range[1]];
         least.clear();
         least
@@ -197,8 +254,9 @@ struct Group<'a> {
 }
 
 impl<'a> Group<'a> {
-    /// The bytes per member its state holds.
-    const BYTES_PER_MEMBER: u64 = (3 * size_of::<f64>() + size_of::<usize>()) as u64;
+    /// The bytes per member its state holds beside its refined
+    /// communities (which [`refine`] charges per node, as it returns them).
+    const BYTES_PER_MEMBER: u64 = (2 * size_of::<f64>() + size_of::<usize>()) as u64;
 
     fn new(
         graph: &'a Undirected,
@@ -459,6 +517,45 @@ mod tests {
         let refined =
             group.refine(Refinement { resolution: 0.0, ..OPTIONS }, &mut Work::new(&cancellation));
         assert!(matches!(refined, Err(CommunityError::Compute(ComputeError::Cancelled))));
+    }
+
+    /// The refinement of a path of `n` nodes in communities of `size`
+    /// consecutive nodes, within a budget of `per_node` bytes a node.
+    fn refined_within(n: u64, size: u64, per_node: u64) -> Result<Refined, CommunityError> {
+        let edges: Edges = (0..n - 1).map(|i| (0, i, i + 1, 1.0)).collect();
+        let graph = undirected(n, &edges);
+        let communities: Vec<i64> = (0..n).map(|node| (node / size) as i64).collect();
+        let tombstones = Tombstones::new(n).unwrap();
+        let memory = ComputeMemory::new(n * per_node);
+        refine(
+            workers(),
+            &memory,
+            &mut Uninterrupted,
+            &graph,
+            &tombstones,
+            &communities,
+            None,
+            OPTIONS,
+        )
+    }
+
+    #[test]
+    fn the_state_of_small_communities_is_charged_for_those_being_refined() {
+        // The labels (8 B a node), the members, places and refined
+        // communities (24 B) and each community's start and list (48 B a
+        // community, 4.8 B a node here): the state of a community being
+        // refined is held only while a thread refines it.
+        let found = refined_within(10_000, 10, 48).unwrap();
+        assert_eq!(found.labels.values().len(), 10_000);
+    }
+
+    #[test]
+    fn the_state_of_one_large_community_is_charged() {
+        let refused = refined_within(10_000, 10_000, 48);
+        assert!(
+            matches!(refused, Err(CommunityError::Compute(ComputeError::MemoryLimit { .. }))),
+            "{refused:?}"
+        );
     }
 
     #[test]

@@ -167,7 +167,10 @@ PL/pgSQL over them, `contract`, `project` and `lift`
 (`crates/pg_warren/src/community_sql/library/`). Graph names beginning
 with `_warren_` are reserved for their levels (42939): `contract(graph,
 labels, NULL)` makes a new graph of the caller's named
-`_warren_level_<version id>`, after the id it returns.
+`_warren_level_<version id>`, after the id it returns. A level graph
+stores each relation's forward CSR only, whatever the input's layout (no
+reverse or merged CSR): the levels read nothing else, and on a directed
+graph that halves what each level writes.
 
 At 1M nodes and 5M undirected edges on 4 vCPUs, `louvain` takes 5.8 s and
 `leiden` 8.3 s for one iteration; at 10M nodes, 93 s and 119 s. The default
@@ -184,9 +187,11 @@ about as much again. At 10M nodes (0.72 GB of segments) `louvain` wrote
 2.5 GB of segments and 2.6 GB of WAL, and `leiden` with its two
 iterations 7.8 GB and 8.2 GB. On a graph with little community structure
 it is far more, because each level's graph stays nearly as large as the
-input: on a uniform random graph of 10M nodes and 100M edges `louvain`
-had written 7.5 GB of segments when it was stopped for disk, and `leiden`
-is refused there at the default limits (53400; see
+input: on a uniform random graph of 10M nodes and 100M directed edges
+`louvain` had written 7.5 GB of segments when it was stopped for disk,
+before level graphs stored forward CSRs only (at 1M nodes that halved its
+level segments, 536 MB to 293 MB), and `leiden` was refused there at the
+default limits (53400), before its refinement charged its real peak (see
 [limits.md](limits.md#known-limitations)). The planned fix for the disk is
 for `contract` to keep a quotient in memory for the rest of the statement
 (DESIGN.md §6.7, §13).
