@@ -1,7 +1,7 @@
 name: Set up PostgreSQL (PGDG)
 description: >
   Install a PostgreSQL major with server dev headers from the PGDG apt repo,
-  plus libclang for pgrx's bindgen (the runner image's, if it has one), and export PG_CONFIG / PGRX_PG_CONFIG_PATH.
+  plus libclang for pgrx's bindgen, and export PG_CONFIG / PGRX_PG_CONFIG_PATH.
 inputs:
   pg-major:
     description: PostgreSQL major version (15, 16, 17, 18)
@@ -34,22 +34,12 @@ runs:
         # pg_warren's vector_map tests exercise JIT, so install it explicitly.
         jit=()
         if [ "$PG_MAJOR" -ge 18 ]; then jit=("postgresql-${PG_MAJOR}-jit"); fi
-        # The runner image already ships clang with libclang; installing
-        # clang/libclang-dev pulled ~95 MB of LLVM 19 from an Ubuntu mirror
-        # that trickled at ~80 kB/s for a whole step (2026-10-22, PG 17).
-        # Use the image's libclang when it has one, else install it.
-        clang=(libclang-dev clang)
-        libclang=$(ls -d /usr/lib/llvm-*/lib/libclang.so* 2>/dev/null | sort -V | tail -n 1 || true)
-        if [ -n "$libclang" ]; then
-          clang=()
-          echo "LIBCLANG_PATH=$(dirname "$libclang")" >> "$GITHUB_ENV"
-        fi
         # Show apt's progress, never wait on a prompt, and give each attempt
         # ten minutes; a retry resumes the downloads already made.
         export DEBIAN_FRONTEND=noninteractive
         for attempt in 1 2 3; do
           if sudo --preserve-env=DEBIAN_FRONTEND timeout 600 apt-get install -y --no-install-recommends \
-            "postgresql-${PG_MAJOR}" "${jit[@]}" "postgresql-server-dev-${PG_MAJOR}" "${clang[@]}"; then
+            "postgresql-${PG_MAJOR}" "${jit[@]}" "postgresql-server-dev-${PG_MAJOR}" libclang-dev clang; then
             break
           fi
           if [ "$attempt" -eq 3 ]; then exit 1; fi
