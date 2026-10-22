@@ -3,7 +3,7 @@
 use std::iter::FusedIterator;
 use std::slice::Iter;
 
-use super::{Csr, Target, TargetWidth};
+use super::{Csr, CsrSlices, Target, TargetWidth};
 use crate::graph::DenseId;
 
 /// A CSR whose target width was chosen from its id space.
@@ -86,6 +86,52 @@ impl AnyCsr {
         match self {
             Self::U32(csr) => csr.has_edge(source, target),
             Self::U64(csr) => csr.has_edge(source, target),
+        }
+    }
+}
+
+impl AnyCsr {
+    /// Its arrays, borrowed once, for reading many rows.
+    pub(crate) fn slices(&self) -> AnyCsrSlices<'_> {
+        match self {
+            Self::U32(csr) => AnyCsrSlices::U32(csr.slices()),
+            Self::U64(csr) => AnyCsrSlices::U64(csr.slices()),
+        }
+    }
+}
+
+/// The arrays of an [`AnyCsr`], borrowed once ([`CsrSlices`]).
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum AnyCsrSlices<'a> {
+    /// A CSR with `u32` targets.
+    U32(CsrSlices<'a, u32>),
+    /// A CSR with `u64` targets.
+    U64(CsrSlices<'a, u64>),
+}
+
+impl<'a> AnyCsrSlices<'a> {
+    /// The targets of `source`'s row in ascending order; empty outside the
+    /// id space.
+    pub(crate) fn neighbours(&self, source: DenseId) -> Neighbours<'a> {
+        match self {
+            Self::U32(csr) => Neighbours(Row::U32(csr.neighbours(source).iter())),
+            Self::U64(csr) => Neighbours(Row::U64(csr.neighbours(source).iter())),
+        }
+    }
+
+    /// The weights of `source`'s row, aligned with [`Self::neighbours`].
+    pub(crate) fn neighbour_weights(&self, source: DenseId) -> Option<&'a [f64]> {
+        match self {
+            Self::U32(csr) => csr.neighbour_weights(source),
+            Self::U64(csr) => csr.neighbour_weights(source),
+        }
+    }
+
+    /// The number of targets in `source`'s row.
+    pub(crate) fn degree(&self, source: DenseId) -> u64 {
+        match self {
+            Self::U32(csr) => csr.degree(source),
+            Self::U64(csr) => csr.degree(source),
         }
     }
 }

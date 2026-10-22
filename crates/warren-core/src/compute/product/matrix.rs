@@ -6,7 +6,7 @@ use std::mem::size_of;
 
 use super::super::{ComputeError, ComputeMemory, MemoryCharge};
 use crate::graph::RelationSelection;
-use crate::graph::{AnyCsr, Csr, DenseId, GraphCsr, Target};
+use crate::graph::{AnyCsr, AnyCsrSlices, CsrSlices, DenseId, GraphCsr, Target};
 
 /// How a product walks the matrix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,10 +17,11 @@ pub(super) enum Form {
     Push,
 }
 
-/// The CSRs a product reads.
+/// The CSRs a product reads, their arrays borrowed once rather than on
+/// every row.
 #[derive(Debug)]
 pub(crate) struct Matrix<'g> {
-    csrs: Vec<&'g AnyCsr>,
+    csrs: Vec<AnyCsrSlices<'g>>,
     weighted: bool,
     form: Form,
     /// The budget row scratches are charged to.
@@ -81,7 +82,7 @@ impl<'g> Matrix<'g> {
         };
         let has_weights = csrs.iter().any(|csr| csr.is_weighted());
         Ok(Self {
-            csrs,
+            csrs: csrs.into_iter().map(AnyCsr::slices).collect(),
             weighted: weighted.unwrap_or(true) && has_weights,
             form,
             memory: memory.clone(),
@@ -114,8 +115,8 @@ impl<'g> Matrix<'g> {
         mut entry: impl FnMut(DenseId, f64) -> Result<(), ComputeError>,
     ) -> Result<(), ComputeError> {
         match self.csrs.as_slice() {
-            [AnyCsr::U32(csr)] => entries(csr, row, self.weighted, entry),
-            [AnyCsr::U64(csr)] => entries(csr, row, self.weighted, entry),
+            [AnyCsrSlices::U32(csr)] => entries(csr, row, self.weighted, entry),
+            [AnyCsrSlices::U64(csr)] => entries(csr, row, self.weighted, entry),
             many => {
                 let len = many.iter().map(|csr| csr.degree(row) as usize).sum();
                 let scratch = scratch.clear_for(len)?;
@@ -141,7 +142,7 @@ impl<'g> Matrix<'g> {
 
 /// The CSRs of one relation's row, weighted or with unit weights.
 fn entries<T: Target>(
-    csr: &Csr<T>,
+    csr: &CsrSlices<'_, T>,
     row: DenseId,
     weighted: bool,
     mut entry: impl FnMut(DenseId, f64) -> Result<(), ComputeError>,

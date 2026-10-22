@@ -11,15 +11,16 @@ mod build;
 mod graph_csr;
 mod merge;
 mod rows;
+mod slices;
 mod target;
 mod transpose;
 
-use std::ops::Range;
-
+pub(crate) use any::AnyCsrSlices;
 pub use any::{AnyCsr, Neighbours};
 pub use build::{BuildPlan, BuildSummary, BuiltCsr, CsrDirection, CsrScope, CsrSink};
 pub use graph_csr::{CsrLayout, GraphCsr, RelationCsr};
 pub use rows::{AllRelations, CsrRows, RowNeighbours};
+pub(crate) use slices::CsrSlices;
 pub use target::{Target, TargetWidth};
 
 use super::{DenseId, GraphError, SegmentBuffer};
@@ -139,32 +140,23 @@ impl<T: Target> Csr<T> {
     /// The targets of `source`'s row in ascending order; empty outside the
     /// id space.
     pub fn neighbours(&self, source: DenseId) -> &[T] {
-        &self.targets[self.row(source)]
+        self.slices().neighbours(source)
     }
 
     /// The weights of `source`'s row, aligned with [`Self::neighbours`].
     pub fn neighbour_weights(&self, source: DenseId) -> Option<&[f64]> {
-        let row = self.row(source);
-        self.weights.as_deref().map(|weights| &weights[row])
+        self.slices().neighbour_weights(source)
     }
 
     /// The number of targets in `source`'s row.
     pub fn degree(&self, source: DenseId) -> u64 {
-        self.row(source).len() as u64
+        self.slices().degree(source)
     }
 
     /// Whether the edge `source → target` exists (binary search in the row).
     pub fn has_edge(&self, source: DenseId, target: DenseId) -> bool {
         T::from_dense(target)
             .is_some_and(|target| self.neighbours(source).binary_search(&target).is_ok())
-    }
-
-    fn row(&self, source: DenseId) -> Range<usize> {
-        if source >= self.id_space {
-            return 0..0;
-        }
-        let source = source as usize;
-        self.offsets[source] as usize..self.offsets[source + 1] as usize
     }
 }
 

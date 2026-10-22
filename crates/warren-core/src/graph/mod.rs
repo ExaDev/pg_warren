@@ -29,6 +29,7 @@ pub use csr::{
     AllRelations, AnyCsr, BuildPlan, BuildSummary, BuiltCsr, Csr, CsrDirection, CsrLayout, CsrRows,
     CsrScope, CsrSink, GraphCsr, Neighbours, RelationCsr, RowNeighbours, Target, TargetWidth,
 };
+pub(crate) use csr::{AnyCsrSlices, CsrSlices};
 pub use direction::Direction;
 pub use edge_list::{EdgeIntake, EdgeList};
 pub use error::GraphError;
