@@ -15,6 +15,9 @@ runs:
         PG_MAJOR: ${{ inputs.pg-major }}
       run: |
         set -euxo pipefail
+        # A stalled mirror connection fails and retries rather than hanging.
+        printf 'Acquire::Retries "3";\nAcquire::http::Timeout "60";\nAcquire::https::Timeout "60";\n' \
+          | sudo tee /etc/apt/apt.conf.d/80-ci-timeouts >/dev/null
         sudo apt-get update -qq
         sudo apt-get install -y -qq postgresql-common
         sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
