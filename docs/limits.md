@@ -405,6 +405,26 @@ Dijkstra's queue was a lazy-deletion heap that grew on the pool to an entry
 per improving relaxation; it is now an indexed heap of 16 bytes per node
 per search, allocated with the rest of the scratch (0.06 GB more for four
 searches at 1M nodes).
+
+The closeness and harmonic rows above, and the soak's below, predate
+multi-source search: unweighted closeness and harmonic now search 64
+sources at a time in one breadth-first search over all the compute
+threads (DESIGN.md §6.7), with 40 bytes of scratch per node per call
+rather than 16 per thread. Measured in the domain crate
+(`cargo bench -p warren-core --bench centrality`: 1M nodes, 10M random
+directed unweighted edges, `warren.threads`' equivalent 4, the same
+shared 4-vCPU Xeon with 15 GB, other builds running, load average 3–12;
+criterion means of 10 iterations, each run listed):
+
+| Sources | closeness, per source | closeness, batched | harmonic, per source | harmonic, batched |
+|---|---|---|---|---|
+| 16 | 3.8, 6.6 s | 0.52–0.72 s (4 runs) | 4.3, 2.7 s | 1.05, 0.54 s |
+| 64 | 10.1, 17.0 s | 0.73–1.05 s (4 runs) | 20.7, 11.0 s | 0.65–1.23 s (4 runs) |
+| 256 | 50.0, 37.5 s | 1.8–3.7 s (6 runs) | 80.5 s | 3.0, 3.5 s |
+
+Betweenness from 16 sources took 13.2 and 16.5 s in the same runs
+(unchanged: one source per thread). Weighted closeness and harmonic still
+search one source per thread. Not re-measured through SQL at 10M nodes.
 `directed := false` and `similar_pairs` first build the symmetric
 adjacency, 16 bytes per stored edge (32 weighted): at 10M nodes and 100M
 edges weighted undirected betweenness needs about 4.6 GB of scratch,
@@ -479,7 +499,7 @@ Seconds, and the backend's private peak, version included:
 | `core_number` | 22.8 s, 3.2 GB |
 | `strong_components_vector` | 15.8 s, 1.7 GB |
 | `minimum_spanning_forest` (rows counted) | 54.4 s |
-| `betweenness_centrality` / `closeness_centrality` / `harmonic_centrality`, 16 sources | 61.1 / 29.4 / 30.9 s, 2.0–2.6 GB |
+| `betweenness_centrality` / `closeness_centrality` / `harmonic_centrality`, 16 sources | 61.1 / 29.4 / 30.9 s, 2.0–2.6 GB (closeness and harmonic before multi-source search, above) |
 | `most_similar`, one node / `similarity`, 100,000 pairs | 2 ms / 0.55 s |
 | `similar_pairs`, `k := 10`, every 100th node | 10.2 s, 3.6 GB |
 | `louvain` | stopped for disk after 383 s (7.5 GB of segments written) |
