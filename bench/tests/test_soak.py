@@ -529,3 +529,23 @@ def test_a_run_cancelled_for_disk_reports_how_long_it_ran():
     found = soak.summary({"hardware": {"cpus": 4}, "stages": stages})["communities"]["leiden"]
     assert found == {"stopped_for_disk": True, "seconds": 900.0, "peak_rss_anon": GIB,
                      "segments_written": 9 * GIB, "wal_written": 10 * GIB}
+
+
+def test_the_shared_cache_is_the_servers_default_unless_a_cap_is_given():
+    assert soak.cluster_settings(None) == soak.SETTINGS
+    assert soak.cluster_settings("8GB") == (*soak.SETTINGS, "shared_preload_libraries = 'pg_warren'",
+                                            "warren.shared_cache_memory = '8GB'")
+
+
+def test_a_versions_shared_bytes_are_read_from_the_registry():
+    sql = soak.shared_bytes_sql(7)
+    assert "warren.shared_cache()" in sql and "kind = 'version'" in sql and "version = 7" in sql
+
+
+def test_a_shared_version_needs_no_raised_pass():
+    id_space = 10_000_000
+    over = {"cached_bytes": 6 * GIB, "cache_memory_bytes": 4 * GIB}
+    assert soak.needs_raised_pass(over, id_space)
+    assert not soak.needs_raised_pass({**over, "shared_bytes": 6 * GIB}, id_space)
+    assert soak.needs_raised_pass({"cached_bytes": None, "cache_memory_bytes": 4 * GIB}, id_space)
+    assert not soak.needs_raised_pass({"cached_bytes": GIB, "cache_memory_bytes": 4 * GIB}, id_space)
