@@ -2,6 +2,14 @@
 
 ## 0.5.0 — in development
 
+### Fixed
+
+- After `DROP EXTENSION pg_warren` and `CREATE EXTENSION pg_warren` in a
+  database, a backend that had read graphs before could serve the old
+  installation's cached versions and vectors for the new installation's
+  (version, graph and vector ids restart). A backend now drops what it
+  cached when pg_warren is installed again.
+
 ## 0.4.0 — locality, the library, and communities (2026-10-22)
 
 Milestone M8 of DESIGN.md §13. Dense ids can be ordered for locality; the
