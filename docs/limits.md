@@ -336,7 +336,7 @@ Smaller-scale kernel numbers (100K nodes, 1M edges unless stated):
 | SpMV (`plus_times`), pull over forward or reverse CSR | 0.38–0.42 G edges/s on 1 thread, 1.2 G edges/s on 4 | DESIGN §6.3, `benches/compute.rs` |
 | SpMV, push (no reverse CSR) | 0.22 G edges/s, 1 thread | DESIGN §6.3 |
 | SpMV out of cache (4M nodes, 40M edges), pull over reverse CSR | 0.12–0.13 G edges/s (f64) and 0.14–0.17 (f32) on 1 thread; 0.19–0.33 and 0.22–0.51 on 4 (a loaded machine) | DESIGN §6.10, `benches/spmv_out_of_cache.rs` |
-| `vector_map`, `pagerank`'s four maps (4M nodes), 1 thread | 145–165 ms (340–390 ms before the no-NULL path); one whole iteration with its product 580–665 ms (790–840 ms before); 250–375 ms (480–550 ms) on 4 threads | DESIGN §6.3, `benches/spmv_out_of_cache.rs` |
+| `vector_map`, `pagerank`'s four maps (4M nodes), 1 thread | 145–165 ms (340–390 ms before the no-NULL path: 2.1–2.7× faster); one whole iteration with its product 580–665 ms (790–840 ms before: 1.2–1.4×); 250–375 ms (480–550 ms: 1.3–2.2×) on 4 threads | DESIGN §6.3, `benches/spmv_out_of_cache.rs` |
 | `gather`, every node sending | `sum` of f64 14 ms (1 thread) / 8 ms (4); `collect` of f64 19 / 8 ms; `collect` of 8-byte messages 46 / 18 ms; pushed 30–70 ms | DESIGN §6.4, `benches/gather.rs` |
 | `diff` between two versions | ~25 ms, 1 thread | DESIGN §7, `benches/version_diff.rs` |
 | `eigen`, k = 20, f32, adjacency, largest | 1,037 steps: 9.9 s (1 thread) / 3.7 s (4); ARPACK 1,020–1,313 matvecs | DESIGN §6.5, `bench/results/eigen/` |

@@ -37,8 +37,10 @@
 - Measured in `warren-core` at 4M nodes and 40M edges
   (`benches/spmv_out_of_cache.rs`), on a shared 4-vCPU machine, so the
   spread is wide:
-  - `pagerank`'s four maps: 2.2–2.4× faster on one thread;
-  - a whole iteration: 1.3–1.4× faster on one thread, 1.3–2× on four.
+  - `pagerank`'s four maps: 2.1–2.7× faster on one thread (340–390 ms
+    before, 145–165 ms after);
+  - a whole iteration: 1.2–1.4× faster on one thread (790–840 →
+    580–665 ms), 1.3–2.2× on four (480–550 → 250–375 ms).
 
   Not re-measured through SQL at 10M nodes.
 
