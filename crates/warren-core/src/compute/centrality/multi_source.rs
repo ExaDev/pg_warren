@@ -278,6 +278,27 @@ mod tests {
     }
 
     #[test]
+    fn an_undirected_edge_is_followed_against_its_direction() {
+        // Shrunk from a proptest failure: 18 -> 0 in a 20-node id space,
+        // searched undirected from 0.
+        let graph = reference::graph(20, 1, &vec![(0, 18, 0, 1.0)], false, false);
+        let tombstones = Tombstones::new(20).unwrap();
+        let paths = ShortestPaths {
+            graph: &graph,
+            relations: RelationSelection::All,
+            tombstones: &tombstones,
+            directed: false,
+            weighted: None,
+        };
+        let memory = ComputeMemory::new(1 << 24);
+        let matrix = Adjacency::matrix(&paths, &memory).unwrap();
+        let adjacency = Adjacency::new(&paths, matrix, &memory, &Cancellation::new()).unwrap();
+        let expected = Reports::from([((18, 1), 1)]);
+        assert_eq!(one_by_one(&adjacency, 20, &[0]), expected);
+        assert_eq!(batched(&adjacency, 20, &[0]), expected);
+    }
+
+    #[test]
     fn a_cancelled_search_stops() {
         let edges: Edges = (0..9).map(|n| (0, n, n + 1, 1.0)).collect();
         let graph = reference::graph(10, 1, &edges, false, false);
@@ -306,6 +327,7 @@ mod tests {
             relations in 1usize..3,
             edges in prop::collection::vec((0usize..2, 0u64..300, 0u64..300), 0..900),
             sources in prop::collection::btree_set(0u64..300, 0..300),
+            only in prop::option::of(0usize..2),
             directed in any::<bool>(),
             store_merged in any::<bool>(),
         ) {
@@ -318,9 +340,14 @@ mod tests {
             let graph = reference::graph_as(id_space, relations, &edges, false, layout);
             let tombstones = Tombstones::new(id_space).unwrap();
             let sources: Vec<DenseId> = sources.into_iter().filter(|&s| s < id_space).collect();
+            let indexes = reference::relations(relations);
+            let relations = match only {
+                Some(only) => RelationSelection::Only(&indexes[only.min(indexes.len() - 1)..][..1]),
+                None => RelationSelection::All,
+            };
             let paths = ShortestPaths {
                 graph: &graph,
-                relations: RelationSelection::All,
+                relations,
                 tombstones: &tombstones,
                 directed,
                 weighted: None,

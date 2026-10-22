@@ -345,7 +345,8 @@ mod tests {
         #[test]
         fn batches_give_what_one_source_at_a_time_gives(
             id_space in 1u64..150,
-            edges in prop::collection::vec((0u64..150, 0u64..150), 0..400),
+            edges in prop::collection::vec((0usize..2, 0u64..150, 0u64..150), 0..400),
+            only in prop::option::of(0usize..2),
             tombstoned in prop::collection::vec(0u64..150, 0..8),
             k in prop::option::of(1u64..150),
             seed in any::<u64>(),
@@ -354,15 +355,20 @@ mod tests {
             let removed = |n: &u64| tombstoned.contains(n);
             let edges: Edges = edges
                 .into_iter()
-                .filter(|&(s, t)| s < id_space && t < id_space && !removed(&s) && !removed(&t))
-                .map(|(s, t)| (0, s, t, 1.0))
+                .filter(|&(_, s, t)| s < id_space && t < id_space && !removed(&s) && !removed(&t))
+                .map(|(r, s, t)| (r, s, t, 1.0))
                 .collect();
-            let graph = reference::graph(id_space, 1, &edges, false, false);
+            let graph = reference::graph(id_space, 2, &edges, false, false);
             let mut tombstones = Tombstones::new(id_space).unwrap();
             tombstoned.iter().filter(|&&t| t < id_space).for_each(|&t| tombstones.insert(t).unwrap());
+            let indexes = reference::relations(2);
+            let relations = match only {
+                Some(only) => RelationSelection::Only(&indexes[only..=only]),
+                None => RelationSelection::All,
+            };
             let paths = ShortestPaths {
                 graph: &graph,
-                relations: RelationSelection::All,
+                relations,
                 tombstones: &tombstones,
                 directed,
                 weighted: None,
