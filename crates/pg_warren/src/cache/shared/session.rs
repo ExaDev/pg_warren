@@ -1,9 +1,10 @@
 //! A backend's side of the shared cache: the slots its current statement
 //! pins, the regions it maps (each an `Arc`, so a mapping a call still
 //! holds is never released from under it), and the slots it is loading.
-//! Its operations run under the registry's lock and keep the registry's
-//! `pins` and `mappers` equal to what the backends hold, so that a
-//! backend's exit gives back everything it held.
+//! Its operations run under the registry's lock, except `unpin`, which
+//! needs only the registry's pin table, and keep the registry's pins and
+//! `mappers` equal to what the backends hold, so that a backend's exit
+//! gives back everything it held.
 //!
 //! When unheld mappings are released is the adapter's policy (DESIGN.md
 //! §14 item 28): every unheld mapping (`Release::Unheld`), or only those of
@@ -12,7 +13,9 @@
 use std::sync::Arc;
 
 use super::admission::Limits;
-use super::registry::{Claim, Gone, Registry, SlotTable};
+use std::sync::atomic::AtomicU32;
+
+use super::registry::{unpin, Claim, Gone, PinTable, Registry, SlotTable};
 use super::slot::{Handle, Key, Process, State, Ticket};
 
 /// A backend's pins, mappings and claims; `M` is a mapped region.
@@ -59,9 +62,9 @@ impl<M> Session<M> {
 
     /// Uses a ready slot in the current statement, pinning it once per
     /// statement.
-    pub(crate) fn open<S: SlotTable>(
+    pub(crate) fn open<S: SlotTable, P: PinTable>(
         &mut self,
-        registry: &mut Registry<S>,
+        registry: &mut Registry<S, P>,
         ticket: Ticket,
     ) -> Result<Use<M>, Gone> {
         if registry.state(ticket) != Some(State::Ready) {
@@ -80,9 +83,9 @@ impl<M> Session<M> {
     /// Records the mapping of a slot `open` said to attach, counting this
     /// backend a mapper. The statement's pin keeps the slot ready, so it is
     /// `Gone` only if the slot was not opened: then detach the mapping.
-    pub(crate) fn mapped<S: SlotTable>(
+    pub(crate) fn mapped<S: SlotTable, P: PinTable>(
         &mut self,
-        registry: &mut Registry<S>,
+        registry: &mut Registry<S, P>,
         ticket: Ticket,
         mapping: Arc<M>,
     ) -> Result<Arc<M>, Gone> {
@@ -97,9 +100,9 @@ impl<M> Session<M> {
     }
 
     /// Claims a slot to load `key`'s version of `bytes` into.
-    pub(crate) fn claim<S: SlotTable>(
+    pub(crate) fn claim<S: SlotTable, P: PinTable>(
         &mut self,
-        registry: &mut Registry<S>,
+        registry: &mut Registry<S, P>,
         key: Key,
         bytes: u64,
         limits: Limits,
@@ -113,9 +116,9 @@ impl<M> Session<M> {
 
     /// Publishes a claimed slot's region, which this backend maps as
     /// `mapping`; the statement pins it.
-    pub(crate) fn publish<S: SlotTable>(
+    pub(crate) fn publish<S: SlotTable, P: PinTable>(
         &mut self,
-        registry: &mut Registry<S>,
+        registry: &mut Registry<S, P>,
         ticket: Ticket,
         handle: Handle,
         mapping: Arc<M>,
@@ -130,24 +133,24 @@ impl<M> Session<M> {
     /// does after an ERROR unwound the load, so that a waiter loads it. Its
     /// mappings stay, and its pins end with the statement as usual; an
     /// attach the ERROR interrupted was never counted (`Session::mapped`).
-    pub(crate) fn abort<S: SlotTable>(&mut self, registry: &mut Registry<S>) {
+    pub(crate) fn abort<S: SlotTable, P: PinTable>(&mut self, registry: &mut Registry<S, P>) {
         for ticket in self.loading.drain(..) {
             registry.abandon(ticket);
         }
     }
 
-    /// Ends the current statement's pins.
-    pub(crate) fn unpin<S: SlotTable>(&mut self, registry: &mut Registry<S>) {
+    /// Ends the current statement's pins, without the registry's lock.
+    pub(crate) fn unpin(&mut self, pins: &[AtomicU32]) {
         for ticket in self.pins.drain(..) {
-            registry.unpin(ticket);
+            unpin(pins, ticket);
         }
     }
 
     /// Releases the mappings `which` selects that no call holds, passing
     /// each to `detach` before the registry counts it gone.
-    pub(crate) fn release<S: SlotTable>(
+    pub(crate) fn release<S: SlotTable, P: PinTable>(
         &mut self,
-        registry: &mut Registry<S>,
+        registry: &mut Registry<S, P>,
         which: Release,
         detach: impl FnMut(Arc<M>),
     ) {
@@ -165,19 +168,19 @@ impl<M> Session<M> {
 
     /// Gives back everything the backend holds as it exits: its pins, its
     /// claims and every mapping, held or not.
-    pub(crate) fn exit<S: SlotTable>(
+    pub(crate) fn exit<S: SlotTable, P: PinTable>(
         &mut self,
-        registry: &mut Registry<S>,
+        registry: &mut Registry<S, P>,
         detach: impl FnMut(Arc<M>),
     ) {
-        self.unpin(registry);
+        self.unpin(registry.pin_table());
         self.abort(registry);
         Self::detach_all(registry, std::mem::take(&mut self.mappings), detach);
     }
 
     /// Detaches each of `mappings`, then counts it gone in the registry.
-    fn detach_all<S: SlotTable>(
-        registry: &mut Registry<S>,
+    fn detach_all<S: SlotTable, P: PinTable>(
+        registry: &mut Registry<S, P>,
         mappings: Vec<(Ticket, Arc<M>)>,
         mut detach: impl FnMut(Arc<M>),
     ) {
@@ -224,12 +227,16 @@ mod tests {
         Limits { cap: 100, store_room: u64::MAX }
     }
 
-    type Table = Registry<Vec<Slot>>;
+    type Table = Registry<Vec<Slot>, Vec<AtomicU32>>;
+
+    fn table(slots: usize) -> Table {
+        Registry::new(vec![Slot::EMPTY; slots], (0..slots).map(|_| AtomicU32::new(0)).collect())
+    }
 
     /// A registry holding `version`, loaded and published by another
     /// backend whose pin has ended (it still maps it), as handle `version`.
     fn published(versions: &[i64]) -> (Table, Vec<Ticket>) {
-        let mut registry = Registry::new(vec![Slot::EMPTY; 4]);
+        let mut registry = table(4);
         let tickets = versions
             .iter()
             .map(|&version| {
@@ -238,7 +245,7 @@ mod tests {
                     panic!("not claimed");
                 };
                 registry.publish(ticket, Handle(version as u32)).unwrap();
-                registry.unpin(ticket);
+                unpin(registry.pin_table(), ticket);
                 ticket
             })
             .collect();
@@ -256,8 +263,7 @@ mod tests {
     }
 
     fn counts(registry: &Table, ticket: Ticket) -> (u32, u32) {
-        let slot = registry.slots()[ticket.slot];
-        (slot.pins, slot.mappers)
+        (registry.pins()[ticket.slot], registry.slots()[ticket.slot].mappers)
     }
 
     #[test]
@@ -277,7 +283,7 @@ mod tests {
         let mut session = Session::<u32>::new(PROCESS);
         assert!(matches!(session.open(&mut registry, tickets[0]), Ok(Use::Attach(Handle(1)))));
         assert_eq!(counts(&registry, tickets[0]), (1, 1), "an attach that fails counts nothing");
-        session.unpin(&mut registry);
+        session.unpin(registry.pin_table());
         session.exit(&mut registry, |_| panic!("nothing mapped"));
         assert_eq!(counts(&registry, tickets[0]), (0, 1));
     }
@@ -287,7 +293,7 @@ mod tests {
         let (mut registry, tickets) = published(&[1]);
         let mut session = Session::new(PROCESS);
         drop(read(&mut session, &mut registry, tickets[0]));
-        session.unpin(&mut registry);
+        session.unpin(registry.pin_table());
         assert_eq!(counts(&registry, tickets[0]), (0, 2));
         assert!(matches!(session.open(&mut registry, tickets[0]), Ok(Use::Mapped(_))));
         assert_eq!(counts(&registry, tickets[0]), (1, 2));
@@ -299,7 +305,7 @@ mod tests {
         registry.evict(|_| true);
         let mut session = Session::<u32>::new(PROCESS);
         assert!(session.open(&mut registry, tickets[0]).is_err());
-        session.unpin(&mut registry);
+        session.unpin(registry.pin_table());
         session.release(&mut registry, Release::Unheld, |_| panic!("nothing mapped"));
         assert_eq!(counts(&registry, tickets[0]), (0, 1), "nothing was counted");
     }
@@ -310,7 +316,7 @@ mod tests {
         let mut session = Session::new(PROCESS);
         let held = read(&mut session, &mut registry, tickets[0]);
         drop(read(&mut session, &mut registry, tickets[1]));
-        session.unpin(&mut registry);
+        session.unpin(registry.pin_table());
         let mut detached = Vec::new();
         session.release(&mut registry, Release::Unheld, |mapping| detached.push(*mapping));
         assert_eq!(detached, [2]);
@@ -327,7 +333,7 @@ mod tests {
         let mut session = Session::new(PROCESS);
         drop(read(&mut session, &mut registry, tickets[0]));
         drop(read(&mut session, &mut registry, tickets[1]));
-        session.unpin(&mut registry);
+        session.unpin(registry.pin_table());
         registry.release(tickets[1]);
         registry.evict(|key| key.version == 2);
         assert_eq!(registry.state(tickets[1]), Some(State::Draining));
@@ -340,7 +346,7 @@ mod tests {
 
     #[test]
     fn a_published_load_is_pinned_and_mapped_by_its_loader() {
-        let mut registry = Registry::new(vec![Slot::EMPTY; 2]);
+        let mut registry = table(2);
         let mut session = Session::new(PROCESS);
         let Claim::Load { ticket, .. } = session.claim(&mut registry, key(1), 10, limits()) else {
             panic!("not claimed");

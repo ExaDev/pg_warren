@@ -1,7 +1,11 @@
 //! The registry's state machine (DESIGN.md §5.6): the transitions of its
 //! slots, as plain Rust over a slot table, so that the `Dsm` adapter runs
 //! them under its lock on a table in shared memory and the `Memory` fake
-//! on one in a `Mutex`.
+//! on one in a `Mutex`. Each slot's pins are an atomic counter in a pin
+//! table beside it: they are added only under the lock, and a statement
+//! ends them without it (`unpin`), so that the end of a transaction takes
+//! no lock; admission and eviction read them under the lock, where a slot
+//! read unpinned stays unpinned until the lock is released.
 //!
 //! ```text
 //!            claim            publish
@@ -16,6 +20,8 @@
 //! mapper detaches. Every transition after a claim names the claim's
 //! `Ticket`, so one on a slot since emptied and claimed again does nothing.
 
+use std::sync::atomic::{AtomicU32, Ordering};
+
 use super::admission::{admit, Limits, Refusal};
 use super::slot::{Handle, Key, Process, Slot, State, Ticket};
 
@@ -25,14 +31,22 @@ pub(crate) trait SlotTable: AsRef<[Slot]> + AsMut<[Slot]> {}
 
 impl<T: AsRef<[Slot]> + AsMut<[Slot]>> SlotTable for T {}
 
-/// The slot table and its clocks.
+/// The slots' pins, one counter per slot, which a statement ends without
+/// the registry's lock: shared with the backends in the `Memory` fake, an
+/// array in shared memory beside the slots in the `Dsm` adapter.
+pub(crate) trait PinTable: AsRef<[AtomicU32]> {}
+
+impl<T: AsRef<[AtomicU32]>> PinTable for T {}
+
+/// The slot table, its pins and its clocks.
 #[derive(Debug)]
-pub(crate) struct Registry<S> {
+pub(crate) struct Registry<S, P> {
     /// The logical clock that orders uses for eviction.
     clock: u64,
     /// The last claim's generation.
     generation: u64,
     slots: S,
+    pins: P,
 }
 
 /// What the registry holds for a key.
@@ -62,15 +76,35 @@ pub(crate) enum Claim {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Gone;
 
-impl<S: SlotTable> Registry<S> {
-    /// A registry over `slots`, all empty.
-    pub(crate) fn new(slots: S) -> Self {
-        Self { clock: 0, generation: 0, slots }
+/// Ends a statement's pin of the slot `ticket` names, without the
+/// registry's lock: the pin keeps the slot ready, so the ticket still names
+/// it, and an evicting backend that reads the count after this sees it.
+pub(crate) fn unpin(pins: &[AtomicU32], ticket: Ticket) {
+    if let Some(count) = pins.get(ticket.slot) {
+        // A pin never ends twice; `None` (no pin) leaves the count at 0.
+        let _ = count.fetch_update(Ordering::Release, Ordering::Relaxed, |n| n.checked_sub(1));
+    }
+}
+
+impl<S: SlotTable, P: PinTable> Registry<S, P> {
+    /// A registry over `slots`, all empty, and their `pins`, all 0.
+    pub(crate) fn new(slots: S, pins: P) -> Self {
+        Self { clock: 0, generation: 0, slots, pins }
     }
 
     /// Its slots.
     pub(crate) fn slots(&self) -> &[Slot] {
         self.slots.as_ref()
+    }
+
+    /// Its slots' pin counters, which `unpin` decrements.
+    pub(crate) fn pin_table(&self) -> &[AtomicU32] {
+        self.pins.as_ref()
+    }
+
+    /// Its slots' pins now.
+    pub(crate) fn pins(&self) -> Vec<u32> {
+        self.pin_table().iter().map(|count| count.load(Ordering::Acquire)).collect()
     }
 
     /// What it holds for `key`.
@@ -97,7 +131,7 @@ impl<S: SlotTable> Registry<S> {
         if self.lookup(key) != Lookup::Missing {
             return Claim::Taken;
         }
-        let plan = match admit(self.slots(), bytes, limits) {
+        let plan = match admit(self.slots(), &self.pins(), bytes, limits) {
             Ok(plan) => plan,
             Err(refusal) => return Claim::Refused(refusal),
         };
@@ -116,9 +150,9 @@ impl<S: SlotTable> Registry<S> {
         let slot = self.held(ticket, State::Loading).ok_or(Gone)?;
         slot.state = State::Ready;
         slot.handle = handle;
-        slot.pins = 1;
         slot.mappers = 1;
         slot.last_used = tick;
+        self.pin_table()[ticket.slot].store(1, Ordering::Relaxed);
         Ok(())
     }
 
@@ -132,16 +166,9 @@ impl<S: SlotTable> Registry<S> {
     pub(crate) fn pin(&mut self, ticket: Ticket) -> Result<(), Gone> {
         let tick = self.tick();
         let slot = self.held(ticket, State::Ready).ok_or(Gone)?;
-        slot.pins += 1;
         slot.last_used = tick;
+        self.pin_table()[ticket.slot].fetch_add(1, Ordering::Relaxed);
         Ok(())
-    }
-
-    /// Ends a statement's pin.
-    pub(crate) fn unpin(&mut self, ticket: Ticket) {
-        if let Some(slot) = self.held(ticket, State::Ready) {
-            slot.pins = slot.pins.saturating_sub(1);
-        }
     }
 
     /// The handle of a ready slot's region, to attach.
@@ -173,11 +200,13 @@ impl<S: SlotTable> Registry<S> {
     /// Evicts the unpinned ready slots whose keys `which` selects; the
     /// regions to unpin.
     pub(crate) fn evict(&mut self, which: impl Fn(&Key) -> bool) -> Vec<Handle> {
+        let pins = self.pins();
         let chosen: Vec<usize> = self
             .slots()
             .iter()
+            .zip(pins)
             .enumerate()
-            .filter(|(_, slot)| slot.evictable() && which(&slot.key))
+            .filter(|(_, (slot, pins))| slot.evictable(*pins) && which(&slot.key))
             .map(|(index, _)| index)
             .collect();
         chosen.into_iter().map(|index| self.retire(index)).collect()
@@ -237,12 +266,14 @@ mod tests {
         Limits { cap, store_room: u64::MAX }
     }
 
-    fn registry(slots: usize) -> Registry<Vec<Slot>> {
-        Registry::new(vec![Slot::EMPTY; slots])
+    type Table = Registry<Vec<Slot>, Vec<AtomicU32>>;
+
+    fn registry(slots: usize) -> Table {
+        Registry::new(vec![Slot::EMPTY; slots], (0..slots).map(|_| AtomicU32::new(0)).collect())
     }
 
     /// Claims `version` of `bytes` under a cap of 100; its ticket.
-    fn claimed(registry: &mut Registry<Vec<Slot>>, version: i64, bytes: u64) -> Ticket {
+    fn claimed(registry: &mut Table, version: i64, bytes: u64) -> Ticket {
         match registry.claim(key(version), bytes, LOADER, limits(100)) {
             Claim::Load { ticket, evicted } => {
                 assert!(evicted.is_empty());
@@ -254,10 +285,10 @@ mod tests {
 
     /// Loads and publishes `version` as handle `version`, then ends the
     /// loader's pin, keeping its mapping.
-    fn loaded(registry: &mut Registry<Vec<Slot>>, version: i64, bytes: u64) -> Ticket {
+    fn loaded(registry: &mut Table, version: i64, bytes: u64) -> Ticket {
         let ticket = claimed(registry, version, bytes);
         registry.publish(ticket, Handle(version as u32)).unwrap();
-        registry.unpin(ticket);
+        unpin(registry.pin_table(), ticket);
         ticket
     }
 
@@ -285,7 +316,7 @@ mod tests {
         assert_eq!(registry.loader(ticket), None);
         let slot = registry.slots()[ticket.slot];
         assert_eq!(
-            (slot.state, slot.handle, slot.pins, slot.mappers),
+            (slot.state, slot.handle, registry.pins()[ticket.slot], slot.mappers),
             (State::Ready, Handle(7), 1, 1)
         );
         assert_eq!(registry.claim(key(1), 10, LOADER, limits(100)), Claim::Taken);
@@ -316,9 +347,9 @@ mod tests {
         assert_eq!(registry.pin(ticket), Ok(()));
         assert_eq!(registry.pin(ticket), Ok(()));
         let slot = registry.slots()[ticket.slot];
-        assert_eq!((slot.pins, slot.mappers), (2, 2));
-        registry.unpin(ticket);
-        assert_eq!(registry.slots()[ticket.slot].pins, 1);
+        assert_eq!((registry.pins()[ticket.slot], slot.mappers), (2, 2));
+        unpin(registry.pin_table(), ticket);
+        assert_eq!(registry.pins()[ticket.slot], 1);
     }
 
     #[test]
@@ -376,7 +407,7 @@ mod tests {
         registry.release(first);
         registry.release(second);
         registry.pin(first).unwrap();
-        registry.unpin(first);
+        unpin(registry.pin_table(), first);
         let Claim::Load { ticket, evicted } = registry.claim(key(3), 40, LOADER, limits(100))
         else {
             panic!("not admitted");
@@ -418,8 +449,8 @@ mod tests {
             registry.claim(key(2), 50, LOADER, limits(100)),
             Claim::Refused(Refusal::NoRoom)
         );
-        registry.unpin(held);
-        assert_eq!(registry.slots()[0].pins, 0);
+        unpin(registry.pin_table(), held);
+        assert_eq!(registry.pins()[0], 0);
         assert_eq!(registry.slots()[0].state, before[0].state);
         assert_eq!(registry.slots()[1], before[1]);
     }

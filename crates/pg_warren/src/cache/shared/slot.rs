@@ -72,7 +72,9 @@ pub(crate) struct Ticket {
     pub(crate) generation: u64,
 }
 
-/// A slot of the registry. Only the registry changes it.
+/// A slot of the registry. Only the registry changes it, under its lock.
+/// Its pins are counted apart, in the registry's pin table, since a
+/// statement ends them without the lock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Slot {
     pub(super) state: State,
@@ -83,8 +85,6 @@ pub(crate) struct Slot {
     pub(super) bytes: u64,
     /// The registry's clock when a backend last pinned it.
     pub(super) last_used: u64,
-    /// Backends whose current statement pins it.
-    pub(super) pins: u32,
     /// Backends that map its region.
     pub(super) mappers: u32,
     /// The backend that claimed it to load.
@@ -101,21 +101,21 @@ impl Slot {
         handle: Handle(0),
         bytes: 0,
         last_used: 0,
-        pins: 0,
         mappers: 0,
         loader: Process::NONE,
         generation: 0,
     };
 
-    /// Whether it may be evicted: ready and pinned by no statement.
-    pub(super) fn evictable(&self) -> bool {
-        self.state == State::Ready && self.pins == 0
+    /// Whether it may be evicted, with `pins` pins: ready and pinned by no
+    /// statement.
+    pub(super) fn evictable(&self, pins: u32) -> bool {
+        self.state == State::Ready && pins == 0
     }
 
-    /// Whether evicting it frees its bytes and the slot at once: evictable
-    /// and mapped by no backend.
-    pub(super) fn reclaimable(&self) -> bool {
-        self.evictable() && self.mappers == 0
+    /// Whether evicting it, with `pins` pins, frees its bytes and the slot
+    /// at once: evictable and mapped by no backend.
+    pub(super) fn reclaimable(&self, pins: u32) -> bool {
+        self.evictable(pins) && self.mappers == 0
     }
 
     /// Whether it counts against the cap: loading, ready or draining.

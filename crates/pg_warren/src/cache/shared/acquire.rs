@@ -146,9 +146,14 @@ mod tests {
             reader.join().unwrap();
         }
         assert_eq!(loads.load(Ordering::SeqCst), 1);
-        let ready: Vec<_> = memory.slots().into_iter().filter(|slot| slot.mappers > 0).collect();
-        assert_eq!(ready.len(), 1);
-        assert_eq!((ready[0].pins, ready[0].mappers), (0, 8), "each reader maps it once");
+        let ready: Vec<_> = memory
+            .slots()
+            .into_iter()
+            .zip(memory.pins())
+            .filter(|(slot, _)| slot.mappers > 0)
+            .map(|(slot, pins)| (pins, slot.mappers))
+            .collect();
+        assert_eq!(ready, [(0, 8)], "each reader maps it once");
     }
 
     #[test]

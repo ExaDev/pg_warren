@@ -51,7 +51,8 @@ pub(crate) trait SharedVersions {
     /// names, taking it over if its loader is gone.
     fn wait(&mut self, loading: Ticket);
 
-    /// Ends the current statement's pins.
+    /// Ends the current statement's pins, without the registry's lock: it
+    /// runs at the end of a transaction (DESIGN.md §5.6).
     fn unpin(&mut self);
 
     /// Releases the mappings `which` selects that no call holds.

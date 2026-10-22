@@ -1,5 +1,6 @@
 //! The `Memory` adapter: an in-process fake of the shared cache. A
-//! `Memory` is a cluster (a registry in a `Mutex`, a condition variable,
+//! `Memory` is a cluster (a registry in a `Mutex`, its pin table outside
+//! it, which a statement's end updates without the lock, a condition variable,
 //! and heap regions standing in for DSM segments, freed when their last
 //! `Arc` drops) and each `Backend` is one backend of it, usually on its own
 //! thread. A backend reads a region through its own `Mapping`, as each
@@ -7,7 +8,7 @@
 //! count of a mapping's holders is this backend's alone.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -25,6 +26,8 @@ pub(crate) struct Memory {
 
 struct Cluster {
     store: Mutex<Store>,
+    /// The registry's pin table, which `unpin` uses without the lock.
+    pins: Arc<[AtomicU32]>,
     /// Broadcast whenever a slot leaves `loading`.
     changed: Condvar,
     /// How long a waiter sleeps before it checks the loader is alive.
@@ -33,7 +36,7 @@ struct Cluster {
 
 /// What the registry's lock guards.
 struct Store {
-    registry: Registry<Vec<Slot>>,
+    registry: Registry<Vec<Slot>, Arc<[AtomicU32]>>,
     /// The published regions the registry pins, by handle: the
     /// segment's pin, apart from every backend's mapping.
     pinned: HashMap<Handle, Arc<Region>>,
@@ -113,8 +116,9 @@ impl Memory {
     /// bytes where regions are created; a waiter checks its loader every
     /// `wait`.
     pub(crate) fn new(slots: usize, cap: u64, capacity: u64, wait: Duration) -> Self {
+        let pins: Arc<[AtomicU32]> = (0..slots).map(|_| AtomicU32::new(0)).collect();
         let store = Store {
-            registry: Registry::new(vec![Slot::EMPTY; slots]),
+            registry: Registry::new(vec![Slot::EMPTY; slots], Arc::clone(&pins)),
             pinned: HashMap::new(),
             last_handle: 0,
             cap,
@@ -123,7 +127,7 @@ impl Memory {
             live: HashSet::new(),
             last_started: 0,
         };
-        let cluster = Cluster { store: Mutex::new(store), changed: Condvar::new(), wait };
+        let cluster = Cluster { store: Mutex::new(store), pins, changed: Condvar::new(), wait };
         Self { cluster: Arc::new(cluster) }
     }
 
@@ -140,6 +144,11 @@ impl Memory {
     /// The registry's slots now.
     pub(crate) fn slots(&self) -> Vec<Slot> {
         self.cluster.lock().registry.slots().to_vec()
+    }
+
+    /// The registry's pins now, read without its lock.
+    pub(crate) fn pins(&self) -> Vec<u32> {
+        self.cluster.pins.iter().map(|count| count.load(Ordering::Acquire)).collect()
     }
 
     /// The bytes of the regions alive.
@@ -252,8 +261,7 @@ impl SharedVersions for Backend {
     }
 
     fn unpin(&mut self) {
-        let mut store = self.cluster.lock();
-        self.session.unpin(&mut store.registry);
+        self.session.unpin(&self.cluster.pins);
     }
 
     fn release(&mut self, which: Release) {
@@ -280,6 +288,9 @@ impl SharedVersions for Backend {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+    use std::thread;
+
     use pgrx::pg_sys::Oid;
 
     use super::*;
@@ -321,6 +332,25 @@ mod tests {
         assert_eq!(reused.session().process().pid, pid, "a new backend has the loader's pid");
         memory.backend().wait(loading);
         assert!(matches!(memory.backend().lookup(key(1)), Found::Missing), "taken over");
+    }
+
+    #[test]
+    fn a_statement_ends_its_pins_without_the_registry_lock() {
+        let memory = cluster();
+        let mut backend = memory.backend();
+        drop(published(&mut backend, 1));
+        let (ended, end) = mpsc::channel();
+        let locked = memory.cluster.lock();
+        let unpinning = thread::spawn(move || {
+            backend.unpin();
+            ended.send(()).unwrap();
+            backend
+        });
+        let waited = end.recv_timeout(Duration::from_secs(5));
+        drop(locked);
+        unpinning.join().unwrap();
+        assert!(waited.is_ok(), "the unpin waited for the registry's lock");
+        assert_eq!(memory.pins()[0], 0);
     }
 
     #[test]

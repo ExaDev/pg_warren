@@ -87,18 +87,23 @@ struct Config {
     sizes: Vec<u64>,
 }
 
-/// What admission should decide for a version of `bytes` over `slots`:
-/// `None` if it may be admitted (unless the store is full).
-fn model_refusal(slots: &[Slot], bytes: u64, cap: u64) -> Option<Refusal> {
+/// The registry's slots and their pins now.
+fn table(memory: &Memory) -> Vec<(Slot, u32)> {
+    memory.slots().into_iter().zip(memory.pins()).collect()
+}
+
+/// What admission should decide for a version of `bytes` over `slots` and
+/// their pins: `None` if it may be admitted (unless the store is full).
+fn model_refusal(slots: &[(Slot, u32)], bytes: u64, cap: u64) -> Option<Refusal> {
     let reclaimable =
-        |slot: &Slot| slot.state == State::Ready && slot.pins == 0 && slot.mappers == 0;
+        |(slot, pins): &&(Slot, u32)| slot.state == State::Ready && *pins == 0 && slot.mappers == 0;
     let staying: u64 = slots
         .iter()
-        .filter(|slot| slot.state != State::Empty && !reclaimable(slot))
-        .map(|slot| slot.bytes)
+        .filter(|entry| entry.0.state != State::Empty && !reclaimable(entry))
+        .map(|(slot, _)| slot.bytes)
         .sum::<u64>()
         + bytes;
-    let free = slots.iter().any(|slot| slot.state == State::Empty || reclaimable(slot));
+    let free = slots.iter().any(|entry| entry.0.state == State::Empty || reclaimable(&entry));
     if cap == 0 {
         Some(Refusal::Disabled)
     } else if bytes > cap {
@@ -122,7 +127,7 @@ fn read(
     if backend.pending.is_some() {
         return Ok(());
     }
-    let before = memory.slots();
+    let before = table(memory);
     let allocated = memory.allocated();
     match backend.port.lookup(key(version)) {
         Found::Ready(view) => backend.views.push((version, view)),
@@ -191,16 +196,17 @@ fn check(
     memory: &Memory,
     config: &Config,
     backends: &[Simulated],
-    before: &[Slot],
+    before: &[(Slot, u32)],
 ) -> Result<(), TestCaseError> {
     let slots = memory.slots();
+    let pinned = memory.pins();
     let occupied: u64 =
         slots.iter().filter(|slot| slot.state != State::Empty).map(|slot| slot.bytes).sum();
     prop_assert!(occupied <= config.cap, "{} bytes over a cap of {}", occupied, config.cap);
-    for (index, (was, now)) in before.iter().zip(&slots).enumerate() {
+    for (index, ((was, pins), now)) in before.iter().zip(&slots).enumerate() {
         let still_ready = now.state == State::Ready && now.generation == was.generation;
         if was.state == State::Ready && !still_ready {
-            prop_assert_eq!(was.pins, 0, "slot {} was evicted while pinned", index);
+            prop_assert_eq!(*pins, 0, "slot {} was evicted while pinned", index);
         }
     }
     for version in 0..VERSIONS {
@@ -221,7 +227,7 @@ fn check(
         let pins = sessions().filter(|session| session.pinned().contains(&ticket)).count();
         let mappers =
             sessions().filter(|session| session.mapped_slots().any(|t| t == ticket)).count();
-        prop_assert_eq!(slot.pins as usize, pins, "pins of slot {}", index);
+        prop_assert_eq!(pinned[index] as usize, pins, "pins of slot {}", index);
         prop_assert_eq!(slot.mappers as usize, mappers, "mappers of slot {}", index);
         if slot.state == State::Draining {
             prop_assert!(slot.mappers > 0, "slot {} drains with no mapper", index);
@@ -258,7 +264,7 @@ proptest! {
         let config = Config { cap, capacity, sizes };
         let mut backends: Vec<Simulated> = (0..BACKENDS).map(|_| Simulated::new(&memory)).collect();
         for op in ops {
-            let before = memory.slots();
+            let before = table(&memory);
             apply(&memory, &config, &mut backends, op)?;
             check(&memory, &config, &backends, &before)?;
         }
