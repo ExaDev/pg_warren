@@ -501,7 +501,7 @@ Dijkstra's indexed heap. Unweighted closeness and harmonic search a batch
 of 64 sources together, one bit per source, in one breadth-first search
 spread over the compute threads: a node's row is read once for all the
 sources that have it in their frontier, which at 1M nodes makes 64
-sources 14–17 times faster. Their scratch is 40 bytes per node, once,
+sources 9–32 times faster (0.65–1.23 s instead of 10.1–20.7 s). Their scratch is 40 bytes per node, once,
 not per thread. All of it is
 allocated before the searches start and charged to
 `warren.max_compute_memory`, and `directed := false` builds the symmetric

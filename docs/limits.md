@@ -422,9 +422,12 @@ criterion means of 10 iterations, each run listed):
 | 64 | 10.1, 17.0 s | 0.73–1.05 s (4 runs) | 20.7, 11.0 s | 0.65–1.23 s (4 runs) |
 | 256 | 50.0, 37.5 s | 1.8–3.7 s (6 runs) | 80.5 s | 3.0, 3.5 s |
 
-Betweenness from 16 sources took 13.2 and 16.5 s in the same runs
-(unchanged: one source per thread). Weighted closeness and harmonic still
-search one source per thread. Not re-measured through SQL at 10M nodes.
+At 64 sources that is 0.65–1.23 s against 10.1–20.7 s, 9–32 times
+faster. Betweenness from 16 sources took 13.2 and 16.5 s on the same
+graph (unchanged: one source per thread, so the benchmark no longer runs
+it). Weighted closeness and harmonic still search one source per thread.
+Not re-measured through SQL at 10M nodes.
+
 `directed := false` and `similar_pairs` first build the symmetric
 adjacency, 16 bytes per stored edge (32 weighted): at 10M nodes and 100M
 edges weighted undirected betweenness needs about 4.6 GB of scratch,

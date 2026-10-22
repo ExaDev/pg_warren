@@ -33,8 +33,8 @@
   searched 64 at a time, one bit per source, each step in parallel over
   the frontier, with 40 B of scratch per node.
   - Measured at 1M nodes / 10M edges on 4 threads
-    (`benches/centrality.rs`): roughly 5–20× faster, e.g. 64 sources of
-    closeness in 0.73–1.05 s instead of 10–17 s.
+    (`benches/centrality.rs`): 64 sources of closeness or harmonic in
+    0.65–1.23 s instead of 10.1–20.7 s (9–32× faster).
   - Closeness is bit-identical to before. Harmonic sums in a new,
     deterministic order, within 1e-12 relative of the old result.
   - Weighted graphs (Dijkstra) and betweenness are unchanged.
