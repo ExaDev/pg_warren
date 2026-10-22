@@ -169,13 +169,15 @@ impl<M: Combine> Part<M> {
     }
 
     /// Combines the messages `receiver` received, in collect order, adding
-    /// the receiver if there are any; `mode` counts them in `tally`.
+    /// the receiver if there are any; `mode` counts them in `tally`, made
+    /// (charging `memory`) the first time it is needed.
     pub(super) fn receive<'a>(
         &mut self,
         combiner: Combiner,
         receiver: DenseId,
         mut received: impl Iterator<Item = M::View<'a>> + Clone,
-        tally: &mut Tally<'a, M>,
+        tally: &mut Option<Tally<'a, M>>,
+        memory: &ComputeMemory,
     ) -> Result<(), ComputeError> {
         let any = match combiner {
             Combiner::Count => {
@@ -202,7 +204,7 @@ impl<M: Combine> Part<M> {
                 Some(first) => self.push(first).map(|()| true)?,
                 None => false,
             },
-            Combiner::Mode => match tally.mode(received)? {
+            Combiner::Mode => match Tally::of(tally, memory)?.mode(received)? {
                 Some(mode) => self.push(mode).map(|()| true)?,
                 None => false,
             },

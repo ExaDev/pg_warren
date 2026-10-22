@@ -35,7 +35,6 @@ pub use messages::Messages;
 use gathered::Part;
 use neighbourhood::{Neighbourhood, Sources};
 use outbox::Outbox;
-use tally::Tally;
 
 use super::{ComputeError, ComputeMemory, Mask, Message, Workers};
 use crate::graph::{DenseId, Direction, GraphCsr, RelationSelection};
@@ -120,14 +119,14 @@ pub fn gather<M: Combine, I: Interrupts>(
                     return Err(Cancelled.into());
                 }
                 let mut part = Part::new(memory)?;
-                let mut tally = Tally::new(memory)?;
+                let mut tally = None;
                 let first = task * RECEIVERS_PER_TASK;
                 let receivers = first..id_space.min(first + RECEIVERS_PER_TASK);
                 for receiver in receivers.filter(|&receiver| selects(receiver)) {
                     let own = gather.include_self.then_some(receiver);
                     let senders = own.into_iter().chain(neighbourhood.senders(receiver));
                     let received = senders.flat_map(|sender| outbox.of(sender));
-                    part.receive(combiner, receiver as DenseId, received, &mut tally)?;
+                    part.receive(combiner, receiver as DenseId, received, &mut tally, memory)?;
                 }
                 part.settle();
                 Ok(part)

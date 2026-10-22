@@ -1,5 +1,6 @@
-//! The scratch `mode` counts a receiver's messages in: one per task,
-//! charged to the compute memory budget while the task runs.
+//! The scratch `mode` counts a receiver's messages in: one per task of a
+//! `mode` gather, made when the task first needs it and charged to the
+//! compute memory budget while the task runs.
 
 use super::Combine;
 use crate::compute::memory::Allowance;
@@ -13,9 +14,18 @@ pub(super) struct Tally<'a, M: Message> {
 }
 
 impl<'a, M: Combine> Tally<'a, M> {
-    /// An empty tally, charging `memory` as it grows.
-    pub(super) fn new(memory: &ComputeMemory) -> Result<Self, ComputeError> {
-        Ok(Self { messages: Vec::new(), allowance: Allowance::unbounded(memory)? })
+    /// The tally in `slot`, made empty there first if there is none,
+    /// charging `memory` as it grows.
+    pub(super) fn of<'t>(
+        slot: &'t mut Option<Self>,
+        memory: &ComputeMemory,
+    ) -> Result<&'t mut Self, ComputeError> {
+        Ok(match slot {
+            Some(tally) => tally,
+            None => {
+                slot.insert(Self { messages: Vec::new(), allowance: Allowance::unbounded(memory)? })
+            }
+        })
     }
 
     /// The [`Combiner::Mode`](super::Combiner::Mode) of `received`, in
