@@ -305,17 +305,34 @@ takes 20–70 ms longer than a private one.
 SAFE` (docs/semantics.md, "Parallel query labels"), so a scan that calls
 one per row can run in parallel workers, each reading the version as
 another backend would. Measured (DESIGN.md §12, `bench/parallel.py`; PG 16,
-4 vCPUs): `has_edge` over 1M rows of a 1M-node graph takes 9.9 s in the
-leader alone, 3.7 s with 2 workers and 2.9 s with 4, with or without the
-shared cache; on a 10M-node graph (1.12 GB), 11.4 s, and with 2 and 4
-workers 4.4 and 3.6 s shared, 7.5 and 6.0 s when each worker loads its own
-copy. A worker's first read costs it an attach (about 20 ms for 112 MB)
-with the shared cache, or a whole load without it, so without the shared
-cache a parallel plan over a small table is slower than the leader alone
-(1.8–3× over 10k rows, when parallelism is forced), and the workers hold a
-copy each until the query ends. The planner chose parallel plans only for
-the large table; for small ones, or to bound memory, preload pg_warren on
-PostgreSQL 15 and 16, or mark the function `PARALLEL RESTRICTED`.
+4 vCPUs, medians): `has_edge` over 1M rows of a 1M-node graph takes
+9.8–10.3 s in the leader alone, 3.7 s with 2 workers, and 2.9 s with 4
+with the shared cache (3.1 s when each worker loads its own copy): 2.6–2.8×
+faster with 2 workers and 3.2–3.6× with 4 across the reads measured with
+the shared cache. On a 10M-node graph (1.12 GB), 11.4–11.9 s alone, and
+with 2 and 4 workers 4.4 and 3.6 s shared, 7.5 and 6.0 s when each worker
+loads its own copy. A worker's first read costs it an attach (about 20 ms
+for 112 MB) with the shared cache, or a whole load without it, so a
+parallel plan over a small table that reads the version privately is
+slower than the leader alone (1.8–3× over 10k rows without the preload,
+when parallelism is forced). The planner chose parallel plans only for the
+large table.
+
+A worker reads a version privately wherever the leader would: not only on
+PostgreSQL 15 and 16 without the preload or with
+`warren.shared_cache_memory = 0`, but also for a version larger than the
+cap, one the shared cache has no room for (beside what is pinned, or in
+`/dev/shm`: Docker's default 64 MB holds little), and one the current
+transaction created. Each worker's copy counts against its own
+`warren.max_cache_memory` and `warren.max_compute_memory` together and is
+held until the query ends, so a parallel plan can hold one copy per
+worker plus the leader's (five with 4 workers). To bound that, or for
+small tables: preload pg_warren on PostgreSQL 15 and 16 and size the
+shared cache and `/dev/shm` (above); keep queries or roles off parallel
+plans with `SET max_parallel_workers_per_gather = 0` (any role, per
+session, `SET LOCAL` per transaction, or `ALTER ROLE … SET`); or, as a
+superuser, mark the function `PARALLEL RESTRICTED` (docs/semantics.md,
+"Parallel query labels").
 
 ### Sizing
 
@@ -734,9 +751,12 @@ loaded by each backend that reads it, within its own
 database's versions can evict another's, and there are no per-database
 shares. An idle cluster keeps up to the cap of shared versions until they
 are evicted (`warren.evict`) or the server restarts. Transient and `bool`
-vectors are never shared. Where the shared cache is unavailable, each
-worker of a parallel plan that calls a `PARALLEL SAFE` graph read loads
-the version itself (docs/semantics.md, "Parallel query labels").
+vectors are never shared. Wherever a version is read privately (the
+shared cache unavailable or off, a version it refuses or has no room for,
+one the current transaction created), each worker of a parallel plan
+that calls a `PARALLEL SAFE` graph read loads its own copy, so the plan
+can hold one per worker plus the leader's ("Parallel query", above;
+docs/semantics.md, "Parallel query labels").
 
 **Not yet supported:** `text` node ids; incremental maintenance (every
 `refresh` is a full rebuild); `refresh` or `compact` of a graph derived by

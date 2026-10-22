@@ -5,9 +5,9 @@
 //! Functions that write, or may persist what they compute, are `PARALLEL
 //! UNSAFE`. Graph reads that use no vector (`neighbours`, `degree`,
 //! `has_edge`, `id_map`, `info` and the traversals) are `PARALLEL SAFE`: a
-//! worker maps the shared version, or loads its own copy where the shared
-//! cache is unavailable, and a traversal it runs records no
-//! `last_stats()`. The other reads are `PARALLEL RESTRICTED`: transient
+//! worker maps the shared version, or loads its own copy wherever the
+//! version is read privately (DESIGN.md §5.6, "Parallel query"), and a
+//! traversal it runs records no `last_stats()`. The other reads are `PARALLEL RESTRICTED`: transient
 //! vectors live only in the leader's backend, and `last_stats()`,
 //! `prewarm` and `evict` are about the leader's session. Functions that
 //! read no graph are `PARALLEL SAFE`. Restricted functions still run in

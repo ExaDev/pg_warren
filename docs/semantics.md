@@ -324,11 +324,10 @@ tombstoned node's row holds zero.
 ## Parallel query labels
 
 A parallel worker is a process of its own. With the shared cache it maps
-the version the leader reads; without it (PostgreSQL 15 and 16 without
-`shared_preload_libraries = 'pg_warren'`, `warren.shared_cache_memory =
-0`, a version that does not fit) it loads its own copy. A worker cannot
-see the leader's transient vectors, and what it records in `last_stats()`
-would never reach the leader. So:
+the version the leader reads; wherever the version is read privately
+(below) it loads its own copy. A worker cannot see the leader's transient
+vectors, and what it records in `last_stats()` would never reach the
+leader. So:
 
 | Label | Functions |
 |---|---|
@@ -337,8 +336,9 @@ would never reach the leader. So:
 | `PARALLEL UNSAFE` (no parallel plan) | everything that writes or may persist: graph management, the vector constructors, `spmv`, `spmm`, `vector_map`, `gather`, `triangles`, the structural kernels that write a vector (`core_number`, `strong_components_vector`, `topological_order`, `dag_longest_path`), `eigen`, the library, `drop_vector` |
 
 So a scan that calls `has_edge` or `degree` per row can run in parallel,
-each worker calling it on its share of the rows (at 1M rows, about 2.7×
-faster with 2 workers, 3.4× with 4: docs/limits.md). Restricted functions
+each worker calling it on its share of the rows (over 1M rows, with the
+shared cache, 2.6–2.8× faster with 2 workers and 3.2–3.6× with 4:
+docs/limits.md). Restricted functions
 work inside parallel plans too: the rest of the query runs in parallel, and
 the warren call runs in the leader.
 
@@ -347,21 +347,49 @@ the warren call runs in the leader.
   still describes the leader's last recording call. Run the traversal
   without a parallel plan (`SET max_parallel_workers_per_gather = 0`)
   when you need its stats.
-- **Without the shared cache, each worker loads the version itself**:
-  PostgreSQL 15 and 16 without the preload, the shared cache turned off,
-  or a version it does not hold. A parallel plan then costs one load per
-  worker, and a worker's copy is held, within its own
-  `warren.max_cache_memory`, until the query ends. On a large version a
-  parallel scan's workers can together hold several copies, and a short
-  query the planner makes parallel can be slower than without workers.
-  Preload pg_warren on 15 and 16, or restore the leader-only behaviour of
-  0.4.0 for the functions you call per row:
+- **The cache's `NOTICE`s come from the leader only.** A worker raises
+  none of them (a version over `warren.max_cache_memory`, the shared cache
+  refusing it or unavailable), since Postgres would pass each on once per
+  worker; the leader raises them where it reads the version itself, so a
+  plan whose leader makes no call (a single-copy `Gather`, as under
+  `debug_parallel_query`) shows none.
+- **Wherever a version is read privately, each worker loads its own
+  copy.** That is not only PostgreSQL 15 and 16 without
+  `shared_preload_libraries = 'pg_warren'` or the shared cache turned off
+  (`warren.shared_cache_memory = 0`): with the shared cache working, a
+  version larger than `warren.shared_cache_memory`, one it has no room
+  for (beside what is pinned or loading, or in `/dev/shm`: Docker's
+  default 64 MB holds little), and one the current transaction created
+  (built or refreshed and not yet committed) are read privately too, by
+  the leader and by every worker. A parallel plan then costs one load per
+  worker, and each worker holds its copy until the query ends, within
+  its own `warren.max_cache_memory` and `warren.max_compute_memory`
+  together (past both, the query fails with 53400, as it would in the
+  leader). So a parallel plan can hold one copy per worker plus the
+  leader's: with 4 workers, five copies of the version. A short query run
+  in parallel can also be slower than without workers (1.8–3× over 10k
+  rows, without the preload: docs/limits.md). The remedies:
 
-  ```sql
-  ALTER FUNCTION warren.has_edge(text, anyelement, anyelement, text, bigint) PARALLEL RESTRICTED;
-  ```
+  - Preload pg_warren on PostgreSQL 15 and 16, and give the shared cache
+    room (`warren.shared_cache_memory`, `/dev/shm`: docs/limits.md).
+  - Keep a query or a role off parallel plans, which any role can do:
 
-  (`\df warren.*` lists every signature.) Such a change is not part of
-  the extension's own script: `pg_dump` does not keep it, and an update to
-  a later release may set the label again, so repeat it after a restore or
-  an update.
+    ```sql
+    SET max_parallel_workers_per_gather = 0;             -- this session
+    SET LOCAL max_parallel_workers_per_gather = 0;       -- this transaction
+    ALTER ROLE app SET max_parallel_workers_per_gather = 0;  -- a role's sessions
+    ```
+
+  - Restore the leader-only behaviour of 0.4.0 for the functions you call
+    per row. `ALTER FUNCTION` needs the function's owner, a superuser
+    (the one that ran `CREATE EXTENSION`, or the bootstrap superuser in a
+    trusted install, whose installer cannot):
+
+    ```sql
+    ALTER FUNCTION warren.has_edge(text, anyelement, anyelement, text, bigint) PARALLEL RESTRICTED;
+    ```
+
+    (`\df warren.*` lists every signature.) Such a change is not part of
+    the extension's own script: `pg_dump` does not keep it, and an update
+    to a later release may set the label again, so repeat it after a
+    restore or an update.
