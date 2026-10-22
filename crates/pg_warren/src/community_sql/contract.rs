@@ -468,7 +468,25 @@ mod tests {
         };
         assert_eq!(segments(level)?.as_deref(), Some(""));
         assert_ne!(segments(named)?.as_deref(), Some(""));
-        assert_eq!(out_weights(&format!("_warren_level_{level}"))?, out_weights("q")?);
+        let level = format!("_warren_level_{level}");
+        assert_eq!(out_weights(&level)?, out_weights("q")?);
+        // A reader of the missing CSRs: a transposed product pushes over
+        // the forward CSR instead, for the same in-weights, and a search
+        // against the edges needs the reverse CSR, which a level has not.
+        let in_weights = |graph: &str| {
+            Spi::run(&format!("SELECT warren.spmv('{graph}', 'one', 'in', transpose := true)"))?;
+            rows(&format!(
+                "SELECT node_id || ':' || value FROM warren.vector_values('{graph}', 'in', NULL::bigint)"
+            ))
+        };
+        assert_eq!(in_weights(&level)?, in_weights("q")?);
+        let search =
+            |graph: &str| failure(&format!("warren.bfs('{graph}', ARRAY[10::bigint], NULL, 'in')"));
+        assert_eq!(
+            search(&level)?.as_deref(),
+            Some("55000: direction 'in' or 'both' needs the reverse CSR, and this graph has none")
+        );
+        assert_eq!(search("q")?, None);
         Ok(())
     }
 

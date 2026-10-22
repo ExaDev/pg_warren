@@ -33,8 +33,9 @@
   `warren.max_compute_memory` up front, every community's state at once,
   and was refused (53400) in the first refinement of a 10M-node,
   100M-edge random graph at the default limit. It now charges what it
-  holds: 24 bytes a node, then 32 a community and the state of the
-  communities being refined, at most one a thread.
+  holds: 24 bytes a node beside the result's label vector (8 bytes a
+  node), then 48 a community and the state of the communities being
+  refined, at most one a thread.
 - After `DROP EXTENSION pg_warren` and `CREATE EXTENSION pg_warren` in a
   database, a backend that had read graphs before could serve the old
   installation's cached versions and vectors for the new installation's

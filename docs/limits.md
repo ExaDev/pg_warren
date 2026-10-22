@@ -578,8 +578,9 @@ vectors.
   scratch is charged to `warren.max_compute_memory`: the undirected view
   (16 bytes per stored edge, both directions of a directed graph, and per
   node), up to 56 bytes per node while moving, and in Leiden's refinement
-  24 bytes per node plus 32 per community (and, for the communities being
-  refined at once, one per thread, 24 bytes per member). Each level writes
+  24 bytes per node (beside its 8-byte-a-node label vector) plus 48 per
+  community (and, for the communities being refined at once, one per
+  thread, 24 bytes per member). Each level writes
   its graph's version (segments and WAL), each relation's forward CSR
   only (no reverse or merged CSR, whatever the input's layout); the
   level's graph is dropped when the next is built, but its rows stay until
