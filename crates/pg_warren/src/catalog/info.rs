@@ -12,7 +12,7 @@ use crate::read_only::read_one;
 /// `warren.info`: graph `name`'s definition, current version, staleness
 /// (`now() - built_at` of the current version), total bytes, and every
 /// version with its statistics, oldest first.
-#[pg_extern(schema = "warren", stable, parallel_restricted)]
+#[pg_extern(schema = "warren", stable, parallel_safe)]
 fn info(name: &str) -> JsonB {
     entry(|_| describe(name))
 }

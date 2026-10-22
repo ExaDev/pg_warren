@@ -1325,7 +1325,7 @@ CREATE FUNCTION warren.reachable_set(graph text, start anyarray, max_depth int D
                                      rels text[] DEFAULT NULL, direction text DEFAULT 'out',
                                      version bigint DEFAULT NULL)
 RETURNS SETOF anyelement
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'reachable_set_wrapper';
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'reachable_set_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -1347,7 +1347,7 @@ CREATE FUNCTION warren.bfs(graph text, start anyarray, max_depth int,
                            node_filter "any" DEFAULT NULL, max_results bigint DEFAULT NULL,
                            version bigint DEFAULT NULL)
 RETURNS TABLE (node_id anyelement, depth int, via anyelement)
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'bfs_wrapper';
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'bfs_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -1451,7 +1451,7 @@ AS 'MODULE_PATHNAME', 'lift_wrapper';
 
 CREATE FUNCTION warren.components(graph text, id_type anyelement, version bigint DEFAULT NULL)
 RETURNS TABLE (node_id anyelement, component_id bigint)
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'components_wrapper';
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'components_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -1567,7 +1567,7 @@ CREATE FUNCTION warren.walk(graph text, start anyarray, steps warren.step[],
                             max_results bigint DEFAULT NULL, reverse boolean DEFAULT false,
                             version bigint DEFAULT NULL)
 RETURNS TABLE (end_id anyelement, path anyarray, rels text[], count bigint)
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'walk_wrapper';
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'walk_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -1638,7 +1638,7 @@ CREATE FUNCTION warren.reachable(graph text, start anyelement, target anyelement
                                  max_depth int DEFAULT NULL, rels text[] DEFAULT NULL,
                                  direction text DEFAULT 'out', version bigint DEFAULT NULL)
 RETURNS boolean
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'reachable_wrapper';
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'reachable_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -1811,7 +1811,7 @@ AS 'MODULE_PATHNAME', 'drop_graph_wrapper';
 CREATE FUNCTION warren.has_edge(graph text, src anyelement, dst anyelement,
                                 rel text DEFAULT NULL, version bigint DEFAULT NULL)
 RETURNS boolean
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'has_edge_wrapper';
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'has_edge_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -1871,7 +1871,7 @@ CREATE FUNCTION warren.dijkstra(graph text, start anyelement, target anyelement,
                                 rels text[] DEFAULT NULL, direction text DEFAULT 'out',
                                 version bigint DEFAULT NULL)
 RETURNS TABLE (path anyarray, cost float8)
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'dijkstra_wrapper';
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'dijkstra_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -1924,7 +1924,7 @@ AS 'MODULE_PATHNAME', 'triangles_wrapper';
 CREATE FUNCTION warren.degree(graph text, node anyelement, direction text DEFAULT 'out',
                               rels text[] DEFAULT NULL, version bigint DEFAULT NULL)
 RETURNS bigint
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'degree_wrapper';
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'degree_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -1976,7 +1976,7 @@ CREATE FUNCTION warren.shortest_path(graph text, start anyelement, target anyele
                                      max_depth int DEFAULT NULL, rels text[] DEFAULT NULL,
                                      direction text DEFAULT 'out', version bigint DEFAULT NULL)
 RETURNS anyarray
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'shortest_path_wrapper';
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'shortest_path_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -1996,7 +1996,7 @@ AS 'MODULE_PATHNAME', 'evict_wrapper';
 CREATE  FUNCTION warren."info"(
 	"name" TEXT /* & str */
 ) RETURNS jsonb /* JsonB */
-STRICT STABLE PARALLEL RESTRICTED 
+STRICT STABLE PARALLEL SAFE 
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'info_wrapper';
 /* </end connected objects> */
@@ -2025,7 +2025,7 @@ AS 'MODULE_PATHNAME', 'vector_from_query_wrapper';
 CREATE FUNCTION warren.neighbours(graph text, node anyelement, direction text DEFAULT 'out',
                                   rels text[] DEFAULT NULL, version bigint DEFAULT NULL)
 RETURNS SETOF anyelement
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'neighbours_wrapper';
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'neighbours_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -2034,7 +2034,7 @@ STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'neighbours_wrapper'
 
 CREATE FUNCTION warren.id_map(graph text, id_type anyelement, version bigint DEFAULT NULL)
 RETURNS TABLE (node_id anyelement, dense_id bigint, live boolean)
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'id_map_wrapper';
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'id_map_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */

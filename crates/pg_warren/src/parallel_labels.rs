@@ -1,14 +1,19 @@
 //! The parallel-safety label of every `warren.*` function (DESIGN.md §6.9,
-//! §9.3), and checks that the functions that read run in parallel mode.
+//! §9.3, §14 item 33), and checks that the functions that read run in
+//! parallel mode, and the safe ones in parallel workers.
 //!
 //! Functions that write, or may persist what they compute, are `PARALLEL
-//! UNSAFE`. Functions that read a graph or vector are `PARALLEL
-//! RESTRICTED`: the backend-local cache and transient vectors live only in
-//! the leader, so a parallel worker would cold-load the version (or not see
-//! the vector at all). Only functions that read no graph are `PARALLEL
-//! SAFE`. Restricted functions still run in the leader while a parallel
-//! plan is executing, which is parallel mode: there they may not assign a
-//! transaction id or write anything.
+//! UNSAFE`. Graph reads that use no vector (`neighbours`, `degree`,
+//! `has_edge`, `id_map`, `info` and the traversals) are `PARALLEL SAFE`: a
+//! worker maps the shared version, or loads its own copy where the shared
+//! cache is unavailable, and a traversal it runs records no
+//! `last_stats()`. The other reads are `PARALLEL RESTRICTED`: transient
+//! vectors live only in the leader's backend, and `last_stats()`,
+//! `prewarm` and `evict` are about the leader's session. Functions that
+//! read no graph are `PARALLEL SAFE`. Restricted functions still run in
+//! the leader while a parallel plan is executing, which is parallel mode:
+//! there, as in a worker, they may not assign a transaction id or write
+//! anything.
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
@@ -24,11 +29,11 @@ mod tests {
     const LABELS: &[(&str, &str)] = &[
         ("aggregate_neighbours", "u"),
         ("betweenness_centrality", "u"),
-        ("bfs", "r"),
+        ("bfs", "s"),
         ("closeness_centrality", "u"),
         ("clustering", "u"),
         ("compact", "u"),
-        ("components", "r"),
+        ("components", "s"),
         ("components_vector", "u"),
         ("contract", "u"),
         ("core_number", "u"),
@@ -36,10 +41,10 @@ mod tests {
         ("current_version_is_kept", "u"),
         ("current_version_is_the_graphs", "u"),
         ("dag_longest_path", "u"),
-        ("degree", "r"),
+        ("degree", "s"),
         ("degree_vector", "u"),
         ("diff", "r"),
-        ("dijkstra", "r"),
+        ("dijkstra", "s"),
         ("distance", "r"),
         ("drop_graph", "u"),
         ("drop_vector", "u"),
@@ -51,10 +56,10 @@ mod tests {
         ("gather", "u"),
         ("grant", "u"),
         ("harmonic_centrality", "u"),
-        ("has_edge", "r"),
+        ("has_edge", "s"),
         ("hits", "u"),
-        ("id_map", "r"),
-        ("info", "r"),
+        ("id_map", "s"),
+        ("info", "s"),
         ("katz_centrality", "u"),
         ("label_propagation", "u"),
         ("label_propagation_majority", "u"),
@@ -69,18 +74,18 @@ mod tests {
         ("minimum_spanning_forest", "r"),
         ("modularity", "r"),
         ("most_similar", "r"),
-        ("neighbours", "r"),
+        ("neighbours", "s"),
         ("pagerank", "u"),
         ("prewarm", "r"),
         ("project", "u"),
         ("promote", "u"),
-        ("reachable", "r"),
-        ("reachable_set", "r"),
+        ("reachable", "s"),
+        ("reachable_set", "s"),
         ("refresh", "u"),
         ("revoke", "u"),
         ("s", "s"),
         ("shared_cache", "s"),
-        ("shortest_path", "r"),
+        ("shortest_path", "s"),
         ("similar_pairs", "r"),
         ("similarity", "r"),
         ("spmm", "u"),
@@ -101,7 +106,7 @@ mod tests {
         ("vector_topk", "r"),
         ("vector_values", "r"),
         ("version", "s"),
-        ("walk", "r"),
+        ("walk", "s"),
     ];
 
     /// A call of every function that is not `PARALLEL UNSAFE`, on graph
@@ -237,6 +242,114 @@ mod tests {
                 "{name} ({label}) has no read"
             );
         }
+    }
+
+    /// A query over each `PARALLEL SAFE` graph read (DESIGN.md §14 item
+    /// 33), on graph `pp`, returning its rows as one text.
+    const WORKER_READS: &[&str] = &[
+        "SELECT string_agg(n::text, ',' ORDER BY n) FROM warren.neighbours('pp', 1::bigint) n",
+        "SELECT warren.degree('pp', 1::bigint, 'both')::text",
+        "SELECT warren.has_edge('pp', 1::bigint, 2::bigint)::text",
+        "SELECT string_agg(m::text, ',' ORDER BY m.dense_id) FROM warren.id_map('pp', NULL::bigint) m",
+        "SELECT warren.info('pp')::text",
+        "SELECT warren.reachable('pp', 1::bigint, 4::bigint)::text",
+        "SELECT warren.shortest_path('pp', 1::bigint, 4::bigint)::text",
+        "SELECT string_agg(d::text, ',') FROM warren.dijkstra('pp', 1::bigint, 4::bigint) d",
+        "SELECT string_agg(b::text, ',' ORDER BY b) FROM warren.bfs('pp', ARRAY[1::bigint], 2) b",
+        "SELECT string_agg(r::text, ',' ORDER BY r) FROM warren.reachable_set('pp', ARRAY[1::bigint]) r",
+        "SELECT string_agg(c::text, ',' ORDER BY c) FROM warren.components('pp', NULL::bigint) c",
+        "SELECT string_agg(w::text, ',' ORDER BY w)
+         FROM warren.walk('pp', ARRAY[1::bigint], ARRAY[warren.s(NULL), warren.s(NULL)]) w",
+    ];
+
+    /// The lines of `EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF) <query>`.
+    fn analyzed(query: &str) -> Result<Vec<String>, Error> {
+        Spi::connect(|client| {
+            client
+                .select(&format!("EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF) {query}"), None, &[])?
+                .map(|row| row.get::<String>(1).map(Option::unwrap_or_default))
+                .collect::<Result<Vec<_>, _>>()
+        })
+    }
+
+    /// The first column of `query`'s first row, as text. Read without a
+    /// row limit: under one (`Spi::get_one`'s), Postgres runs the plan
+    /// without workers.
+    fn text_of(query: &str) -> Result<Option<String>, Error> {
+        Spi::connect(|client| client.select(query, None, &[])?.first().get_one::<String>())
+    }
+
+    /// The parallel workers the plan of `query` launched.
+    fn workers_launched(query: &str) -> Result<usize, Error> {
+        Ok(analyzed(query)?
+            .iter()
+            .filter_map(|line| line.trim().strip_prefix("Workers Launched: "))
+            .filter_map(|count| count.parse::<usize>().ok())
+            .sum())
+    }
+
+    #[pg_test]
+    fn every_safe_graph_read_runs_in_a_worker_and_returns_the_leaders_rows() -> Result<(), Error> {
+        graph_with_a_vector()?;
+        for query in WORKER_READS {
+            let in_leader = text_of(query)?;
+            assert!(in_leader.is_some(), "{query} returned nothing");
+            Spi::run(&format!("SET {FORCE_PARALLEL} = on"))?;
+            assert_eq!(workers_launched(query)?, 1, "{query} did not run in a worker");
+            let in_worker = text_of(query)?;
+            Spi::run(&format!("RESET {FORCE_PARALLEL}"))?;
+            assert_eq!(in_worker, in_leader, "{query}");
+        }
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_parallel_scan_calls_safe_reads_per_row_in_its_workers() -> Result<(), Error> {
+        graph_with_a_vector()?;
+        Spi::run(
+            "CREATE TABLE pairs AS SELECT g FROM generate_series(1, 100000) g; ANALYZE pairs",
+        )?;
+        let query = "SELECT count(*)::text || ' ' || sum(warren.degree('pp', g % 5 + 1))::text
+                     FROM pairs WHERE warren.has_edge('pp', g % 5 + 1, (g + 1) % 5 + 1)";
+        let serial = text_of(query)?;
+        Spi::run(
+            "SET parallel_setup_cost = 0; SET parallel_tuple_cost = 0;
+             SET min_parallel_table_scan_size = 0; SET max_parallel_workers_per_gather = 2",
+        )?;
+        assert!(workers_launched(query)? >= 1, "{:?}", analyzed(query)?);
+        let parallel = text_of(query)?;
+        Spi::run(
+            "RESET parallel_setup_cost; RESET parallel_tuple_cost;
+             RESET min_parallel_table_scan_size; RESET max_parallel_workers_per_gather",
+        )?;
+        assert_eq!(parallel, serial);
+        assert_eq!(serial.as_deref(), Some("100000 100000"));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_traversal_in_a_worker_records_no_last_stats() -> Result<(), Error> {
+        graph_with_a_vector()?;
+        // A function that claims to be safe, so that it runs in the worker
+        // and reads the worker's own last_stats() after a traversal there.
+        Spi::run(
+            "CREATE FUNCTION stats_in_a_worker() RETURNS text LANGUAGE plpgsql PARALLEL SAFE AS $$
+             BEGIN
+                 PERFORM count(*) FROM warren.bfs('pp', ARRAY[1::bigint], 2);
+                 RETURN coalesce(warren.last_stats() ->> 'function', 'nothing');
+             END $$",
+        )?;
+        Spi::run("SELECT warren.reachable('pp', 1::bigint, 4::bigint)")?;
+        Spi::run(&format!("SET {FORCE_PARALLEL} = on"))?;
+        assert_eq!(workers_launched("SELECT stats_in_a_worker()")?, 1);
+        let in_worker = text_of("SELECT stats_in_a_worker()")?;
+        let bfs = text_of("SELECT count(*)::text FROM warren.bfs('pp', ARRAY[1::bigint], 2)")?;
+        Spi::run(&format!("RESET {FORCE_PARALLEL}"))?;
+        assert_eq!(in_worker.as_deref(), Some("nothing"));
+        assert_eq!(bfs.as_deref(), Some("3"));
+        let in_leader = Spi::get_one::<String>("SELECT warren.last_stats() ->> 'function'")?;
+        assert_eq!(in_leader.as_deref(), Some("reachable"), "a worker's bfs reached the leader");
+        Ok(())
     }
 
     #[pg_test]

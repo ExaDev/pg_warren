@@ -1,6 +1,9 @@
 //! `warren.last_stats()`: what the session's last recording traversal did
 //! (DESIGN.md §9.3, Appendix A.6), and the `NOTICE` that makes truncation
-//! visible.
+//! visible. The traversals are `PARALLEL SAFE` (§14 item 33): one that
+//! runs in a parallel worker records nothing, since the worker's record
+//! could never reach the leader, so `last_stats()` describes only calls
+//! the leader ran.
 
 use std::cell::RefCell;
 
@@ -21,7 +24,8 @@ thread_local! {
 /// `reachable_set`, `shortest_path`, `dijkstra`, `components`); NULL before
 /// the first. Keys: `function`, `graph`, `version`, `nodes_visited`,
 /// `edges_traversed`, `truncated`. A set-returning function updates them as
-/// it streams, so after SQL `LIMIT` stops it they count the work done.
+/// it streams, so after SQL `LIMIT` stops it they count the work done. A
+/// call that a parallel worker ran is not recorded.
 #[pg_extern(schema = "warren", volatile, parallel_restricted)]
 fn last_stats() -> Option<JsonB> {
     LAST.with_borrow(|last| last.clone().map(JsonB))
@@ -59,9 +63,21 @@ impl Recorder {
     }
 
     fn store(&self, stats: TraversalStats) {
+        if in_parallel_worker() {
+            return;
+        }
         let value = stats_json(self.function, &self.graph, self.version, stats);
         LAST.with_borrow_mut(|last| *last = Some(value));
     }
+}
+
+/// Whether this process is a parallel worker (Postgres's
+/// `IsParallelWorker()`).
+fn in_parallel_worker() -> bool {
+    // SAFETY: reads the process's parallel worker number, set once as a
+    // parallel worker starts and -1 in every other backend, on the main
+    // thread.
+    unsafe { pg_sys::ParallelWorkerNumber >= 0 }
 }
 
 fn stats_json(function: &str, graph: &str, version: VersionId, stats: TraversalStats) -> Value {

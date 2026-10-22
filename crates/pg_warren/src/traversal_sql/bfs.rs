@@ -42,7 +42,7 @@ CREATE FUNCTION warren.bfs(graph text, start anyarray, max_depth int,
                            node_filter "any" DEFAULT NULL, max_results bigint DEFAULT NULL,
                            version bigint DEFAULT NULL)
 RETURNS TABLE (node_id anyelement, depth int, via anyelement)
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'bfs_wrapper';
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'bfs_wrapper';
 "#
 )]
 fn bfs(
@@ -91,7 +91,7 @@ CREATE FUNCTION warren.reachable_set(graph text, start anyarray, max_depth int D
                                      rels text[] DEFAULT NULL, direction text DEFAULT 'out',
                                      version bigint DEFAULT NULL)
 RETURNS SETOF anyelement
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'reachable_set_wrapper';
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'reachable_set_wrapper';
 "#
 )]
 fn reachable_set(

@@ -1,8 +1,9 @@
 //! `warren.neighbours`, `warren.degree` and `warren.has_edge`: one node's
 //! adjacency, read straight from the CSR (DESIGN.md §9.3). They record no
-//! stats, but are `PARALLEL RESTRICTED` until the cache is shared (v1.1
-//! DSM): a parallel worker starts with an empty backend-local cache, so
-//! under a parallel scan every worker would load the whole version.
+//! stats and read no vector, so they are `PARALLEL SAFE` (§14 item 33): a
+//! parallel scan's workers call them on their own rows, each mapping the
+//! shared version, or loading its own copy where the shared cache is
+//! unavailable.
 
 use pgrx::prelude::*;
 use pgrx::AnyElement;
@@ -25,7 +26,7 @@ use crate::source::{with_id_type, IdDatum};
 CREATE FUNCTION warren.neighbours(graph text, node anyelement, direction text DEFAULT 'out',
                                   rels text[] DEFAULT NULL, version bigint DEFAULT NULL)
 RETURNS SETOF anyelement
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'neighbours_wrapper';
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'neighbours_wrapper';
 "#
 )]
 fn neighbours(
@@ -54,7 +55,7 @@ fn neighbours(
 CREATE FUNCTION warren.degree(graph text, node anyelement, direction text DEFAULT 'out',
                               rels text[] DEFAULT NULL, version bigint DEFAULT NULL)
 RETURNS bigint
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'degree_wrapper';
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'degree_wrapper';
 "#
 )]
 fn degree(
@@ -83,7 +84,7 @@ fn degree(
 CREATE FUNCTION warren.has_edge(graph text, src anyelement, dst anyelement,
                                 rel text DEFAULT NULL, version bigint DEFAULT NULL)
 RETURNS boolean
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'has_edge_wrapper';
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'has_edge_wrapper';
 "#
 )]
 fn has_edge(
@@ -240,7 +241,7 @@ mod tests {
     }
 
     #[pg_test]
-    fn traversal_functions_are_stable_and_parallel_restricted() -> Result<(), Error> {
+    fn traversal_functions_are_stable_and_parallel_safe() -> Result<(), Error> {
         let labels = Spi::get_one::<String>(
             "SELECT string_agg(proname || ':' || provolatile::text || proparallel::text, ' '
                               ORDER BY proname)
@@ -252,8 +253,8 @@ mod tests {
         assert_eq!(
             labels.as_deref(),
             Some(
-                "bfs:sr components:sr degree:sr dijkstra:sr has_edge:sr last_stats:vr \
-                 neighbours:sr reachable:sr reachable_set:sr shortest_path:sr"
+                "bfs:ss components:ss degree:ss dijkstra:ss has_edge:ss last_stats:vr \
+                 neighbours:ss reachable:ss reachable_set:ss shortest_path:ss"
             )
         );
         Ok(())

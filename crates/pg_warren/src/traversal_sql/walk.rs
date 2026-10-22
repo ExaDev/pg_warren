@@ -44,7 +44,7 @@ CREATE FUNCTION warren.walk(graph text, start anyarray, steps warren.step[],
                             max_results bigint DEFAULT NULL, reverse boolean DEFAULT false,
                             version bigint DEFAULT NULL)
 RETURNS TABLE (end_id anyelement, path anyarray, rels text[], count bigint)
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'walk_wrapper';
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'walk_wrapper';
 "#
 )]
 fn walk<'a>(

@@ -145,3 +145,20 @@ BEGIN
   PERFORM warren.drop_vector(graph, '_warren_label_propagation_majority_' || part, v, true) FROM unnest(parts) part;
   RETURN i;
 END $$;
+
+-- The graph reads that use no vector become PARALLEL SAFE (DESIGN.md §14
+-- item 33): a parallel worker maps the shared version, or loads its own
+-- copy where the shared cache is unavailable, and a traversal it runs
+-- records no last_stats().
+ALTER FUNCTION warren.neighbours(text, anyelement, text, text[], bigint) PARALLEL SAFE;
+ALTER FUNCTION warren.degree(text, anyelement, text, text[], bigint) PARALLEL SAFE;
+ALTER FUNCTION warren.has_edge(text, anyelement, anyelement, text, bigint) PARALLEL SAFE;
+ALTER FUNCTION warren.id_map(text, anyelement, bigint) PARALLEL SAFE;
+ALTER FUNCTION warren.info(text) PARALLEL SAFE;
+ALTER FUNCTION warren.reachable(text, anyelement, anyelement, int, text[], text, bigint) PARALLEL SAFE;
+ALTER FUNCTION warren.shortest_path(text, anyelement, anyelement, int, text[], text, bigint) PARALLEL SAFE;
+ALTER FUNCTION warren.dijkstra(text, anyelement, anyelement, text[], text, bigint) PARALLEL SAFE;
+ALTER FUNCTION warren.bfs(text, anyarray, int, text, text[], "any", bigint, bigint) PARALLEL SAFE;
+ALTER FUNCTION warren.reachable_set(text, anyarray, int, text[], text, bigint) PARALLEL SAFE;
+ALTER FUNCTION warren.components(text, anyelement, bigint) PARALLEL SAFE;
+ALTER FUNCTION warren.walk(text, anyarray, warren.step[], text, boolean, bigint, boolean, bigint) PARALLEL SAFE;
