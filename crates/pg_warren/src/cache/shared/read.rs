@@ -102,18 +102,17 @@ pub(crate) fn evict_graph(graph: i32, owner: bool) -> Result<usize, CacheError> 
     let Some(mut port) = port else {
         return Ok(0);
     };
-    Ok(evict_versions(&mut port, &graph_keys(graph, None)?, owner))
+    Ok(evict_versions(&mut port, &graph_keys(graph)?, owner))
 }
 
-/// The keys of graph `graph`'s versions as of the statement's snapshot,
-/// but `except`.
-fn graph_keys(graph: i32, except: Option<VersionId>) -> Result<Vec<Key>, CacheError> {
+/// The keys of graph `graph`'s versions as of the statement's snapshot.
+fn graph_keys(graph: i32) -> Result<Vec<Key>, CacheError> {
     let versions = as_catalog_owner(|| {
         Ok::<_, CacheError>(
             read_one::<Vec<VersionId>>(
                 "SELECT coalesce(array_agg(version_id), '{}') FROM warren.versions
-                 WHERE graph_id = $1 AND version_id IS DISTINCT FROM $2",
-                &[graph.into(), except.into()],
+                 WHERE graph_id = $1",
+                &[graph.into()],
             )?
             .unwrap_or_default(),
         )
@@ -125,17 +124,37 @@ fn graph_keys(graph: i32, except: Option<VersionId>) -> Result<Vec<Key>, CacheEr
 /// if it is its graph's current version, the graph's other versions, as
 /// the private cache drops them (DESIGN.md §5.5, §5.6); unpinned ones only,
 /// so other backends reading one on purpose (a REPEATABLE READ snapshot,
-/// an explicit `version :=`) reload it if they need it again.
+/// an explicit `version :=`) reload it if they need it again. Current
+/// means current in the latest committed state: a reader whose snapshot
+/// predates a promotion loads the version it sees as current like any
+/// other, and never evicts the one promoted since.
 fn make_room(resolved: &Resolved) -> Result<(), CacheError> {
     prune()?;
-    let (graph, version) = (&resolved.graph, resolved.version);
-    if graph.current_version == Some(version) {
-        let superseded = graph_keys(graph.graph_id, Some(version))?;
-        if !superseded.is_empty() {
-            evict_versions(&mut Dsm::here(), &superseded, true);
-        }
+    if !latest_readable() {
+        return Ok(());
+    }
+    let superseded = superseded_by(resolved.graph.graph_id, resolved.version)?;
+    if !superseded.is_empty() {
+        evict_versions(&mut Dsm::here(), &superseded, true);
     }
     Ok(())
+}
+
+/// The keys of graph `graph`'s versions but `version`, if `version` is its
+/// current version in the latest committed state; none otherwise.
+fn superseded_by(graph: i32, version: VersionId) -> Result<Vec<Key>, CacheError> {
+    let versions = as_catalog_owner(|| {
+        Ok::<_, CacheError>(
+            read_one_latest::<Vec<VersionId>>(
+                "SELECT coalesce(array_agg(v.version_id), '{}')
+                 FROM warren.graphs AS g JOIN warren.versions AS v USING (graph_id)
+                 WHERE g.graph_id = $1 AND g.current_version = $2 AND v.version_id <> $2",
+                &[graph.into(), version.into()],
+            )?
+            .unwrap_or_default(),
+        )
+    })?;
+    Ok(versions.into_iter().filter_map(key).collect())
 }
 
 /// With `warren.shared_cache_memory` set to 0 (the setting is reloaded,
