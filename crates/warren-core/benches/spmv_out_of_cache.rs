@@ -92,11 +92,21 @@ fn bench_spmv(c: &mut Criterion) {
             for (dtype, x, y) in &mut operands {
                 let (Ok(x), Ok(y)) = (x, y) else { continue };
                 let product = Product { transpose: true, ..Product::new(Semiring::PlusTimes) };
+                if let Err(error) =
+                    spmv(&workers, &memory, &mut Uninterrupted, &graph, &product, x, y)
+                {
+                    eprintln!("skipping {name}/{dtype}: {error}");
+                    continue;
+                }
                 group.bench_function(format!("{name}/{dtype}/threads_{threads}"), |b| {
                     b.iter(|| spmv(&workers, &memory, &mut Uninterrupted, &graph, &product, x, y))
                 });
             }
             if let (Shape::Uniform, Ok(vectors)) = (shape, pagerank_vectors(&memory)) {
+                if let Err(error) = pagerank_iteration(&workers, &memory, &graph, &vectors) {
+                    eprintln!("skipping {name}/pagerank_iteration: {error}");
+                    continue;
+                }
                 group.bench_function(format!("{name}/pagerank_iteration/threads_{threads}"), |b| {
                     b.iter(|| pagerank_iteration(&workers, &memory, &graph, &vectors))
                 });
@@ -185,6 +195,12 @@ fn bench_vector_work(c: &mut Criterion) {
     for threads in [1, cores] {
         let Ok(workers) = Workers::new(threads) else { continue };
         for (name, expr) in &pagerank_maps() {
+            if let Err(error) =
+                map(&workers, &memory, &mut Uninterrupted, ID_SPACE, expr, &operands)
+            {
+                eprintln!("skipping {name}: {error}");
+                continue;
+            }
             group.bench_function(format!("{name}/threads_{threads}"), |b| {
                 b.iter(|| map(&workers, &memory, &mut Uninterrupted, ID_SPACE, expr, &operands))
             });

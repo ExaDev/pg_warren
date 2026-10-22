@@ -5,6 +5,7 @@ use proptest::prelude::*;
 use super::eval::Chunk;
 use super::*;
 use super::{arithmetic, eval, not_null};
+use crate::compute::cast::SqlCast;
 use crate::compute::{ArithmeticError, Dtype, Element, Vector};
 use crate::interrupts::{Cancelled, Uninterrupted};
 
@@ -349,7 +350,10 @@ mod reference {
                     I64Op::Negate(a) => self.i64(a)?.map(arithmetic::int_negate).transpose(),
                     I64Op::Abs(a) => self.i64(a)?.map(arithmetic::int_abs).transpose(),
                 },
-                |_| unreachable!("the generator casts nothing to bigint"),
+                |any| match any {
+                    AnyExpr::F64(e) => self.f64(e)?.map(SqlCast::sql_cast).transpose(),
+                    _ => unreachable!("the generator casts only double precision to bigint"),
+                },
             )
         }
 
@@ -358,20 +362,22 @@ mod reference {
                 e,
                 |op| match op {
                     BoolOp::Compare(c, comparands) => {
-                        let (a, b) = match comparands.as_ref() {
-                            Comparands::F64(a, b) => (self.f64(a)?, self.f64(b)?),
-                            _ => unreachable!("the generator compares double precision"),
-                        };
-                        Ok(a.zip(b).map(|(a, b)| {
-                            let order = a.sql_cmp(b);
-                            match c {
-                                Comparison::Eq => order.is_eq(),
-                                Comparison::Ne => order.is_ne(),
-                                Comparison::Lt => order.is_lt(),
-                                Comparison::Le => order.is_le(),
-                                Comparison::Gt => order.is_gt(),
-                                Comparison::Ge => order.is_ge(),
+                        let order = match comparands.as_ref() {
+                            Comparands::F64(a, b) => {
+                                self.f64(a)?.zip(self.f64(b)?).map(|(a, b)| a.sql_cmp(b))
                             }
+                            Comparands::I64(a, b) => {
+                                self.i64(a)?.zip(self.i64(b)?).map(|(a, b)| a.sql_cmp(b))
+                            }
+                            _ => unreachable!("the generator compares double precision and bigint"),
+                        };
+                        Ok(order.map(|order| match c {
+                            Comparison::Eq => order.is_eq(),
+                            Comparison::Ne => order.is_ne(),
+                            Comparison::Lt => order.is_lt(),
+                            Comparison::Le => order.is_le(),
+                            Comparison::Gt => order.is_gt(),
+                            Comparison::Ge => order.is_ge(),
                         }))
                     }
                     BoolOp::Not(a) => Ok(self.bool(a)?.map(|a| !a)),
@@ -585,10 +591,14 @@ fn bigints() -> impl Strategy<Value = Expr<i64>> {
     })
 }
 
-/// A condition that is never NULL: comparisons, non-NULL literals and NOT.
-fn not_null_condition(inner: BoxedStrategy<Expr<f64>>) -> impl Strategy<Value = Expr<bool>> {
+/// A condition that is never NULL: comparisons of `inner` (as
+/// `comparands` pairs them), non-NULL literals and NOT.
+fn not_null_condition<T: Value + std::fmt::Debug + 'static>(
+    inner: BoxedStrategy<Expr<T>>,
+    comparands: fn(Expr<T>, Expr<T>) -> Comparands,
+) -> impl Strategy<Value = Expr<bool>> {
     let compare = (comparisons(), inner.clone(), inner)
-        .prop_map(|(c, a, b)| Expr::Op(BoolOp::Compare(c, Box::new(Comparands::F64(a, b)))));
+        .prop_map(move |(c, a, b)| Expr::Op(BoolOp::Compare(c, Box::new(comparands(a, b)))));
     let leaf = prop_oneof![compare, any::<bool>().prop_map(|v| Expr::Literal(Some(v)))];
     leaf.prop_recursive(2, 4, 1, |inner| inner.prop_map(|a| Expr::Op(BoolOp::Not(Box::new(a)))))
 }
@@ -610,19 +620,39 @@ fn not_null_doubles() -> impl Strategy<Value = Expr<f64>> {
                 .prop_map(|(o, a, b)| Expr::Op(F64Op::Arithmetic(o, a, b))),
             (functions.clone(), b()).prop_map(|(f, a)| Expr::Op(F64Op::Call(f, a))),
             (b(), b()).prop_map(|(a, b)| Expr::Op(F64Op::Power(a, b))),
-            (not_null_condition(inner.clone().boxed()), inner.clone(), b()).prop_map(
-                |(c, v, otherwise)| Expr::Case { when: vec![(c, v)], otherwise: Some(otherwise) }
-            ),
+            not_null_case(not_null_condition(inner.clone().boxed(), Comparands::F64), inner),
         ]
     })
 }
 
-/// `bigint` expressions with no NULL anywhere.
+/// `CASE WHEN condition THEN value ELSE value END`, never NULL: a value
+/// that fails where its condition is false must not fail the whole.
+fn not_null_case<T: Value + std::fmt::Debug + 'static>(
+    condition: impl Strategy<Value = Expr<bool>>,
+    value: impl Strategy<Value = Expr<T>> + Clone,
+) -> impl Strategy<Value = Expr<T>> {
+    (condition, value.clone(), value.prop_map(Box::new))
+        .prop_map(|(c, v, otherwise)| Expr::Case { when: vec![(c, v)], otherwise: Some(otherwise) })
+}
+
+/// A `double precision` leaf to cast: NaN, ±Infinity, 1e300 and 1e-300
+/// are out of range for `bigint` and `real`.
+fn double_to_cast() -> impl Strategy<Value = AnyExpr> {
+    prop_oneof![
+        special_f64().prop_map(|v| Expr::Literal(Some(v))),
+        (0usize..2).prop_map(Expr::Vector),
+    ]
+    .prop_map(AnyExpr::F64)
+}
+
+/// `bigint` expressions with no NULL anywhere, with casts that can fail
+/// and `CASE` guarding overflow and division by zero.
 fn not_null_bigints() -> impl Strategy<Value = Expr<i64>> {
     let leaf = prop_oneof![
         prop_oneof![Just(0i64), Just(-1), Just(3), Just(i64::MIN), Just(i64::MAX)]
             .prop_map(|v| Expr::Literal(Some(v))),
         Just(Expr::Vector(2)),
+        double_to_cast().prop_map(|from| Expr::Cast(Box::new(from))),
     ];
     let arithmetic = arithmetics();
     leaf.prop_recursive(3, 12, 2, move |inner| {
@@ -633,6 +663,53 @@ fn not_null_bigints() -> impl Strategy<Value = Expr<i64>> {
             (b(), b()).prop_map(|(a, b)| Expr::Op(I64Op::Modulo(a, b))),
             (arithmetic.clone(), b(), b())
                 .prop_map(|(o, a, b)| Expr::Op(I64Op::Arithmetic(o, a, b))),
+            not_null_case(not_null_condition(inner.clone().boxed(), Comparands::I64), inner),
+        ]
+    })
+}
+
+/// `real` expressions with no NULL anywhere; casts from `double
+/// precision` can overflow or underflow.
+fn not_null_reals() -> impl Strategy<Value = Expr<f32>> {
+    let leaf = prop_oneof![
+        prop_oneof![
+            (-4i8..5).prop_map(f32::from),
+            Just(0.5),
+            Just(f32::NAN),
+            Just(f32::INFINITY),
+            Just(3e38)
+        ]
+        .prop_map(|v| Expr::Literal(Some(v))),
+        double_to_cast().prop_map(|from| Expr::Cast(Box::new(from))),
+        Just(Expr::Cast(Box::new(AnyExpr::I64(Expr::Vector(2))))),
+    ];
+    let arithmetic = arithmetics();
+    leaf.prop_recursive(3, 12, 2, move |inner| {
+        let b = || inner.clone().prop_map(Box::new);
+        prop_oneof![
+            b().prop_map(|a| Expr::Op(F32Op::Negate(a))),
+            b().prop_map(|a| Expr::Op(F32Op::Abs(a))),
+            (arithmetic.clone(), b(), b())
+                .prop_map(|(o, a, b)| Expr::Op(F32Op::Arithmetic(o, a, b))),
+            not_null_case(not_null_condition(inner.clone().boxed(), Comparands::F32), inner),
+        ]
+    })
+}
+
+/// `boolean` expressions with no NULL anywhere: comparisons of each type
+/// (whose operands can fail), casts, NOT and `CASE`.
+fn not_null_booleans() -> impl Strategy<Value = Expr<bool>> {
+    let leaf = prop_oneof![
+        not_null_condition(not_null_doubles().boxed(), Comparands::F64),
+        not_null_condition(not_null_bigints().boxed(), Comparands::I64),
+        not_null_condition(not_null_reals().boxed(), Comparands::F32),
+        double_to_cast().prop_map(|from| Expr::Cast(Box::new(from))),
+        Just(Expr::Cast(Box::new(AnyExpr::I64(Expr::Vector(2))))),
+    ];
+    leaf.prop_recursive(2, 8, 2, |inner| {
+        prop_oneof![
+            inner.clone().prop_map(|a| Expr::Op(BoolOp::Not(Box::new(a)))),
+            not_null_case(inner.clone(), inner),
         ]
     })
 }
@@ -703,7 +780,7 @@ proptest! {
 }
 
 #[test]
-fn pagerank_s_maps_take_the_no_null_path() {
+fn pagerank_maps_take_the_no_null_path() {
     // CASE WHEN out > 0 THEN x / out ELSE 0 END, and the update
     // damping * (y + dangling * p) + teleport * p.
     let message = Expr::Case {
@@ -806,5 +883,35 @@ proptest! {
         let chunk = Chunk { operands: &operands, width: d, start, len };
         let active = activity(len, &mask, masked);
         agree(&expr, &chunk, &active, masked, |v: i64| v)?;
+    }
+
+    #[test]
+    fn the_no_null_path_matches_the_columnar_path_on_reals(
+        (n, d, a, b, c) in operands(), expr in not_null_reals(),
+        (start, len) in (any::<prop::sample::Index>(), any::<prop::sample::Index>()),
+        mask in prop::collection::vec(any::<bool>(), 1..8), masked in any::<bool>()
+    ) {
+        let (a, b, c) = (vector(d, a), vector(1, b), vector(1, c));
+        let operands = [&a, &b, &c];
+        let start = start.index(n * d + 1);
+        let len = len.index(n * d - start + 1);
+        let chunk = Chunk { operands: &operands, width: d, start, len };
+        let active = activity(len, &mask, masked);
+        agree(&expr, &chunk, &active, masked, f32::to_bits)?;
+    }
+
+    #[test]
+    fn the_no_null_path_matches_the_columnar_path_on_booleans(
+        (n, d, a, b, c) in operands(), expr in not_null_booleans(),
+        (start, len) in (any::<prop::sample::Index>(), any::<prop::sample::Index>()),
+        mask in prop::collection::vec(any::<bool>(), 1..8), masked in any::<bool>()
+    ) {
+        let (a, b, c) = (vector(d, a), vector(1, b), vector(1, c));
+        let operands = [&a, &b, &c];
+        let start = start.index(n * d + 1);
+        let len = len.index(n * d - start + 1);
+        let chunk = Chunk { operands: &operands, width: d, start, len };
+        let active = activity(len, &mask, masked);
+        agree(&expr, &chunk, &active, masked, |v: bool| v)?;
     }
 }
