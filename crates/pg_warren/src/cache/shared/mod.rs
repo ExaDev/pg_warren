@@ -28,7 +28,7 @@ mod setting;
 mod slot;
 mod unavailable;
 
-pub(crate) use read::{evict_graph, prune, shared};
+pub(crate) use read::{evict_graph, prune, shared, shared_hit};
 
 /// Registers `warren.shared_cache_memory` and, while
 /// `shared_preload_libraries` loads pg_warren on PG 15 and 16, the hooks

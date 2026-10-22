@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use pgrx::{ereport, pg_sys, PgSqlErrorCode};
 
-use super::acquire::{acquire, Acquired};
+use super::acquire::{acquire, find, Acquired};
 use super::admission::Refusal;
 use super::dsm::{store_name, Dsm, DETACH, PREFIX};
 use super::eviction::{self, evict_versions};
@@ -37,6 +37,41 @@ use crate::source::IdDatum;
 pub(crate) fn shared<E: IdDatum + Send + Sync>(
     resolved: &Resolved,
 ) -> Result<Option<Arc<LoadedVersion<E>>>, CacheError> {
+    match port_for(resolved)? {
+        Some(port) => through(port, resolved),
+        None => Ok(None),
+    }
+}
+
+/// The version `resolved` names if the shared cache holds it (waiting
+/// while another backend loads it), pinned until the statement ends; `None`
+/// where [`shared`] would load privately, and on a miss, which it leaves
+/// unclaimed: a two-version call takes what is shared first, so that its
+/// partner's load cannot evict it.
+pub(crate) fn shared_hit<E: IdDatum + Send + Sync>(
+    resolved: &Resolved,
+) -> Result<Option<Arc<LoadedVersion<E>>>, CacheError> {
+    let Some(mut port) = port_for(resolved)? else {
+        return Ok(None);
+    };
+    let Some(key) = key(resolved.version) else {
+        return Ok(None);
+    };
+    if let Some(attached) = port.pinned(key) {
+        return Ok(Some(attached.version::<E>(resolved.version)?));
+    }
+    port.release(DETACH);
+    pin_shared();
+    match find(&mut port, key) {
+        Some(attached) => Ok(Some(attached.version::<E>(resolved.version)?)),
+        None => Ok(None),
+    }
+}
+
+/// The port to read `resolved` through, or `None` to load it privately:
+/// the shared cache is off or unavailable, or this transaction created the
+/// version.
+fn port_for(resolved: &Resolved) -> Result<Option<Dsm>, CacheError> {
     if setting::cap() == 0 {
         retire();
         return Ok(None);
@@ -48,10 +83,7 @@ pub(crate) fn shared<E: IdDatum + Send + Sync>(
             return Ok(None);
         }
     };
-    if created_here(resolved.version)? {
-        return Ok(None);
-    }
-    through(port, resolved)
+    Ok((!created_here(resolved.version)?).then_some(port))
 }
 
 /// `warren.evict`'s share of the shared cache (DESIGN.md §14 item 34):
