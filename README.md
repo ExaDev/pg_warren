@@ -153,7 +153,7 @@ surrounding query.
 
 Every function that works on a graph takes its name first and, where it
 reads the graph, an optional `version` (default: the current version).
-`version`, `last_stats`, `s` and `steps` take no graph.
+`version`, `last_stats`, `s`, `steps` and `shared_cache` take no graph.
 
 | Area | Functions |
 |---|---|
@@ -164,7 +164,7 @@ reads the graph, an optional `version` (default: the current version).
 | Compute | `spmv`, `spmm`, `vector_map`, `explain_map`, `vector_reduce`, `vector_norm_diff`, `gather` |
 | Library | `pagerank`, `eigenvector_centrality`, `katz_centrality`, `hits`, `components_vector`, `label_propagation`, `label_propagation_majority`, `sssp_vector`, `degree_vector`, `aggregate_neighbours`, `triangles`, `clustering`, `core_number`, `strong_components_vector`, `topological_order`, `dag_longest_path`, `minimum_spanning_forest` |
 | Spectral | `eigen`, `distance` |
-| Extension | `version` |
+| Extension | `version`, `shared_cache` |
 
 Signatures are in `\df warren.*` and in DESIGN.md (§6, §8, §9.3).
 
