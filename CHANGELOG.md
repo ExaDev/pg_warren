@@ -71,8 +71,6 @@
   an iteration takes ~3 s, against ~37 s before on the same machine. Its
   results are unchanged.
 
-### Changed
-
 - A level graph (`contract(graph, labels, NULL)`, the graphs `louvain` and
   `leiden` contract each level into) stores each relation's forward CSR
   only, without a reverse or merged CSR whatever the input's layout. The
