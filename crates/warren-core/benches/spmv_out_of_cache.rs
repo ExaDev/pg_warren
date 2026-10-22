@@ -3,14 +3,16 @@
 //! product runs, on a G(n, m) random graph and on a power-law graph in
 //! random and in hub-first node order, `f64` and `f32`, one thread and
 //! every core. Beside it, the per-iteration vector work of `pagerank`
-//! (its four maps, a sum, an L1 `norm_diff` and `y`'s fill) at the same size.
+//! (its four maps, a sum, an L1 `norm_diff` and `y`'s fill) at the same
+//! size, and on the G(n, m) graph one whole iteration of `pagerank.sql`'s
+//! loop, its SQL calls made directly.
 
 use std::thread::available_parallelism;
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use warren_core::compute::{
-    map, norm_diff, reduce, AnyExpr, AnyVector, Arithmetic, BoolOp, Comparands, Comparison,
-    ComputeMemory, Expr, F64Op, Norm, Product, Reduction, Semiring, Vector, Workers,
+    map, norm_diff, reduce, spmv, AnyExpr, AnyVector, Arithmetic, BoolOp, Comparands, Comparison,
+    ComputeError, ComputeMemory, Expr, F64Op, Norm, Product, Reduction, Semiring, Vector, Workers,
 };
 use warren_core::graph::{EdgeList, GraphCsr, GraphError, RelationDictionary};
 use warren_core::interrupts::Uninterrupted;
@@ -91,22 +93,53 @@ fn bench_spmv(c: &mut Criterion) {
                 let (Ok(x), Ok(y)) = (x, y) else { continue };
                 let product = Product { transpose: true, ..Product::new(Semiring::PlusTimes) };
                 group.bench_function(format!("{name}/{dtype}/threads_{threads}"), |b| {
-                    b.iter(|| {
-                        warren_core::compute::spmv(
-                            &workers,
-                            &memory,
-                            &mut Uninterrupted,
-                            &graph,
-                            &product,
-                            x,
-                            y,
-                        )
-                    })
+                    b.iter(|| spmv(&workers, &memory, &mut Uninterrupted, &graph, &product, x, y))
+                });
+            }
+            if let (Shape::Uniform, Ok(vectors)) = (shape, pagerank_vectors(&memory)) {
+                group.bench_function(format!("{name}/pagerank_iteration/threads_{threads}"), |b| {
+                    b.iter(|| pagerank_iteration(&workers, &memory, &graph, &vectors))
                 });
             }
         }
     }
     group.finish();
+}
+
+/// One iteration of `pagerank.sql`'s loop over `[x, out, y, p, dangling,
+/// damping, teleport]`, its SQL calls made directly: the two maps, the
+/// dangling sum, the product into a fresh `y`, the update, its L1 change
+/// and the copy back into `x`.
+fn pagerank_iteration(
+    workers: &Workers,
+    memory: &ComputeMemory,
+    graph: &GraphCsr,
+    vectors: &[AnyVector],
+) -> Result<f64, ComputeError> {
+    let [msg, dangling_x, next, copy] = pagerank_maps().map(|(_, expr)| expr);
+    let operands: Vec<&AnyVector> = vectors.iter().collect();
+    let run = |expr, operands: &[&AnyVector]| {
+        map(workers, memory, &mut Uninterrupted, ID_SPACE, expr, operands)
+    };
+    let message = run(&msg, &operands)?;
+    let dangling = run(&dangling_x, &operands)?;
+    reduce(workers, &mut Uninterrupted, &dangling, Reduction::Sum)?;
+    let mut y = AnyVector::from(Vector::filled(memory, ID_SPACE, 1, 0.0f64)?);
+    let product = Product { transpose: true, ..Product::new(Semiring::PlusTimes) };
+    spmv(workers, memory, &mut Uninterrupted, graph, &product, &message, &mut y)?;
+    let mut updated = operands.clone();
+    updated[2] = &y;
+    let next = run(&next, &updated)?;
+    let delta = norm_diff(workers, &mut Uninterrupted, &next, operands[0], Norm::L1)?;
+    run(&copy, &[&next])?;
+    Ok(delta)
+}
+
+/// The iteration's operands: `x`, `out`, `y`, `p`, `dangling`,
+/// `damping` and `teleport`, as constants.
+fn pagerank_vectors(memory: &ComputeMemory) -> Result<Vec<AnyVector>, ComputeError> {
+    let vector = |value| Vector::filled(memory, ID_SPACE, 1, value).map(AnyVector::from);
+    [0.25f64, 10.0, 0.5, 0.25, 0.1, 0.85, 0.15].map(vector).into_iter().collect()
 }
 
 /// `pagerank`'s maps (`pagerank.sql`), over vectors `[x, out, y, p,
@@ -144,8 +177,7 @@ fn bench_vector_work(c: &mut Criterion) {
     group.throughput(Throughput::Elements(ID_SPACE));
     group.sample_size(10);
     let vector = |value| Vector::filled(&memory, ID_SPACE, 1, value).map(AnyVector::from);
-    let values = [0.25f64, 10.0, 0.5, 0.25, 0.1, 0.85, 0.15];
-    let Ok(operands) = values.map(vector).into_iter().collect::<Result<Vec<_>, _>>() else {
+    let Ok(operands) = pagerank_vectors(&memory) else {
         eprintln!("skipping vector work: allocation failed");
         return;
     };
