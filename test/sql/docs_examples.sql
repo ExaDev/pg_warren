@@ -591,6 +591,11 @@ SELECT warren.evict('kg');                                         -- frees kg's
 SELECT count(*) FROM warren.bfs('kg', ARRAY[1::bigint], 2);        -- reloads; still works under the cap
 SELECT assert.equal((SELECT count(*) FROM warren.bfs('kg', ARRAY[1::bigint], 2)), 5::bigint, 'works under the cap');
 RESET warren.max_cache_memory;
+-- limits.md "The shared cache": what it holds
+SELECT kind, graph, version, state, pg_size_pretty(bytes) AS size, pins, mappers
+FROM warren.shared_cache();                -- a row per shared entry you may read, then the cluster's totals
+SELECT assert.equal((SELECT array_agg(kind) FROM warren.shared_cache() WHERE kind = 'cluster'),
+                    ARRAY['cluster'], 'one totals row');
 SELECT assert.raises($$SELECT * FROM warren.walk('roads', ARRAY[1], ARRAY[warren.s(NULL, 'out', NULL::int[], 1, 3)],
                                                  mode := 'paths', max_results := 20000000)$$,
                      'max_results above warren.max_walk_paths', '54000');
