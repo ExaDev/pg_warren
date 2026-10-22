@@ -770,10 +770,10 @@ mod tests {
 
     #[test]
     fn a_graph_of_shared_views_reads_as_the_owned_one() {
-        let relations = crate::compute::reference::relations(2);
+        let mut relations = RelationDictionary::new();
         let mut edges = EdgeList::new(true);
-        edges.push(relations[0], 0, 1, 2.0).unwrap();
-        edges.push(relations[1], 1, 2, 3.0).unwrap();
+        edges.push(relations.intern("a").unwrap(), 0, 1, 2.0).unwrap();
+        edges.push(relations.intern("b").unwrap(), 1, 2, 3.0).unwrap();
         let owned = GraphCsr::build_as(edges, 2, 3, unmerged(true)).unwrap();
         let shared = owned.shared_views();
         assert_eq!(shared, owned);
