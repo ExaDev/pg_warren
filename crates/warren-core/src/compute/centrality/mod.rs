@@ -13,12 +13,11 @@
 //! pool. A round waits for its slowest source.
 //!
 //! Closeness and harmonic centrality on unweighted rows instead search
-//! from a batch of sources at a time (64, or 256 when there are more than
-//! 64), in one multi-source breadth-first search parallel over nodes,
-//! which reports per node how many sources first reach it at each
-//! distance; batches run in ascending source order and a node's totals are
-//! added to in order of batch, then distance, again whatever the thread
-//! count.
+//! from [`SourceBatch::WIDTH`] sources at a time, in one multi-source
+//! breadth-first search parallel over nodes, which reports per node how
+//! many sources first reach it at each distance; batches run in ascending
+//! source order and a node's totals are added to in order of batch, then
+//! distance, again whatever the thread count.
 
 mod adjacency;
 mod betweenness;
@@ -166,36 +165,10 @@ fn run_batched<M: Batched, I: Interrupts>(
     if matrix.is_weighted() {
         return run_one_by_one(workers, memory, interrupts, paths, sampling, measure, matrix);
     }
-    let live = paths.tombstones.id_space() - paths.tombstones.count();
-    match sampling.k.map_or(live, |k| k.min(live)) > SourceBatch::<1>::WIDTH as u64 {
-        true => run_in_batches::<_, _, WIDE>(
-            workers, memory, interrupts, paths, sampling, measure, matrix,
-        ),
-        false => {
-            run_in_batches::<_, _, 1>(workers, memory, interrupts, paths, sampling, measure, matrix)
-        }
-    }
-}
-
-/// The words of sources per node of a batch when there are more sources
-/// than one word holds: four words, 256 sources.
-const WIDE: usize = 4;
-
-/// Runs `measure` over `matrix`'s unweighted rows, in batches of
-/// [`SourceBatch::WIDTH`] sources.
-fn run_in_batches<M: Batched, I: Interrupts, const L: usize>(
-    workers: &Workers,
-    memory: &ComputeMemory,
-    interrupts: &mut I,
-    paths: &ShortestPaths<'_, '_>,
-    sampling: &Sampling<'_>,
-    measure: &M,
-    matrix: Matrix<'_>,
-) -> Result<Centrality, ComputeError> {
     let tombstones = paths.tombstones;
     let id_space = tombstones.id_space();
     let counts = measure.counts(memory, id_space)?;
-    let mut batch = SourceBatch::<L>::new(memory, id_space)?;
+    let mut batch = SourceBatch::new(memory, id_space)?;
     // As in `run_one_by_one`: only the adjacency, the sample and a
     // multi-relation row scratch are charged on the pool.
     memory.reclaim_for(
@@ -205,7 +178,7 @@ fn run_in_batches<M: Batched, I: Interrupts, const L: usize>(
         let adjacency = Adjacency::new(paths, matrix, memory, cancellation)?;
         let sources = Sources::choose(memory, cancellation, sampling, tombstones)?;
         let reached = |node, sources, distance| measure.add(&counts, node, sources, distance);
-        for batch_sources in sources.nodes().chunks(SourceBatch::<L>::WIDTH) {
+        for batch_sources in sources.nodes().chunks(SourceBatch::WIDTH) {
             batch.search(&adjacency, batch_sources, memory, cancellation, &reached)?;
         }
         Ok(sources)

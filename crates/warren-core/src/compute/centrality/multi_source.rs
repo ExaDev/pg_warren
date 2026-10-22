@@ -1,26 +1,25 @@
 //! Multi-source breadth-first search (Then et al., "The More the Merrier",
 //! VLDB 2014): up to [`SourceBatch::WIDTH`] sources searched together on
-//! unweighted rows, one bit per source in `L` per-node words, so one scan
-//! of a frontier node's row serves every source that has it in its
-//! frontier.
+//! unweighted rows, one bit per source in a per-node word, so one scan of
+//! a frontier node's row serves every source that has it in its frontier.
 //!
 //! The search is level-synchronous and parallel over nodes. A step pushes
-//! each frontier node's words along its row into its neighbours' `next`
+//! each frontier node's word along its row into its neighbours' `next`
 //! words (an atomic OR, less the sources that have already reached the
-//! neighbour), listing a neighbour the first time a step reaches it; then
-//! each listed node takes its `next` words into `seen` and its frontier,
-//! and reports how many sources reached it at that distance. An OR does
-//! not depend on the order it runs in, and each node is settled by one
-//! thread per step, so what is reported is the same for any thread count.
+//! neighbour), and the thread whose OR sets a neighbour's word from zero
+//! lists it; then each listed node takes its `next` word into `seen` and
+//! its frontier, and reports how many sources reached it at that
+//! distance. An OR does not depend on the order it runs in, and each node
+//! is settled by one thread per step, so what is reported is the same for
+//! any thread count.
 //!
-//! The scratch is `3 L` words per node (`seen` and `next` side by side, so
-//! a row entry reads one cache line, and the frontier), a flag per node
-//! for more than one word, and two lists of up to every node, allocated
-//! before the search; a step touches only the nodes listed, and `seen` is
-//! cleared after each search.
+//! The scratch is three words per node (`seen` and `next` side by side,
+//! so a row entry reads one cache line, and the frontier) and two lists of
+//! up to every node, allocated before the search; a step touches only the
+//! nodes listed, and `seen` is cleared after each search.
 
 use std::mem::size_of;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::Relaxed};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
 
 use rayon::prelude::*;
 
@@ -31,16 +30,13 @@ use super::NODES_PER_TASK;
 use crate::graph::DenseId;
 use crate::interrupts::{Cancellation, Cancelled, Work};
 
-/// A batch search's scratch, `L` words of sources per node.
-pub(super) struct SourceBatch<const L: usize> {
+/// A batch search's scratch.
+pub(super) struct SourceBatch {
     /// Each node's sources that have reached it, and those that reach it
     /// in the step being taken.
-    words: Vec<Words<L>>,
+    words: Vec<Words>,
     /// Each node's sources whose frontier it is in.
-    frontier: Vec<[AtomicU64; L]>,
-    /// Whether the step has listed each node (more than one word only: a
-    /// word's OR from zero then no longer tells who lists it).
-    listed: Vec<AtomicBool>,
+    frontier: Vec<AtomicU64>,
     /// The frontier's nodes.
     current: Vec<AtomicU64>,
     /// The nodes the step reaches: the next frontier's.
@@ -49,29 +45,23 @@ pub(super) struct SourceBatch<const L: usize> {
 }
 
 /// A node's `seen` and `next` words.
-struct Words<const L: usize> {
-    seen: [AtomicU64; L],
-    next: [AtomicU64; L],
-}
-
-/// `L` zeroed words.
-fn zero<const L: usize>() -> [AtomicU64; L] {
-    std::array::from_fn(|_| AtomicU64::new(0))
+#[derive(Default)]
+struct Words {
+    seen: AtomicU64,
+    next: AtomicU64,
 }
 
 /// The nodes a task lists before it claims room for them in the shared
 /// list.
 const LISTED_PER_CLAIM: usize = 256;
 
-impl<const L: usize> SourceBatch<L> {
-    /// The most sources one search takes: one per bit of the words.
-    pub(super) const WIDTH: usize = L * u64::BITS as usize;
+impl SourceBatch {
+    /// The most sources one search takes: one per bit of a word.
+    pub(super) const WIDTH: usize = u64::BITS as usize;
 
     /// The bytes [`Self::new`] charges for an id space.
     pub(super) fn bytes(id_space: u64) -> u64 {
-        let flag = if L > 1 { size_of::<AtomicBool>() } else { 0 };
-        let lists = 2 * size_of::<AtomicU64>();
-        let per_node = size_of::<Words<L>>() + L * size_of::<AtomicU64>() + flag + lists;
+        let per_node = size_of::<Words>() + 3 * size_of::<AtomicU64>();
         id_space.saturating_mul(per_node as u64)
     }
 
@@ -79,25 +69,19 @@ impl<const L: usize> SourceBatch<L> {
     pub(super) fn new(memory: &ComputeMemory, id_space: u64) -> Result<Self, ComputeError> {
         let charge = memory.charge(Self::bytes(id_space))?;
         let bytes = charge.bytes();
-        fn filled<T>(
-            len: u64,
-            bytes: u64,
-            value: impl FnMut() -> T,
-        ) -> Result<Vec<T>, ComputeError> {
+        fn zeroed<T: Default>(len: u64, bytes: u64) -> Result<Vec<T>, ComputeError> {
             let mut buffer = Vec::new();
             buffer
                 .try_reserve_exact(len as usize)
                 .map_err(|_| ComputeError::OutOfMemory { bytes })?;
-            buffer.resize_with(len as usize, value);
+            buffer.resize_with(len as usize, T::default);
             Ok(buffer)
         }
-        let flags = if L > 1 { id_space } else { 0 };
         Ok(Self {
-            words: filled(id_space, bytes, || Words { seen: zero(), next: zero() })?,
-            frontier: filled(id_space, bytes, zero)?,
-            listed: filled(flags, bytes, AtomicBool::default)?,
-            current: filled(id_space, bytes, AtomicU64::default)?,
-            next: filled(id_space, bytes, AtomicU64::default)?,
+            words: zeroed(id_space, bytes)?,
+            frontier: zeroed(id_space, bytes)?,
+            current: zeroed(id_space, bytes)?,
+            next: zeroed(id_space, bytes)?,
             _charge: charge,
         })
     }
@@ -114,9 +98,9 @@ impl<const L: usize> SourceBatch<L> {
         reached: &(impl Fn(DenseId, u32, u32) + Sync),
     ) -> Result<(), ComputeError> {
         for (bit, &source) in sources.iter().enumerate() {
-            let (lane, word) = (bit / 64, 1u64 << (bit % 64));
-            self.words[source as usize].seen[lane].store(word, Relaxed);
-            self.frontier[source as usize][lane].store(word, Relaxed);
+            let word = 1u64 << bit;
+            self.words[source as usize].seen.store(word, Relaxed);
+            self.frontier[source as usize].store(word, Relaxed);
             self.current[bit].store(source, Relaxed);
         }
         let mut frontier = sources.len();
@@ -151,11 +135,13 @@ impl<const L: usize> SourceBatch<L> {
                 for node in nodes {
                     let node = node.load(Relaxed);
                     work.spend(1)?;
-                    let words: [u64; L] = std::array::from_fn(|lane| {
-                        self.frontier[node as usize][lane].swap(0, Relaxed)
-                    });
+                    let word = self.frontier[node as usize].swap(0, Relaxed);
                     adjacency.for_each(node, scratch, &mut work, |target, _| {
-                        if self.push(&words, target) {
+                        let words = &self.words[target as usize];
+                        let new = word & !words.seen.load(Relaxed);
+                        if new & !words.next.load(Relaxed) != 0
+                            && words.next.fetch_or(new, Relaxed) == 0
+                        {
                             list.push(target, &self.next, &listed);
                         }
                         Ok(())
@@ -168,26 +154,7 @@ impl<const L: usize> SourceBatch<L> {
         Ok(listed.into_inner())
     }
 
-    /// ORs the sources of `words` that have not reached `target` into its
-    /// `next` words; returns whether this lists it.
-    fn push(&self, words: &[u64; L], target: DenseId) -> bool {
-        let to = &self.words[target as usize];
-        let mut first = true;
-        let mut added = false;
-        for ((word, seen), next) in words.iter().zip(&to.seen).zip(&to.next) {
-            let new = word & !seen.load(Relaxed);
-            if new & !next.load(Relaxed) != 0 {
-                first &= next.fetch_or(new, Relaxed) == 0;
-                added = true;
-            }
-        }
-        match L {
-            1 => added && first,
-            _ => added && !self.listed[target as usize].swap(true, Relaxed),
-        }
-    }
-
-    /// Takes each listed node's `next` words into `seen` and its frontier,
+    /// Takes each listed node's `next` word into `seen` and its frontier,
     /// reporting how many sources reached it at `distance`.
     fn settle(
         &self,
@@ -201,20 +168,14 @@ impl<const L: usize> SourceBatch<L> {
                 return Err(Cancelled);
             }
             for node in nodes {
-                let node = node.load(Relaxed) as usize;
-                let words = &self.words[node];
-                let mut sources = 0;
-                for lane in 0..L {
-                    let word = words.next[lane].swap(0, Relaxed);
-                    let seen = &words.seen[lane];
-                    seen.store(seen.load(Relaxed) | word, Relaxed);
-                    self.frontier[node][lane].store(word, Relaxed);
-                    sources += word.count_ones();
-                }
-                if L > 1 {
-                    self.listed[node].store(false, Relaxed);
-                }
-                reached(node as DenseId, sources, distance);
+                let node = node.load(Relaxed);
+                let words = &self.words[node as usize];
+                // This thread alone settles the node: a load and a store
+                // suffice.
+                let word = words.next.swap(0, Relaxed);
+                words.seen.store(words.seen.load(Relaxed) | word, Relaxed);
+                self.frontier[node as usize].store(word, Relaxed);
+                reached(node, word.count_ones(), distance);
             }
             Ok(())
         })
@@ -226,9 +187,7 @@ impl<const L: usize> SourceBatch<L> {
             if cancellation.is_cancelled() {
                 return Err(Cancelled);
             }
-            for words in words {
-                words.seen.iter().for_each(|seen| seen.store(0, Relaxed));
-            }
+            words.iter().for_each(|words| words.seen.store(0, Relaxed));
             Ok(())
         })?)
     }
@@ -298,16 +257,12 @@ mod tests {
     }
 
     /// What batches of [`SourceBatch::WIDTH`] report, in one scratch.
-    fn batched<const L: usize>(
-        adjacency: &Adjacency<'_>,
-        id_space: u64,
-        sources: &[DenseId],
-    ) -> Reports {
+    fn batched(adjacency: &Adjacency<'_>, id_space: u64, sources: &[DenseId]) -> Reports {
         let memory = ComputeMemory::new(1 << 24);
         let cancellation = Cancellation::new();
-        let mut batch = SourceBatch::<L>::new(&memory, id_space).unwrap();
+        let mut batch = SourceBatch::new(&memory, id_space).unwrap();
         let mut reports = Reports::new();
-        for batch_sources in sources.chunks(SourceBatch::<L>::WIDTH) {
+        for batch_sources in sources.chunks(SourceBatch::WIDTH) {
             let each = Mutex::new(Reports::new());
             let reached = |node, sources, distance| {
                 assert!(sources > 0, "{node} reported reached by no source");
@@ -338,7 +293,7 @@ mod tests {
         let cancellation = Cancellation::new();
         let matrix = Adjacency::matrix(&paths, &memory).unwrap();
         let adjacency = Adjacency::new(&paths, matrix, &memory, &cancellation).unwrap();
-        let mut batch = SourceBatch::<2>::new(&memory, 10).unwrap();
+        let mut batch = SourceBatch::new(&memory, 10).unwrap();
         cancellation.cancel();
         let searched = batch.search(&adjacency, &[0, 3], &memory, &cancellation, &|_, _, _| ());
         assert_eq!(searched, Err(ComputeError::Cancelled));
@@ -374,8 +329,7 @@ mod tests {
             let matrix = Adjacency::matrix(&paths, &memory).unwrap();
             let adjacency = Adjacency::new(&paths, matrix, &memory, &Cancellation::new()).unwrap();
             let expected = one_by_one(&adjacency, id_space, &sources);
-            prop_assert_eq!(&batched::<1>(&adjacency, id_space, &sources), &expected);
-            prop_assert_eq!(&batched::<3>(&adjacency, id_space, &sources), &expected);
+            prop_assert_eq!(batched(&adjacency, id_space, &sources), expected);
         }
     }
 }
