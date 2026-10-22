@@ -32,26 +32,37 @@ pub(crate) fn acquire<P: SharedVersions, T, E>(
 ) -> Result<Acquired<P::View>, E> {
     let mut planned = None;
     loop {
-        match port.lookup(key) {
-            Found::Ready(view) => return Ok(Acquired::Shared(view)),
-            Found::Loading(loading) => port.wait(loading),
-            Found::Missing => {
-                let made = match planned.take() {
-                    Some(made) => made,
-                    None => plan()?,
-                };
-                let (bytes, made) = planned.insert(made);
-                match port.claim(key, *bytes) {
-                    Claimed::Load(mut region) => {
-                        load(made, &mut region)?;
-                        if let Ok(view) = port.publish(region) {
-                            return Ok(Acquired::Shared(view));
-                        }
-                    }
-                    Claimed::Taken => {}
-                    Claimed::Refused(refusal) => return Ok(Acquired::Private(refusal)),
+        if let Some(view) = find(port, key) {
+            return Ok(Acquired::Shared(view));
+        }
+        let made = match planned.take() {
+            Some(made) => made,
+            None => plan()?,
+        };
+        let (bytes, made) = planned.insert(made);
+        match port.claim(key, *bytes) {
+            Claimed::Load(mut region) => {
+                load(made, &mut region)?;
+                if let Ok(view) = port.publish(region) {
+                    return Ok(Acquired::Shared(view));
                 }
             }
+            Claimed::Taken => {}
+            Claimed::Refused(refusal) => return Ok(Acquired::Private(refusal)),
+        }
+    }
+}
+
+/// Version `key` if the shared cache has it, pinned for the current
+/// statement, waiting while another backend loads it; `None` on a miss,
+/// which it does not claim. So a call reading two versions takes those
+/// shared first, pinned, and a load for its partner cannot evict them.
+pub(crate) fn find<P: SharedVersions>(port: &mut P, key: Key) -> Option<Arc<P::View>> {
+    loop {
+        match port.lookup(key) {
+            Found::Ready(view) => return Some(view),
+            Found::Loading(loading) => port.wait(loading),
+            Found::Missing => return None,
         }
     }
 }
@@ -221,5 +232,44 @@ mod tests {
             shared(acquire(&mut waiter, KEY, sized(10), |_, r| fill(r)).unwrap()).bytes(),
             [7; 10]
         );
+    }
+
+    #[test]
+    fn find_takes_a_shared_version_and_claims_no_missing_one() {
+        let memory = cluster(100);
+        let mut backend = memory.backend();
+        assert!(find(&mut backend, KEY).is_none());
+        assert!(memory.slots().iter().all(|slot| slot.state == State::Empty), "nothing claimed");
+        drop(shared(acquire(&mut backend, KEY, sized(10), |_, r| fill(r)).unwrap()));
+        backend.unpin();
+        let mut reader = memory.backend();
+        assert_eq!(find(&mut reader, KEY).map(|view| view.bytes().to_vec()), Some(vec![7; 10]));
+        assert_eq!(memory.pins().iter().sum::<u32>(), 1, "pinned by the finder's statement");
+    }
+
+    #[test]
+    fn find_waits_for_a_load_in_progress() {
+        let memory = cluster(100);
+        let (claimed, wait_for_claim) = mpsc::channel();
+        let (publish, publishing) = mpsc::channel::<()>();
+        let mut loader = memory.backend();
+        let loading = thread::spawn(move || {
+            drop(shared(
+                acquire(&mut loader, KEY, sized(10), |_, region| {
+                    claimed.send(()).unwrap();
+                    publishing.recv().unwrap();
+                    fill(region)
+                })
+                .unwrap(),
+            ));
+            loader
+        });
+        wait_for_claim.recv().unwrap();
+        let mut finder = memory.backend();
+        let finding = thread::spawn(move || find(&mut finder, KEY).map(|v| v.bytes().to_vec()));
+        thread::sleep(Duration::from_millis(30));
+        publish.send(()).unwrap();
+        assert_eq!(finding.join().unwrap(), Some(vec![7; 10]));
+        drop(loading.join().unwrap());
     }
 }

@@ -172,17 +172,44 @@ impl<M> Session<M> {
         &mut self,
         registry: &mut Registry<S, P>,
         which: Release,
+        detach: impl FnMut(Arc<M>),
+    ) where
+        M: Mapped,
+    {
+        self.release_where(registry, detach, |registry, ticket| match which {
+            Release::Evicted => registry.state(ticket) != Some(State::Ready),
+            Release::Unheld => true,
+        });
+    }
+
+    /// Releases this backend's mappings of the versions whose keys `which`
+    /// selects, ready or evicted, that no call holds (`warren.evict`, and
+    /// the versions a prune or a promotion evicts): it evicts nothing.
+    pub(crate) fn forget<S: SlotTable, P: PinTable>(
+        &mut self,
+        registry: &mut Registry<S, P>,
+        which: &dyn Fn(&Key) -> bool,
+        detach: impl FnMut(Arc<M>),
+    ) where
+        M: Mapped,
+    {
+        self.release_where(registry, detach, |registry, ticket| {
+            registry.state(ticket).is_some() && which(&registry.slots()[ticket.slot].key)
+        });
+    }
+
+    /// Releases the mappings `selected` selects that no call holds.
+    fn release_where<S: SlotTable, P: PinTable>(
+        &mut self,
+        registry: &mut Registry<S, P>,
         mut detach: impl FnMut(Arc<M>),
+        selected: impl Fn(&Registry<S, P>, Ticket) -> bool,
     ) where
         M: Mapped,
     {
         let mut index = 0;
         while let Some((ticket, mapping)) = self.mappings.get(index) {
-            let selected = match which {
-                Release::Evicted => registry.state(*ticket) != Some(State::Ready),
-                Release::Unheld => true,
-            };
-            if selected && Arc::strong_count(mapping) == 1 && !mapping.in_use() {
+            if selected(registry, *ticket) && Arc::strong_count(mapping) == 1 && !mapping.in_use() {
                 self.release_one(registry, index, &mut detach);
             } else {
                 index += 1;
@@ -429,6 +456,24 @@ mod tests {
         assert_eq!(detached, [2]);
         assert_eq!(registry.state(tickets[1]), None, "its last mapper emptied it");
         assert_eq!(counts(&registry, tickets[0]), (0, 2), "a ready slot stays mapped");
+    }
+
+    #[test]
+    fn forget_releases_the_unheld_mappings_of_the_versions_selected_ready_or_not() {
+        let (mut registry, tickets) = published(&[1, 2, 3]);
+        let mut session = Session::new(PROCESS);
+        let held = read(&mut session, &mut registry, tickets[0]);
+        drop(read(&mut session, &mut registry, tickets[1]));
+        drop(read(&mut session, &mut registry, tickets[2]));
+        session.unpin(registry.pin_table());
+        let mut detached = Vec::new();
+        session.forget(&mut registry, &|key| key.version != 3, |mapping| detached.push(*mapping));
+        assert_eq!(detached, [2], "neither a held mapping nor one not selected");
+        assert_eq!(registry.state(tickets[1]), Some(State::Ready), "forgetting evicts nothing");
+        assert_eq!(counts(&registry, tickets[1]), (0, 1), "mapped by its loader alone");
+        drop(held);
+        session.forget(&mut registry, &|key| key.version == 1, |mapping| detached.push(*mapping));
+        assert_eq!(detached, [2, 1]);
     }
 
     #[test]

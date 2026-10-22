@@ -19,6 +19,7 @@
 
 mod bound;
 mod error;
+mod installation;
 mod load;
 mod lru;
 mod open;

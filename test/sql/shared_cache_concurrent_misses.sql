@@ -25,7 +25,7 @@ SELECT assert.equal(shared_segments(:version), CASE WHEN :'shared' THEN 1 ELSE 0
 SELECT assert.equal(evicted, CASE WHEN :'shared' THEN 0 ELSE 1 END::bigint,
                     'a shared version is in no backend''s own cache')
 FROM unnest(ARRAY['a', 'b', 'c', 'd']) AS session,
-     LATERAL dblink(session, $$SELECT warren.evict('g')$$) AS t(evicted bigint);
+     LATERAL dblink(session, $$SELECT own_evictions('g')$$) AS t(evicted bigint);
 
 -- Another backend, and this one, read the shared copy.
 SELECT dblink_connect('e', :'conninfo');

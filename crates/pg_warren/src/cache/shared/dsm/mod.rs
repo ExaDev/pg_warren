@@ -211,6 +211,26 @@ impl Backend {
         unsafe { (*self.shared()).drains.load(Ordering::Acquire) }
     }
 
+    /// Releases mappings through `release`, under the registry's lock, and
+    /// notes the drains seen and whether a mapping of a slot no longer
+    /// ready is left (one a call holds), for the next release of evicted
+    /// mappings.
+    fn releasing(
+        &mut self,
+        release: impl FnOnce(
+            &mut Registry<&mut [Slot; SLOTS], &[AtomicU32; SLOTS]>,
+            &mut Session<Attached>,
+        ),
+    ) {
+        let (drains, pending) = self.locked(|registry, session| {
+            release(registry, session);
+            let pending =
+                session.mapped_slots().any(|mapped| registry.state(mapped) != Some(State::Ready));
+            (registry.clocks().drains(), pending)
+        });
+        (self.seen_drains, self.pending) = (drains, pending);
+    }
+
     /// Wakes the backends waiting on slot `slot`.
     fn broadcast(&self, slot: usize) {
         // SAFETY: a condition variable of the registry, on the main thread.
@@ -377,15 +397,26 @@ impl SharedVersions for Dsm {
             {
                 return;
             }
-            let (drains, pending) = backend.locked(|registry, session| {
+            backend.releasing(|registry, session| {
                 session.release(registry, which, |attached| attached.detach());
-                let pending = session
-                    .mapped_slots()
-                    .any(|mapped| registry.state(mapped) != Some(State::Ready));
-                (registry.clocks().drains(), pending)
             });
-            (backend.seen_drains, backend.pending) = (drains, pending);
         });
+    }
+
+    /// Takes the registry's lock and detaches segments, so never at a
+    /// transaction's end.
+    fn forget(&mut self, which: &dyn Fn(&Key) -> bool) {
+        with_backend(|backend| {
+            if backend.session.mapped_slots().next().is_some() {
+                backend.releasing(|registry, session| {
+                    session.forget(registry, which, |attached| attached.detach());
+                });
+            }
+        });
+    }
+
+    fn keys(&mut self) -> Vec<Key> {
+        with_backend(|backend| backend.locked(|registry, _| registry.keys())).unwrap_or_default()
     }
 
     fn evict(&mut self, which: &dyn Fn(&Key) -> bool) -> usize {

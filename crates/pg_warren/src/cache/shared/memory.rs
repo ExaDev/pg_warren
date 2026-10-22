@@ -327,6 +327,15 @@ impl SharedVersions for Backend {
         evicted.len()
     }
 
+    fn forget(&mut self, which: &dyn Fn(&Key) -> bool) {
+        let mut store = self.cluster.lock();
+        self.session.forget(&mut store.registry, which, drop);
+    }
+
+    fn keys(&mut self) -> Vec<Key> {
+        self.cluster.lock().registry.keys()
+    }
+
     fn exit(&mut self) {
         let mut store = self.cluster.lock();
         self.session.exit(&mut store.registry, drop);

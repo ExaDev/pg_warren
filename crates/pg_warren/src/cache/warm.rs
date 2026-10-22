@@ -4,9 +4,10 @@
 
 use pgrx::prelude::*;
 
-use super::open::{cached, evict_graph, prune_dropped, resolve};
+use super::open::{cached, evict_graph, forget_other_installations, prune_dropped, resolve};
+use super::shared;
 use super::CacheError;
-use crate::access::entry;
+use crate::access::{entry, is_owner};
 use crate::catalog::{GraphDefinition, VersionId};
 use crate::source::with_id_type;
 use crate::vector::{evict_transients, evict_vectors};
@@ -26,21 +27,27 @@ fn prewarm_version(name: &str, version: Option<VersionId>) -> Result<VersionId, 
 }
 
 /// `warren.evict`: frees this backend's cached versions, cached vectors
-/// and transient vectors of graph `name` and returns how many there were.
-/// It first frees, uncounted, what this backend holds of versions (of any
-/// graph) that no longer exist. It changes nothing but this backend's
-/// memory, so it needs no privilege on the graph.
+/// and transient vectors of graph `name`, and its mappings of the graph's
+/// shared versions; a member of the graph's owner role also evicts the
+/// shared versions no statement pins (DESIGN.md §14 item 34). Returns how
+/// many entries it freed and shared versions it evicted. It first frees,
+/// uncounted, what this backend holds of versions (of any graph) that no
+/// longer exist. Anyone may call it: without ownership it changes nothing
+/// but this backend's memory.
 #[pg_extern(schema = "warren", volatile, parallel_restricted)]
 fn evict(name: &str) -> i64 {
     entry(|_| evict_versions(name))
 }
 
 fn evict_versions(name: &str) -> Result<i64, CacheError> {
+    forget_other_installations();
     let graph = GraphDefinition::find(name)?;
     prune_dropped()?;
+    let owner = is_owner(graph.owner)?;
     let freed = evict_graph(graph.graph_id)
         + evict_vectors(graph.graph_id)
-        + evict_transients(graph.graph_id);
+        + evict_transients(graph.graph_id)
+        + shared::evict_graph(graph.graph_id, owner)?;
     Ok(i64::try_from(freed).unwrap_or(i64::MAX))
 }
 

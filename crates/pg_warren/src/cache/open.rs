@@ -12,18 +12,18 @@ use pgrx::notice;
 use warren_core::compute::{AnyVector, ComputeMemory};
 
 use super::bound::{admit_load, make_room, unfit, unfit_notice};
-use super::shared::shared;
+use super::shared::{prune as prune_shared, shared, shared_hit};
 use super::statement::{notice_due, pin_vector, pin_version, version_pinned};
 use super::versions::{VersionCache, CACHE};
-use super::{load, trim, CacheError, LoadedVersion};
+use super::{installation, load, trim, CacheError, LoadedVersion};
 use crate::access::{as_catalog_owner, require_reader};
 use crate::catalog::{require_version, GraphDefinition, VersionId};
 use crate::read_only::{read_one, read_two};
 use crate::segment::SpiSegmentStore;
 use crate::source::IdDatum;
 use crate::vector::{
-    self, lookup_vector, remember, retain_transients, transient_versions, SpiVectorStore,
-    VectorError, VectorId, VectorRecord,
+    self, cached_vectors, forget, lookup_vector, remember, retain_transients, transient_versions,
+    SpiVectorStore, VectorError, VectorId, VectorRecord,
 };
 
 /// A graph and the version of it a call reads.
@@ -43,6 +43,7 @@ pub(crate) fn resolve(
     version: Option<VersionId>,
     action: &'static str,
 ) -> Result<Resolved, CacheError> {
+    forget_other_installations();
     let graph = GraphDefinition::find(name)?;
     require_reader(graph.owner, &graph.readers, &graph.name, action)?;
     let version = match version {
@@ -117,26 +118,27 @@ fn load_private<E: IdDatum + Send + Sync>(
 }
 
 /// The loaded versions `first` and `second` name, as [`cached`] gives
-/// them, both pinned until the statement ends. Cached ones, in this
-/// backend's cache or the shared cache, are taken (and so held) first;
-/// then those still missing are refused together, before either is loaded
-/// into this backend's cache, if they would not fit beside them.
+/// them, both pinned until the statement ends. Those this backend's cache
+/// or the shared cache holds are taken (and so pinned) first, so that a
+/// load for the other cannot evict them; then those still missing are
+/// loaded into the shared cache if it admits them, and the rest are
+/// refused together, before either is loaded into this backend's cache,
+/// if they would not fit beside what it holds.
 pub(crate) fn cached_pair<E: IdDatum + Send + Sync>(
     first: &Resolved,
     second: &Resolved,
 ) -> Result<[Arc<LoadedVersion<E>>; 2], CacheError> {
-    let hit = |resolved: &Resolved| {
-        if let Some(loaded) = CACHE.with_borrow_mut(|cache| cache.get::<E>(resolved.version)) {
-            pin_version(resolved.version);
-            return Ok(Some(loaded));
+    let pair = [first, second];
+    let mut found = [hit::<E>(first)?, hit::<E>(second)?];
+    for (resolved, found) in pair.iter().zip(&mut found) {
+        if found.is_none() {
+            *found = shared::<E>(resolved)?;
         }
-        shared::<E>(resolved)
-    };
-    let hits = [hit(first)?, hit(second)?];
-    let mut missing: Vec<VersionId> = [first, second]
+    }
+    let mut missing: Vec<VersionId> = pair
         .iter()
-        .zip(&hits)
-        .filter(|(_, hit)| hit.is_none())
+        .zip(&found)
+        .filter(|(_, found)| found.is_none())
         .map(|(resolved, _)| resolved.version)
         .collect();
     missing.dedup();
@@ -148,17 +150,30 @@ pub(crate) fn cached_pair<E: IdDatum + Send + Sync>(
         }
         admit_load(&missing, expected)?;
     }
-    let [first_hit, second_hit] = hits;
-    let first = match first_hit {
+    let [first_found, second_found] = found;
+    let first = match first_found {
         Some(loaded) => loaded,
         None => load_private::<E>(first)?,
     };
-    let second = match second_hit {
+    let second = match second_found {
         Some(loaded) => loaded,
         None => load_private::<E>(second)?,
     };
     trim();
     Ok([first, second])
+}
+
+/// The loaded version `resolved` names if this backend's cache or the
+/// shared cache holds it, pinned until the statement ends; nothing is
+/// loaded.
+fn hit<E: IdDatum + Send + Sync>(
+    resolved: &Resolved,
+) -> Result<Option<Arc<LoadedVersion<E>>>, CacheError> {
+    if let Some(loaded) = CACHE.with_borrow_mut(|cache| cache.get::<E>(resolved.version)) {
+        pin_version(resolved.version);
+        return Ok(Some(loaded));
+    }
+    shared_hit::<E>(resolved)
 }
 
 /// Persisted vector `id`, if this backend's vector cache holds it: pinned
@@ -195,7 +210,8 @@ pub(crate) fn keep_vector(graph_id: i32, id: VectorId, vector: Arc<AnyVector>) {
 
 /// Drops this backend's cached versions (and those evicted that a call
 /// still holds), and transient vectors (of every role), of versions that
-/// no longer exist as of the statement's snapshot:
+/// no longer exist as of the statement's snapshot, and evicts such
+/// versions from the shared cache (`shared::prune`):
 /// dropped with their graphs, by `drop_version` or by retention, here or in
 /// another backend, or rolled back. Transient vectors cannot be reloaded,
 /// so they are dropped only for deletions that have committed: not in a
@@ -213,7 +229,22 @@ pub(super) fn prune_dropped() -> Result<(), CacheError> {
     if unsafe { pg_sys::GetTopTransactionIdIfAny() } == pg_sys::TransactionId::INVALID {
         retain_transients(&existing);
     }
-    Ok(())
+    prune_shared()
+}
+
+/// Drops everything this backend's own caches hold (versions, cached
+/// vectors and transient vectors) if pg_warren was installed again since it
+/// was cached: version, vector and graph ids restart with an installation,
+/// so they would name the new one's. Called by `resolve` and `warren.evict`.
+pub(super) fn forget_other_installations() {
+    if !installation::changed() {
+        return;
+    }
+    CACHE.take();
+    for (vector, _, _) in cached_vectors() {
+        forget(vector);
+    }
+    retain_transients(&[]);
 }
 
 /// Drops this backend's cached versions of graph `graph_id`; returns how

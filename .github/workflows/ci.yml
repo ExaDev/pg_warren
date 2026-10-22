@@ -199,13 +199,14 @@ jobs:
       - name: The harness's Python dependencies (test/run.py imports the oracle)
         run: pip install -r bench/requirements.txt
       - name: Shared cache across backends (test/run.py --shared-cache)
-        # DESIGN.md §5.6: the multi-backend tests, with the shared cache off,
-        # preloaded with a cap, and with a cap alone (shared on PG 17 and 18,
-        # unavailable and so private on PG 15 and 16). The harness job runs
-        # the whole suite preloaded on PG 16.
+        # DESIGN.md §5.6: the multi-backend tests and the statement pin's,
+        # with the shared cache off, preloaded with a cap, and with a cap
+        # alone (shared on PG 17 and 18, unavailable and so private on PG 15
+        # and 16). The harness job runs the whole suite preloaded on PG 16.
         run: |
           for mode in off preload on; do
-            python test/run.py --no-install --shared-cache "$mode" --pg-config "$PG_CONFIG" test/sql/shared_cache_*.sql
+            python test/run.py --no-install --shared-cache "$mode" --pg-config "$PG_CONFIG" \
+              test/sql/shared_cache_*.sql test/sql/cache_statement_pin.sql
           done
       - name: Schema drift against sql/pg_warren--<version>.sql
         if: matrix.pg == '16'
