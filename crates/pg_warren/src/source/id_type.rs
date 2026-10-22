@@ -47,7 +47,16 @@ impl IdType {
 
 /// An external id type with its Postgres value type: what the adapter
 /// reads from source rows and SQL arguments and returns to SQL.
-pub(crate) trait IdDatum: ExternalId + Send + Sync + 'static {
+///
+/// # Safety
+///
+/// A loaded version's id map is read in place from its region (DESIGN.md
+/// §5.6), so every pattern of `size_of::<Self>()` initialized bytes must
+/// be a valid id, the type must have no padding, and its alignment must be
+/// at most 8. Its segments are copied there unchanged on a little-endian
+/// target, so `Self::WIDTH` must be `size_of::<Self>()` and, on such a
+/// target, an id's encoding (`write_le`) must be its bytes in memory.
+pub(crate) unsafe trait IdDatum: ExternalId + Send + Sync + 'static {
     /// The Rust type pgrx reads and writes the SQL value as.
     type Sql: FromDatum + IntoDatum;
 
@@ -62,7 +71,9 @@ pub(crate) trait IdDatum: ExternalId + Send + Sync + 'static {
     fn from_integer(value: i64) -> Option<Self>;
 }
 
-impl IdDatum for i32 {
+// SAFETY: an integer: any bits are a value, no padding, alignment 4;
+// encoded little-endian in its size.
+unsafe impl IdDatum for i32 {
     type Sql = i32;
 
     fn from_sql(value: i32) -> Self {
@@ -78,7 +89,9 @@ impl IdDatum for i32 {
     }
 }
 
-impl IdDatum for i64 {
+// SAFETY: an integer: any bits are a value, no padding, alignment 8;
+// encoded little-endian in its size.
+unsafe impl IdDatum for i64 {
     type Sql = i64;
 
     fn from_sql(value: i64) -> Self {
@@ -94,7 +107,9 @@ impl IdDatum for i64 {
     }
 }
 
-impl IdDatum for [u8; 16] {
+// SAFETY: bytes: any bits are a value, no padding, alignment 1;
+// encoded as themselves.
+unsafe impl IdDatum for [u8; 16] {
     type Sql = Uuid;
 
     fn from_sql(value: Uuid) -> Self {
@@ -137,6 +152,27 @@ pub(crate) use with_id_type;
 #[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_external_id_is_encoded_as_its_bytes_in_memory() {
+        fn check<E: IdDatum>(id: E, in_memory: &[u8]) {
+            assert_eq!(E::WIDTH, std::mem::size_of::<E>());
+            let mut encoded = Vec::new();
+            id.write_le(&mut encoded);
+            if cfg!(target_endian = "little") {
+                assert_eq!(encoded, in_memory, "{id:?}");
+            }
+            assert_eq!(E::read_le(&encoded), id);
+        }
+        for id in [i32::MIN, -7, 0, 0x0102_0304, i32::MAX] {
+            check(id, &id.to_ne_bytes());
+        }
+        for id in [i64::MIN, -7, 0, 0x0102_0304_0506_0708, i64::MAX] {
+            check(id, &id.to_ne_bytes());
+        }
+        let uuid: [u8; 16] = std::array::from_fn(|i| i as u8 * 17);
+        check(uuid, &uuid);
+    }
 
     #[test]
     fn id_types_round_trip_through_their_oids() {

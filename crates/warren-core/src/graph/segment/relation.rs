@@ -7,7 +7,7 @@ impl RelationDictionary {
     /// The length of its encoding.
     pub fn encoded_bytes(&self) -> u64 {
         let payload: usize = self.names().iter().map(|name| 4 + name.len()).sum();
-        (super::HEADER_LEN + payload) as u64
+        (super::SEGMENT_HEADER_LEN + payload) as u64
     }
 
     /// Encodes the names in index order, each as a `u32` byte length

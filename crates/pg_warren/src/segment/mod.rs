@@ -13,8 +13,7 @@ mod name;
 mod spi;
 
 pub(crate) use chunk::{
-    read_optional_segment, read_segment, read_segment_within, write_segment, EachChunk,
-    SegmentStore, CHUNK_SIZE,
+    read_segment, read_segment_within, write_segment, EachChunk, SegmentStore, CHUNK_SIZE,
 };
 pub(crate) use error::SegmentError;
 pub(crate) use layout::{write_version, writer_memory, SegmentWriter};

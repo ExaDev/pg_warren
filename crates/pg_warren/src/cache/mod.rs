@@ -1,6 +1,7 @@
-//! Backend-local cache (DESIGN.md §5.5): the loader, which decodes a
-//! version's segments into its id map, relation dictionary and CSRs and
-//! validates them; a backend-local map of loaded versions keyed by version
+//! Backend-local cache (DESIGN.md §5.5): the loader, which copies a
+//! version's segments into one 64-byte-aligned region (`region`, §5.6)
+//! and reads its id map, relation dictionary and CSRs through shared views
+//! of it, validating them; a backend-local map of loaded versions keyed by version
 //! id, shared through `Arc`s; opening a version for a query (access check,
 //! current version re-read per call, cache in front of the loader);
 //! `warren.max_cache_memory`, the size bound that evicts cached versions
@@ -21,6 +22,7 @@ mod error;
 mod load;
 mod lru;
 mod open;
+mod region;
 // The `Dsm` adapter (DESIGN.md §5.6, step 5) wires it to Postgres; until
 // then only its tests, through the `Memory` fake, use it.
 #[cfg(test)]

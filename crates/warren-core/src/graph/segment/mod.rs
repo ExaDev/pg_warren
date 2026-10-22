@@ -27,14 +27,14 @@ pub use csr::{CsrPart, CsrSegments};
 use super::{memory, BuildMemory, DenseId, ExternalId, GraphError, IdPair};
 
 /// The length of a segment header in bytes.
-pub(crate) const HEADER_LEN: usize = 16;
+pub const SEGMENT_HEADER_LEN: usize = 16;
 const MAGIC: [u8; 4] = *b"WRSG";
 const FORMAT: u8 = 1;
 
 /// What a segment holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub(crate) enum SegmentKind {
+pub enum SegmentKind {
     /// CSR `offsets` (`u64`).
     Offsets = 1,
     /// CSR `targets` (`u32` or `u64`).
@@ -50,6 +50,30 @@ pub(crate) enum SegmentKind {
     /// `membership`: each parent node's community in a quotient version
     /// (`u64`, `u64::MAX` for none; DESIGN.md §6.6).
     Membership = 7,
+}
+
+impl SegmentKind {
+    /// Checks a segment's header (its first [`SEGMENT_HEADER_LEN`] bytes)
+    /// as decoding does, before its payload is read: that it is a segment
+    /// of this kind, with elements `width` bytes wide, whose payload is
+    /// `payload_len` bytes. Returns the header's count (for tombstones,
+    /// the id space in bits, stored in whole `u64` words).
+    pub fn check_header(
+        self,
+        header: &[u8],
+        width: usize,
+        payload_len: u64,
+    ) -> Result<u64, GraphError> {
+        let header = header.get(..SEGMENT_HEADER_LEN).ok_or(GraphError::SegmentTruncated)?;
+        let (header, _) = read_header(header, self)?;
+        expect_width(&header, width)?;
+        let elements = match self {
+            Self::Tombstones => header.count.div_ceil(64),
+            _ => header.count,
+        };
+        expect_length(payload_len, elements, width)?;
+        Ok(header.count)
+    }
 }
 
 /// A decoded segment header.
@@ -111,7 +135,7 @@ pub(crate) fn with_header(
     count: u64,
     payload_len: usize,
 ) -> Result<Vec<u8>, GraphError> {
-    let mut out = memory::with_capacity(HEADER_LEN + payload_len)?;
+    let mut out = memory::with_capacity(SEGMENT_HEADER_LEN + payload_len)?;
     out.extend_from_slice(&MAGIC);
     out.extend_from_slice(&[FORMAT, kind as u8, width as u8, 0]);
     out.extend_from_slice(&count.to_le_bytes());
@@ -135,10 +159,10 @@ pub(crate) fn encode_chunked<E: Element, X: From<GraphError>>(
     each: &mut ChunkSink<'_, X>,
 ) -> Result<u64, X> {
     let chunk_size = chunk_size.max(1);
-    let length = HEADER_LEN + elements.len() * E::WIDTH;
-    let capacity = chunk_size.min(length).max(HEADER_LEN) + E::WIDTH;
+    let length = SEGMENT_HEADER_LEN + elements.len() * E::WIDTH;
+    let capacity = chunk_size.min(length).max(SEGMENT_HEADER_LEN) + E::WIDTH;
     let _charge = memory.charge(capacity as u64)?;
-    let mut chunk = with_header(kind, E::WIDTH, count, capacity - HEADER_LEN)?;
+    let mut chunk = with_header(kind, E::WIDTH, count, capacity - SEGMENT_HEADER_LEN)?;
     let mut full = |chunk: &mut Vec<u8>| -> Result<(), X> {
         while chunk.len() >= chunk_size {
             each(&chunk[..chunk_size])?;
@@ -167,7 +191,7 @@ pub(crate) fn encode<E: Element>(kind: SegmentKind, elements: &[E]) -> Result<Ve
 /// Splits a segment of `kind` into its header and payload.
 pub(crate) fn read_header(bytes: &[u8], kind: SegmentKind) -> Result<(Header, &[u8]), GraphError> {
     let (header, payload) =
-        bytes.split_at_checked(HEADER_LEN).ok_or(GraphError::SegmentTruncated)?;
+        bytes.split_at_checked(SEGMENT_HEADER_LEN).ok_or(GraphError::SegmentTruncated)?;
     if header[..4] != MAGIC {
         return Err(GraphError::SegmentMagic);
     }
@@ -193,9 +217,9 @@ pub(crate) fn expect_width(header: &Header, width: usize) -> Result<(), GraphErr
     }
 }
 
-/// Checks that a payload holds exactly `count` elements of `width` bytes.
-fn expect_length(payload: &[u8], count: u64, width: usize) -> Result<(), GraphError> {
-    let found = payload.len() as u64;
+/// Checks that a payload of `found` bytes holds exactly `count` elements
+/// of `width` bytes.
+fn expect_length(found: u64, count: u64, width: usize) -> Result<(), GraphError> {
     match count.checked_mul(width as u64) {
         Some(expected) if expected == found => Ok(()),
         expected => {
@@ -207,7 +231,7 @@ fn expect_length(payload: &[u8], count: u64, width: usize) -> Result<(), GraphEr
 /// Decodes the payload of a header already read, as `E` elements.
 pub(crate) fn elements<E: Element>(header: &Header, payload: &[u8]) -> Result<Vec<E>, GraphError> {
     expect_width(header, E::WIDTH)?;
-    expect_length(payload, header.count, E::WIDTH)?;
+    expect_length(payload.len() as u64, header.count, E::WIDTH)?;
     let mut elements = memory::with_capacity(payload.len() / E::WIDTH)?;
     elements.extend(payload.chunks_exact(E::WIDTH).map(E::read));
     Ok(elements)
@@ -241,7 +265,7 @@ mod tests {
         assert_eq!(&segments.offsets()[..8], b"WRSG\x01\x01\x08\x00");
         assert_eq!(&segments.offsets()[8..16], &4u64.to_le_bytes());
         assert_eq!(&segments.targets()[4..8], b"\x01\x02\x04\x00");
-        assert_eq!(segments.offsets().len(), HEADER_LEN + 4 * 8);
+        assert_eq!(segments.offsets().len(), SEGMENT_HEADER_LEN + 4 * 8);
     }
 
     #[test]
@@ -289,6 +313,41 @@ mod tests {
     }
 
     #[test]
+    fn a_header_is_checked_before_its_payload_is_read() {
+        let segments = csr_example().encode().unwrap();
+        let (header, payload) = segments.offsets().split_at(SEGMENT_HEADER_LEN);
+        let payload = payload.len() as u64;
+        assert_eq!(SegmentKind::Offsets.check_header(header, 8, payload), Ok(4));
+        assert_eq!(
+            SegmentKind::Targets.check_header(header, 8, payload),
+            Err(GraphError::SegmentKind {
+                expected: SegmentKind::Targets as u8,
+                found: SegmentKind::Offsets as u8
+            })
+        );
+        assert_eq!(
+            SegmentKind::Offsets.check_header(header, 4, payload),
+            Err(GraphError::SegmentWidth { expected: 4, found: 8 })
+        );
+        assert_eq!(
+            SegmentKind::Offsets.check_header(header, 8, payload + 1),
+            Err(GraphError::SegmentLength { expected: 32, found: 33 })
+        );
+        assert_eq!(
+            SegmentKind::Offsets.check_header(&header[..10], 8, payload),
+            Err(GraphError::SegmentTruncated)
+        );
+        // A tombstone header counts bits, stored in whole words.
+        let tombstones = Tombstones::new(70).unwrap().encode().unwrap();
+        let header = &tombstones[..SEGMENT_HEADER_LEN];
+        assert_eq!(SegmentKind::Tombstones.check_header(header, 8, 16), Ok(70));
+        assert_eq!(
+            SegmentKind::Tombstones.check_header(header, 8, 24),
+            Err(GraphError::SegmentLength { expected: 16, found: 24 })
+        );
+    }
+
+    #[test]
     fn decoding_requires_the_target_width_of_the_id_space() {
         let wide = AnyCsr::U64(Csr::from_parts(3, vec![0, 1, 1, 1], vec![2u64], None).unwrap());
         let segments = wide.encode().unwrap();
@@ -302,7 +361,7 @@ mod tests {
     fn decoding_checks_the_csr_invariants() {
         let segments = csr_example().encode().unwrap();
         let mut bad = segments.offsets().to_vec();
-        bad[HEADER_LEN + 8..HEADER_LEN + 16].copy_from_slice(&5u64.to_le_bytes());
+        bad[SEGMENT_HEADER_LEN + 8..SEGMENT_HEADER_LEN + 16].copy_from_slice(&5u64.to_le_bytes());
         assert_eq!(
             AnyCsr::decode(3, &bad, segments.targets(), None),
             Err(GraphError::OffsetsNotMonotone { row: 1 })
@@ -360,7 +419,7 @@ mod tests {
         let bytes = relations.encode().unwrap();
         assert_eq!(RelationDictionary::decode(&bytes).as_ref(), Ok(&relations));
         let mut bad = bytes.clone();
-        bad[HEADER_LEN + 4] = 0xff;
+        bad[SEGMENT_HEADER_LEN + 4] = 0xff;
         assert_eq!(RelationDictionary::decode(&bad), Err(GraphError::RelationNameNotUtf8));
         let mut duplicate = RelationDictionary::new();
         duplicate.intern("cites").unwrap();

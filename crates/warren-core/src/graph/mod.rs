@@ -29,6 +29,7 @@ pub use csr::{
     AllRelations, AnyCsr, BuildPlan, BuildSummary, BuiltCsr, Csr, CsrDirection, CsrLayout, CsrRows,
     CsrScope, CsrSink, GraphCsr, Neighbours, RelationCsr, RowNeighbours, Target, TargetWidth,
 };
+pub(crate) use csr::{AnyCsrSlices, CsrSlices};
 pub use direction::Direction;
 pub use edge_list::{EdgeIntake, EdgeList};
 pub use error::GraphError;
@@ -37,7 +38,7 @@ pub use membership::Membership;
 pub(crate) use membership::NO_COMMUNITY;
 pub use node_order::{NodeOrder, Permutation};
 pub use relation::{RelationDictionary, RelationIndex, RelationSelection};
-pub use segment::{ChunkSink, CsrPart, CsrSegments};
+pub use segment::{ChunkSink, CsrPart, CsrSegments, SegmentKind, SEGMENT_HEADER_LEN};
 #[cfg(test)]
 pub(crate) use segment_buffer::HeapSegment;
 pub use segment_buffer::{SegmentBuffer, SharedSegment};

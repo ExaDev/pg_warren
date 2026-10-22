@@ -88,7 +88,7 @@ fn pull_with<E: SemiringElement, S: Ops<E>>(
     y: &mut [E],
     write: &Write<'_, E>,
 ) -> Result<(), ComputeError> {
-    let width = x.width();
+    let (width, values) = (x.width(), x.values());
     y.par_chunks_mut(ROWS_PER_TASK * width).enumerate().try_for_each(|(task, rows)| {
         if cancellation.is_cancelled() {
             return Err(Cancelled.into());
@@ -100,7 +100,7 @@ fn pull_with<E: SemiringElement, S: Ops<E>>(
             let mut present = false;
             if width == 1 {
                 // The SpMV fast path: a scalar sum, no row slices.
-                let (values, sum) = (x.values(), &mut sum[0]);
+                let sum = &mut sum[0];
                 matrix.for_each_entry(row, &mut scratch, |column, weight| {
                     let product = S::multiply(weight, values[column as usize])?;
                     *sum = if present { S::add(*sum, product)? } else { product };

@@ -197,13 +197,13 @@ impl<'g> LinearOperator<'g> {
         let (operator, forward) = (self.operator, self.forward);
         let buffers = &mut self.buffers;
         let (degrees, scale) = (&self.degrees, &self.scale);
-        let input = values(&buffers.input);
+        let input = values(&buffers.input)?;
         if operator.normalized() {
             dense::update(resources, values_mut(&mut buffers.scaled)?, |i, _| scale[i] * input[i])?;
         }
         let source = if operator.normalized() { Source::Scaled } else { Source::Input };
         buffers.multiply(resources, self.graph, forward, self.transpose, source)?;
-        let input = values(&buffers.input);
+        let input = values(&buffers.input)?;
         let output = values_mut(&mut buffers.output)?;
         match operator {
             Operator::Adjacency => {}
@@ -225,7 +225,7 @@ impl<'g> LinearOperator<'g> {
         value: f64,
     ) -> Result<f64, SpectralError> {
         self.apply(resources)?;
-        let (x, y) = (values(&self.buffers.input), values(&self.buffers.output));
+        let (x, y) = (values(&self.buffers.input)?, values(&self.buffers.output)?);
         Ok(dense::sum(resources, x.len(), |i| (y[i] - value * x[i]).powi(2))?.sqrt())
     }
 
@@ -282,7 +282,7 @@ impl<'g> LinearOperator<'g> {
         resources: &mut Resources<'_, I>,
     ) -> Result<f64, SpectralError> {
         self.apply(resources)?;
-        let (x, y) = (values(&self.buffers.input), values(&self.buffers.output));
+        let (x, y) = (values(&self.buffers.input)?, values(&self.buffers.output)?);
         let numerator = dense::sum(resources, x.len(), |i| x[i] * y[i])?;
         let denominator = dense::sum(resources, x.len(), |i| x[i] * x[i])?;
         Ok(numerator / denominator)
@@ -298,12 +298,12 @@ impl<'g> LinearOperator<'g> {
         values_mut(&mut buffers.input)?.fill(1.0);
         let unweighted = Product { weighted: Some(false), ..self.forward };
         buffers.multiply(resources, graph, unweighted, transpose, Source::Input)?;
-        for (active, &edges) in self.active.iter_mut().zip(values(&buffers.output)) {
+        for (active, &edges) in self.active.iter_mut().zip(values(&buffers.output)?) {
             *active = edges > 0.0;
         }
         self.dimension = self.active.iter().filter(|&&active| active).count() as u64;
         buffers.multiply(resources, graph, self.forward, transpose, Source::Input)?;
-        self.degrees.copy_from_slice(values(&buffers.output));
+        self.degrees.copy_from_slice(values(&buffers.output)?);
         if self.operator.normalized() {
             for (node, (&active, &degree)) in (0..).zip(self.active.iter().zip(&self.degrees)) {
                 if active && (degree.is_nan() || degree <= 0.0) {
@@ -341,7 +341,7 @@ impl<'g> LinearOperator<'g> {
             &buffers.input,
             &mut buffers.scratch,
         )?;
-        let (ax, atx) = (values(&buffers.output), values(&buffers.scratch));
+        let (ax, atx) = (values(&buffers.output)?, values(&buffers.scratch)?);
         let size = dense::max(resources, ax.len(), |i| ax[i].abs().max(atx[i].abs()))?;
         let difference = dense::max(resources, ax.len(), |i| (ax[i] - atx[i]).abs())?;
         if difference.is_nan() || difference > SYMMETRY_TOLERANCE * size {
@@ -417,18 +417,21 @@ impl Buffers {
         if transpose {
             let transpose = Product { transpose: true, ..product };
             spmv(workers, memory, *interrupts, graph, &transpose, x, &mut self.scratch)?;
-            let scratch = values(&self.scratch);
+            let scratch = values(&self.scratch)?;
             dense::update(resources, values_mut(&mut self.output)?, |i, y| (y + scratch[i]) / 2.0)?;
         }
         Ok(())
     }
 }
 
-/// The values of one of the operator's own vectors, which are all `f64`.
-fn values(vector: &AnyVector) -> &[f64] {
+/// The values of one of the operator's own vectors: an error, never an
+/// empty slice, if the vector is not `f64`.
+fn values(vector: &AnyVector) -> Result<&[f64], SpectralError> {
     match vector {
-        AnyVector::F64(vector) => vector.values(),
-        _ => &[],
+        AnyVector::F64(vector) => Ok(vector.values()),
+        other => {
+            Err(ComputeError::DtypeMismatch { expected: Dtype::F64, found: other.dtype() }.into())
+        }
     }
 }
 

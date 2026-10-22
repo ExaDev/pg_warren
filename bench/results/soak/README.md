@@ -261,3 +261,66 @@ runs at a peak of 1.083 GB, 15 MB (1.4%) past their 1.065 GB sum and
 no warren setting covers. So nothing warren holds is uncharged, and the
 part of the peak past cache and compute is `contract`'s build scratch: a
 statement that runs `contract` is bounded by the three limits together.
+
+## The region loader at a tenth of the scale (M9 step 3)
+
+`a-scale10-step3-506b5c3-{1,2,3}.json` (main before step 3, `pg_warren.so`
+sha256 fb99e1ab…) and `a-scale10-step3-3613402-{1,2,3}.json` (the region
+loader, DESIGN.md §5.6 step 3, sha256 6e2e61d3…): case `a` at `--scale 10`
+(1M nodes, 10M edges, a 120.1 MB version), release builds, PostgreSQL
+16.15, the same 4-vCPU Xeon, run alternately (main first) under
+`/tmp/pgrx-test.lock`, load average 0.6–1.3:
+
+    bench/soak.py a --scale 10 --pg-config /usr/bin/pg_config --parent /var/tmp \
+        --extension-revision <rev> --extension-profile release --threads 4 --no-cte \
+        --no-eigen --skip second-version --skip library --skip communities \
+        --disk-floor 4294967296
+
+Seconds, runs 1 / 2 / 3, the private peak (RssAnon) over the three, and
+the ratio of the medians:
+
+| Stage | 506b5c3 | 3613402 | ratio |
+|---|---|---|---|
+| cold load (`prewarm`) | 0.196 / 0.185 / 0.188, 164.8 MiB | 0.160 / 0.161 / 0.155, **126.6 MiB** | 0.85 |
+| cold load probe (64kB cap) | 0.193 / 0.190 / 0.183, 164.6 MiB | 0.182 / 0.153 / 0.151, 126.3 MiB | 0.81 |
+| BFS depth 6 | 0.066 / 0.062 / 0.065 | 0.075 / 0.068 / 0.063 | 1.04 |
+| `reachable_set` | 0.274 / 0.261 / 0.278 | 0.283 / 0.268 / 0.273 | 0.99 |
+| `components` | 0.357 / 0.318 / 0.316 | 0.325 / 0.331 / 0.323 | 1.02 |
+| `pagerank` | 1.194 / 1.230 / 1.190 | 1.161 / 1.220 / 1.202 | 1.01 |
+| `pagerank` from cold | 1.342 / 1.322 / 1.248 | 1.294 / 1.278 / 1.284 | 0.97 |
+
+A cold load copies each chunk straight into the version's region instead
+of assembling each segment and then decoding it, so it is about 15%
+faster and its peak is the version (114.6 MiB) plus 12 MiB, not plus
+50 MiB (most of it one CSR's raw segments: 38 MiB of targets and 8 MiB of
+offsets). Before the product kernels borrowed each CSR's
+arrays once (3613402's parent, 5a07152), `pagerank` ran 25–30% slower
+over the region's shared views (1.42–1.56 s), since every access to a
+shared view is a virtual call; the other stages are within run-to-run
+noise.
+
+### The region zeroed lazily (PR #41 review)
+
+`a-scale10-step3-fix-673eb64-{1,2,3}.json` (the region loader as
+reviewed, `pg_warren.so` sha256 821f8fbf…) and
+`a-scale10-step3-fix-ea7ae37-{1,2,3}.json` (the region allocated
+byte-aligned and 64 bytes longer, so that `alloc_zeroed` is `calloc`, sha256
+a6d40999…): the same command and machine, `--disk-floor 1073741824`, run
+alternately (673eb64 first) under `/tmp/pgrx-test.lock`, load average
+0.8–1.3. A 64-byte-aligned `alloc_zeroed` is `posix_memalign` and a
+`memset` of the whole region, a pass over its 120 MB that the fill then
+writes again; `calloc`'s large allocations are fresh zero pages.
+
+| Stage | 673eb64 | ea7ae37 | ratio |
+|---|---|---|---|
+| cold load (`prewarm`) | 0.136 / 0.155 / 0.157, 126.6 MiB | 0.128 / 0.143 / 0.136, 126.6 MiB | 0.87 |
+| cold load probe (64kB cap) | 0.150 / 0.154 / 0.156, 126.3 MiB | 0.143 / 0.150 / 0.146, 126.3 MiB | 0.95 |
+| BFS depth 6 | 0.064 / 0.064 / 0.069 | 0.061 / 0.072 / 0.065 | 1.01 |
+| `reachable_set` | 0.258 / 0.273 / 0.277 | 0.250 / 0.275 / 0.262 | 0.96 |
+| `components` | 0.314 / 0.323 / 0.330 | 0.309 / 0.329 / 0.315 | 0.98 |
+| `pagerank` | 1.118 / 1.085 / 1.176 | 1.142 / 1.311 / 1.101 | 1.02 |
+| `pagerank` from cold | 1.196 / 1.333 / 1.246 | 1.260 / 1.301 / 1.252 | 1.01 |
+
+The cold load is 5–13% faster; its peak is unchanged, since the fill
+writes every page of the region either way. The other stages are within
+run-to-run noise.
