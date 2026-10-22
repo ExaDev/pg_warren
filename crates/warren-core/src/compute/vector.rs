@@ -136,8 +136,13 @@ impl<E: Element> Vector<E> {
         }
     }
 
-    /// Sets every element of each tombstoned row to zero (`false`).
+    /// Sets every element of each tombstoned row to zero (`false`). A shared
+    /// vector with no tombstoned row is left as it is: not copied, not
+    /// charged.
     pub fn clear_tombstoned(&mut self, tombstones: &Tombstones) -> Result<(), ComputeError> {
+        if !(0..self.id_space).any(|node| tombstones.contains(node)) {
+            return Ok(());
+        }
         let width = self.width;
         for (node, row) in (0..).zip(self.values_mut()?.chunks_mut(width)) {
             if tombstones.contains(node) {
@@ -359,6 +364,19 @@ mod tests {
             Err(ComputeError::MemoryLimit { requested: 16, .. })
         ));
         assert_eq!(f64::vector(&vector).unwrap().values(), &[1.0, 2.0]);
+        assert_eq!(memory.in_use(), 0);
+    }
+
+    #[test]
+    fn clearing_no_tombstoned_rows_neither_copies_nor_charges_a_shared_vector() {
+        let memory = ComputeMemory::new(0);
+        let region = HeapSegment::of(&[1.0f64, 2.0]);
+        let mut vector =
+            Vector::shared(&memory, 2, 1, SegmentBuffer::shared(Arc::clone(&region) as _)).unwrap();
+        let mut tombstones = Tombstones::new(3).unwrap();
+        tombstones.insert(2).unwrap();
+        vector.clear_tombstoned(&tombstones).unwrap();
+        assert_eq!(vector.values().as_ptr(), region.elements().as_ptr(), "no copy");
         assert_eq!(memory.in_use(), 0);
     }
 
