@@ -41,6 +41,10 @@ name = "spectral"
 harness = false
 
 [[bench]]
+name = "spmv_out_of_cache"
+harness = false
+
+[[bench]]
 name = "structure"
 harness = false
 

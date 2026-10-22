@@ -20,6 +20,7 @@ mod arithmetic;
 mod column;
 mod eval;
 mod expr;
+mod not_null;
 
 pub use expr::{
     AnyExpr, Arithmetic, BoolOp, Comparands, Comparison, Expr, F32Op, F64Op, Function, I64Op, Value,
@@ -32,7 +33,8 @@ use rayon::prelude::*;
 use super::{AnyVector, ComputeError, ComputeMemory, Vector, Workers};
 use crate::interrupts::{Cancelled, Interrupts};
 use column::Column;
-use eval::{eval, eval_any, Chunk, Eval};
+use eval::{eval, eval_any, Chunk};
+use not_null::NotNull;
 
 /// The elements one task evaluates at once; small under test, so tests
 /// cross chunk and row boundaries.
@@ -91,7 +93,8 @@ struct Failure {
 impl<I: Interrupts> Task<'_, I> {
     /// Evaluates chunks in parallel. A chunk starting after a known failure
     /// is skipped; the failure reported is the first by position.
-    fn run<T: Eval>(&mut self, expr: &Expr<T>) -> Result<Vector<T>, ComputeError> {
+    fn run<T: NotNull>(&mut self, expr: &Expr<T>) -> Result<Vector<T>, ComputeError> {
+        let not_null = not_null::covers(expr);
         let mut output = Vector::filled(self.memory, self.id_space, self.width, T::default())?;
         let (operands, width) = (self.operands, self.width);
         let first_failure = AtomicUsize::new(usize::MAX);
@@ -109,7 +112,7 @@ impl<I: Interrupts> Task<'_, I> {
                         return Some(Failure { position: start, error: Cancelled.into() });
                     }
                     let chunk = Chunk { operands, width, start, len: out.len() };
-                    let failure = evaluate(expr, &chunk, out).err()?;
+                    let failure = evaluate(expr, &chunk, out, not_null).err()?;
                     first_failure.fetch_min(failure.position, Ordering::Relaxed);
                     Some(failure)
                 })
@@ -123,9 +126,20 @@ impl<I: Interrupts> Task<'_, I> {
     }
 }
 
-/// Evaluates `chunk` into `out`. If any element fails, evaluates the chunk
+/// Evaluates `chunk` into `out`, on the no-NULL path if `not_null` (the
+/// expression is never NULL) and no element fails there. Otherwise
+/// evaluates it on the columnar path, and if any element fails there,
 /// again one element at a time to find the first failing element.
-fn evaluate<T: Eval>(expr: &Expr<T>, chunk: &Chunk<'_>, out: &mut [T]) -> Result<(), Failure> {
+fn evaluate<T: NotNull>(
+    expr: &Expr<T>,
+    chunk: &Chunk<'_>,
+    out: &mut [T],
+    not_null: bool,
+) -> Result<(), Failure> {
+    if let Some(Ok(values)) = not_null.then(|| not_null::eval(expr, chunk, None)) {
+        out.copy_from_slice(&values);
+        return Ok(());
+    }
     let whole = eval(expr, chunk, &vec![true; chunk.len]).and_then(|column| store(&column, out));
     if whole.is_ok() {
         return Ok(());

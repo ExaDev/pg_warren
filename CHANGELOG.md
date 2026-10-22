@@ -79,6 +79,22 @@
   statement: 2.1 s, from 14.5 s), and `pgbench` of one `degree` per
   transaction with 4 clients runs at about 140,000 tps, from 35,000.
 
+- **`vector_map`'s no-NULL path** (`warren-core`'s `compute::map`;
+  DESIGN.md §6.3). An expression built only from vectors, non-NULL
+  literals, casts, arithmetic, comparisons, `NOT` and `CASE … ELSE` is
+  never NULL. It is now evaluated without NULL flags, with each operator
+  chosen once per chunk rather than per element. Results are
+  bit-identical, and any error is still reported by the general path.
+- Measured in `warren-core` at 4M nodes and 40M edges
+  (`benches/spmv_out_of_cache.rs`), on a shared 4-vCPU machine, so the
+  spread is wide:
+  - `pagerank`'s four maps: 2.1–2.7× faster on one thread (340–390 ms
+    before, 145–165 ms after);
+  - a whole iteration: 1.2–1.4× faster on one thread (790–840 →
+    580–665 ms), 1.3–2.2× on four (480–550 → 250–375 ms).
+
+  Not re-measured through SQL at 10M nodes.
+
 - **Multi-source BFS for unweighted closeness and harmonic centrality**
   (`warren-core`'s `compute::centrality`; DESIGN.md §6.7). Sources are
   searched 64 at a time, one bit per source, each step in parallel over
