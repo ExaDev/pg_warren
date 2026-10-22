@@ -15,8 +15,9 @@ SELECT dblink_connect('a', :'conninfo');
 SELECT pid AS kernel FROM dblink('a', 'SELECT pg_backend_pid()') AS t(pid int) \gset
 
 -- a runs betweenness centrality over g on its compute threads.
-SELECT dblink_send_query('a', $$SET warren.threads = 4;
-    SELECT warren.betweenness_centrality('g', 'bc', k := 3000, persist := false)$$);
+SELECT dblink_exec('a', 'SET warren.threads = 4');
+SELECT dblink_send_query('a',
+    $$SELECT warren.betweenness_centrality('g', 'bc', k := 3000, persist := false)$$);
 DO $$
 BEGIN
     FOR attempt IN 1..3000 LOOP
