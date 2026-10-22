@@ -18,6 +18,14 @@ runs:
         # A stalled mirror connection fails and retries rather than hanging.
         printf 'Acquire::Retries "3";\nAcquire::http::Timeout "60";\nAcquire::https::Timeout "60";\n' \
           | sudo tee /etc/apt/apt.conf.d/80-ci-timeouts >/dev/null
+        # The runner's first mirror (azure.archive.ubuntu.com) trickled LLVM 19,
+        # which postgresql-server-dev-NN depends on, at ~80 kB/s for whole steps
+        # (2026-10-22). Drop it from the mirror list while others remain.
+        mirrors=/etc/apt/apt-mirrors.txt
+        if [ -f "$mirrors" ] && grep -qv 'azure\.archive\.ubuntu\.com' "$mirrors"; then
+          sudo sed -i '/azure\.archive\.ubuntu\.com/d' "$mirrors"
+          cat "$mirrors"
+        fi
         sudo apt-get update -qq
         sudo apt-get install -y -qq postgresql-common
         sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
