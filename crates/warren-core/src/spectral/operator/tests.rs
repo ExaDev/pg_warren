@@ -248,7 +248,8 @@ fn two_products(graph: &GraphCsr, x: &[f64]) -> Vec<f64> {
     };
     run(&product, &mut forward);
     run(&Product { transpose: true, ..product }, &mut transposed);
-    values(&forward).iter().zip(values(&transposed)).map(|(a, b)| (a + b) / 2.0).collect()
+    let (forward, transposed) = (values(&forward).unwrap(), values(&transposed).unwrap());
+    forward.iter().zip(transposed).map(|(a, b)| (a + b) / 2.0).collect()
 }
 
 proptest! {
@@ -295,6 +296,19 @@ fn a_vector_that_is_not_f64_is_an_error_not_an_empty_slice() {
     let mut vector: AnyVector = Vector::filled(&memory, 2, 1, 0i64).unwrap().into();
     assert!(matches!(
         values_mut(&mut vector),
+        Err(SpectralError::Compute(ComputeError::DtypeMismatch {
+            expected: Dtype::F64,
+            found: Dtype::I64
+        }))
+    ));
+}
+
+#[test]
+fn a_vector_that_is_not_f64_is_an_error_when_read_too() {
+    let memory = ComputeMemory::new(1 << 10);
+    let vector: AnyVector = Vector::filled(&memory, 2, 1, 0i64).unwrap().into();
+    assert!(matches!(
+        values(&vector),
         Err(SpectralError::Compute(ComputeError::DtypeMismatch {
             expected: Dtype::F64,
             found: Dtype::I64
