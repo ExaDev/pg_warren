@@ -298,3 +298,29 @@ arrays once (3613402's parent, 5a07152), `pagerank` ran 25–30% slower
 over the region's shared views (1.42–1.56 s), since every access to a
 shared view is a virtual call; the other stages are within run-to-run
 noise.
+
+### The region zeroed lazily (PR #41 review)
+
+`a-scale10-step3-fix-673eb64-{1,2,3}.json` (the region loader as
+reviewed, `pg_warren.so` sha256 821f8fbf…) and
+`a-scale10-step3-fix-ea7ae37-{1,2,3}.json` (the region allocated
+byte-aligned and 64 bytes longer, so that `alloc_zeroed` is `calloc`, sha256
+a6d40999…): the same command and machine, `--disk-floor 1073741824`, run
+alternately (673eb64 first) under `/tmp/pgrx-test.lock`, load average
+0.8–1.3. A 64-byte-aligned `alloc_zeroed` is `posix_memalign` and a
+`memset` of the whole region, a pass over its 120 MB that the fill then
+writes again; `calloc`'s large allocations are fresh zero pages.
+
+| Stage | 673eb64 | ea7ae37 | ratio |
+|---|---|---|---|
+| cold load (`prewarm`) | 0.136 / 0.155 / 0.157, 126.6 MiB | 0.128 / 0.143 / 0.136, 126.6 MiB | 0.87 |
+| cold load probe (64kB cap) | 0.150 / 0.154 / 0.156, 126.3 MiB | 0.143 / 0.150 / 0.146, 126.3 MiB | 0.95 |
+| BFS depth 6 | 0.064 / 0.064 / 0.069 | 0.061 / 0.072 / 0.065 | 1.01 |
+| `reachable_set` | 0.258 / 0.273 / 0.277 | 0.250 / 0.275 / 0.262 | 0.96 |
+| `components` | 0.314 / 0.323 / 0.330 | 0.309 / 0.329 / 0.315 | 0.98 |
+| `pagerank` | 1.118 / 1.085 / 1.176 | 1.142 / 1.311 / 1.101 | 1.02 |
+| `pagerank` from cold | 1.196 / 1.333 / 1.246 | 1.260 / 1.301 / 1.252 | 1.01 |
+
+The cold load is 5–13% faster; its peak is unchanged, since the fill
+writes every page of the region either way. The other stages are within
+run-to-run noise.
