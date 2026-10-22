@@ -21,12 +21,13 @@ use proptest::prelude::*;
 
 use super::admission::Refusal;
 use super::memory::{Backend, Loading, Mapping, Memory};
-use super::session::{Release, Session};
+use super::session::Session;
 use super::slot::{Key, Process, Slot, State, Ticket};
 use super::{Claimed, Found, SharedVersions};
 
 const BACKENDS: usize = 3;
-const VERSIONS: usize = 4;
+/// The versions and vectors read: two of each, alternating (`key`).
+const ENTRIES: usize = 4;
 
 /// What one backend does next.
 #[derive(Debug, Clone)]
@@ -49,8 +50,8 @@ enum Op {
     EndStatement(usize),
     /// Its calls stop holding what they read.
     DropViews(usize),
-    /// Releases its mappings.
-    Release(usize, Release),
+    /// Releases its mappings of evicted versions.
+    Release(usize),
     /// Evicts a version.
     Evict(usize, usize),
     /// Releases its mapping of a version, ready or not (`warren.evict`).
@@ -63,8 +64,7 @@ enum Op {
 
 fn op() -> impl Strategy<Value = Op> {
     let backend = 0..BACKENDS;
-    let version = 0..VERSIONS;
-    let release = prop_oneof![Just(Release::Evicted), Just(Release::Unheld)];
+    let version = 0..ENTRIES;
     prop_oneof![
         5 => (backend.clone(), version.clone()).prop_map(|(b, v)| Op::Read(b, v)),
         2 => backend.clone().prop_map(Op::Wait),
@@ -73,7 +73,7 @@ fn op() -> impl Strategy<Value = Op> {
         1 => (backend.clone(), version.clone()).prop_map(|(b, v)| Op::FailAttach(b, v)),
         3 => backend.clone().prop_map(Op::EndStatement),
         2 => backend.clone().prop_map(Op::DropViews),
-        3 => (backend.clone(), release).prop_map(|(b, r)| Op::Release(b, r)),
+        3 => backend.clone().prop_map(Op::Release),
         1 => (backend.clone(), version.clone()).prop_map(|(b, v)| Op::Evict(b, v)),
         1 => (backend.clone(), version).prop_map(|(b, v)| Op::Forget(b, v)),
         1 => backend.clone().prop_map(Op::Exit),
@@ -81,8 +81,14 @@ fn op() -> impl Strategy<Value = Op> {
     ]
 }
 
-fn key(version: usize) -> Key {
-    Key { database: Oid::from(1), extension: Oid::from(2), version: version as i64 }
+/// The key of entry `entry`: versions and vectors alternate, so a version
+/// and a vector share each id (DESIGN.md §14 item 38).
+fn key(entry: usize) -> Key {
+    let id = (entry / 2) as i64;
+    match entry % 2 {
+        0 => Key::version(Oid::from(1), Oid::from(2), id),
+        _ => Key::vector(Oid::from(1), Oid::from(2), id),
+    }
 }
 
 /// A backend and what its calls hold.
@@ -291,7 +297,7 @@ impl World {
             }
             Op::EndStatement(b) => self.backends[b].port.unpin(),
             Op::DropViews(b) => self.backends[b].views.clear(),
-            Op::Release(b, which) => self.backends[b].port.release(which),
+            Op::Release(b) => self.backends[b].port.release(),
             Op::Evict(b, version) => {
                 self.backends[b].port.evict(&|evicted| *evicted == key(version));
             }
@@ -347,7 +353,7 @@ impl World {
                 prop_assert_eq!(*pins, 0, "slot {} was evicted while pinned", index);
             }
         }
-        for version in 0..VERSIONS {
+        for version in 0..ENTRIES {
             let live = slots
                 .iter()
                 .filter(|slot| {
@@ -390,36 +396,39 @@ impl World {
         Ok(())
     }
 
-    /// Every live backend ends what it does and releases what it holds,
-    /// evicted mappings first: then no slot drains, and every ready slot is
-    /// reclaimable, except those that vanished backends hold.
+    /// Every live backend ends what it does and releases its evicted
+    /// mappings: then no slot drains. Evicted then and released again,
+    /// every slot is empty: every ready slot was reclaimable. Slots that
+    /// vanished backends hold are the exceptions.
     fn settle(&mut self) -> Result<(), TestCaseError> {
         for backend in &mut self.backends {
             backend.pending = None;
             backend.port.abort();
             backend.views.clear();
             backend.port.unpin();
-            backend.port.release(Release::Evicted);
+            backend.port.release();
         }
         for (index, slot) in self.memory.slots().iter().enumerate() {
             if slot.state == State::Draining {
                 prop_assert!(self.held_by_vanished(index), "slot {} still drains", index);
             }
         }
+        let settled = table(&self.memory);
+        self.check(&settled)?;
+        if let Some(backend) = self.backends.first_mut() {
+            backend.port.evict(&|_| true);
+        }
         for backend in &mut self.backends {
-            backend.port.release(Release::Unheld);
+            backend.port.release();
         }
         let settled = table(&self.memory);
         self.check(&settled)?;
-        for (index, (slot, pins)) in settled.into_iter().enumerate() {
+        for (index, (slot, _)) in settled.into_iter().enumerate() {
             if self.held_by_vanished(index) {
                 continue;
             }
             match slot.state {
-                State::Ready => {
-                    let counts = (pins, slot.mappers);
-                    prop_assert_eq!(counts, (0, 0), "slot {} is not reclaimable", index);
-                }
+                State::Ready => prop_assert!(false, "slot {} is not reclaimable", index),
                 State::Loading => prop_assert!(self.is_vanished(slot.loader)),
                 State::Draining => prop_assert!(false, "slot {} still drains", index),
                 State::Empty => {}
@@ -435,7 +444,7 @@ proptest! {
         slots in 1usize..6,
         cap in prop_oneof![1 => Just(0u64), 9 => 20u64..200],
         capacity in prop_oneof![3 => Just(1000u64), 1 => 0u64..300],
-        sizes in prop::collection::vec(1u64..70, VERSIONS),
+        sizes in prop::collection::vec(1u64..70, ENTRIES),
         ops in prop::collection::vec(op(), 1..80),
     ) {
         let memory = Memory::new(slots, cap, capacity, Duration::ZERO);

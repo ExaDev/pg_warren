@@ -133,8 +133,12 @@ compute kernels from the main thread every millisecond), so
   cached between runs.
 - `warren.evict(name)` frees a graph's cached versions and vectors, and this
   role's transient vectors of it (which are then gone), at once. Lowering the
-  cap takes effect at the next lookup or load. A shared-memory cache across
-  backends is a later release.
+  cap takes effect at the next lookup or load. With
+  `warren.shared_cache_memory` set, versions and persisted vectors (not
+  `bool` ones) are shared across backends instead, charged to no call;
+  `warren.shared_cache()` lists the shared entries of the graphs the
+  caller may read, and every role sees one totals row (bytes, pins and
+  mappers across the cluster, and the cap).
 - `warren.prewarm(name)` loads the current version ahead of first use, for
   pooled connections; `warren.evict(name)` returns how many versions and vectors it freed.
 - `warren.max_compute_memory` bounds what one call reads and allocates,

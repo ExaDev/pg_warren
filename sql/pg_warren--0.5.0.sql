@@ -1401,6 +1401,27 @@ STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'similarity_wrapper'
 /* </end connected objects> */
 
 /* <begin connected objects> */
+-- crates/pg_warren/src/cache/shared/introspection.rs:136
+-- pg_warren::cache::shared::introspection::shared_cache
+CREATE  FUNCTION warren."shared_cache"() RETURNS TABLE (
+	"kind" TEXT,  /* String */
+	"graph" TEXT,  /* Option < String > */
+	"version" bigint,  /* Option < i64 > */
+	"vector" TEXT,  /* Option < String > */
+	"vector_id" bigint,  /* Option < i64 > */
+	"state" TEXT,  /* Option < String > */
+	"bytes" bigint,  /* i64 */
+	"pins" INT,  /* i32 */
+	"mappers" INT,  /* i32 */
+	"last_use" bigint,  /* i64 */
+	"cap" bigint  /* Option < i64 > */
+)
+STRICT VOLATILE PARALLEL SAFE 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'shared_cache_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
 -- crates/pg_warren/src/compute_sql/drop.rs:16
 -- pg_warren::compute_sql::drop::drop_vector
 CREATE  FUNCTION warren."drop_vector"(

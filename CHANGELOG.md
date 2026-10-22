@@ -2,6 +2,22 @@
 
 ## 0.5.0 — in development
 
+### Added
+
+- `warren.shared_cache()` (`PARALLEL SAFE`): what the shared cache
+  (`warren.shared_cache_memory`) holds. A row per shared version and
+  persisted vector of a graph the caller may read (its state, bytes, pins,
+  mappers and last use), then one `cluster` row of totals across every
+  database, with the cap. A role sees only graphs it may read (superusers
+  read all); dropped entries are listed to no one. `ALTER EXTENSION
+  pg_warren UPDATE` creates it.
+- Persisted vectors are shared across backends like versions: loaded once,
+  mapped by every backend that reads them, and charged to no call's
+  `warren.max_compute_memory`. `bool` vectors and vectors written by the
+  reading transaction are still read privately. Dropping or replacing a
+  vector evicts it, and `warren.evict` by the graph's owner evicts its
+  shared vectors.
+
 ### Fixed
 
 - After `DROP EXTENSION pg_warren` and `CREATE EXTENSION pg_warren` in a

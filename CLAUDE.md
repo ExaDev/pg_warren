@@ -38,7 +38,7 @@ before changing code. Commands, toolchain setup and environment gotchas are in
    - `pg_warren/src/`: `extension` (schema + `warren.version()`, SQL
      errors), `access/` (identity switches, privilege checks), `source/`
      (node/edge query columns and read-only cursors), `catalog/`,
-     `segment/` (chunked persistence), `cache/` (loader; `shared`, the shared cache across backends), `build/`,
+     `segment/` (chunked persistence), `cache/` (loader; `shared`, the shared cache across backends, and `shared::introspection`, `warren.shared_cache()`), `build/`,
      `version_sql/` (compact, diff), `interrupts` (the main-thread poll),
      `read_only` (single-row SPI reads that assign no transaction id),
      `external_ids/` (id arguments ↔ dense ids), `selection/` (direction and

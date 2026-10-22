@@ -1,7 +1,7 @@
-//! A shared version's DSM segment (DESIGN.md §5.6): a 64-byte prefix that
-//! names the version it holds (its key and the registry's format, checked
-//! on every attach), then the version's region (`cache::region`), which
-//! starts 64-byte aligned since a segment's mapping is page aligned.
+//! A shared version's or persisted vector's DSM segment (DESIGN.md §5.6):
+//! a 64-byte prefix that names what it holds (its key and the registry's
+//! format, checked on every attach), then its region (`cache::region`),
+//! which starts 64-byte aligned since a segment's mapping is page aligned.
 //!
 //! | Bytes | Prefix field |
 //! |---|---|
@@ -9,8 +9,9 @@
 //! | 4..8 | the registry's format (`u32`) |
 //! | 8..12 | the database's oid (`u32`) |
 //! | 12..16 | pg_warren's extension oid (`u32`) |
-//! | 16..24 | the version id (`i64`) |
-//! | 24..64 | reserved, 0 |
+//! | 16..24 | the version id or vector id (`i64`) |
+//! | 24..28 | its kind (`u32`: 1 a version, 2 a vector) |
+//! | 28..64 | reserved, 0 |
 //!
 //! Also where segments are created, and how many bytes are free there.
 
@@ -186,7 +187,8 @@ fn encode(key: Key) -> [u8; PREFIX] {
     prefix[4..8].copy_from_slice(&FORMAT.to_le_bytes());
     prefix[8..12].copy_from_slice(&key.database.to_u32().to_le_bytes());
     prefix[12..16].copy_from_slice(&key.extension.to_u32().to_le_bytes());
-    prefix[16..24].copy_from_slice(&key.version.to_le_bytes());
+    prefix[16..24].copy_from_slice(&key.id.to_le_bytes());
+    prefix[24..28].copy_from_slice(&(key.kind as u32).to_le_bytes());
     prefix
 }
 
@@ -243,17 +245,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_prefix_names_the_version_and_the_registrys_format() {
-        let key = Key { database: Oid::from(5), extension: Oid::from(16_384), version: -2 };
+    fn a_prefix_names_the_key_and_the_registrys_format() {
+        let key = Key::version(Oid::from(5), Oid::from(16_384), -2);
         let prefix = encode(key);
         assert_eq!(&prefix[..4], b"WRSV");
         assert_eq!(prefix[4..8], FORMAT.to_le_bytes());
         assert_eq!(prefix[8..12], 5u32.to_le_bytes());
         assert_eq!(prefix[12..16], 16_384u32.to_le_bytes());
         assert_eq!(prefix[16..24], (-2i64).to_le_bytes());
-        assert!(prefix[24..].iter().all(|&byte| byte == 0));
-        let other = Key { version: 3, ..key };
+        assert_eq!(prefix[24..28], 1u32.to_le_bytes(), "a version's kind");
+        assert!(prefix[28..].iter().all(|&byte| byte == 0));
+        let other = Key { id: 3, ..key };
         assert_ne!(encode(other), prefix, "another version's prefix differs");
+        let vector = Key::vector(key.database, key.extension, key.id);
+        assert_eq!(encode(vector)[24..28], 2u32.to_le_bytes(), "a vector's kind");
+        assert_eq!(encode(vector)[..24], prefix[..24]);
     }
 
     #[test]

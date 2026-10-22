@@ -1,5 +1,6 @@
-//! The shared cache (DESIGN.md §5.6): one copy of a loaded version per
-//! cluster, mapped by every backend that reads it. Owns the registry's
+//! The shared cache (DESIGN.md §5.6): one copy of a loaded version, or of
+//! a persisted vector (§14 item 38), per cluster, mapped by every backend
+//! that reads it; a slot's key says which kind it holds. Owns the registry's
 //! slot table and its state machine (claim, publish, abandon, pin, unpin,
 //! attach, release, evict, drain), admission under
 //! `warren.shared_cache_memory` and its fallbacks (a refusal means a
@@ -11,12 +12,14 @@
 //! where it cannot work (PG 15 and 16 without the preload, a big-endian
 //! target), which loads privately; and `Memory`, an in-process fake whose
 //! backends are threads. `read` is how `cache::open` asks it first;
-//! `setting` is `warren.shared_cache_memory`.
+//! `setting` is `warren.shared_cache_memory`; `introspection` is
+//! `warren.shared_cache()`, what the registry holds.
 
 mod acquire;
 mod admission;
 mod dsm;
 mod eviction;
+mod introspection;
 #[cfg(test)]
 mod memory;
 #[cfg(test)]
@@ -28,7 +31,7 @@ mod setting;
 mod slot;
 mod unavailable;
 
-pub(crate) use read::{evict_graph, prune, shared, shared_hit};
+pub(crate) use read::{evict_graph, evict_vector, prune, shared, shared_hit, shared_vector};
 
 /// Registers `warren.shared_cache_memory` and, while
 /// `shared_preload_libraries` loads pg_warren on PG 15 and 16, the hooks
@@ -45,18 +48,17 @@ pub(crate) fn end_statement() {
     dsm::Dsm::here().unpin();
 }
 
-/// At the end of a client message, releases the mappings no call holds
-/// that `dsm::DETACH` selects (DESIGN.md §14 item 28). It takes the
-/// registry's lock and detaches segments, so never at a transaction's end.
+/// At the end of a client message, releases the mappings of evicted slots
+/// that no call holds (DESIGN.md §14 item 28). It takes the registry's
+/// lock and detaches segments, so never at a transaction's end.
 pub(crate) fn end_message() {
-    dsm::Dsm::here().release(dsm::DETACH);
+    dsm::Dsm::here().release();
 }
 
 use std::sync::Arc;
 
 use admission::Refusal;
-use registry::Gone;
-use session::Release;
+use registry::{Gone, Listing};
 use slot::{Key, Ticket};
 
 /// The shared cache as one backend sees it (DESIGN.md §5.6, §14 item 30).
@@ -90,8 +92,9 @@ pub(crate) trait SharedVersions {
     /// runs at the end of a transaction (DESIGN.md §5.6).
     fn unpin(&mut self);
 
-    /// Releases the mappings `which` selects that no call holds.
-    fn release(&mut self, which: Release);
+    /// Releases the mappings of evicted slots that no call holds; those of
+    /// ready slots stay (DESIGN.md §14 item 28).
+    fn release(&mut self);
 
     /// Evicts the unpinned versions whose keys `which` selects; how many.
     /// (A read with `warren.shared_cache_memory` at 0, `warren.evict`, a
@@ -104,6 +107,9 @@ pub(crate) trait SharedVersions {
 
     /// The keys of the versions the registry holds, in any state.
     fn keys(&mut self) -> Vec<Key>;
+
+    /// The slots in use and the registry's clock (`warren.shared_cache()`).
+    fn listing(&mut self) -> Listing;
 
     /// Gives back everything this backend holds, as it exits.
     fn exit(&mut self);

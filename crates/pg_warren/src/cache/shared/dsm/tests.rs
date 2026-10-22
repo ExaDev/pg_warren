@@ -11,11 +11,12 @@ use pgrx::spi::{Error, Spi};
 
 use super::{with_backend, Dsm};
 use crate::cache::open::{resolve, Resolved};
-use crate::cache::shared::read::key;
+use crate::cache::shared::read::{key, vector_key};
 use crate::cache::shared::slot::{Key, State};
 use crate::cache::shared::{end_message, SharedVersions};
 use crate::cache::statement::end_statement;
 use crate::fixture::{refresh, ring};
+use crate::vector::{SpiVectorStore, VectorRecord, VectorStore};
 
 /// Sets `warren.shared_cache_memory` in this backend, as a reload of the
 /// configuration file would (it cannot be `SET`), and holds the shared
@@ -44,6 +45,18 @@ fn graph(name: &str, nodes: i64) -> Result<(Key, Resolved), Error> {
     let version = refresh(name, true)?;
     let resolved = resolve(name, None, "read").map_err(|_| Error::InvalidPosition)?;
     Ok((key(version).ok_or(Error::InvalidPosition)?, resolved))
+}
+
+/// Graph `name`, a ring of `nodes` with a promoted version, and persisted
+/// vector `x` of `dtype` bound to it (every element 1): the vector's key
+/// and record.
+fn vector(name: &str, nodes: i64, dtype: &str) -> Result<(Key, VectorRecord), Error> {
+    ring(name, nodes, 1)?;
+    let version = refresh(name, true)?;
+    Spi::run(&format!("SELECT warren.vector_const('{name}', 'x', 1, '{dtype}')"))?;
+    let bound = SpiVectorStore.bound(version).map_err(|_| Error::InvalidPosition)?;
+    let record = bound.into_iter().next().ok_or(Error::InvalidPosition)?;
+    Ok((vector_key(record.vector).ok_or(Error::InvalidPosition)?, record))
 }
 
 /// The state, pins and mappers of the slot holding `key`, if one does.
@@ -82,7 +95,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use super::{forget, graph, port, set_cap, slot, with_backend};
+    use super::{forget, graph, port, set_cap, slot, vector, with_backend};
     use crate::cache::compute_memory;
     use crate::cache::load::load;
     use crate::cache::open::cached;
@@ -90,7 +103,7 @@ mod tests {
     use crate::cache::shared::acquire::acquire;
     use crate::cache::shared::admission::Limits;
     use crate::cache::shared::dsm::PREFIX;
-    use crate::cache::shared::read::{evict_through, shared, through};
+    use crate::cache::shared::read::{evict_through, prune, shared, through, vector_through};
     use crate::cache::shared::registry::Claim;
     use crate::cache::shared::slot::Key;
     use crate::cache::shared::slot::Process;
@@ -99,6 +112,8 @@ mod tests {
     use crate::cache::statement::end_statement;
     use crate::fixture::{refresh, ring};
     use crate::segment::SpiSegmentStore;
+    use crate::vector::{read_vector, SpiVectorStore, VectorRecord, VectorStore};
+    use warren_core::compute::AnyVector;
 
     #[pg_test]
     fn the_shared_cache_is_off_by_default() -> Result<(), Error> {
@@ -130,8 +145,8 @@ mod tests {
             || through::<i64>(port()?, &resolved).ok().flatten().ok_or(Error::InvalidPosition);
         let first = read()?;
         assert_eq!(slot(key), Some((State::Ready, 1, 1)), "pinned and mapped by its loader");
-        let private = load::<i64>(&mut SpiSegmentStore, key.version, true)
-            .map_err(|_| Error::InvalidPosition)?;
+        let private =
+            load::<i64>(&mut SpiSegmentStore, key.id, true).map_err(|_| Error::InvalidPosition)?;
         assert_eq!((&first.id_map, &first.graph), (&private.id_map, &private.graph));
         end_statement();
         assert_eq!(slot(key), Some((State::Ready, 0, 1)), "mapped across statements");
@@ -399,5 +414,149 @@ mod tests {
         assert!(compute_memory().in_use() > 0, "a private version past the cap is charged");
         drop((shared, private));
         forget(key)
+    }
+
+    /// Persisted vector `record` through the shared cache, whatever wrote
+    /// it.
+    fn shared_vector(record: &VectorRecord) -> Result<Arc<AnyVector>, Error> {
+        vector_through(port()?, record).ok().flatten().ok_or(Error::InvalidPosition)
+    }
+
+    #[pg_test]
+    fn a_persisted_vector_is_loaded_once_and_shared_by_later_statements() -> Result<(), Error> {
+        set_cap(c"64MB")?;
+        let (key, record) = vector("vector_once", 2000, "f64")?;
+        let first = shared_vector(&record)?;
+        assert_eq!(slot(key), Some((State::Ready, 1, 1)), "pinned and mapped by its loader");
+        let mut store = SpiVectorStore;
+        let private = read_vector(&mut store, &compute_memory(), &record)
+            .map_err(|_| Error::InvalidPosition)?;
+        assert_eq!(*first, private, "the vector as it decodes");
+        end_statement();
+        assert_eq!(slot(key), Some((State::Ready, 0, 1)), "mapped across statements");
+        let second = shared_vector(&record)?;
+        assert!(Arc::ptr_eq(&first, &second), "the same mapping and vector");
+        assert_eq!(compute_memory().in_use(), 0, "charged to no call");
+        let version = super::key(key.id).ok_or(Error::InvalidPosition)?;
+        assert_eq!(slot(version), None, "a vector's id is not a version's");
+        drop((first, second));
+        forget(key)?;
+        assert_eq!(slot(key), None);
+        Ok(())
+    }
+
+    #[pg_test]
+    fn an_uncommitted_vector_is_read_privately() -> Result<(), Error> {
+        set_cap(c"64MB")?;
+        let (key, record) = vector("vector_uncommitted", 50, "f64")?;
+        let read = crate::cache::shared_vector(&record).map_err(|_| Error::InvalidPosition)?;
+        assert!(read.is_none());
+        assert_eq!(slot(key), None);
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_bool_vector_is_read_privately() -> Result<(), Error> {
+        set_cap(c"64MB")?;
+        let (key, record) = vector("vector_bool", 50, "bool")?;
+        let read = vector_through(port()?, &record).map_err(|_| Error::InvalidPosition)?;
+        assert!(read.is_none(), "a bool vector has no region");
+        assert_eq!(slot(key), None);
+        Ok(())
+    }
+
+    #[pg_test]
+    fn dropping_a_shared_vector_evicts_it() -> Result<(), Error> {
+        set_cap(c"64MB")?;
+        let (key, record) = vector("vector_dropped", 100, "i64")?;
+        drop(shared_vector(&record)?);
+        end_statement();
+        Spi::run("SELECT warren.drop_vector('vector_dropped', 'x')")?;
+        assert_eq!(slot(key), None, "evicted, and released by this backend");
+        Ok(())
+    }
+
+    #[pg_test]
+    fn replacing_a_shared_vector_evicts_it() -> Result<(), Error> {
+        set_cap(c"64MB")?;
+        let (key, record) = vector("vector_replaced", 100, "f32")?;
+        drop(shared_vector(&record)?);
+        end_statement();
+        Spi::run("SELECT warren.vector_const('vector_replaced', 'x', 2, 'f32')")?;
+        assert_eq!(slot(key), None, "evicted, and released by this backend");
+        Ok(())
+    }
+
+    #[pg_test]
+    fn evict_by_an_owner_evicts_the_graphs_shared_vectors() -> Result<(), Error> {
+        set_cap(c"64MB")?;
+        let (key, record) = vector("vector_evicted", 100, "f64")?;
+        drop(shared_vector(&record)?);
+        end_statement();
+        let evicted = Spi::get_one::<i64>("SELECT warren.evict('vector_evicted')")?;
+        // The version and the vector its uncommitted write cached
+        // privately, and the shared vector.
+        assert_eq!(evicted, Some(3));
+        assert_eq!(slot(key), None, "evicted, and released by this backend");
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_prune_evicts_shared_vectors_whose_rows_are_gone() -> Result<(), Error> {
+        set_cap(c"64MB")?;
+        let (key, record) = vector("vector_pruned", 100, "f64")?;
+        drop(shared_vector(&record)?);
+        end_statement();
+        // Deleted behind the cache's back, as another backend's drop would.
+        Spi::run(&format!("DELETE FROM warren.vectors WHERE vector_id = {}", record.vector))?;
+        assert_eq!(slot(key), Some((State::Ready, 0, 1)));
+        prune().map_err(|_| Error::InvalidPosition)?;
+        assert_eq!(slot(key), None, "evicted, and released by this backend");
+        Ok(())
+    }
+
+    /// What `warren.shared_cache()` lists of graph `graph`, as kind and
+    /// state, and its `cluster` row's bytes.
+    fn listed(graph: &str) -> Result<(Option<String>, Option<i64>), Error> {
+        let entries = Spi::get_one::<String>(&format!(
+            "SELECT string_agg(kind || ':' || state, ',' ORDER BY kind)
+             FROM warren.shared_cache() WHERE graph = '{graph}'"
+        ))?;
+        let cluster = Spi::get_one::<i64>(
+            "SELECT bytes FROM warren.shared_cache() WHERE kind = 'cluster' AND cap IS NOT NULL",
+        )?;
+        Ok((entries, cluster))
+    }
+
+    #[pg_test]
+    fn the_view_lists_shared_versions_and_vectors_to_their_graphs_readers() -> Result<(), Error> {
+        set_cap(c"64MB")?;
+        let (version, resolved) = graph("listed", 100)?;
+        drop(through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?);
+        Spi::run("SELECT warren.vector_const('listed', 'x', 1)")?;
+        let bound = SpiVectorStore.bound(version.id).map_err(|_| Error::InvalidPosition)?;
+        let record = bound.into_iter().next().ok_or(Error::InvalidPosition)?;
+        drop(shared_vector(&record)?);
+        let (entries, cluster) = listed("listed")?;
+        assert_eq!(entries.as_deref(), Some("vector:ready,version:ready"));
+        assert!(cluster.is_some_and(|bytes| bytes > 0), "{cluster:?}");
+        let pins = Spi::get_one::<i32>(
+            "SELECT pins FROM warren.shared_cache() WHERE graph = 'listed' AND kind = 'version'",
+        )?;
+        assert_eq!(pins, Some(1), "its statement pins it");
+        Spi::run("CREATE ROLE view_stranger; SET ROLE view_stranger")?;
+        let (hidden, totals) = listed("listed")?;
+        Spi::run("RESET ROLE; SELECT warren.grant('listed', 'view_stranger')")?;
+        assert_eq!(hidden, None, "a role that cannot read the graph sees none of it");
+        assert_eq!(totals, cluster, "but sees the cluster's totals");
+        Spi::run("SET ROLE view_stranger")?;
+        let (granted, _) = listed("listed")?;
+        Spi::run("RESET ROLE")?;
+        assert_eq!(granted, entries, "a reader sees it");
+        end_statement();
+        forget(super::vector_key(record.vector).ok_or(Error::InvalidPosition)?)?;
+        forget(version)?;
+        assert_eq!(listed("listed")?.0, None, "evicted");
+        Ok(())
     }
 }

@@ -190,7 +190,7 @@ mod tests {
     /// A slot in `state` holding `bytes`, last used at `tick`, with `pins`
     /// and `mappers`.
     fn slot(state: State, bytes: u64, tick: u64, pins: u32, mappers: u32) -> (Slot, u32) {
-        let key = Key { database: Oid::from(1), extension: Oid::from(2), version: tick as i64 };
+        let key = Key::version(Oid::from(1), Oid::from(2), tick as i64);
         (Slot { state, key, bytes, last_used: tick, mappers, ..Slot::EMPTY }, pins)
     }
 

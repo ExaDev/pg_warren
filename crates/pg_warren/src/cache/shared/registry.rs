@@ -99,6 +99,17 @@ pub(crate) enum Claim {
     Refused { refusal: Refusal, drained: Vec<Handle> },
 }
 
+/// The slots in use, each with its pins, and the registry's clock: a
+/// snapshot taken under its lock.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Listing {
+    /// The loading, ready and draining slots, with their pins.
+    pub(crate) slots: Vec<(Slot, u32)>,
+    /// The clock that orders uses: a slot's `last_used` is its value when
+    /// the slot was last pinned.
+    pub(crate) clock: u64,
+}
+
 /// The slot no longer holds the use a ticket names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Gone;
@@ -272,6 +283,17 @@ impl<S: SlotTable, P: PinTable> Registry<S, P> {
         self.slots().iter().filter(|slot| slot.occupied()).map(|slot| slot.key).collect()
     }
 
+    /// Every slot in use (loading, ready or draining) with its pins, and
+    /// the clock now: what `warren.shared_cache()` shows (DESIGN.md §14
+    /// item 37).
+    pub(crate) fn listing(&self) -> Listing {
+        let slots = self.slots().iter().copied().zip(self.pins());
+        Listing {
+            slots: slots.filter(|(slot, _)| slot.occupied()).collect(),
+            clock: self.clocks.clock,
+        }
+    }
+
     /// The state of the use `ticket` names, if the slot still holds it.
     pub(crate) fn state(&self, ticket: Ticket) -> Option<State> {
         let slot = self.slots().get(ticket.slot)?;
@@ -319,11 +341,12 @@ mod tests {
     use pgrx::pg_sys::Oid;
 
     use super::*;
+    use crate::cache::shared::slot::Kind;
 
     const LOADER: Process = Process { pid: 100, started: 1 };
 
     fn key(version: i64) -> Key {
-        Key { database: Oid::from(1), extension: Oid::from(2), version }
+        Key::version(Oid::from(1), Oid::from(2), version)
     }
 
     fn limits(cap: u64) -> Limits {
@@ -369,6 +392,21 @@ mod tests {
         );
         assert_eq!(registry.state(ticket), Some(State::Loading));
         assert_eq!(registry.slots()[ticket.slot].bytes, 10);
+    }
+
+    #[test]
+    fn a_version_and_a_vector_of_the_same_id_are_held_apart() {
+        let mut registry = registry(2);
+        let version = loaded(&mut registry, 1, 10);
+        let vector = Key::vector(Oid::from(1), Oid::from(2), 1);
+        assert_eq!(registry.lookup(vector), Lookup::Missing);
+        let Claim::Load { ticket, .. } = registry.claim(vector, 10, LOADER, limits(100)) else {
+            panic!("not claimed");
+        };
+        assert_ne!(ticket.slot, version.slot);
+        assert_eq!(registry.lookup(key(1)), Lookup::Ready(version));
+        assert_eq!(registry.evict(|key| key.kind == Kind::Vector), Vec::<Handle>::new());
+        assert_eq!(registry.lookup(vector), Lookup::Loading(ticket), "a loading slot stays");
     }
 
     #[test]
@@ -475,9 +513,9 @@ mod tests {
         let unmapped = loaded(&mut registry, 2, 10);
         registry.release(unmapped);
         assert_eq!(registry.clocks().drains(), 0);
-        registry.evict(|key| key.version == 2);
+        registry.evict(|key| key.id == 2);
         assert_eq!(registry.clocks().drains(), 0, "emptied at once, not drained");
-        registry.evict(|key| key.version == 1);
+        registry.evict(|key| key.id == 1);
         assert_eq!(registry.clocks().drains(), 1);
         registry.release(mapped);
         assert_eq!(registry.clocks().drains(), 1, "its end is not counted");
@@ -488,7 +526,7 @@ mod tests {
         let mut registry = registry(2);
         let first = loaded(&mut registry, 1, 10);
         let second = loaded(&mut registry, 2, 10);
-        assert_eq!(registry.evict(|key| key.version == 2), vec![Handle(2)]);
+        assert_eq!(registry.evict(|key| key.id == 2), vec![Handle(2)]);
         assert_eq!(registry.state(first), Some(State::Ready));
         assert_eq!(registry.state(second), Some(State::Draining));
     }

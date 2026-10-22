@@ -1,13 +1,14 @@
-//! A region's layout (DESIGN.md §5.6, §14 item 29): a header, a table of
-//! contents, then every array of the loaded version at a 64-byte-aligned
-//! offset, the region ending with the last array. The header and table
+//! A region's layout (DESIGN.md §5.6, §14 items 29 and 38): a header, a
+//! table of contents, then every array of the loaded version (or the one
+//! array of a persisted vector) at a 64-byte-aligned offset, the region
+//! ending with the last array. The header and table
 //! are little-endian; the arrays are in native layout.
 //!
 //! | Bytes | Header field |
 //! |---|---|
 //! | 0..4 | magic `WRRG` |
 //! | 4..8 | format (`u32`) |
-//! | 8..16 | the version id (`i64`) |
+//! | 8..16 | the version id, or a vector's region's vector id (`i64`) |
 //! | 16..24 | the region's length in bytes (`u64`) |
 //! | 24..32 | the number of entries in the table (`u64`) |
 //! | 32..64 | reserved, 0 |
@@ -46,6 +47,9 @@ pub(crate) enum Array {
     RelationDictionary,
     /// One part of one CSR.
     Csr(Direction, CsrPart, CsrScope),
+    /// A persisted vector's elements, row-major: the one array of a
+    /// vector's region.
+    Values,
 }
 
 /// Where an array lies in a region.
@@ -239,6 +243,7 @@ fn encode_array(array: Array) -> ArrayKey {
             };
             (5, direction, part, scope)
         }
+        Array::Values => (6, 0, 0, 0),
     }
 }
 
@@ -249,6 +254,7 @@ fn decode_array(kind: u8, direction: u8, part: u8, scope: u64) -> Option<Array> 
         (2, 0, 0, 0) => Some(Array::ByDense),
         (3, 0, 0, 0) => Some(Array::Tombstones),
         (4, 0, 0, 0) => Some(Array::RelationDictionary),
+        (6, 0, 0, 0) => Some(Array::Values),
         (5, ..) => {
             let direction = match direction {
                 0 => Direction::Forward,

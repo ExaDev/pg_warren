@@ -22,17 +22,19 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use pgrx::{ereport, pg_sys, PgSqlErrorCode};
+use warren_core::compute::AnyVector;
 
 use super::admission::{Limits, Refusal};
-use super::registry::{Claim, Gone, Lookup, Registry};
-use super::session::{Mapped, Release, Session, Unattached, Use};
+use super::registry::{Claim, Gone, Listing, Lookup, Registry};
+use super::session::{Mapped, Session, Unattached, Use};
 use super::slot::{Handle, Key, Process, Slot, State, Ticket};
 use super::unavailable::Unavailable;
 use super::{setting, Claimed, Found, SharedVersions};
-use crate::cache::load::{read, LoadError, LoadedVersion};
+use crate::cache::load::{read, read_vector, LoadError, LoadedVersion};
 use crate::cache::region::Region;
 use crate::catalog::VersionId;
 use crate::source::IdDatum;
+use crate::vector::VectorRecord;
 use placement::{Located, Shared, SLOTS};
 use segment::{Segment, SegmentRegion};
 
@@ -40,15 +42,6 @@ pub(crate) use placement::request_preload;
 #[cfg(any(feature = "pg17", feature = "pg18", test))]
 pub(in crate::cache::shared) use placement::FORMAT;
 pub(in crate::cache::shared) use segment::{store_name, PREFIX};
-
-/// When this backend releases the mappings no call holds (DESIGN.md §14
-/// item 28, pending the owner; built as recommended): at the end of each
-/// client message (and at its next read of the shared cache), those of
-/// evicted, draining slots only, so a version stays mapped between
-/// statements and a statement does not attach it again. `Release::Unheld`
-/// would release every mapping no call holds, so that an idle backend maps
-/// nothing.
-pub(in crate::cache::shared) const DETACH: Release = Release::Evicted;
 
 /// How long a waiter sleeps on a loading slot before it checks that the
 /// loader still exists, in milliseconds.
@@ -75,8 +68,9 @@ struct Backend {
 #[derive(Debug)]
 pub(crate) struct Dsm(());
 
-/// This backend's mapping of a published version's segment, and the
-/// loaded version built over it, kept while the mapping is.
+/// This backend's mapping of a published version's (or persisted
+/// vector's) segment, and the loaded version (or vector) built over it,
+/// kept while the mapping is.
 pub(crate) struct Attached {
     segment: Segment,
     held: Mutex<Held>,
@@ -386,19 +380,17 @@ impl SharedVersions for Dsm {
     /// Releasing evicted mappings takes the lock only if a slot has
     /// started draining since this backend last released, or that release
     /// left one held: so a message's start costs one atomic read.
-    fn release(&mut self, which: Release) {
+    fn release(&mut self) {
         with_backend(|backend| {
             if backend.session.mapped_slots().next().is_none() {
                 return;
             }
             let drains = backend.drains();
-            if which == Release::Evicted
-                && !release_due(drains, backend.seen_drains, backend.pending)
-            {
+            if !release_due(drains, backend.seen_drains, backend.pending) {
                 return;
             }
             backend.releasing(|registry, session| {
-                session.release(registry, which, |attached| attached.detach());
+                session.release(registry, |attached| attached.detach());
             });
         });
     }
@@ -417,6 +409,10 @@ impl SharedVersions for Dsm {
 
     fn keys(&mut self) -> Vec<Key> {
         with_backend(|backend| backend.locked(|registry, _| registry.keys())).unwrap_or_default()
+    }
+
+    fn listing(&mut self) -> Listing {
+        with_backend(|backend| backend.locked(|registry, _| registry.listing())).unwrap_or_default()
     }
 
     fn evict(&mut self, which: &dyn Fn(&Key) -> bool) -> usize {
@@ -548,6 +544,22 @@ impl Attached {
         Ok(loaded)
     }
 
+    /// The persisted vector `record` describes, which this mapping holds:
+    /// read in place the first time, then kept with the mapping, as
+    /// [`Attached::version`] keeps a version.
+    pub(crate) fn vector(&self, record: &VectorRecord) -> Result<Arc<AnyVector>, LoadError> {
+        let mut held = self.held();
+        if let Some(loaded) = &held.loaded {
+            return Arc::clone(loaded)
+                .downcast()
+                .map_err(|_| broken("a shared vector was read as something else"));
+        }
+        let (vector, region) = read_vector(Box::new(self.segment.region()), record)?;
+        let vector = Arc::new(vector);
+        *held = Held { loaded: Some(vector.clone()), region };
+        Ok(vector)
+    }
+
     fn held(&self) -> MutexGuard<'_, Held> {
         self.held.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -580,6 +592,14 @@ impl Loading {
         let (loaded, region) = read::<E>(Box::new(self.region), version)?;
         let loaded: Arc<LoadedVersion<E>> = Arc::new(loaded);
         self.held = Held { loaded: Some(loaded), region };
+        Ok(())
+    }
+
+    /// Reads the filled region as the persisted vector `record` describes,
+    /// and keeps it for the published mapping.
+    pub(crate) fn validate_vector(&mut self, record: &VectorRecord) -> Result<(), LoadError> {
+        let (vector, region) = read_vector(Box::new(self.region), record)?;
+        self.held = Held { loaded: Some(Arc::new(vector)), region };
         Ok(())
     }
 }

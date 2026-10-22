@@ -3,7 +3,8 @@
 -- maps that copy; none of them holds it in its own cache. Where the shared
 -- cache is off or unavailable (test/run.py --shared-cache off, or on
 -- without the preload on PG 15 and 16), each backend loads its own copy
--- and no segment is created.
+-- and no segment is created. The segments are counted in /dev/shm, and
+-- the registry is read through warren.shared_cache().
 \ir include/shared_cache.sql
 CREATE TABLE nodes AS SELECT generate_series(1, 200003)::bigint AS id;
 SELECT warren.create_graph('g', 'SELECT id FROM nodes', 'SELECT id, id % 200003 + 1 FROM nodes');
@@ -22,6 +23,10 @@ SELECT count(*) FROM unnest(ARRAY['a', 'b', 'c', 'd']) AS session,
      LATERAL dblink_get_result(session) AS t(prewarmed bigint);
 SELECT assert.equal(shared_segments(:version), CASE WHEN :'shared' THEN 1 ELSE 0 END::bigint,
                     'concurrent misses load the version once');
+SELECT assert.equal((SELECT string_agg(format('%s %s %s', state, pins, mappers), ', ')
+                     FROM warren.shared_cache() WHERE kind = 'version' AND version = :version),
+                    CASE WHEN :'shared' THEN 'ready 0 4' END,
+                    'the registry holds it once, mapped by each backend, pinned by none');
 SELECT assert.equal(evicted, CASE WHEN :'shared' THEN 0 ELSE 1 END::bigint,
                     'a shared version is in no backend''s own cache')
 FROM unnest(ARRAY['a', 'b', 'c', 'd']) AS session,
