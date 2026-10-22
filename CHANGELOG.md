@@ -6,8 +6,8 @@
 
 - **Run `ALTER EXTENSION pg_warren UPDATE;` in every database that has the
   extension**, after installing the new build and before using the new
-  version: the update creates `warren.shared_cache()` and replaces
-  `warren.gather`.
+  version: the update creates `warren.shared_cache()`, replaces
+  `warren.gather` and marks the graph reads `PARALLEL SAFE` (below).
 - The update drops and recreates `warren.gather` (it gains
   `include_self`; grants on it are kept). A view or a `BEGIN ATOMIC` SQL
   function that calls `warren.gather` depends on it and makes `ALTER
@@ -65,6 +65,22 @@
 
 ### Changed
 
+- **Graph reads can run in parallel workers** (DESIGN.md §14 item 33):
+  `neighbours`, `degree`, `has_edge`, `id_map`, `info` and the traversals
+  `reachable`, `shortest_path`, `dijkstra`, `bfs`, `reachable_set`,
+  `components` and `walk` are `PARALLEL SAFE` (they were `PARALLEL
+  RESTRICTED`), so a scan that calls one per row can run in parallel: at
+  1M rows, `has_edge` per row takes 3.7 s with 2 workers and 2.9 s with 4,
+  against 9.9 s in the leader alone. A worker maps the shared version; where
+  the shared cache is unavailable (PostgreSQL 15 and 16 without
+  `shared_preload_libraries = 'pg_warren'`), **each worker loads the
+  version itself**, which costs a load per worker and a copy each for the
+  query. `last_stats()` reports only calls the leader ran: a traversal in a
+  worker records nothing. To keep 0.4.0's behaviour for a function, `ALTER
+  FUNCTION … PARALLEL RESTRICTED` (docs/semantics.md, "Parallel query
+  labels"). Vector reads, `explain_map`, `diff`, `distance`, `prewarm`,
+  `evict` and `last_stats` stay `PARALLEL RESTRICTED`. `ALTER EXTENSION
+  pg_warren UPDATE` changes the labels.
 - `label_propagation_majority` counts its votes in-engine, with one
   `gather` (`mode`, `include_self`) per iteration instead of counting
   every received label in the executor: at 1M nodes and 20M stored edges

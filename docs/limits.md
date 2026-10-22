@@ -301,6 +301,22 @@ or 5–15% faster. Connections that each read a graph of their own gain
 nothing from sharing, and lose a little: a shared load of a 34 MB version
 takes 20–70 ms longer than a private one.
 
+**Parallel query.** The graph reads that use no vector are `PARALLEL
+SAFE` (docs/semantics.md, "Parallel query labels"), so a scan that calls
+one per row can run in parallel workers, each reading the version as
+another backend would. Measured (DESIGN.md §12, `bench/parallel.py`; PG 16,
+4 vCPUs): `has_edge` over 1M rows of a 1M-node graph takes 9.9 s in the
+leader alone, 3.7 s with 2 workers and 2.9 s with 4, with or without the
+shared cache; on a 10M-node graph (1.12 GB), 11.4 s, and with 2 and 4
+workers 4.4 and 3.6 s shared, 7.5 and 6.0 s when each worker loads its own
+copy. A worker's first read costs it an attach (about 20 ms for 112 MB)
+with the shared cache, or a whole load without it, so without the shared
+cache a parallel plan over a small table is slower than the leader alone
+(1.8–3× over 10k rows, when parallelism is forced), and the workers hold a
+copy each until the query ends. The planner chose parallel plans only for
+the large table; for small ones, or to bound memory, preload pg_warren on
+PostgreSQL 15 and 16, or mark the function `PARALLEL RESTRICTED`.
+
 ### Sizing
 
 Measured by the 100M-edge soak (`bench/soak.py`, DESIGN.md §12; the
@@ -718,8 +734,9 @@ loaded by each backend that reads it, within its own
 database's versions can evict another's, and there are no per-database
 shares. An idle cluster keeps up to the cap of shared versions until they
 are evicted (`warren.evict`) or the server restarts. Transient and `bool`
-vectors are never shared. Graph reads are still `PARALLEL RESTRICTED`, so
-parallel workers do not read graphs yet.
+vectors are never shared. Where the shared cache is unavailable, each
+worker of a parallel plan that calls a `PARALLEL SAFE` graph read loads
+the version itself (docs/semantics.md, "Parallel query labels").
 
 **Not yet supported:** `text` node ids; incremental maintenance (every
 `refresh` is a full rebuild); `refresh` or `compact` of a graph derived by

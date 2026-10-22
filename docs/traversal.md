@@ -228,3 +228,7 @@ SELECT warren.last_stats();
 ```
 
 After a streaming call stopped by `LIMIT`, it counts the work actually done.
+
+The traversals are `PARALLEL SAFE`, so a parallel plan may run them in its
+workers, and a worker records nothing: `last_stats()` describes only
+calls the leader ran (docs/semantics.md, "Parallel query labels").

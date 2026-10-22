@@ -323,15 +323,45 @@ tombstoned node's row holds zero.
 
 ## Parallel query labels
 
-pg_warren's cache is per backend: a parallel worker would start with an
-empty one (and cold-load the whole version), could not see transient
-vectors, and could not hand `last_stats()` back. So:
+A parallel worker is a process of its own. With the shared cache it maps
+the version the leader reads; without it (PostgreSQL 15 and 16 without
+`shared_preload_libraries = 'pg_warren'`, `warren.shared_cache_memory =
+0`, a version that does not fit) it loads its own copy. A worker cannot
+see the leader's transient vectors, and what it records in `last_stats()`
+would never reach the leader. So:
 
 | Label | Functions |
 |---|---|
-| `PARALLEL RESTRICTED` (run in the leader, never in a worker) | everything that reads a graph or a vector: traversal, `info`, `diff`, `distance`, `prewarm`, `evict`, `last_stats`, `vector_values`, `matrix_rows`, `vector_topk`, `vector_stats`, `vector_reduce`, `vector_norm_diff`, `id_map`, `explain_map`, `minimum_spanning_forest` |
+| `PARALLEL SAFE` (may run in a worker) | the graph reads that use no vector: `neighbours`, `degree`, `has_edge`, `id_map`, `info`, and the traversals `reachable`, `shortest_path`, `dijkstra`, `bfs`, `reachable_set`, `components`, `walk`; and `version`, `s`, `steps`, `shared_cache`, which read no graph |
+| `PARALLEL RESTRICTED` (run in the leader, never in a worker) | the vector reads (`vector_values`, `matrix_rows`, `vector_topk`, `vector_stats`, `vector_reduce`, `vector_norm_diff`, `modularity`, `minimum_spanning_forest`, `similarity`, `most_similar`, `similar_pairs`), `explain_map`, `diff`, `distance`, `prewarm`, `evict`, `last_stats` |
 | `PARALLEL UNSAFE` (no parallel plan) | everything that writes or may persist: graph management, the vector constructors, `spmv`, `spmm`, `vector_map`, `gather`, `triangles`, the structural kernels that write a vector (`core_number`, `strong_components_vector`, `topological_order`, `dag_longest_path`), `eigen`, the library, `drop_vector` |
-| `PARALLEL SAFE` | `version`, `s`, `steps` (they read no graph) |
 
-Restricted functions work inside parallel plans: the rest of the query runs
-in parallel, and the warren call runs in the leader.
+So a scan that calls `has_edge` or `degree` per row can run in parallel,
+each worker calling it on its share of the rows (at 1M rows, about 2.7×
+faster with 2 workers, 3.4× with 4: docs/limits.md). Restricted functions
+work inside parallel plans too: the rest of the query runs in parallel, and
+the warren call runs in the leader.
+
+- **`last_stats()` reports only calls the leader ran.** A traversal that
+  runs in a worker records nothing, so after a parallel plan `last_stats()`
+  still describes the leader's last recording call. Run the traversal
+  without a parallel plan (`SET max_parallel_workers_per_gather = 0`)
+  when you need its stats.
+- **Without the shared cache, each worker loads the version itself**:
+  PostgreSQL 15 and 16 without the preload, the shared cache turned off,
+  or a version it does not hold. A parallel plan then costs one load per
+  worker, and a worker's copy is held, within its own
+  `warren.max_cache_memory`, until the query ends. On a large version a
+  parallel scan's workers can together hold several copies, and a short
+  query the planner makes parallel can be slower than without workers.
+  Preload pg_warren on 15 and 16, or restore the leader-only behaviour of
+  0.4.0 for the functions you call per row:
+
+  ```sql
+  ALTER FUNCTION warren.has_edge(text, anyelement, anyelement, text, bigint) PARALLEL RESTRICTED;
+  ```
+
+  (`\df warren.*` lists every signature.) Such a change is not part of
+  the extension's own script: `pg_dump` does not keep it, and an update to
+  a later release may set the label again, so repeat it after a restore or
+  an update.
