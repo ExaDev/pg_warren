@@ -32,7 +32,8 @@ pub(crate) struct Session<M> {
 pub(crate) enum Use<M> {
     /// Through this backend's mapping.
     Mapped(Arc<M>),
-    /// Attach this region, then record it with `Session::mapped`.
+    /// Attach this region, then record it with `Session::mapped`, which
+    /// counts this backend a mapper: an attach that fails counts nothing.
     Attach(Handle),
 }
 
@@ -72,12 +73,25 @@ impl<M> Session<M> {
         }
         match self.mappings.iter().find(|(mapped, _)| *mapped == ticket) {
             Some((_, mapping)) => Ok(Use::Mapped(Arc::clone(mapping))),
-            None => registry.attach(ticket).map(Use::Attach),
+            None => registry.handle(ticket).map(Use::Attach),
         }
     }
 
-    /// Records the mapping of a slot `open` said to attach.
-    pub(crate) fn mapped(&mut self, ticket: Ticket, mapping: Arc<M>) -> Arc<M> {
+    /// Records the mapping of a slot `open` said to attach, counting this
+    /// backend a mapper. The statement's pin keeps the slot ready, so it is
+    /// `Gone` only if the slot was not opened: then detach the mapping.
+    pub(crate) fn mapped<S: SlotTable>(
+        &mut self,
+        registry: &mut Registry<S>,
+        ticket: Ticket,
+        mapping: Arc<M>,
+    ) -> Result<Arc<M>, Gone> {
+        registry.attach(ticket)?;
+        Ok(self.held(ticket, mapping))
+    }
+
+    /// Records a mapping the registry already counts.
+    fn held(&mut self, ticket: Ticket, mapping: Arc<M>) -> Arc<M> {
         self.mappings.push((ticket, Arc::clone(&mapping)));
         mapping
     }
@@ -109,7 +123,7 @@ impl<M> Session<M> {
         self.loading.retain(|&loading| loading != ticket);
         registry.publish(ticket, handle)?;
         self.pins.push(ticket);
-        Ok(self.mapped(ticket, mapping))
+        Ok(self.held(ticket, mapping))
     }
 
     /// Abandons a claimed slot.
@@ -232,7 +246,9 @@ mod tests {
     fn read(session: &mut Session<u32>, registry: &mut Table, ticket: Ticket) -> Arc<u32> {
         match session.open(registry, ticket).unwrap() {
             Use::Mapped(mapping) => mapping,
-            Use::Attach(Handle(handle)) => session.mapped(ticket, Arc::new(handle)),
+            Use::Attach(Handle(handle)) => {
+                session.mapped(registry, ticket, Arc::new(handle)).unwrap()
+            }
         }
     }
 
@@ -246,10 +262,21 @@ mod tests {
         let (mut registry, tickets) = published(&[1]);
         let mut session = Session::new(PID);
         assert!(matches!(session.open(&mut registry, tickets[0]), Ok(Use::Attach(Handle(1)))));
-        let mapping = session.mapped(tickets[0], Arc::new(1));
+        let mapping = session.mapped(&mut registry, tickets[0], Arc::new(1)).unwrap();
         let again = read(&mut session, &mut registry, tickets[0]);
         assert!(Arc::ptr_eq(&mapping, &again), "the mapping is reused");
         assert_eq!(counts(&registry, tickets[0]), (1, 2));
+    }
+
+    #[test]
+    fn a_mapper_is_counted_only_once_its_attach_succeeds() {
+        let (mut registry, tickets) = published(&[1]);
+        let mut session = Session::<u32>::new(PID);
+        assert!(matches!(session.open(&mut registry, tickets[0]), Ok(Use::Attach(Handle(1)))));
+        assert_eq!(counts(&registry, tickets[0]), (1, 1), "an attach that fails counts nothing");
+        session.unpin(&mut registry);
+        session.exit(&mut registry, |_| panic!("nothing mapped"));
+        assert_eq!(counts(&registry, tickets[0]), (0, 1));
     }
 
     #[test]

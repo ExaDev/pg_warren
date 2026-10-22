@@ -144,11 +144,19 @@ impl<S: SlotTable> Registry<S> {
         }
     }
 
-    /// Counts a new mapper of a ready slot; the handle to attach.
-    pub(crate) fn attach(&mut self, ticket: Ticket) -> Result<Handle, Gone> {
+    /// The handle of a ready slot's region, to attach.
+    pub(crate) fn handle(&self, ticket: Ticket) -> Result<Handle, Gone> {
+        match self.state(ticket) {
+            Some(State::Ready) => Ok(self.slots()[ticket.slot].handle),
+            _ => Err(Gone),
+        }
+    }
+
+    /// Counts a new mapper of a ready slot, once its region is attached.
+    pub(crate) fn attach(&mut self, ticket: Ticket) -> Result<(), Gone> {
         let slot = self.held(ticket, State::Ready).ok_or(Gone)?;
         slot.mappers += 1;
-        Ok(slot.handle)
+        Ok(())
     }
 
     /// Ends a mapping: a draining slot is empty after its last.
@@ -299,7 +307,9 @@ mod tests {
     fn readers_pin_and_attach_a_ready_slot() {
         let mut registry = registry(1);
         let ticket = loaded(&mut registry, 1, 10);
-        assert_eq!(registry.attach(ticket), Ok(Handle(1)));
+        assert_eq!(registry.handle(ticket), Ok(Handle(1)));
+        assert_eq!(registry.slots()[ticket.slot].mappers, 1, "not counted before it attaches");
+        assert_eq!(registry.attach(ticket), Ok(()));
         assert_eq!(registry.pin(ticket), Ok(()));
         assert_eq!(registry.pin(ticket), Ok(()));
         let slot = registry.slots()[ticket.slot];
@@ -313,11 +323,13 @@ mod tests {
         let mut registry = registry(1);
         let ticket = claimed(&mut registry, 1, 10);
         assert_eq!(registry.pin(ticket), Err(Gone));
+        assert_eq!(registry.handle(ticket), Err(Gone));
         assert_eq!(registry.attach(ticket), Err(Gone));
         registry.abandon(ticket);
         let again = loaded(&mut registry, 2, 10);
         assert_eq!(again.slot, ticket.slot);
         assert_eq!(registry.pin(ticket), Err(Gone));
+        assert_eq!(registry.handle(ticket), Err(Gone));
         assert_eq!(registry.attach(ticket), Err(Gone));
         assert_eq!(registry.state(ticket), None);
     }
@@ -336,6 +348,7 @@ mod tests {
         assert_eq!(registry.state(unmapped), None, "nobody maps it: empty at once");
         assert_eq!(registry.lookup(key(2)), Lookup::Missing, "a draining version is not found");
         assert_eq!(registry.pin(mapped), Err(Gone));
+        assert_eq!(registry.handle(mapped), Err(Gone));
         assert_eq!(registry.attach(mapped), Err(Gone));
         assert_eq!(registry.evict(|_| true), vec![], "evicted once");
         registry.release(mapped);

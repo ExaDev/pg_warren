@@ -186,7 +186,10 @@ impl SharedVersions for Backend {
             Ok(Use::Mapped(view)) => Found::Ready(view),
             Ok(Use::Attach(handle)) => {
                 let mapping = Mapping::of(&store.pinned[&handle]);
-                Found::Ready(self.session.mapped(ticket, mapping))
+                match self.session.mapped(&mut store.registry, ticket, mapping) {
+                    Ok(view) => Found::Ready(view),
+                    Err(Gone) => Found::Missing,
+                }
             }
             Err(Gone) => Found::Missing,
         }
