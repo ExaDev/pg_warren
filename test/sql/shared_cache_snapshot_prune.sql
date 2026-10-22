@@ -24,7 +24,8 @@ SELECT assert.equal(shared_segments(:g1), :one, 'g''s version is shared');
 
 -- warren.evict, by a role that owns nothing, prunes: g's version exists,
 -- though a's snapshot does not see it, so it stays.
-SELECT assert.equal(evicted, 0::bigint, 'the stranger evicts nothing of h''s')
+-- (Where nothing is shared, it frees a's own copy of h.)
+SELECT assert.equal(evicted, 1 - :one, 'the stranger evicts no shared version of h''s')
 FROM dblink('a', $$SELECT own_evictions('h')$$) AS t(evicted bigint);
 SELECT assert.equal(shared_segments(:g1), :one, 'an old snapshot does not prune a newer version');
 SELECT dblink_exec('a', 'COMMIT');
