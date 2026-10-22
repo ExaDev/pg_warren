@@ -13,6 +13,7 @@ use serde_json::{json, Value};
 use warren_core::traversal::TraversalStats;
 
 use crate::catalog::VersionId;
+use crate::parallel_worker::in_parallel_worker;
 
 thread_local! {
     /// The stats of this session's last recording traversal.
@@ -69,15 +70,6 @@ impl Recorder {
         let value = stats_json(self.function, &self.graph, self.version, stats);
         LAST.with_borrow_mut(|last| *last = Some(value));
     }
-}
-
-/// Whether this process is a parallel worker (Postgres's
-/// `IsParallelWorker()`).
-fn in_parallel_worker() -> bool {
-    // SAFETY: reads the process's parallel worker number, set once as a
-    // parallel worker starts and -1 in every other backend, on the main
-    // thread.
-    unsafe { pg_sys::ParallelWorkerNumber >= 0 }
 }
 
 fn stats_json(function: &str, graph: &str, version: VersionId, stats: TraversalStats) -> Value {

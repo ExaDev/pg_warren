@@ -19,6 +19,7 @@ mod interrupts;
 #[cfg(any(test, feature = "pg_test"))]
 #[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod parallel_labels;
+mod parallel_worker;
 mod read_only;
 mod segment;
 mod selection;

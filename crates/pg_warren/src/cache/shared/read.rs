@@ -26,6 +26,7 @@ use crate::cache::open::Resolved;
 use crate::cache::statement::{pin_shared, retire_due, shared_notice_due};
 use crate::cache::CacheError;
 use crate::catalog::VersionId;
+use crate::parallel_worker::cache_notice_raised;
 use crate::read_only::{latest_readable, read_one, read_one_latest};
 use crate::segment::SpiSegmentStore;
 use crate::source::IdDatum;
@@ -301,7 +302,7 @@ pub(super) fn through<E: IdDatum + Send + Sync>(
 fn notice_refusal(refusal: Refusal, what: &str) {
     let (cap, store) = (setting::cap(), store_name());
     if let Some(message) = refusal_notice(refusal, what, cap, store, setting::at_default()) {
-        if shared_notice_due() {
+        if cache_notice_raised(shared_notice_due()) {
             ereport!(NOTICE, PgSqlErrorCode::ERRCODE_SUCCESSFUL_COMPLETION, message);
         }
     }
