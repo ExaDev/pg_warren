@@ -7,8 +7,8 @@
 -- changes, or after max_iter iterations with a WARNING (a synchronous
 -- update can oscillate). NetworkX's label propagation is asynchronous
 -- (random order and ties) or semi-synchronous (by colouring), so neither
--- matches step for step. Tier 2: each iteration is one `gather` (collect)
--- whose received labels are counted by SQL, N + M rows through the
+-- matches step for step. Tier 2: each iteration is one `gather` (mode, with
+-- include_self), which counts the labels in-engine, N rows through the
 -- executor. Writes vector `out` (f64) and returns the iterations run.
 CREATE FUNCTION warren.label_propagation_majority(graph text, "out" text, seed text DEFAULT NULL,
                                                   max_iter int DEFAULT 100, rels text[] DEFAULT NULL,
@@ -18,18 +18,12 @@ DECLARE
   info jsonb := warren.info(graph);
   v bigint := coalesce(version, (info ->> 'current_version')::bigint);
   parts text[] := ARRAY['x', 'next'];
-  -- Each node's own label and its neighbours', counted; the most votes
-  -- win, then the smallest label.
+  -- Each node's own label and its neighbours', counted in-engine; the most
+  -- votes win, then the smallest label.
   votes text := format(
-    'SELECT DISTINCT ON (node_id) node_id, label
-     FROM (SELECT node_id, label, count(*) AS votes
-           FROM (SELECT g.node_id, unnest(g.value) AS label
-                 FROM warren.gather(%1$L, %2$L, NULL::%3$s, NULL::float8[], ''collect'', ''both'', %4$L::text[],
-                                    version := %5$s) g
-                 UNION ALL
-                 SELECT x.node_id, x.value FROM warren.vector_values(%1$L, %2$L, NULL::%3$s, %5$s) x) m
-           GROUP BY node_id, label) c
-     ORDER BY node_id, votes DESC, label',
+    'SELECT node_id, value
+     FROM warren.gather(%1$L, %2$L, NULL::%3$s, NULL::float8, ''mode'', ''both'', %4$L::text[],
+                        version := %5$s, include_self := true)',
     graph, '_warren_label_propagation_majority_x', info ->> 'id_type', rels, v);
   nodes bigint;
   delta float8;

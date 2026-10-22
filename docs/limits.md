@@ -552,14 +552,29 @@ of the version; best of three, `bench/results/library/`):
 | `triangles` | 4.19 s |
 | `clustering` (`triangles` plus degrees) | 4.45 s |
 | `label_propagation`, 10 iterations (min-label, tier 1) | 0.97 s |
-| `label_propagation_majority`, 1 iteration | 21.3 s |
-| `label_propagation_majority`, 5 iterations | 100.5 s (~20 s an iteration) |
+| `label_propagation_majority`, 1 iteration (0.4.0) | 21.3 s |
+| `label_propagation_majority`, 5 iterations (0.4.0) | 100.5 s (~20 s an iteration) |
 
 The SpMV centralities cost 40–90 ms an iteration. Majority-vote label
-propagation is tier 2: each iteration `gather`s 20M labels and counts them
-in the executor (`unnest`, `GROUP BY`, `DISTINCT ON` over 21M rows), about
-300 times an SpMV iteration. An in-engine `mode` combiner for `gather` would
-make it one kernel call (DESIGN.md §6.7, missing primitives).
+propagation is tier 2. In 0.4.0 each iteration `gather`ed 20M labels and
+counted them in the executor (`unnest`, `GROUP BY`, `DISTINCT ON` over 21M
+rows), about 300 times an SpMV iteration. Since 0.5.0 `gather` counts them
+in-engine (`combine := 'mode'`, `include_self := true`; DESIGN.md §6.4,
+§6.7), and only the 1M winners pass through the executor. Measured on the
+same graph and build, old and new body side by side, on the same 4-vCPU
+machine while three other builds ran (load average ~9, so every time is
+slower than in the table above), each a fresh session:
+
+| What | 0.4.0 (`collect`, counted in SQL) | 0.5.0 (`mode`) |
+|---|---|---|
+| `label_propagation_majority`, 1 iteration | 37.5 s | 3.0 s |
+| `label_propagation_majority`, 5 iterations | 168.3 s | 13.2 s (~2.6 s an iteration) |
+
+Both give the same labels. Of an iteration's ~3 s, `gather` alone (the
+kernel and its 1M result rows) takes 2.8 s, so an iteration still costs
+several times an SpMV centrality's. Run to
+convergence (the default `max_iter` of 100) on this graph it took 300 s,
+about 100 iterations' worth: a synchronous majority vote need not settle.
 
 **Contraction at scale** (DESIGN.md §6.6, `bench/results/communities/`;
 release build, 4 shared vCPUs, through SQL, each call in a fresh session so
