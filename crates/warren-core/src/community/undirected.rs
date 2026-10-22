@@ -230,7 +230,10 @@ fn fold_row(row: &mut [(DenseId, f64)]) -> u64 {
     kept as u64
 }
 
+// Not under Miri: the tests build their graphs with the compute reference,
+// which is not compiled under Miri.
 #[cfg(test)]
+#[cfg(not(miri))]
 mod tests {
     use proptest::prelude::*;
 

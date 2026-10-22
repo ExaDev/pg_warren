@@ -107,7 +107,10 @@ impl Communities {
     }
 }
 
+// Not under Miri: the tests build their graphs with the compute reference,
+// which is not compiled under Miri.
 #[cfg(test)]
+#[cfg(not(miri))]
 mod tests {
     use super::*;
     use crate::compute::reference::{self, Edges};
