@@ -1298,6 +1298,11 @@ Test it by installing as a non-superuser in CI and running the suite. **Make the
 - the user documentation (README, `docs/`).
 
 **M8 — 0.4.0: locality and the library.** Locality ordering of dense ids (§14 item 22); the planned library's groups 1 and 2 (§6.7); contraction, project and lift (§6.6, whose `PᵀAP` is the first SpGEMM) and Louvain and Leiden over them (§6.7 group 3). The native in-memory Louvain/Leiden kernel is deferred past 0.4.0 (§6.7).
+**Done (0.4.0, 2026-10-22):**
+- locality ordering of dense ids, opt-in per graph and on `compact` (§14 item 22): 1.25–1.66× on SpMV, BFS and `components` at 10M nodes on a community-structured graph, little on power-law graphs, nothing on uniform random ones;
+- the planned library's group 1 in PL/pgSQL and group 2 as kernels, each against a NetworkX oracle and measured at 10M nodes (§6.7);
+- contraction, projection and lifting (§6.6), and Louvain and Leiden in PL/pgSQL over them, with Leiden's iterations (default 2) (§6.7 group 3);
+- the 100M-edge soak re-run for 0.4.0 (§12): no row moved beyond the machine's run-to-run spread; at 10M nodes `leiden` is refused (53400) at the default limits and `louvain` stopped for disk on a graph with little community structure, while both complete on the 10M block graph; a statement that runs `contract` is bounded by the cache, compute and build limits together (§14 item 20). The in-memory `contract` is the candidate fix (below).
 
 **The road to 1.0** (decided 2026-10-21, §14 item 25). By the end of M8, everything §3 put in v1's scope has shipped, and more. What stands between it and 1.0 is what a 1.0 promises: a SQL surface that will not change, behaviour proven on real data and in real deployments, and working well where Postgres actually runs, behind poolers with many backends. Four milestones:
 
