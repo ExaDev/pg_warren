@@ -4,14 +4,17 @@ Settings, memory, what has been measured, and what does not work yet.
 
 ## Settings
 
-All are ordinary GUCs, settable per session or per transaction
-(`SET warren.threads = 8`) by any user.
+All but `warren.shared_cache_memory` are ordinary GUCs, settable per
+session or per transaction (`SET warren.threads = 8`) by any user.
+`warren.shared_cache_memory` bounds memory the whole cluster shares, so it
+is set in the server's configuration and takes effect on reload.
 
 | Setting | Default | Range | What it bounds | When exceeded |
 |---|---|---|---|---|
 | `warren.threads` | half the cores, at least 1 | 1–1024 | threads a compute kernel runs on (`spmv`, `spmm`, `vector_map`, reductions, `gather`, `eigen`, `distance`, `triangles`, the sort in `core_number`, the centralities' sources and the similarities) | — |
 | `warren.max_compute_memory` | `4GB` | `64kB` up | memory one call holds: every vector it reads (once, cached or not), every vector and work buffer it allocates, and what its statement holds in the cache past `warren.max_cache_memory` | `configuration_limit_exceeded` (53400), before allocating or loading |
 | `warren.max_cache_memory` | `4GB` | `64kB` up | what this backend's cache holds *between* statements: cached versions, cached persisted vectors, and every role's transient vectors | versions and persisted vectors no running statement has read are evicted, least recently used first; a transient write that would go over is refused with 53400 |
+| `warren.shared_cache_memory` | `4GB` | `0` up; `0` turns it off | the cluster's shared versions and persisted vectors, of every database together; set in `postgresql.conf` (or `ALTER SYSTEM`) and reloaded, not per session ([the shared cache](#the-shared-cache)) | unpinned entries no backend maps are evicted, least recently used first; one that still does not fit is loaded into the reading backend's own cache, with a `NOTICE` |
 | `warren.max_build_memory` | `4GB` | `1MB` up | everything a `refresh` holds at once: the node ids, the id map, the edge list, the CSRs it is building and its sort and write buffers; and, separately, the CSR offsets of the whole version (8 bytes × (id_space + 1) per relation's CSR, and the merged CSR's if stored, per direction) | `configuration_limit_exceeded` (53400): before the edge query runs if the id map or the offsets do not fit, before the version is written if the build's estimate does not, else when the edge list grows past it |
 | `warren.max_walk_paths` | `10000000` | 1 up | the largest `max_results` for a `walk` that returns a row per walk (`mode := 'paths'`, or `'ends'` without `distinct_ends`) | `program_limit_exceeded` (54000) |
 
@@ -50,11 +53,20 @@ compute kernels from the main thread every millisecond), so
 
 ## Memory model
 
-- **The cache is per backend.** The first call in a connection that reads a
-  version loads it from `warren.segments` into that backend's memory (the
-  CSRs and the id map; vectors likewise, on first use). Every connection
-  that queries a graph holds its own copy: 20 pooled connections hold 20
-  copies.
+A loaded version (its CSRs and id map) lives in one of two places. By
+default it is in the **shared cache**: one copy per cluster, in dynamic
+shared memory, mapped by every backend that reads it (below). Where the
+shared cache cannot hold it, a backend loads it into its own **private
+cache**, as every version was before 0.5.0. Query functions behave the
+same either way; only where the bytes live, and which setting counts them,
+differs.
+
+- **The private cache is per backend.** A version that is not shared is
+  loaded by the first call in a connection that reads it, from
+  `warren.segments` into that backend's memory (vectors likewise, on first
+  use), and every connection that reads it holds its own copy: 20 pooled
+  connections hold 20 copies. The rest of this list is about the private
+  cache; shared versions are not counted in it.
 - Loading a graph's current version drops that backend's other cached
   versions of the graph, so after promotions a backend holds one copy per
   graph. Calls with an explicit `version :=` load that version too.
@@ -132,13 +144,10 @@ compute kernels from the main thread every millisecond), so
   `warren.max_cache_memory` for large graphs, so the version also stays
   cached between runs.
 - `warren.evict(name)` frees a graph's cached versions and vectors, and this
-  role's transient vectors of it (which are then gone), at once. Lowering the
-  cap takes effect at the next lookup or load. With
-  `warren.shared_cache_memory` set, versions and persisted vectors (not
-  `bool` ones) are shared across backends instead, charged to no call;
-  `warren.shared_cache()` lists the shared entries of the graphs the
-  caller may read, and every role sees one totals row (bytes, pins and
-  mappers across the cluster, and the cap).
+  role's transient vectors of it (which are then gone), at once, and, if
+  the caller is a member of the graph's owner role, evicts its shared
+  versions and vectors that no statement is using. Lowering the cap takes
+  effect at the next lookup or load.
 - `warren.prewarm(name)` loads the current version ahead of first use, for
   pooled connections; `warren.evict(name)` returns how many versions and vectors it freed.
 - `warren.max_compute_memory` bounds what one call reads and allocates,
@@ -171,9 +180,9 @@ compute kernels from the main thread every millisecond), so
   persisted `f64` vector is 8 bytes × id_space × width (80 MB per column at
   10M nodes).
 
-Cold loads, the cost of a per-backend cache, run at 0.26–0.55 GB/s from
-`warren.segments` (measured at 10M nodes: 1.2 GB in 2.2–2.9 s, 3.44 GB in
-6.2 s, 6.0 GB in 23 s).
+Cold loads run at 0.26–0.55 GB/s from `warren.segments` (measured at 10M
+nodes: 1.2 GB in 2.2–2.9 s, 3.44 GB in 6.2 s, 6.0 GB in 23 s), once per
+cluster for a shared version, once per backend for a private one.
 
 ```sql
 SET warren.max_cache_memory = '64kB';
@@ -184,6 +193,95 @@ SELECT warren.evict('kg');                                         -- frees kg's
 SELECT count(*) FROM warren.bfs('kg', ARRAY[1::bigint], 2);        -- reloads; still works under the cap
 RESET warren.max_cache_memory;
 ```
+
+### The shared cache
+
+Since 0.5.0 a version is loaded once per cluster and mapped by every
+backend that reads it, so a pool of connections reading one graph holds
+one copy, and the first connection's load serves the rest. Persisted
+vectors (`pagerank`'s results, say) are shared the same way. Shared entries
+are counted by neither `warren.max_cache_memory` nor
+`warren.max_compute_memory`: evicting one would free nothing of the
+backend's own.
+
+- **`warren.shared_cache_memory`** (default `4GB`) bounds the shared
+  entries of all databases together. It is a server setting: change it in
+  `postgresql.conf` or with `ALTER SYSTEM`, then reload. `0` turns the
+  shared cache off; the shared entries are then evicted as backends next
+  read a graph. Memory is taken only as versions are read, and a shared
+  entry stays until it is evicted (to make room, by `warren.evict` or when
+  its version is dropped or superseded) or the server restarts, also while
+  no backend uses it: an idle cluster can hold up to the cap.
+- **When the cap is full**, entries no statement is using and no backend
+  maps are evicted, least recently used first. A version that still does
+  not fit (it is larger than the cap, or the versions in use leave no
+  room) is loaded into the reading backend's private cache instead, with a
+  `NOTICE` once per statement naming the setting, and the least recently
+  used versions that idle backends still map are marked for eviction, so
+  that the room appears as those backends next read a graph. Nothing waits
+  for room and nothing fails.
+- **PostgreSQL 17 and 18** need nothing configured: the cache's registry is
+  created on first use, also under a trusted install.
+- **PostgreSQL 15 and 16** need pg_warren preloaded, which takes a restart:
+
+  ```
+  shared_preload_libraries = 'pg_warren'
+  ```
+
+  Without it every backend loads its own copies, as in 0.4.0. At the
+  default cap that is silent; with `warren.shared_cache_memory` set to
+  anything else, each backend says so once in a `NOTICE`.
+- **`/dev/shm`.** On Linux each shared version is a file in `/dev/shm`
+  (`dynamic_shared_memory_type = posix`, the default), and its pages are
+  memory. A version is shared only if it fits there with a quarter of
+  `/dev/shm` left free for Postgres's own segments (parallel query uses
+  them too); otherwise it is loaded privately, with a `NOTICE` naming the
+  container's `--shm-size`. A host's `/dev/shm` is usually half its RAM.
+  **Docker gives a container 64 MB**, so only versions up to 48 MB in all
+  are shared there: run the container with `--shm-size` at least the cap
+  plus a third (`docker run --shm-size=6g …` for the default 4GB; in
+  Compose, `shm_size`; in Kubernetes, an `emptyDir` with `medium: Memory`
+  mounted at `/dev/shm`). With `dynamic_shared_memory_type = mmap` the
+  files are in the data directory's `pg_dynshmem` (backed by disk) and
+  the same check applies there; `sysv` segments are not limited this way.
+- **`min_dynamic_shared_memory`** (a restart setting) reserves part of
+  Postgres's main shared memory for dynamic segments, backed by huge pages
+  when `huge_pages` is on, and segments are taken from it first. Shared
+  versions use it like any other segment, but pg_warren still admits a
+  version only if it would fit `/dev/shm` as above (it cannot see how much
+  of the reserved area is free, and a segment that does not fit there goes
+  to `/dev/shm`), so it does not lift a small `/dev/shm`'s limit. Size it to
+  the versions you want shared, plus what parallel query needs.
+- **What stays private:** transient vectors (per role and backend by
+  design), `bool` vectors, a version or vector written by the reading
+  transaction (a staged build queried before commit), and everything on a
+  big-endian machine.
+- **Memory accounting.** Linux counts a shared version's pages in every
+  backend that maps it (`RssShmem`, and so `VmRSS` and `top`'s `RES`), so
+  adding up backends' RSS counts a shared version once per backend. Use
+  their PSS (`/proc/<pid>/smaps_rollup`), the size of `/dev/shm`, or
+  `warren.shared_cache()`:
+
+```sql
+SELECT kind, graph, version, state, pg_size_pretty(bytes) AS size, pins, mappers
+FROM warren.shared_cache();                -- a row per shared entry you may read, then the cluster's totals
+```
+
+  Its rows list the shared versions and vectors of graphs the caller may
+  read, in this database; the last row (`kind` `cluster`) gives the
+  bytes, pins and mappers of every database's, and the cap. `pins` counts
+  statements using an entry now, `mappers` backends that map it.
+
+Measured (DESIGN.md §12, `bench/pooler.py`; 1M nodes and 10M edges, 4
+vCPUs, PgBouncer in transaction mode): 50 pooled backends reading one
+graph hold one copy, 338 MB in all for a 112 MB version against 6.63 GB
+with the shared cache off, and 562 MB for a 336 MB version that would need
+16.8 GB of private copies. A pooled backend's own memory is 4–12 MB. The
+pool's cold start takes 0.7 s for 50 sessions at once instead of 1.2 s,
+and `neighbours`, `bfs` and `pagerank` run as fast as with private copies
+or 5–15% faster. Connections that each read a graph of their own gain
+nothing from sharing, and lose a little: a shared load of a 34 MB version
+takes 20–70 ms longer than a private one.
 
 ### Sizing
 
@@ -240,7 +338,14 @@ solve holds at its peak n·33 bytes of operator (n·49 for the normalised
 operators), ⌈n / 4096⌉·4096·m·e of basis, (4m² + m)·8 of projected
 matrices, k·n·e of eigenvectors and n·8 for counting components; at 10M
 nodes, k = 20, `f32` and the normalised Laplacian that is 3.0 GB. For a graph that is only just over, `store_merged :=
-false` also helps. A `refresh` of any of these graphs fits the default
+false` also helps. With the shared cache (above), a version
+it holds counts against `warren.shared_cache_memory`, not
+`warren.max_cache_memory`, so the five-relation graph without the merged
+CSR (3.44 GB) is shared at the default `4GB` and `pagerank`'s scratch has
+the backend's cap to itself. The merged graph (6.0 GB) is over the default
+shared cap as well, and is loaded privately as above: raise
+`warren.shared_cache_memory` (to `8GB`, say, with `/dev/shm` to match) to
+share it. A `refresh` of any of these graphs fits the default
 `warren.max_build_memory` (before 0.3.0, weighted multi-relation builds
 of 100M edges needed 6–10 GB).
 
@@ -545,8 +650,18 @@ accepted only when the matrix is already symmetric.
 `WHERE x < (SELECT warren.vector_reduce(…))`, not `WHERE x <
 warren.vector_reduce(…)`, so the call runs once.
 
-**No shared cache.** Each backend loads its own copy of every version it
-reads ([memory model](#memory-model)), within `warren.max_cache_memory`.
+**The shared cache's limits** ([the shared cache](#the-shared-cache)). On
+PostgreSQL 15 and 16 it needs `shared_preload_libraries = 'pg_warren'` and
+a restart. A version larger than `warren.shared_cache_memory`, one that
+does not fit beside the versions in use, or one that does not fit
+`/dev/shm` with a quarter of it left free (Docker's default is 64 MB) is
+loaded by each backend that reads it, within its own
+`warren.max_cache_memory`. The cap is one for the whole cluster: one
+database's versions can evict another's, and there are no per-database
+shares. An idle cluster keeps up to the cap of shared versions until they
+are evicted (`warren.evict`) or the server restarts. Transient and `bool`
+vectors are never shared. Graph reads are still `PARALLEL RESTRICTED`, so
+parallel workers do not read graphs yet.
 
 **Not yet supported:** `text` node ids; incremental maintenance (every
 `refresh` is a full rebuild); `refresh` or `compact` of a graph derived by

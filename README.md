@@ -56,8 +56,12 @@ published yet; build it locally:
 
 ```sh
 docker build -f docker/Dockerfile --build-arg PG_MAJOR=17 -t pg_warren:pg17 .
-docker run --rm -e POSTGRES_PASSWORD=postgres -p 5432:5432 pg_warren:pg17
+docker run --rm --shm-size=1g -e POSTGRES_PASSWORD=postgres -p 5432:5432 pg_warren:pg17
 ```
+
+`--shm-size` sizes the container's `/dev/shm`, where the shared cache keeps
+loaded graphs (below); Docker's default is 64 MB. `1g` shares graphs of up
+to about 750 MB; for the default cap of 4GB, give it `6g`.
 
 Then, in each database:
 
@@ -95,6 +99,21 @@ normally. Because only that superuser can read the catalog, a non-superuser's
 superuser, or leave the graphs out with `--exclude-table-data='warren.*'`
 and, after the restore, create them again with `warren.create_graph` and
 `warren.refresh`.
+
+**The shared cache.** A loaded graph version is kept once per cluster, in
+dynamic shared memory, and mapped by every backend that reads it, so pooled
+connections share one copy instead of loading one each. It is on by default
+(`warren.shared_cache_memory = 4GB`, cluster-wide). On PostgreSQL 17 and 18
+it needs nothing configured. On 15 and 16 it needs pg_warren preloaded
+(a restart):
+
+```
+shared_preload_libraries = 'pg_warren'
+```
+
+Without that, or where `/dev/shm` is too small, each backend loads its own
+copy, as before 0.5.0: nothing fails. Sizing, containers and the other
+settings are in [docs/limits.md](docs/limits.md#the-shared-cache).
 
 **Upgrading** from an earlier release: install the new build, then run
 `ALTER EXTENSION pg_warren UPDATE;` in every database that has the extension,
