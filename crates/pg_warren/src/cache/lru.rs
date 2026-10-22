@@ -1,28 +1,31 @@
 //! The cache's eviction policy (DESIGN.md §5.5): which reloadable entries
 //! (cached versions and persisted vectors) to evict, least recently used
 //! first, so that what this backend's cache holds fits
-//! `warren.max_cache_memory`; and whether a transient vector, which cannot
-//! be reloaded and so is never evicted, may be kept.
+//! `warren.max_cache_memory` (and, in `shared`, which shared versions to
+//! evict to fit `warren.shared_cache_memory`, §5.6); and whether a
+//! transient vector, which cannot be reloaded and so is never evicted, may
+//! be kept.
 
 use std::time::Instant;
 
-/// A reloadable entry: its key, the heap bytes it holds, and when a call
-/// last used it.
+/// A reloadable entry: its key, the bytes it holds, and when a call last
+/// used it (an `Instant` in a backend, a tick of the registry's logical
+/// clock for a shared version).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Held<K> {
+pub(crate) struct Held<K, T = Instant> {
     /// What it is.
     pub(crate) key: K,
     /// The heap bytes it holds.
     pub(crate) bytes: u64,
     /// When it was last loaded or looked up.
-    pub(crate) last_used: Instant,
+    pub(crate) last_used: T,
 }
 
 /// The entries to evict.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct Evictions<K> {
+pub(crate) struct Evictions<K, T = Instant> {
     /// The entries that could never fit beside the pinned bytes.
-    pub(crate) unfit: Vec<Held<K>>,
+    pub(crate) unfit: Vec<Held<K, T>>,
     /// The keys of the least recently used entries evicted to fit the
     /// rest, least recent first.
     pub(crate) least_recent: Vec<K>,
@@ -33,11 +36,15 @@ pub(crate) struct Evictions<K> {
 /// never fit beside the pinned bytes, so that it does not push out the
 /// others, then the least recently used first; every entry, if the pinned
 /// bytes alone do not fit.
-pub(crate) fn evictions<K>(held: Vec<Held<K>>, pinned: u64, limit: u64) -> Evictions<K> {
+pub(crate) fn evictions<K, T: Ord>(
+    held: Vec<Held<K, T>>,
+    pinned: u64,
+    limit: u64,
+) -> Evictions<K, T> {
     let room = limit.saturating_sub(pinned);
     let (mut fitting, unfit): (Vec<_>, Vec<_>) =
         held.into_iter().partition(|entry| entry.bytes <= room);
-    fitting.sort_by_key(|entry| entry.last_used);
+    fitting.sort_by(|a, b| a.last_used.cmp(&b.last_used));
     let mut total = fitting.iter().fold(pinned, |total, entry| total.saturating_add(entry.bytes));
     let least_recent = fitting
         .into_iter()

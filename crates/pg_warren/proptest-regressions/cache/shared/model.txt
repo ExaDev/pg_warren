@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 1262b3176a597bc31ee647d0c1e1a4c7971accec1aa50abcbc1d38e973bc69ac # shrinks to slots = 3, cap = 70, capacity = 122, sizes = [19, 1, 1, 51], ops = [Read(1, 1), Read(0, 0), Publish(0), Publish(1), EndStatement(0), Read(0, 3)]
+cc d0f2f45c21ffc1fc71ea90cb2865a390327583666074a13c3e309cb02abc017b # shrinks to slots = 1, cap = 33, capacity = 1000, sizes = [1, 1, 1, 1], ops = [Read(0, 0), Publish(0), Read(0, 0)]
+cc 59baa86be63967db4a8097699922e11bbf60f20fc9c6f729c27ac1f589619813 # shrinks to slots = 2, cap = 82, capacity = 1000, sizes = [1, 1, 1, 1], ops = [Read(0, 3), Publish(0), FailAttach(1, 3)]
+cc bc5aa81ad6389a5b15fc2f475cd6f099e2a8f75559354f722b2cbd46cdd9dc81 # shrinks to slots = 2, cap = 123, capacity = 1000, sizes = [1, 1, 1, 1], ops = [Read(0, 2), Vanish(0), Read(2, 2), Wait(2)]
