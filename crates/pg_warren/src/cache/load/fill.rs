@@ -8,20 +8,19 @@ use warren_core::graph::{DenseId, GraphError, IdPair, SEGMENT_HEADER_LEN};
 
 use super::plan::{Placed, Plan};
 use super::LoadError;
-use crate::cache::region::{typed, typed_mut, write_pair, Array, Entry, HeapMemory, Unpadded};
+use crate::cache::region::{typed, typed_mut, write_pair, Array, Entry, Unpadded};
 use crate::catalog::VersionId;
 use crate::segment::{SegmentError, SegmentStore};
 use crate::source::IdDatum;
 
-/// Writes the header and every array of `plan` into `memory`, which holds
+/// Writes the header and every array of `plan` into `region`, which holds
 /// exactly its layout's bytes.
-pub(super) fn fill<E: IdDatum>(
+pub(in crate::cache) fn fill<E: IdDatum>(
     segments: &mut impl SegmentStore,
     version: VersionId,
     plan: &Plan,
-    memory: &mut HeapMemory,
+    region: &mut [u8],
 ) -> Result<(), LoadError> {
-    let region = memory.bytes_mut();
     let layout = &plan.layout;
     layout.write_header(region);
     if let Some(entry) = layout.entry(Array::RelationDictionary) {

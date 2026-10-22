@@ -7,6 +7,9 @@ mod fill;
 mod plan;
 mod views;
 
+pub(super) use fill::fill;
+pub(super) use plan::plan;
+
 use pgrx::PgSqlErrorCode;
 use thiserror::Error;
 use warren_core::graph::{
@@ -14,7 +17,7 @@ use warren_core::graph::{
 };
 use warren_core::version::{GraphVersion, VersionError};
 
-use super::region::{HeapMemory, Region, RegionError};
+use super::region::{HeapMemory, Region, RegionError, RegionMemory};
 use crate::access::SqlError;
 use crate::catalog::VersionId;
 use crate::extension::graph_sqlstate;
@@ -127,10 +130,19 @@ pub(crate) fn load<E: IdDatum>(
     version: VersionId,
     store_merged: bool,
 ) -> Result<LoadedVersion<E>, LoadError> {
-    let plan = plan::plan::<E>(segments, version, store_merged)?;
-    let mut memory = HeapMemory::zeroed(plan.layout.len())?;
-    fill::fill::<E>(segments, version, &plan, &mut memory)?;
-    views::loaded(&Region::open(Box::new(memory), version)?)
+    let plan = plan::<E>(segments, version, store_merged)?;
+    let mut memory = HeapMemory::zeroed(plan.len())?;
+    fill::<E>(segments, version, &plan, memory.bytes_mut())?;
+    read(Box::new(memory), version)
+}
+
+/// The version `memory` holds, filled by [`fill`], read through views of
+/// its region and validated as [`load`] validates it.
+pub(super) fn read<E: IdDatum>(
+    memory: Box<dyn RegionMemory>,
+    version: VersionId,
+) -> Result<LoadedVersion<E>, LoadError> {
+    views::loaded(&Region::open(memory, version)?)
 }
 
 #[cfg(test)]
