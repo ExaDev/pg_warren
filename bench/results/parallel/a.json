@@ -1,0 +1,482 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/parallel.py",
+   "--pg-config",
+   "/var/tmp/m9par-pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "cf9dce1",
+   "--extension-profile",
+   "release",
+   "--scale",
+   "1",
+   "--rows",
+   "1000000",
+   "--workloads",
+   "has_edge",
+   "--repeat",
+   "2"
+  ],
+  "harness": {
+   "revision": "cf9dce1ef4f9e246b4e8665346a4619c3b41ac69",
+   "dirty": true
+  },
+  "extension": {
+   "revision": "cf9dce1",
+   "profile": "release",
+   "library": "/var/tmp/m9par-pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "4a5296ee409eb01cd9cb9ee673e934938dd23a5b6c708cda85fb0cf0d6b51317"
+  }
+ },
+ "case": "a",
+ "nodes": 10000000,
+ "edges": 100000000,
+ "repeat": 2,
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v140",
+  "load_average": [
+   1.580078125,
+   1.6181640625,
+   1.30419921875
+  ]
+ },
+ "started_at": "2026-10-22T20:42:54+00:00",
+ "runs": [
+  {
+   "mode": "preload",
+   "label": "restricted",
+   "rows": 1000000,
+   "workload": "has_edge",
+   "workers": 0,
+   "costs": "default",
+   "ms": [
+    11581.143,
+    11511.772
+   ],
+   "workers_launched": [
+    0,
+    0
+   ],
+   "plan": [
+    "Aggregate (actual rows=1 loops=1)",
+    "->  Seq Scan on probe (actual rows=500000 loops=1)",
+    "Filter: warren.has_edge('g1'::text, src, dst, NULL::text, NULL::bigint)",
+    "Rows Removed by Filter: 500000"
+   ],
+   "median_ms": 11546.5,
+   "min_ms": 11511.772,
+   "max_ms": 11581.143
+  },
+  {
+   "mode": "preload",
+   "label": "restricted",
+   "rows": 1000000,
+   "workload": "has_edge",
+   "workers": 2,
+   "costs": "forced",
+   "ms": [
+    11358.692,
+    11338.63
+   ],
+   "workers_launched": [
+    0,
+    0
+   ],
+   "plan": [
+    "Aggregate (actual rows=1 loops=1)",
+    "->  Seq Scan on probe (actual rows=500000 loops=1)",
+    "Filter: warren.has_edge('g1'::text, src, dst, NULL::text, NULL::bigint)",
+    "Rows Removed by Filter: 500000"
+   ],
+   "median_ms": 11348.7,
+   "min_ms": 11338.63,
+   "max_ms": 11358.692
+  },
+  {
+   "mode": "preload",
+   "label": "restricted",
+   "rows": 1000000,
+   "workload": "has_edge",
+   "workers": 4,
+   "costs": "forced",
+   "ms": [
+    11704.778,
+    11610.862
+   ],
+   "workers_launched": [
+    0,
+    0
+   ],
+   "plan": [
+    "Aggregate (actual rows=1 loops=1)",
+    "->  Seq Scan on probe (actual rows=500000 loops=1)",
+    "Filter: warren.has_edge('g1'::text, src, dst, NULL::text, NULL::bigint)",
+    "Rows Removed by Filter: 500000"
+   ],
+   "median_ms": 11657.8,
+   "min_ms": 11610.862,
+   "max_ms": 11704.778
+  },
+  {
+   "mode": "preload",
+   "label": "restricted",
+   "rows": 1000000,
+   "workload": "has_edge",
+   "workers": 4,
+   "costs": "default",
+   "ms": [
+    11439.909,
+    11591.857
+   ],
+   "workers_launched": [
+    0,
+    0
+   ],
+   "plan": [
+    "Aggregate (actual rows=1 loops=1)",
+    "->  Seq Scan on probe (actual rows=500000 loops=1)",
+    "Filter: warren.has_edge('g1'::text, src, dst, NULL::text, NULL::bigint)",
+    "Rows Removed by Filter: 500000"
+   ],
+   "median_ms": 11515.9,
+   "min_ms": 11439.909,
+   "max_ms": 11591.857
+  },
+  {
+   "mode": "preload",
+   "label": "safe",
+   "rows": 1000000,
+   "workload": "has_edge",
+   "workers": 0,
+   "costs": "default",
+   "ms": [
+    11418.226,
+    11412.884
+   ],
+   "workers_launched": [
+    0,
+    0
+   ],
+   "plan": [
+    "Aggregate (actual rows=1 loops=1)",
+    "->  Seq Scan on probe (actual rows=500000 loops=1)",
+    "Filter: warren.has_edge('g1'::text, src, dst, NULL::text, NULL::bigint)",
+    "Rows Removed by Filter: 500000"
+   ],
+   "median_ms": 11415.6,
+   "min_ms": 11412.884,
+   "max_ms": 11418.226
+  },
+  {
+   "mode": "preload",
+   "label": "safe",
+   "rows": 1000000,
+   "workload": "has_edge",
+   "workers": 2,
+   "costs": "forced",
+   "ms": [
+    4370.137,
+    4464.615
+   ],
+   "workers_launched": [
+    2,
+    2
+   ],
+   "plan": [
+    "Finalize Aggregate (actual rows=1 loops=1)",
+    "->  Gather (actual rows=3 loops=1)",
+    "Workers Planned: 2",
+    "Workers Launched: 2",
+    "->  Partial Aggregate (actual rows=1 loops=3)",
+    "->  Parallel Seq Scan on probe (actual rows=166667 loops=3)",
+    "Filter: warren.has_edge('g1'::text, src, dst, NULL::text, NULL::bigint)",
+    "Rows Removed by Filter: 166667"
+   ],
+   "median_ms": 4417.4,
+   "min_ms": 4370.137,
+   "max_ms": 4464.615
+  },
+  {
+   "mode": "preload",
+   "label": "safe",
+   "rows": 1000000,
+   "workload": "has_edge",
+   "workers": 4,
+   "costs": "forced",
+   "ms": [
+    3602.376,
+    3634.282
+   ],
+   "workers_launched": [
+    4,
+    4
+   ],
+   "plan": [
+    "Finalize Aggregate (actual rows=1 loops=1)",
+    "->  Gather (actual rows=5 loops=1)",
+    "Workers Planned: 4",
+    "Workers Launched: 4",
+    "->  Partial Aggregate (actual rows=1 loops=5)",
+    "->  Parallel Seq Scan on probe (actual rows=100000 loops=5)",
+    "Filter: warren.has_edge('g1'::text, src, dst, NULL::text, NULL::bigint)",
+    "Rows Removed by Filter: 100000"
+   ],
+   "median_ms": 3618.3,
+   "min_ms": 3602.376,
+   "max_ms": 3634.282
+  },
+  {
+   "mode": "preload",
+   "label": "safe",
+   "rows": 1000000,
+   "workload": "has_edge",
+   "workers": 4,
+   "costs": "default",
+   "ms": [
+    4385.284,
+    4648.546
+   ],
+   "workers_launched": [
+    2,
+    2
+   ],
+   "plan": [
+    "Finalize Aggregate (actual rows=1 loops=1)",
+    "->  Gather (actual rows=3 loops=1)",
+    "Workers Planned: 2",
+    "Workers Launched: 2",
+    "->  Partial Aggregate (actual rows=1 loops=3)",
+    "->  Parallel Seq Scan on probe (actual rows=166667 loops=3)",
+    "Filter: warren.has_edge('g1'::text, src, dst, NULL::text, NULL::bigint)",
+    "Rows Removed by Filter: 166667"
+   ],
+   "median_ms": 4516.9,
+   "min_ms": 4385.284,
+   "max_ms": 4648.546
+  },
+  {
+   "mode": "private",
+   "label": "restricted",
+   "rows": 1000000,
+   "workload": "has_edge",
+   "workers": 0,
+   "costs": "default",
+   "ms": [
+    12198.45,
+    11553.597
+   ],
+   "workers_launched": [
+    0,
+    0
+   ],
+   "plan": [
+    "Aggregate (actual rows=1 loops=1)",
+    "->  Seq Scan on probe (actual rows=500000 loops=1)",
+    "Filter: warren.has_edge('g1'::text, src, dst, NULL::text, NULL::bigint)",
+    "Rows Removed by Filter: 500000"
+   ],
+   "median_ms": 11876.0,
+   "min_ms": 11553.597,
+   "max_ms": 12198.45
+  },
+  {
+   "mode": "private",
+   "label": "restricted",
+   "rows": 1000000,
+   "workload": "has_edge",
+   "workers": 2,
+   "costs": "forced",
+   "ms": [
+    11656.741,
+    11860.409
+   ],
+   "workers_launched": [
+    0,
+    0
+   ],
+   "plan": [
+    "Aggregate (actual rows=1 loops=1)",
+    "->  Seq Scan on probe (actual rows=500000 loops=1)",
+    "Filter: warren.has_edge('g1'::text, src, dst, NULL::text, NULL::bigint)",
+    "Rows Removed by Filter: 500000"
+   ],
+   "median_ms": 11758.6,
+   "min_ms": 11656.741,
+   "max_ms": 11860.409
+  },
+  {
+   "mode": "private",
+   "label": "restricted",
+   "rows": 1000000,
+   "workload": "has_edge",
+   "workers": 4,
+   "costs": "forced",
+   "ms": [
+    11800.887,
+    11379.272
+   ],
+   "workers_launched": [
+    0,
+    0
+   ],
+   "plan": [
+    "Aggregate (actual rows=1 loops=1)",
+    "->  Seq Scan on probe (actual rows=500000 loops=1)",
+    "Filter: warren.has_edge('g1'::text, src, dst, NULL::text, NULL::bigint)",
+    "Rows Removed by Filter: 500000"
+   ],
+   "median_ms": 11590.1,
+   "min_ms": 11379.272,
+   "max_ms": 11800.887
+  },
+  {
+   "mode": "private",
+   "label": "restricted",
+   "rows": 1000000,
+   "workload": "has_edge",
+   "workers": 4,
+   "costs": "default",
+   "ms": [
+    11604.09,
+    11420.089
+   ],
+   "workers_launched": [
+    0,
+    0
+   ],
+   "plan": [
+    "Aggregate (actual rows=1 loops=1)",
+    "->  Seq Scan on probe (actual rows=500000 loops=1)",
+    "Filter: warren.has_edge('g1'::text, src, dst, NULL::text, NULL::bigint)",
+    "Rows Removed by Filter: 500000"
+   ],
+   "median_ms": 11512.1,
+   "min_ms": 11420.089,
+   "max_ms": 11604.09
+  },
+  {
+   "mode": "private",
+   "label": "safe",
+   "rows": 1000000,
+   "workload": "has_edge",
+   "workers": 0,
+   "costs": "default",
+   "ms": [
+    12110.712,
+    11642.552
+   ],
+   "workers_launched": [
+    0,
+    0
+   ],
+   "plan": [
+    "Aggregate (actual rows=1 loops=1)",
+    "->  Seq Scan on probe (actual rows=500000 loops=1)",
+    "Filter: warren.has_edge('g1'::text, src, dst, NULL::text, NULL::bigint)",
+    "Rows Removed by Filter: 500000"
+   ],
+   "median_ms": 11876.6,
+   "min_ms": 11642.552,
+   "max_ms": 12110.712
+  },
+  {
+   "mode": "private",
+   "label": "safe",
+   "rows": 1000000,
+   "workload": "has_edge",
+   "workers": 2,
+   "costs": "forced",
+   "ms": [
+    9612.518,
+    5426.33
+   ],
+   "workers_launched": [
+    2,
+    2
+   ],
+   "plan": [
+    "Finalize Aggregate (actual rows=1 loops=1)",
+    "->  Gather (actual rows=3 loops=1)",
+    "Workers Planned: 2",
+    "Workers Launched: 2",
+    "->  Partial Aggregate (actual rows=1 loops=3)",
+    "->  Parallel Seq Scan on probe (actual rows=166667 loops=3)",
+    "Filter: warren.has_edge('g1'::text, src, dst, NULL::text, NULL::bigint)",
+    "Rows Removed by Filter: 166667"
+   ],
+   "median_ms": 7519.4,
+   "min_ms": 5426.33,
+   "max_ms": 9612.518
+  },
+  {
+   "mode": "private",
+   "label": "safe",
+   "rows": 1000000,
+   "workload": "has_edge",
+   "workers": 4,
+   "costs": "forced",
+   "ms": [
+    7286.062,
+    4751.821
+   ],
+   "workers_launched": [
+    4,
+    4
+   ],
+   "plan": [
+    "Finalize Aggregate (actual rows=1 loops=1)",
+    "->  Gather (actual rows=5 loops=1)",
+    "Workers Planned: 4",
+    "Workers Launched: 4",
+    "->  Partial Aggregate (actual rows=1 loops=5)",
+    "->  Parallel Seq Scan on probe (actual rows=100000 loops=5)",
+    "Filter: warren.has_edge('g1'::text, src, dst, NULL::text, NULL::bigint)",
+    "Rows Removed by Filter: 100000"
+   ],
+   "median_ms": 6018.9,
+   "min_ms": 4751.821,
+   "max_ms": 7286.062
+  },
+  {
+   "mode": "private",
+   "label": "safe",
+   "rows": 1000000,
+   "workload": "has_edge",
+   "workers": 4,
+   "costs": "default",
+   "ms": [
+    5659.037,
+    5752.104
+   ],
+   "workers_launched": [
+    2,
+    2
+   ],
+   "plan": [
+    "Finalize Aggregate (actual rows=1 loops=1)",
+    "->  Gather (actual rows=3 loops=1)",
+    "Workers Planned: 2",
+    "Workers Launched: 2",
+    "->  Partial Aggregate (actual rows=1 loops=3)",
+    "->  Parallel Seq Scan on probe (actual rows=166667 loops=3)",
+    "Filter: warren.has_edge('g1'::text, src, dst, NULL::text, NULL::bigint)",
+    "Rows Removed by Filter: 166667"
+   ],
+   "median_ms": 5705.6,
+   "min_ms": 5659.037,
+   "max_ms": 5752.104
+  }
+ ],
+ "version_bytes": 1121249756,
+ "pg_warren": "0.5.0",
+ "postgres": "16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
+ "finished_at": "2026-10-22T20:52:22+00:00",
+ "load_average_after": [
+  2.41162109375,
+  1.6064453125,
+  1.365234375
+ ]
+}
