@@ -121,17 +121,20 @@ struct Pool<'a> {
     threads: usize,
 }
 
+/// A community's refined communities, or why it could not be refined.
+type Refining = Result<Vec<usize>, CommunityError>;
+
 /// What [`run`] holds once the communities are known, charged on the
 /// pool (reclaimed for ahead, at most [`Grouping::BYTES_PER_NODE`] a
 /// node): per community its start and its refined communities' list
-/// (32 B); the state of the communities being refined, at most one per
+/// ([`Refining`]); the state of the communities being refined, at most one per
 /// thread and each at most the largest ([`Group::BYTES_PER_MEMBER`] a
 /// member); and the least key of each refined community of one community
 /// at a time (8 B a member of the largest).
 struct Grouping;
 
 impl Grouping {
-    const BYTES_PER_COMMUNITY: u64 = (size_of::<usize>() + size_of::<Vec<usize>>()) as u64;
+    const BYTES_PER_COMMUNITY: u64 = (size_of::<usize>() + size_of::<Refining>()) as u64;
     const BYTES_PER_LEAST: u64 = size_of::<i64>() as u64;
     /// The most it charges a node: every node a community of its own, or
     /// every node in one community.
@@ -200,18 +203,25 @@ fn run(
             place[node as usize] = at;
         }
     }
-    let refined: Vec<Vec<usize>> = starts
+    // Collected indexed, in place: a `Result` collect would gather the
+    // communities' lists in pieces before copying them into one.
+    let mut refined: Vec<Refining> = Vec::new();
+    refined.try_reserve_exact(distinct).map_err(|_| ComputeError::OutOfMemory {
+        bytes: (distinct * size_of::<Refining>()) as u64,
+    })?;
+    starts
         .par_windows(2)
         .map(|range| {
             let mut work = Work::new(cancellation);
             work.check()?;
             Group::new(graph, &members[range[0]..range[1]], &place)?.refine(options, &mut work)
         })
-        .collect::<Result<_, CommunityError>>()?;
+        .collect_into_vec(&mut refined);
     let key = |node: DenseId| keys.map_or(node as i64, |keys| keys[node as usize]);
     let mut count = 0;
     let mut least = Vec::new();
-    for (range, roots) in starts.windows(2).zip(&refined) {
+    for (range, roots) in starts.windows(2).zip(refined) {
+        let roots = roots?;
         let members = &members[range[0]..range[1]];
         least.clear();
         least
@@ -532,8 +542,8 @@ mod tests {
     #[test]
     fn the_state_of_small_communities_is_charged_for_those_being_refined() {
         // The labels (8 B a node), the members, places and refined
-        // communities (24 B) and each community's start and list (32 B a
-        // community, 3.2 B a node here): the state of a community being
+        // communities (24 B) and each community's start and list (48 B a
+        // community, 4.8 B a node here): the state of a community being
         // refined is held only while a thread refines it.
         let found = refined_within(10_000, 10, 48).unwrap();
         assert_eq!(found.labels.values().len(), 10_000);
