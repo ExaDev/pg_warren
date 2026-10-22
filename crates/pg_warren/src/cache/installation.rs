@@ -70,6 +70,7 @@ unsafe extern "C-unwind" fn forget(_arg: pg_sys::Datum, _cache: i32, _hash: u32)
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
