@@ -117,7 +117,7 @@ mod tests {
     #[test]
     fn exactly_the_live_parent_nodes_have_a_community() {
         let mut tombstones = Tombstones::new(3).unwrap();
-        tombstones.insert(1);
+        tombstones.insert(1).unwrap();
         let membership = Membership::new(&[Some(0), None, Some(0)], 1).unwrap();
         assert_eq!(membership.check_parent(&tombstones), Ok(()));
         let live_without = Membership::new(&[Some(0), None, None], 1).unwrap();

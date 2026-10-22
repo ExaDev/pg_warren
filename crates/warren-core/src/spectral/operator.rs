@@ -21,7 +21,9 @@ use std::str::FromStr;
 
 use super::{components, dense, Resources, SpectralError};
 use crate::compute::random;
-use crate::compute::{spmv, AnyVector, ComputeError, MemoryCharge, Product, Semiring, Vector};
+use crate::compute::{
+    spmv, AnyVector, ComputeError, Dtype, MemoryCharge, Product, Semiring, Vector,
+};
 use crate::graph::{GraphCsr, RelationSelection};
 use crate::interrupts::Interrupts;
 
@@ -178,12 +180,12 @@ impl<'g> LinearOperator<'g> {
     }
 
     /// The vector [`Self::apply`] multiplies, to be filled by the caller.
-    pub(super) fn input_mut(&mut self) -> &mut [f64] {
+    pub(super) fn input_mut(&mut self) -> Result<&mut [f64], SpectralError> {
         values_mut(&mut self.buffers.input)
     }
 
     /// The output of the last [`Self::apply`], mutably.
-    pub(super) fn output_mut(&mut self) -> &mut [f64] {
+    pub(super) fn output_mut(&mut self) -> Result<&mut [f64], SpectralError> {
         values_mut(&mut self.buffers.output)
     }
 
@@ -197,12 +199,12 @@ impl<'g> LinearOperator<'g> {
         let (degrees, scale) = (&self.degrees, &self.scale);
         let input = values(&buffers.input);
         if operator.normalized() {
-            dense::update(resources, values_mut(&mut buffers.scaled), |i, _| scale[i] * input[i])?;
+            dense::update(resources, values_mut(&mut buffers.scaled)?, |i, _| scale[i] * input[i])?;
         }
         let source = if operator.normalized() { Source::Scaled } else { Source::Input };
         buffers.multiply(resources, self.graph, forward, self.transpose, source)?;
         let input = values(&buffers.input);
-        let output = values_mut(&mut buffers.output);
+        let output = values_mut(&mut buffers.output)?;
         match operator {
             Operator::Adjacency => {}
             Operator::Laplacian => {
@@ -236,7 +238,7 @@ impl<'g> LinearOperator<'g> {
         stream: u64,
     ) -> Result<&mut [f64], SpectralError> {
         let active = &self.active;
-        let input = values_mut(&mut self.buffers.input);
+        let input = values_mut(&mut self.buffers.input)?;
         dense::update(resources, input, |i, _| match active[i] {
             true => random::uniform(seed, stream, i as u64),
             false => 0.0,
@@ -256,7 +258,7 @@ impl<'g> LinearOperator<'g> {
             return Ok(false);
         }
         let scale = &self.scale;
-        dense::update(resources, values_mut(&mut self.buffers.input), |i, x| scale[i] * x)?;
+        dense::update(resources, values_mut(&mut self.buffers.input)?, |i, x| scale[i] * x)?;
         Ok(true)
     }
 
@@ -269,7 +271,7 @@ impl<'g> LinearOperator<'g> {
         if self.operator == Operator::RandomWalk {
             let scale = &self.scale;
             let unscaled = |i: usize, x: f64| if scale[i] == 0.0 { 0.0 } else { x / scale[i] };
-            dense::update(resources, values_mut(&mut self.buffers.input), unscaled)?;
+            dense::update(resources, values_mut(&mut self.buffers.input)?, unscaled)?;
         }
         Ok(())
     }
@@ -293,7 +295,7 @@ impl<'g> LinearOperator<'g> {
         resources: &mut Resources<'_, I>,
     ) -> Result<(), SpectralError> {
         let (graph, transpose, buffers) = (self.graph, self.transpose, &mut self.buffers);
-        values_mut(&mut buffers.input).fill(1.0);
+        values_mut(&mut buffers.input)?.fill(1.0);
         let unweighted = Product { weighted: Some(false), ..self.forward };
         buffers.multiply(resources, graph, unweighted, transpose, Source::Input)?;
         for (active, &edges) in self.active.iter_mut().zip(values(&buffers.output)) {
@@ -324,7 +326,7 @@ impl<'g> LinearOperator<'g> {
         resources: &mut Resources<'_, I>,
     ) -> Result<(), SpectralError> {
         let (graph, buffers) = (self.graph, &mut self.buffers);
-        for (node, value) in (0..).zip(values_mut(&mut buffers.input)) {
+        for (node, value) in (0..).zip(values_mut(&mut buffers.input)?) {
             *value = random::uniform(SYMMETRY_SEED, 0, node);
         }
         let Resources { workers, memory, interrupts } = &mut *resources;
@@ -416,7 +418,7 @@ impl Buffers {
             let transpose = Product { transpose: true, ..product };
             spmv(workers, memory, *interrupts, graph, &transpose, x, &mut self.scratch)?;
             let scratch = values(&self.scratch);
-            dense::update(resources, values_mut(&mut self.output), |i, y| (y + scratch[i]) / 2.0)?;
+            dense::update(resources, values_mut(&mut self.output)?, |i, y| (y + scratch[i]) / 2.0)?;
         }
         Ok(())
     }
@@ -430,11 +432,14 @@ fn values(vector: &AnyVector) -> &[f64] {
     }
 }
 
-/// The values of one of the operator's own vectors, mutably.
-fn values_mut(vector: &mut AnyVector) -> &mut [f64] {
+/// The values of one of the operator's own vectors, mutably: an error,
+/// never an empty slice, if the vector is not `f64` or a copy fails.
+fn values_mut(vector: &mut AnyVector) -> Result<&mut [f64], SpectralError> {
     match vector {
-        AnyVector::F64(vector) => vector.values_mut(),
-        _ => &mut [],
+        AnyVector::F64(vector) => Ok(vector.values_mut()?),
+        other => {
+            Err(ComputeError::DtypeMismatch { expected: Dtype::F64, found: other.dtype() }.into())
+        }
     }
 }
 

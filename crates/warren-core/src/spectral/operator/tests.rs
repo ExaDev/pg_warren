@@ -4,7 +4,8 @@ use proptest::prelude::*;
 
 use super::*;
 use crate::compute::reference::{self, Edges};
-use crate::compute::{ComputeMemory, Workers};
+use crate::compute::{ComputeError, ComputeMemory, Dtype, Vector, Workers};
+use crate::graph::{HeapSegment, SegmentBuffer};
 use crate::interrupts::Uninterrupted;
 use crate::spectral::reference as dense_reference;
 
@@ -19,7 +20,7 @@ fn apply(graph: &GraphCsr, matrix: &GraphMatrix<'_>, x: &[f64]) -> Result<Vec<f6
     let mut resources =
         Resources { workers: workers(), memory: &memory, interrupts: &mut Uninterrupted };
     let mut operator = LinearOperator::new(&mut resources, graph, matrix)?;
-    operator.input_mut().copy_from_slice(x);
+    operator.input_mut()?.copy_from_slice(x);
     Ok(operator.apply(&mut resources)?.to_vec())
 }
 
@@ -275,4 +276,28 @@ proptest! {
         let dense = dense(n, &undirected, None, true, true, Operator::Adjacency, &x);
         prop_assert!(close(&got, &dense), "{:?} != {:?}", got, dense);
     }
+}
+
+#[test]
+fn a_vector_that_cannot_be_copied_is_an_error_not_an_empty_slice() {
+    let memory = ComputeMemory::new(0);
+    let shared = SegmentBuffer::shared(HeapSegment::of(&[1.0f64, 2.0]));
+    let mut vector: AnyVector = Vector::shared(&memory, 2, 1, shared).unwrap().into();
+    assert!(matches!(
+        values_mut(&mut vector),
+        Err(SpectralError::Compute(ComputeError::MemoryLimit { requested: 16, .. }))
+    ));
+}
+
+#[test]
+fn a_vector_that_is_not_f64_is_an_error_not_an_empty_slice() {
+    let memory = ComputeMemory::new(1 << 10);
+    let mut vector: AnyVector = Vector::filled(&memory, 2, 1, 0i64).unwrap().into();
+    assert!(matches!(
+        values_mut(&mut vector),
+        Err(SpectralError::Compute(ComputeError::DtypeMismatch {
+            expected: Dtype::F64,
+            found: Dtype::I64
+        }))
+    ));
 }

@@ -115,7 +115,7 @@ mod tests {
 
     fn top(x: &AnyVector, tombstoned: &[u64], k: u64, descending: bool) -> Vec<(u64, f64)> {
         let mut tombstones = Tombstones::new(x.id_space()).unwrap();
-        tombstoned.iter().for_each(|&id| tombstones.insert(id));
+        tombstoned.iter().for_each(|&id| tombstones.insert(id).unwrap());
         top_k(&memory(), &mut Uninterrupted, x, &tombstones, k, descending).unwrap()
     }
 

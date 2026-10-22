@@ -90,6 +90,17 @@ impl AnyCsr {
     }
 }
 
+#[cfg(test)]
+impl AnyCsr {
+    /// The same CSR with every buffer a shared view of a heap segment.
+    pub(crate) fn shared_views(&self) -> Self {
+        match self {
+            Self::U32(csr) => Self::U32(csr.shared_views()),
+            Self::U64(csr) => Self::U64(csr.shared_views()),
+        }
+    }
+}
+
 impl From<Csr<u32>> for AnyCsr {
     fn from(csr: Csr<u32>) -> Self {
         Self::U32(csr)

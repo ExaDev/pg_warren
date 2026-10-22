@@ -9,7 +9,7 @@
 use super::super::{Resources, SpectralError};
 use crate::compute::{ComputeError, MemoryCharge};
 use crate::graph::{
-    CsrLayout, DenseId, EdgeList, ExternalId, GraphCsr, RelationDictionary, RelationIndex,
+    CsrLayout, DenseId, EdgeList, ExternalId, GraphCsr, IdPair, RelationDictionary, RelationIndex,
 };
 use crate::interrupts::Interrupts;
 use crate::version::GraphVersion;
@@ -48,7 +48,7 @@ pub fn align_ids<E: ExternalId, I: Interrupts>(
 ) -> Result<IdAlignment, SpectralError> {
     let (mut dense_ids, charge) = resources.memory.filled(other.id_map().id_space() as usize, 0)?;
     let mut id_space = this.id_map().id_space();
-    for (row, (external, dense)) in other.id_map().pairs().iter().enumerate() {
+    for (row, IdPair { external, dense }) in other.id_map().pairs().iter().enumerate() {
         if (row as u64).is_multiple_of(ROWS_PER_POLL) {
             resources.interrupts.check().map_err(ComputeError::from)?;
         }

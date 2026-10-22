@@ -141,7 +141,7 @@ mod tests {
 
     fn live(id_space: u64, tombstoned: &[u64]) -> Tombstones {
         let mut tombstones = Tombstones::new(id_space).unwrap();
-        tombstoned.iter().for_each(|&node| tombstones.insert(node));
+        tombstoned.iter().for_each(|&node| tombstones.insert(node).unwrap());
         tombstones
     }
 

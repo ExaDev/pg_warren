@@ -75,14 +75,14 @@ pub fn project(
     }
     if aggregate == Aggregate::Count {
         let mut counts = Vector::filled(memory, communities, width, 0i64)?;
-        for (row, &count) in counts.values_mut().chunks_exact_mut(width).zip(members.iter()) {
+        for (row, &count) in counts.values_mut()?.chunks_exact_mut(width).zip(members.iter()) {
             row.fill(count as i64);
         }
         return Ok(counts.into());
     }
     let mut y = Vector::filled(memory, communities, width, 0.0f64)?;
     let (mut started, _started_charge) = memory.filled(rows, false)?;
-    let into = Folded { y: y.values_mut(), started: &mut started, width, aggregate };
+    let into = Folded { y: y.values_mut()?, started: &mut started, width, aggregate };
     match x {
         AnyVector::F32(x) => into.fold(x.values(), membership),
         AnyVector::F64(x) => into.fold(x.values(), membership),
@@ -90,7 +90,7 @@ pub fn project(
         AnyVector::Bool(x) => into.fold(x.values(), membership),
     }
     if aggregate == Aggregate::Mean {
-        for (row, &count) in y.values_mut().chunks_exact_mut(width).zip(members.iter()) {
+        for (row, &count) in y.values_mut()?.chunks_exact_mut(width).zip(members.iter()) {
             row.iter_mut().filter(|_| count > 0).for_each(|value| *value /= count as f64);
         }
     }
@@ -157,7 +157,7 @@ fn broadcast<E: Element>(
 ) -> Result<Vector<E>, CommunityError> {
     let width = y.width();
     let mut x = Vector::filled(memory, membership.id_space(), width, E::default())?;
-    for (node, row) in (0..).zip(x.values_mut().chunks_exact_mut(width)) {
+    for (node, row) in (0..).zip(x.values_mut()?.chunks_exact_mut(width)) {
         if let Some(community) = membership.community(node) {
             row.copy_from_slice(y.row(community));
         }

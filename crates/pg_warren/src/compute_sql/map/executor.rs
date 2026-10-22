@@ -157,6 +157,7 @@ impl Evaluation<'_> {
     fn run<T: Stored>(&self, mut output: Vector<T>) -> Result<Vector<T>, ComputeSqlError> {
         let natts = i32::try_from(self.analysed.columns.len().max(1)).unwrap_or(i32::MAX);
         let len = output.values().len();
+        let values = output.values_mut()?;
         let cost = len as f64 * {
             // SAFETY: reads a planner cost setting; main thread.
             unsafe { pg_sys::cpu_operator_cost }
@@ -195,7 +196,6 @@ impl Evaluation<'_> {
             JIT_COMPILED.set(!(*estate).es_jit.is_null());
             (estate, econtext, state, slot)
         };
-        let values = output.values_mut();
         let outcome = (|| {
             for start in (0..len).step_by(BATCH) {
                 check_for_interrupts!();

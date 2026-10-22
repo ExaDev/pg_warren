@@ -34,7 +34,7 @@ pub fn triangles<I: Interrupts>(
     let forward = selected_rows(graph, relations)?;
     let id_space = graph.all_relations().forward().id_space();
     let mut counts = Vector::filled(memory, id_space, 1, 0i64)?;
-    let values = counts.values_mut();
+    let values = counts.values_mut()?;
     // The adjacency is charged on the pool, which reclaims no held memory
     // (`memory`), so room for it is reclaimed here, on the caller's thread.
     memory.reclaim_for(Symmetric::bytes(&forward, id_space));

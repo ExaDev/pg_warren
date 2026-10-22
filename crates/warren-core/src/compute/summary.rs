@@ -138,7 +138,7 @@ mod tests {
 
     fn summary(x: &AnyVector, tombstoned: &[u64]) -> Summary {
         let mut tombstones = Tombstones::new(x.id_space()).unwrap();
-        tombstoned.iter().for_each(|&id| tombstones.insert(id));
+        tombstoned.iter().for_each(|&id| tombstones.insert(id).unwrap());
         summarise(workers(), &mut Uninterrupted, x, &tombstones).unwrap()
     }
 

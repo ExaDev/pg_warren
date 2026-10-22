@@ -53,6 +53,14 @@ impl RelationCsr {
     }
 }
 
+#[cfg(test)]
+impl RelationCsr {
+    fn shared_views(&self) -> Self {
+        let reverse = self.reverse.as_ref().map(AnyCsr::shared_views);
+        Self { forward: self.forward.shared_views(), reverse }
+    }
+}
+
 /// Checks that two CSRs of one graph version agree on id space, target
 /// width and weightedness.
 fn check_alike(expected: &AnyCsr, found: &AnyCsr) -> Result<(), GraphError> {
@@ -98,6 +106,21 @@ impl Layout {
             (Some(merged), Err(relations)) => Ok(Self::Merged { relations, merged }),
             (None, Err(relations)) if count >= 2 => Ok(Self::Unmerged { relations }),
             _ => Err(GraphError::MergedCsrMismatch { relations: count }),
+        }
+    }
+}
+
+#[cfg(test)]
+impl Layout {
+    fn shared_views(&self) -> Self {
+        let each =
+            |relations: &[RelationCsr]| relations.iter().map(RelationCsr::shared_views).collect();
+        match self {
+            Self::Single(single) => Self::Single(single.shared_views()),
+            Self::Merged { relations, merged } => {
+                Self::Merged { relations: each(relations), merged: merged.shared_views() }
+            }
+            Self::Unmerged { relations } => Self::Unmerged { relations: each(relations) },
         }
     }
 }
@@ -239,6 +262,13 @@ impl GraphCsr {
             }
         }
         Ok(graph)
+    }
+
+    /// The same graph with every buffer a shared view of a heap segment,
+    /// so that tests read both kinds of buffer.
+    #[cfg(test)]
+    pub(crate) fn shared_views(&self) -> Self {
+        Self { layout: self.layout.shared_views(), deduplicated_edges: self.deduplicated_edges }
     }
 
     /// The CSRs of each relation, in relation-index order.
@@ -718,6 +748,39 @@ mod tests {
         let enough = BuildMemory::new(plan.bytes_needed());
         let edges = EdgeList::within(3, false, &enough);
         assert!(plan.build(edges, &mut Built::default()).is_ok());
+    }
+
+    /// Every offsets, targets and weights buffer of `graph`.
+    fn buffers(graph: &GraphCsr) -> Vec<*const u8> {
+        let csrs = graph.relations().iter().chain(graph.merged()).flat_map(RelationCsr::csrs);
+        csrs.flat_map(|csr| match csr {
+            AnyCsr::U32(csr) => pointers(csr),
+            AnyCsr::U64(csr) => pointers(csr),
+        })
+        .collect()
+    }
+
+    fn pointers<T: Target>(csr: &Csr<T>) -> Vec<*const u8> {
+        let weights = csr.weights().map(|weights| weights.as_ptr().cast());
+        [csr.offsets().as_ptr().cast(), csr.targets().as_ptr().cast()]
+            .into_iter()
+            .chain(weights)
+            .collect()
+    }
+
+    #[test]
+    fn a_graph_of_shared_views_reads_as_the_owned_one() {
+        let mut relations = RelationDictionary::new();
+        let mut edges = EdgeList::new(true);
+        edges.push(relations.intern("a").unwrap(), 0, 1, 2.0).unwrap();
+        edges.push(relations.intern("b").unwrap(), 1, 2, 3.0).unwrap();
+        let owned = GraphCsr::build_as(edges, 2, 3, unmerged(true)).unwrap();
+        let shared = owned.shared_views();
+        assert_eq!(shared, owned);
+        assert_eq!(shared.bytes(), owned.bytes());
+        let (owned, shared) = (buffers(&owned), buffers(&shared));
+        assert_eq!(owned.len(), shared.len());
+        assert!(owned.iter().zip(&shared).all(|(owned, shared)| owned != shared));
     }
 
     #[derive(Debug, Clone)]

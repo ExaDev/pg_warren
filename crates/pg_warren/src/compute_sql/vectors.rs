@@ -276,7 +276,7 @@ impl<E: IdDatum> Vectors<E> {
             let replaced = transient(graph_id, self.version, name).map_or(0, |old| old.bytes());
             admit_transient(replaced, vector.bytes())?;
         }
-        vector.clear_tombstoned(self.tombstones());
+        vector.clear_tombstoned(self.tombstones())?;
         self.held.remove(name);
         // The catalog change comes first: if it fails (a concurrent write),
         // this session's transient vectors are left as they were.

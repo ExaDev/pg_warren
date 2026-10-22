@@ -111,6 +111,17 @@ impl ComputeMemory {
         Ok(charge)
     }
 
+    /// A charge of no bytes, which is never refused: for a buffer that is
+    /// charged only if it grows, such as a shared vector once it is copied.
+    pub(crate) fn nothing(&self) -> MemoryCharge {
+        MemoryCharge {
+            memory: self.clone(),
+            bytes: 0,
+            #[cfg(test)]
+            audit: audit::Pooled::default(),
+        }
+    }
+
     /// Reclaims held memory until `bytes` more would fit, or all of it if
     /// that is not enough (`bytes` may be an upper bound): for charges that
     /// will be made on other threads, where nothing is reclaimed. Does

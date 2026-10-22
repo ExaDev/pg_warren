@@ -116,7 +116,7 @@ pub fn local_moving<I: Interrupts>(
             initial,
             keys,
             options,
-            labels.values_mut(),
+            labels.values_mut()?,
         ))
     })??;
     let (communities, sweeps, moves, modularity) = outcome;

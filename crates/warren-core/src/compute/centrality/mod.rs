@@ -33,7 +33,7 @@ use sources::Sources;
 
 use super::{ComputeError, ComputeMemory, Vector, Workers};
 use crate::graph::{DenseId, GraphCsr, RelationSelection, Tombstones};
-use crate::interrupts::{Cancellation, Cancelled, Interrupts, Work};
+use crate::interrupts::{Cancellation, Interrupts, Work};
 
 /// The graph whose shortest paths a centrality counts.
 #[derive(Debug, Clone, Copy)]
@@ -91,7 +91,7 @@ trait Measure: Sync {
         totals: &mut Self::Totals,
         round: &[Paths],
         cancellation: &Cancellation,
-    ) -> Result<(), Cancelled>;
+    ) -> Result<(), ComputeError>;
 
     /// The centrality from the totals over `sources`, `live` the number of
     /// live nodes.
@@ -140,7 +140,7 @@ fn run<M: Measure, I: Interrupts>(
         Ok(sources)
     })?;
     let mut values = measure.finish(totals, &sources, live)?;
-    values.clear_tombstoned(tombstones);
+    values.clear_tombstoned(tombstones)?;
     Ok(Centrality { values, sources: sources.nodes().len() as u64 })
 }
 

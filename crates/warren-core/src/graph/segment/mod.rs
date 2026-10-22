@@ -24,7 +24,7 @@ mod tombstones;
 
 pub use csr::{CsrPart, CsrSegments};
 
-use super::{memory, BuildMemory, DenseId, ExternalId, GraphError};
+use super::{memory, BuildMemory, DenseId, ExternalId, GraphError, IdPair};
 
 /// The length of a segment header in bytes.
 pub(crate) const HEADER_LEN: usize = 16;
@@ -90,17 +90,17 @@ little_endian_element!(u32);
 little_endian_element!(u64);
 little_endian_element!(f64);
 
-impl<E: ExternalId> Element for (E, DenseId) {
+impl<E: ExternalId> Element for IdPair<E> {
     const WIDTH: usize = E::WIDTH + DenseId::WIDTH;
 
     fn write(&self, out: &mut Vec<u8>) {
-        self.0.write_le(out);
-        self.1.write(out);
+        self.external.write_le(out);
+        self.dense.write(out);
     }
 
     fn read(bytes: &[u8]) -> Self {
         let (external, dense) = bytes.split_at(E::WIDTH);
-        (E::read_le(external), DenseId::read(dense))
+        IdPair { external: E::read_le(external), dense: DenseId::read(dense) }
     }
 }
 
@@ -312,7 +312,7 @@ mod tests {
     #[test]
     fn decoding_tombstones_rejects_bits_outside_the_id_space() {
         let mut tombstones = Tombstones::new(70).unwrap();
-        tombstones.insert(69);
+        tombstones.insert(69).unwrap();
         let mut bytes = tombstones.encode().unwrap();
         assert_eq!(Tombstones::decode(&bytes), Ok(tombstones));
         let last = bytes.len() - 1;

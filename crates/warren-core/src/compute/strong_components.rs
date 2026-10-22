@@ -39,7 +39,7 @@ pub fn strong_components<I: Interrupts>(
         .collect();
     let id_space = graph.all_relations().forward().id_space();
     let mut labels = Vector::filled(memory, id_space, 1, 0i64)?;
-    let values = labels.values_mut();
+    let values = labels.values_mut()?;
     // The lowlinks and the stacks are charged on the pool, which reclaims
     // no held memory, so room for them at their largest is reclaimed here:
     // each stack holds at most a node's entry per node, in a buffer that

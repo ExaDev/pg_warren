@@ -343,6 +343,7 @@ struct Scenario {
     reverse: bool,
     wide: bool,
     store_merged: bool,
+    shared: bool,
     direction: Direction,
     selected: Option<Vec<usize>>,
     mask: Option<(Vec<f64>, bool)>,
@@ -351,7 +352,8 @@ struct Scenario {
 
 impl Scenario {
     /// The graph, with `u64` targets if `wide` (which the build otherwise
-    /// chooses only for id spaces of 2³² or more).
+    /// chooses only for id spaces of 2³² or more), read through shared
+    /// views if `shared`.
     fn graph(&self) -> GraphCsr {
         let indexes = reference::relations(self.relation_count);
         let mut list = EdgeList::new(false);
@@ -364,7 +366,10 @@ impl Scenario {
             true => GraphCsr::build_with::<u64>(list, count, id_space, layout),
             false => GraphCsr::build_as(list, count, id_space, layout),
         };
-        graph.unwrap()
+        match self.shared {
+            true => graph.unwrap().shared_views(),
+            false => graph.unwrap(),
+        }
     }
 
     fn naive<'a, T>(&'a self, sent: &'a [(DenseId, T)]) -> Naive<'a, T> {
@@ -391,7 +396,7 @@ fn scenarios() -> impl Strategy<Value = Scenario> {
         let mask_value = prop::sample::select(vec![0.0, -0.0, 1.0, f64::NAN]);
         (
             prop::collection::vec(edge, 0..50),
-            any::<(bool, bool, bool)>(),
+            any::<(bool, bool, bool, bool)>(),
             prop_oneof![Just(Direction::In), Just(Direction::Out), Just(Direction::Both)],
             prop::option::of(prop::collection::vec(0..relation_count, 0..3)),
             prop::option::of((prop::collection::vec(mask_value, id_space as usize), any::<bool>())),
@@ -400,7 +405,7 @@ fn scenarios() -> impl Strategy<Value = Scenario> {
             .prop_map(
                 move |(
                     edges,
-                    (reverse, wide, store_merged),
+                    (reverse, wide, store_merged, shared),
                     direction,
                     selected,
                     mask,
@@ -412,6 +417,7 @@ fn scenarios() -> impl Strategy<Value = Scenario> {
                     reverse,
                     wide,
                     store_merged,
+                    shared,
                     direction,
                     selected,
                     mask,
