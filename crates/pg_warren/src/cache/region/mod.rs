@@ -30,7 +30,9 @@ pub(crate) use layout::{Array, Entry, RegionLayout, ALIGNMENT};
 /// # Safety
 ///
 /// `bytes` returns the same initialized bytes, at the same address, on
-/// every call, and they do not change while the memory lives.
+/// every call, and they do not change while any reference it returned
+/// lives or while the memory is a [`Region`]'s. (Memory may change them
+/// before then, as [`HeapMemory::bytes_mut`] does while it is filled.)
 pub(crate) unsafe trait RegionMemory: Send + Sync {
     /// The region's bytes.
     fn bytes(&self) -> &[u8];
@@ -119,9 +121,9 @@ impl<T: InPlace> SharedSegment<T> for View<T> {
         // SAFETY: `start` and `len` are a slice `Region::view` formed with
         // `in_place::typed` (aligned for `T`, inside the region, any
         // initialized bytes a valid `T`); the region's memory keeps the same
-        // bytes at the same address while it lives (`RegionMemory`'s
-        // contract), which is at least as long as `self._region`, and so as
-        // the slice borrowed from `self`.
+        // bytes at the same address while it is the region's
+        // (`RegionMemory`'s contract), which is at least as long as
+        // `self._region`, and so as the slice borrowed from `self`.
         unsafe { std::slice::from_raw_parts(self.start, self.len) }
     }
 }
