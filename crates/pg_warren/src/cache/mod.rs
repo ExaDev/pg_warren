@@ -23,9 +23,6 @@ mod load;
 mod lru;
 mod open;
 mod region;
-// The `Dsm` adapter (DESIGN.md §5.6, step 5) wires it to Postgres; until
-// then only its tests, through the `Memory` fake, use it.
-#[cfg(test)]
 mod shared;
 mod statement;
 mod versions;
@@ -37,5 +34,6 @@ pub(crate) use load::{load, load_identity, Identity, LoadError, LoadedVersion};
 pub(crate) use open::{
     cached, cached_pair, cached_vector, cached_vector_hit, keep_vector, resolve, Resolved,
 };
+pub(crate) use shared::define_shared_cache;
 #[cfg(any(test, feature = "pg_test"))]
 pub(crate) use statement::end_statement;

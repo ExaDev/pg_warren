@@ -1,0 +1,443 @@
+//! The `Dsm` adapter (DESIGN.md §5.6, §14 items 26–28): the registry in
+//! shared memory (`placement`), one DSM segment per shared version
+//! (`segment`), and this backend's side of them: its session (pins,
+//! mappings and claims), the registry's lock around every transition but a
+//! statement's unpin, the condition variables loads are waited on, and the
+//! callbacks that give back what a failed or exiting backend holds
+//! (`callbacks`).
+//!
+//! Only the main thread calls into Postgres (§6.9). This backend's state
+//! is borrowed only around pure Rust and the registry's lock, never across
+//! a call that may check for interrupts: a FATAL exits from inside such a
+//! call, without unwinding, and the exit callback must then find the
+//! state free to give everything back.
+
+mod callbacks;
+mod placement;
+mod segment;
+
+use std::any::Any;
+use std::cell::RefCell;
+use std::sync::atomic::AtomicU32;
+use std::sync::{Arc, OnceLock};
+
+use pgrx::{ereport, pg_sys, PgSqlErrorCode};
+
+use super::admission::{Limits, Refusal};
+use super::registry::{Claim, Gone, Lookup, Registry};
+use super::session::{Mapped, Release, Session, Use};
+use super::slot::{Handle, Key, Process, Slot, State, Ticket};
+use super::unavailable::Unavailable;
+use super::{setting, Claimed, Found, SharedVersions};
+use crate::cache::load::{read, LoadError, LoadedVersion};
+use crate::catalog::VersionId;
+use crate::source::IdDatum;
+use placement::{Located, Shared, SLOTS};
+use segment::{Segment, SegmentRegion};
+
+pub(crate) use placement::request_preload;
+pub(in crate::cache::shared) use segment::{store_name, PREFIX};
+
+/// When this backend releases the mappings no call holds (DESIGN.md §14
+/// item 28, pending the owner; built as recommended): at the end of each
+/// client message (and at its next read of the shared cache), those of
+/// evicted, draining slots only, so a version stays mapped between
+/// statements and a statement does not attach it again. `Release::Unheld`
+/// would release every mapping no call holds, so that an idle backend maps
+/// nothing.
+pub(in crate::cache::shared) const DETACH: Release = Release::Evicted;
+
+/// How long a waiter sleeps on a loading slot before it checks that the
+/// loader still exists, in milliseconds.
+const WAIT_MS: i64 = 1000;
+
+thread_local! {
+    /// This backend's side of the shared cache, once it has used it.
+    static BACKEND: RefCell<Option<Backend>> = const { RefCell::new(None) };
+}
+
+/// This backend's side of the shared cache.
+struct Backend {
+    located: Located,
+    session: Session<Attached>,
+}
+
+/// The shared cache through the registry and DSM segments: the port for
+/// this backend, whose state is thread-local.
+#[derive(Debug)]
+pub(crate) struct Dsm(());
+
+/// This backend's mapping of a published version's segment, and the
+/// loaded version built over it, kept while the mapping is.
+pub(crate) struct Attached {
+    segment: Segment,
+    loaded: OnceLock<Arc<dyn Any + Send + Sync>>,
+}
+
+/// A segment claimed to load a version into, and, once it has loaded and
+/// been validated, the loaded version built over it.
+pub(crate) struct Loading {
+    ticket: Ticket,
+    segment: Segment,
+    region: SegmentRegion,
+    loaded: Option<Arc<dyn Any + Send + Sync>>,
+}
+
+impl Dsm {
+    /// The port of this backend, which does nothing if the backend has not
+    /// used the shared cache: for the ends of statements and messages and
+    /// the callbacks.
+    pub(in crate::cache::shared) fn here() -> Self {
+        Self(())
+    }
+
+    /// The port, after finding (or on PG 17 and 18 creating) the registry
+    /// on this backend's first use and registering the callbacks that give
+    /// back what it holds; why the shared cache is unavailable otherwise.
+    pub(crate) fn open() -> Result<Self, Unavailable> {
+        if cfg!(target_endian = "big") {
+            return Err(Unavailable::BigEndian);
+        }
+        let known = BACKEND.with_borrow(Option::is_some);
+        if !known {
+            let located = placement::locate().ok_or(Unavailable::NotPreloaded)?;
+            let process = Process {
+                // SAFETY: this backend's pid and start, set before any query.
+                pid: unsafe { pg_sys::MyProcPid },
+                // SAFETY: as above.
+                started: unsafe { pg_sys::MyStartTimestamp },
+            };
+            BACKEND.set(Some(Backend { located, session: Session::new(process) }));
+            callbacks::register();
+        }
+        Ok(Self(()))
+    }
+}
+
+/// Runs `f` on this backend's state, if it has used the shared cache and
+/// the state is free (it is borrowed only around pure Rust and the
+/// registry's lock).
+fn with_backend<R>(f: impl FnOnce(&mut Backend) -> R) -> Option<R> {
+    BACKEND.with(|backend| backend.try_borrow_mut().ok()?.as_mut().map(f))
+}
+
+/// Raises an internal ERROR for a broken invariant of the shared cache.
+fn broken(what: &str) -> ! {
+    ereport!(
+        ERROR,
+        PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+        format!("pg_warren's shared cache: {what}")
+    );
+}
+
+impl Backend {
+    fn shared(&self) -> *mut Shared {
+        self.located.shared.as_ptr()
+    }
+
+    /// The condition variable of slot `slot`.
+    fn changed(&self, slot: usize) -> *mut pg_sys::ConditionVariable {
+        // SAFETY: the registry stays mapped; only Postgres touches the
+        // condition variables, through this pointer.
+        unsafe { std::ptr::addr_of_mut!((*self.shared()).changed[slot.min(SLOTS - 1)]) }
+    }
+
+    /// Runs `f` on the registry and this backend's session under the
+    /// registry's lock, held exclusively. `f` is pure Rust, or calls only
+    /// Postgres functions that check for no interrupts (`dsm_detach`).
+    fn locked<R>(
+        &mut self,
+        f: impl FnOnce(
+            &mut Registry<&mut [Slot; SLOTS], &[AtomicU32; SLOTS]>,
+            &mut Session<Attached>,
+        ) -> R,
+    ) -> R {
+        let (shared, lock) = (self.shared(), self.located.lock.as_ptr());
+        // SAFETY: the registry's lock, on the main thread; LWLockAcquire
+        // holds interrupts off while it waits.
+        unsafe { pg_sys::LWLockAcquire(lock, pg_sys::LWLockMode::LW_EXCLUSIVE) };
+        // SAFETY: the lock, held exclusively, gives this backend sole use of
+        // the clocks and slots (every other backend changes them only under
+        // it); the pins are atomics others may change meanwhile, so they
+        // are only shared.
+        let result = unsafe {
+            let mut registry =
+                Registry::resume((*shared).clocks, &mut (*shared).slots, &(*shared).pins);
+            let result = f(&mut registry, &mut self.session);
+            (*shared).clocks = registry.clocks();
+            result
+        };
+        // SAFETY: released as it was taken, on the main thread.
+        unsafe { pg_sys::LWLockRelease(lock) };
+        result
+    }
+
+    /// Wakes the backends waiting on slot `slot`.
+    fn broadcast(&self, slot: usize) {
+        // SAFETY: a condition variable of the registry, on the main thread.
+        unsafe { pg_sys::ConditionVariableBroadcast(self.changed(slot)) };
+    }
+}
+
+/// What a lookup found, under the lock.
+enum Step {
+    Found(Found<Attached>),
+    Attach(Ticket, Handle),
+}
+
+impl SharedVersions for Dsm {
+    type Region = Loading;
+    type View = Attached;
+
+    fn lookup(&mut self, key: Key) -> Found<Attached> {
+        let step = with_backend(|backend| {
+            backend.locked(|registry, session| match registry.lookup(key) {
+                Lookup::Missing => Step::Found(Found::Missing),
+                Lookup::Loading(ticket) => Step::Found(Found::Loading(ticket)),
+                Lookup::Ready(ticket) => match session.open(registry, ticket) {
+                    Ok(Use::Mapped(view)) => Step::Found(Found::Ready(view)),
+                    Ok(Use::Attach(handle)) => Step::Attach(ticket, handle),
+                    Err(Gone) => Step::Found(Found::Missing),
+                },
+            })
+        });
+        let (ticket, handle) = match step {
+            Some(Step::Found(found)) => return found,
+            Some(Step::Attach(ticket, handle)) => (ticket, handle),
+            None => broken("this backend's state is in use"),
+        };
+        // The statement's pin keeps the slot ready, and so its segment.
+        let Some(segment) = segment::attach(handle, key) else {
+            broken("a ready version's segment cannot be attached or holds another version")
+        };
+        let attached = Arc::new(Attached { segment, loaded: OnceLock::new() });
+        let mapped = with_backend(|backend| {
+            backend.locked(|registry, session| session.mapped(registry, ticket, attached))
+        });
+        match mapped {
+            Some(Ok(view)) => Found::Ready(view),
+            _ => broken("a version pinned by this statement stopped being ready"),
+        }
+    }
+
+    fn claim(&mut self, key: Key, bytes: u64) -> Claimed<Loading> {
+        let limits = Limits { cap: setting::cap(), store_room: segment::store_room() };
+        let claim = with_backend(|backend| {
+            backend.locked(|registry, session| session.claim(registry, key, bytes, limits))
+        });
+        match claim {
+            Some(Claim::Load { ticket, evicted }) => {
+                evicted.into_iter().for_each(segment::unpin);
+                match segment::create(bytes, key) {
+                    Some(segment) => {
+                        let region = segment.region();
+                        Claimed::Load(Loading { ticket, segment, region, loaded: None })
+                    }
+                    None => {
+                        self.abort();
+                        Claimed::Refused(Refusal::NoSegment)
+                    }
+                }
+            }
+            Some(Claim::Taken) => Claimed::Taken,
+            Some(Claim::Refused { refusal, drained }) => {
+                drained.into_iter().for_each(segment::unpin);
+                Claimed::Refused(refusal)
+            }
+            None => broken("this backend's state is in use"),
+        }
+    }
+
+    fn publish(&mut self, loading: Loading) -> Result<Arc<Attached>, Gone> {
+        let Loading { ticket, segment, loaded, .. } = loading;
+        segment.keep();
+        let handle = segment.handle();
+        let kept = OnceLock::new();
+        if let Some(loaded) = loaded {
+            // A new cell: set once.
+            let _ = kept.set(loaded);
+        }
+        let attached = Arc::new(Attached { segment, loaded: kept });
+        let published = with_backend(|backend| {
+            let published = backend
+                .locked(|registry, session| session.publish(registry, ticket, handle, attached));
+            backend.broadcast(ticket.slot);
+            published
+        });
+        match published {
+            Some(Ok(view)) => Ok(view),
+            _ => {
+                segment::unpin(handle);
+                segment.detach();
+                Err(Gone)
+            }
+        }
+    }
+
+    fn abort(&mut self) {
+        with_backend(|backend| {
+            let loading = backend.session.loading().to_vec();
+            if !loading.is_empty() {
+                backend.locked(|registry, session| session.abort(registry));
+                loading.iter().for_each(|ticket| backend.broadcast(ticket.slot));
+            }
+        });
+    }
+
+    fn wait(&mut self, loading: Ticket) {
+        let Some(changed) = with_backend(|backend| backend.changed(loading.slot)) else {
+            return;
+        };
+        // SAFETY: a condition variable of the registry, on the main thread;
+        // prepared before the state is checked, so no broadcast is missed.
+        unsafe { pg_sys::ConditionVariablePrepareToSleep(changed) };
+        let still = |backend: &mut Backend| {
+            backend.locked(|registry, _| registry.state(loading) == Some(State::Loading))
+        };
+        if with_backend(still) == Some(true) {
+            // SAFETY: as above; it checks for interrupts, so a cancel or
+            // `statement_timeout` ends the wait with an ERROR, after which
+            // the transaction's abort cancels the sleep.
+            let timed_out = unsafe {
+                pg_sys::ConditionVariableTimedSleep(changed, WAIT_MS, pg_sys::PG_WAIT_EXTENSION)
+            };
+            if timed_out {
+                take_over_if_gone(loading);
+            }
+        }
+        // SAFETY: ends the sleep prepared above.
+        unsafe { pg_sys::ConditionVariableCancelSleep() };
+    }
+
+    /// Pure Rust, so that it may run at the end of a transaction (DESIGN.md
+    /// §5.5).
+    fn unpin(&mut self) {
+        with_backend(|backend| {
+            // SAFETY: the registry stays mapped for the session; its pins
+            // are atomics, which any backend may update through a shared
+            // reference. Borrowed apart from the session.
+            let pins = unsafe { &(*backend.shared()).pins };
+            backend.session.unpin(pins);
+        });
+    }
+
+    /// Takes the registry's lock and detaches segments, so never at a
+    /// transaction's end.
+    fn release(&mut self, which: Release) {
+        with_backend(|backend| {
+            if backend.session.mapped_slots().next().is_some() {
+                backend.locked(|registry, session| {
+                    session.release(registry, which, |attached| attached.detach());
+                });
+            }
+        });
+    }
+
+    #[cfg(any(test, feature = "pg_test"))]
+    fn evict(&mut self, which: &dyn Fn(&Key) -> bool) -> usize {
+        let evicted = with_backend(|backend| backend.locked(|registry, _| registry.evict(which)));
+        let evicted = evicted.unwrap_or_default();
+        let count = evicted.len();
+        evicted.into_iter().for_each(segment::unpin);
+        count
+    }
+
+    /// Postgres detaches the mappings after the exit callbacks
+    /// (`dsm_backend_shutdown`), so nothing here unmaps memory a call might
+    /// still hold.
+    fn exit(&mut self) {
+        with_backend(|backend| {
+            let lock = backend.located.lock.as_ptr();
+            // SAFETY: on the main thread; an exit never leaves the lock held
+            // (it is taken only around pure Rust), but if it did, it is
+            // released before it is taken again.
+            if unsafe { pg_sys::LWLockHeldByMe(lock) } {
+                // SAFETY: held by this backend, as just checked.
+                unsafe { pg_sys::LWLockRelease(lock) };
+            }
+            let loading = backend.session.loading().to_vec();
+            backend.locked(|registry, session| session.exit(registry, drop));
+            loading.iter().for_each(|ticket| backend.broadcast(ticket.slot));
+        });
+    }
+}
+
+/// Empties a loading slot whose loader no longer exists, so that a waiter
+/// loads it: a belt to the abort and exit callbacks, which a backend
+/// killed outright never runs (but then the postmaster resets shared
+/// memory). A process is looked up by its pid, among live backends.
+fn take_over_if_gone(loading: Ticket) {
+    let loader = with_backend(|backend| backend.locked(|registry, _| registry.loader(loading)));
+    let Some(Some(loader)) = loader else { return };
+    // SAFETY: looks the pid up in the proc array, on the main thread.
+    let alive = !unsafe { pg_sys::BackendPidGetProc(loader.pid) }.is_null();
+    if !alive {
+        with_backend(|backend| {
+            if backend.locked(|registry, _| registry.abandon(loading)) {
+                backend.broadcast(loading.slot);
+            }
+        });
+    }
+}
+
+impl Mapped for Attached {
+    fn in_use(&self) -> bool {
+        self.loaded.get().is_some_and(|loaded| Arc::strong_count(loaded) > 1)
+    }
+}
+
+impl Attached {
+    /// The loaded version this mapping holds, `version` with external ids
+    /// `E`: built over the segment's region (and validated) the first time,
+    /// then kept with the mapping, which it keeps in use while a call holds
+    /// it.
+    pub(crate) fn version<E: IdDatum + Send + Sync>(
+        &self,
+        version: VersionId,
+    ) -> Result<Arc<LoadedVersion<E>>, LoadError> {
+        if let Some(loaded) = self.loaded.get() {
+            return Arc::clone(loaded)
+                .downcast()
+                .map_err(|_| broken("a shared version was read with another id type"));
+        }
+        let loaded = Arc::new(read::<E>(Box::new(self.segment.region()), version)?);
+        let kept: Arc<dyn Any + Send + Sync> = loaded.clone();
+        // Set only here, on the main thread, and only when empty.
+        let _ = self.loaded.set(kept);
+        Ok(loaded)
+    }
+
+    /// Detaches the mapping, once nothing holds it or what was built over
+    /// it (`Session::release` checks): the loaded version is dropped first.
+    fn detach(self: Arc<Self>) {
+        if let Ok(attached) = Arc::try_unwrap(self) {
+            let Self { segment, loaded } = attached;
+            drop(loaded);
+            segment.detach();
+        }
+    }
+}
+
+impl Loading {
+    /// The region to fill.
+    pub(crate) fn bytes_mut(&mut self) -> &mut [u8] {
+        // SAFETY: the loader fills it before it builds any view
+        // (`validate` builds the first, after the fill).
+        unsafe { self.region.bytes_mut() }
+    }
+
+    /// Reads the filled region as version `version`, validating it once,
+    /// and keeps what it read for the published mapping.
+    pub(crate) fn validate<E: IdDatum + Send + Sync>(
+        &mut self,
+        version: VersionId,
+    ) -> Result<(), LoadError> {
+        let loaded: Arc<LoadedVersion<E>> = Arc::new(read::<E>(Box::new(self.region), version)?);
+        self.loaded = Some(loaded);
+        Ok(())
+    }
+}
+
+#[cfg(any(test, feature = "pg_test"))]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
+mod tests;

@@ -32,6 +32,10 @@ pub(crate) enum Refusal {
     NoSlot,
     /// Its region would not fit where regions are created.
     StoreFull,
+    /// No region could be created: the `Dsm` adapter's segments take
+    /// Postgres's DSM control slots, which were all in use
+    /// (`DSM_CREATE_NULL_IF_MAXSEGMENTS`).
+    NoSegment,
 }
 
 /// How a version is admitted.

@@ -53,6 +53,9 @@ pub(crate) enum Release {
     /// Those of slots evicted (draining) since they were mapped.
     Evicted,
     /// Every one.
+    // DESIGN.md §14 item 28's other answer, pending the owner: `dsm::DETACH`
+    // switches to it in one line.
+    #[cfg_attr(not(test), allow(dead_code))]
     Unheld,
 }
 
@@ -63,6 +66,7 @@ impl<M> Session<M> {
     }
 
     /// The backend's process.
+    #[cfg(test)]
     pub(crate) fn process(&self) -> Process {
         self.process
     }
@@ -203,6 +207,7 @@ impl<M> Session<M> {
 
 impl<M> Session<M> {
     /// The slots the current statement pins.
+    #[cfg(test)]
     pub(crate) fn pinned(&self) -> &[Ticket] {
         &self.pins
     }

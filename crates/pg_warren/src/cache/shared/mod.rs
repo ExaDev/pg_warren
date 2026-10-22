@@ -6,16 +6,50 @@
 //! private load, never an error), a backend's own pins, mappings and
 //! claims, the port `SharedVersions` that `cache::open` asks before its
 //! backend-local cache, and the protocol that reads a version through it
-//! (look up, wait, claim, load, publish). The `Memory` adapter is an
-//! in-process fake whose backends are threads.
+//! (look up, wait, claim, load, publish). Three adapters: `Dsm`, the
+//! registry and a DSM segment per version in shared memory; `Unavailable`,
+//! where it cannot work (PG 15 and 16 without the preload, a big-endian
+//! target), which loads privately; and `Memory`, an in-process fake whose
+//! backends are threads. `read` is how `cache::open` asks it first;
+//! `setting` is `warren.shared_cache_memory`.
 
 mod acquire;
 mod admission;
+mod dsm;
+#[cfg(test)]
 mod memory;
+#[cfg(test)]
 mod model;
+mod read;
 mod registry;
 mod session;
+mod setting;
 mod slot;
+mod unavailable;
+
+pub(crate) use read::shared;
+
+/// Registers `warren.shared_cache_memory` and, while
+/// `shared_preload_libraries` loads pg_warren on PG 15 and 16, the hooks
+/// that place the registry in shared memory. Called once, from `_PG_init`.
+pub(crate) fn define_shared_cache() {
+    setting::define();
+    dsm::request_preload();
+}
+
+/// Ends the current statement's pins of shared versions: pure Rust,
+/// without the registry's lock, so it may run at a transaction's end
+/// (DESIGN.md §5.5, §5.6).
+pub(crate) fn end_statement() {
+    dsm::Dsm::here().unpin();
+}
+
+/// At the end of a client message, releases the mappings no call holds
+/// that `dsm::DETACH` selects (DESIGN.md §14 item 28). It takes the
+/// registry's lock and detaches segments, so never at a transaction's end.
+pub(crate) fn end_message() {
+    dsm::Dsm::here().release(dsm::DETACH);
+}
 
 use std::sync::Arc;
 
@@ -59,6 +93,9 @@ pub(crate) trait SharedVersions {
     fn release(&mut self, which: Release);
 
     /// Evicts the unpinned versions whose keys `which` selects; how many.
+    /// (Step 6 of DESIGN.md §5.6 evicts through it: prune, promotion and
+    /// `warren.evict`; until then only tests do.)
+    #[cfg(any(test, feature = "pg_test"))]
     fn evict(&mut self, which: &dyn Fn(&Key) -> bool) -> usize;
 
     /// Gives back everything this backend holds, as it exits.

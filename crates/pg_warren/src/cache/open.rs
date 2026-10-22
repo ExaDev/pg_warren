@@ -12,6 +12,7 @@ use pgrx::notice;
 use warren_core::compute::{AnyVector, ComputeMemory};
 
 use super::bound::{admit_load, make_room, unfit, unfit_notice};
+use super::shared::shared;
 use super::statement::{notice_due, pin_vector, pin_version, version_pinned};
 use super::versions::{VersionCache, CACHE};
 use super::{load, trim, CacheError, LoadedVersion};
@@ -58,8 +59,9 @@ pub(crate) fn resolve(
 }
 
 /// The loaded version `resolved` names, from this backend's cache (the
-/// lookup marks it used) or loaded into it, pinned until the statement
-/// ends. A load first prunes cached versions, and transient vectors of
+/// lookup marks it used), from the shared cache (DESIGN.md §5.6; counted
+/// by neither of this backend's limits), or loaded into this backend's
+/// cache, pinned until the statement ends. A load first prunes cached versions, and transient vectors of
 /// versions, that have since been dropped (with their graphs or on their
 /// own); it is refused if what the statement then holds in the cache would
 /// go past `warren.max_cache_memory` and `warren.max_compute_memory`
@@ -73,12 +75,23 @@ pub(crate) fn resolve(
 pub(crate) fn cached<E: IdDatum + Send + Sync>(
     resolved: &Resolved,
 ) -> Result<Arc<LoadedVersion<E>>, CacheError> {
-    let (graph_id, version) = (resolved.graph.graph_id, resolved.version);
-    if let Some(loaded) = CACHE.with_borrow_mut(|cache| cache.get::<E>(version)) {
-        pin_version(version);
+    if let Some(loaded) = CACHE.with_borrow_mut(|cache| cache.get::<E>(resolved.version)) {
+        pin_version(resolved.version);
         trim();
         return Ok(loaded);
     }
+    if let Some(loaded) = shared::<E>(resolved)? {
+        return Ok(loaded);
+    }
+    load_private(resolved)
+}
+
+/// The version `resolved` names, loaded into this backend's cache, as
+/// [`cached`] describes.
+fn load_private<E: IdDatum + Send + Sync>(
+    resolved: &Resolved,
+) -> Result<Arc<LoadedVersion<E>>, CacheError> {
+    let (graph_id, version) = (resolved.graph.graph_id, resolved.version);
     prune_dropped()?;
     let expected = expected_bytes::<E>(version)?;
     admit_load(&[version], expected)?;
@@ -104,19 +117,22 @@ pub(crate) fn cached<E: IdDatum + Send + Sync>(
 }
 
 /// The loaded versions `first` and `second` name, as [`cached`] gives
-/// them, both pinned until the statement ends. Cached ones are taken (and
-/// so held) first; then those still missing are refused together, before
-/// either is loaded, if they would not fit beside them.
+/// them, both pinned until the statement ends. Cached ones, in this
+/// backend's cache or the shared cache, are taken (and so held) first;
+/// then those still missing are refused together, before either is loaded
+/// into this backend's cache, if they would not fit beside them.
 pub(crate) fn cached_pair<E: IdDatum + Send + Sync>(
     first: &Resolved,
     second: &Resolved,
 ) -> Result<[Arc<LoadedVersion<E>>; 2], CacheError> {
     let hit = |resolved: &Resolved| {
-        let loaded = CACHE.with_borrow_mut(|cache| cache.get::<E>(resolved.version))?;
-        pin_version(resolved.version);
-        Some(loaded)
+        if let Some(loaded) = CACHE.with_borrow_mut(|cache| cache.get::<E>(resolved.version)) {
+            pin_version(resolved.version);
+            return Ok(Some(loaded));
+        }
+        shared::<E>(resolved)
     };
-    let hits = [hit(first), hit(second)];
+    let hits = [hit(first)?, hit(second)?];
     let mut missing: Vec<VersionId> = [first, second]
         .iter()
         .zip(&hits)
@@ -135,11 +151,11 @@ pub(crate) fn cached_pair<E: IdDatum + Send + Sync>(
     let [first_hit, second_hit] = hits;
     let first = match first_hit {
         Some(loaded) => loaded,
-        None => cached::<E>(first)?,
+        None => load_private::<E>(first)?,
     };
     let second = match second_hit {
         Some(loaded) => loaded,
-        None => cached::<E>(second)?,
+        None => load_private::<E>(second)?,
     };
     trim();
     Ok([first, second])
