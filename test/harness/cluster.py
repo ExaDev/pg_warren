@@ -43,6 +43,11 @@ class Cluster:
         self._run("pg_ctl", "-D", data, "-l", self.directory / "server.log", "-w", "start")
         return self
 
+    def restart(self):
+        """Restarts the server, for a setting that needs it or a clean shared memory."""
+        data = self.directory / "data"
+        self._run("pg_ctl", "-D", data, "-l", self.directory / "server.log", "-m", "fast", "-w", "restart")
+
     def __exit__(self, *_):
         self._run("pg_ctl", "-D", self.directory / "data", "-m", "fast", "-w", "stop")
         if self.keep:

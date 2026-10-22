@@ -76,7 +76,7 @@ fn hide_unreadable_parents(info: &mut JsonB) -> Result<(), CatalogError> {
             continue;
         };
         let readable = match GraphDefinition::find(&parent) {
-            Ok(graph) => is_reader(graph.owner, &graph.readers)?,
+            Ok(graph) => is_reader(graph.owner, &graph.readers),
             Err(CatalogError::GraphNotFound(_)) => false,
             Err(error) => return Err(error),
         };

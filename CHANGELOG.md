@@ -2,8 +2,34 @@
 
 ## 0.5.0 — in development
 
+### Upgrading
+
+- **The shared cache is on by default.** A loaded graph version is kept
+  once per cluster in dynamic shared memory, up to
+  `warren.shared_cache_memory` (default `4GB`, a server setting: set it in
+  `postgresql.conf` or with `ALTER SYSTEM` and reload; `0` turns it off),
+  and mapped by every backend that reads it. On PostgreSQL 17 and 18 it
+  needs nothing configured. On 15 and 16 it needs
+  `shared_preload_libraries = 'pg_warren'` and a restart; without it,
+  backends load their own copies as in 0.4.0, silently at the default cap.
+  Shared versions are files in `/dev/shm`: a version that does not fit
+  there with a quarter of it left free is loaded privately (with a
+  `NOTICE` only if you set the cap yourself; `warren.shared_cache()` shows
+  what is shared), so in a Docker container (64 MB by default) raise
+  `--shm-size` (docs/limits.md, "The shared cache"). An idle cluster keeps
+  up to the cap of shared versions until they are evicted or it restarts.
+
 ### Added
 
+- The shared cache (DESIGN.md §5.6): `warren.shared_cache_memory`. A
+  version, or a persisted vector, is loaded once per cluster by the first
+  backend that misses it (the others wait for that load) and is mapped by
+  every backend that reads it; it is counted by neither
+  `warren.max_cache_memory` nor `warren.max_compute_memory`. Entries that
+  no statement uses are evicted least recently used first to make room; a
+  version that does not fit is loaded privately, as before. A promotion,
+  `drop_version`, retention and `warren.evict` by the graph's owner evict
+  shared versions.
 - `warren.shared_cache()` (`PARALLEL SAFE`): what the shared cache
   (`warren.shared_cache_memory`) holds. A row per shared version and
   persisted vector of a graph the caller may read (its state, bytes, pins,
@@ -17,6 +43,14 @@
   reading transaction are still read privately. Dropping or replacing a
   vector evicts it, and `warren.evict` by the graph's owner evicts its
   shared vectors.
+
+### Performance
+
+- Every graph read checked the caller's access with a catalog query planned
+  on each call; it now reads the role caches. A point lookup such as
+  `warren.degree` takes about a seventh of the time (200,000 calls in one
+  statement: 2.1 s, from 14.5 s), and `pgbench` of one `degree` per
+  transaction with 4 clients runs at about 140,000 tps, from 35,000.
 
 ### Fixed
 
