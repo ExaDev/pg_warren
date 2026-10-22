@@ -80,8 +80,11 @@ mod tests {
     use super::{forget, graph, port, set_cap, slot, with_backend};
     use crate::cache::load::load;
     use crate::cache::shared::acquire::acquire;
+    use crate::cache::shared::admission::Limits;
     use crate::cache::shared::dsm::PREFIX;
     use crate::cache::shared::read::{evict_through, shared, through};
+    use crate::cache::shared::registry::Claim;
+    use crate::cache::shared::slot::Process;
     use crate::cache::shared::slot::State;
     use crate::cache::shared::{end_message, SharedVersions};
     use crate::cache::statement::end_statement;
@@ -155,6 +158,28 @@ mod tests {
         assert!(read.is_none());
         assert_eq!(slot(key), None, "a refusal changes nothing");
         Ok(())
+    }
+
+    #[pg_test]
+    fn a_load_whose_loader_is_gone_is_taken_over() -> Result<(), Error> {
+        set_cap(c"64MB");
+        let (key, resolved) = graph("orphaned", 100)?;
+        // A claim by a backend no longer running (no live backend has its
+        // pid), as one killed outright mid-load would leave it, if the
+        // postmaster did not reset shared memory then.
+        let gone = Process { pid: i32::MAX, started: 0 };
+        let limits = Limits { cap: 64 << 20, store_room: u64::MAX };
+        port()?;
+        let claimed = with_backend(|backend| {
+            backend.locked(|registry, _| registry.claim(key, 4096, gone, limits))
+        });
+        assert!(matches!(claimed, Some(Claim::Load { .. })));
+        assert_eq!(slot(key), Some((State::Loading, 0, 0)));
+        let read = through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?;
+        assert!(read.is_some(), "a waiter took the load over and loaded it");
+        assert_eq!(slot(key), Some((State::Ready, 1, 1)));
+        drop(read);
+        forget(key)
     }
 
     #[pg_test]
