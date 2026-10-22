@@ -28,7 +28,7 @@ use slot::{Key, Ticket};
 /// `cache::open` asks it first and loads privately when it refuses.
 pub(crate) trait SharedVersions {
     /// A region claimed to load a version into, until it is published or
-    /// abandoned.
+    /// the load fails.
     type Region;
     /// A published region, as this backend maps it.
     type View;
@@ -43,8 +43,9 @@ pub(crate) trait SharedVersions {
     /// Publishes a loaded region; the current statement pins it.
     fn publish(&mut self, region: Self::Region) -> Result<Arc<Self::View>, Gone>;
 
-    /// Gives up a claimed region, so that a waiter loads the version.
-    fn abandon(&mut self, region: Self::Region);
+    /// Gives up what the current transaction was loading: the abort
+    /// callback, after an ERROR unwound the load.
+    fn abort(&mut self);
 
     /// Waits a while for another backend's load of the slot `loading`
     /// names, taking it over if its loader is gone.
@@ -77,7 +78,7 @@ pub(crate) enum Found<V> {
 /// The outcome of a claim.
 #[derive(Debug)]
 pub(crate) enum Claimed<R> {
-    /// Load it into this region, then publish or abandon it.
+    /// Load it into this region, then publish it.
     Load(R),
     /// Another backend claimed it first: look again.
     Taken,

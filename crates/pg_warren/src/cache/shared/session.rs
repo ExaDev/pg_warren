@@ -126,10 +126,14 @@ impl<M> Session<M> {
         Ok(self.held(ticket, mapping))
     }
 
-    /// Abandons a claimed slot.
-    pub(crate) fn abandon<S: SlotTable>(&mut self, registry: &mut Registry<S>, ticket: Ticket) {
-        self.loading.retain(|&loading| loading != ticket);
-        registry.abandon(ticket);
+    /// Gives up every slot the backend is loading, as the abort callback
+    /// does after an ERROR unwound the load, so that a waiter loads it. Its
+    /// mappings stay, and its pins end with the statement as usual; an
+    /// attach the ERROR interrupted was never counted (`Session::mapped`).
+    pub(crate) fn abort<S: SlotTable>(&mut self, registry: &mut Registry<S>) {
+        for ticket in self.loading.drain(..) {
+            registry.abandon(ticket);
+        }
     }
 
     /// Ends the current statement's pins.
@@ -167,9 +171,7 @@ impl<M> Session<M> {
         detach: impl FnMut(Arc<M>),
     ) {
         self.unpin(registry);
-        for ticket in self.loading.drain(..) {
-            registry.abandon(ticket);
-        }
+        self.abort(registry);
         Self::detach_all(registry, std::mem::take(&mut self.mappings), detach);
     }
 
@@ -351,14 +353,20 @@ mod tests {
     }
 
     #[test]
-    fn an_abandoned_load_empties_its_slot() {
-        let mut registry = Registry::new(vec![Slot::EMPTY; 2]);
-        let mut session = Session::<u32>::new(PID);
-        let Claim::Load { ticket, .. } = session.claim(&mut registry, key(1), 10, limits()) else {
+    fn an_abort_gives_up_its_loads_and_keeps_its_pins_and_mappings() {
+        let (mut registry, tickets) = published(&[1]);
+        let mut session = Session::new(PID);
+        let held = read(&mut session, &mut registry, tickets[0]);
+        let Claim::Load { ticket, .. } = session.claim(&mut registry, key(2), 10, limits()) else {
             panic!("not claimed");
         };
-        session.abandon(&mut registry, ticket);
-        assert_eq!(registry.lookup(key(1)), Lookup::Missing);
+        session.abort(&mut registry);
+        assert_eq!(registry.lookup(key(2)), Lookup::Missing, "a waiter loads it");
+        assert_eq!(registry.state(ticket), None);
+        assert!(session.loading().is_empty());
+        assert_eq!(counts(&registry, tickets[0]), (1, 2), "the statement's end unpins it");
+        assert_eq!(session.mapped_slots().collect::<Vec<_>>(), [tickets[0]]);
+        drop(held);
     }
 
     #[test]
@@ -379,7 +387,7 @@ mod tests {
         assert_eq!(detached, [1, 2], "held or not");
         assert_eq!(counts(&registry, tickets[0]), (0, 1));
         assert_eq!(counts(&registry, tickets[1]), (0, 0));
-        assert_eq!(registry.state(loading), None, "its claim is abandoned");
+        assert_eq!(registry.state(loading), None, "its claim is given up");
         drop(held);
     }
 }

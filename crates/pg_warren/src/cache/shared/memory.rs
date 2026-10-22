@@ -225,9 +225,9 @@ impl SharedVersions for Backend {
         Ok(view)
     }
 
-    fn abandon(&mut self, loading: Loading) {
+    fn abort(&mut self) {
         let mut store = self.cluster.lock();
-        self.session.abandon(&mut store.registry, loading.ticket);
+        self.session.abort(&mut store.registry);
         self.cluster.changed.notify_all();
     }
 

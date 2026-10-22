@@ -1,6 +1,6 @@
 //! Reading a version through the shared cache (DESIGN.md §5.6): look it
 //! up; wait while another backend loads it; on a miss, claim it, load it
-//! and publish it; take over a load its loader abandoned. One loader per
+//! and publish it; take over a load its loader gave up. One loader per
 //! version, whatever the number of backends that miss at once.
 
 use std::sync::Arc;
@@ -20,8 +20,9 @@ pub(crate) enum Acquired<V> {
 
 /// Version `key`, of `bytes`, from the shared cache, loaded by `load` into
 /// a claimed region if no other backend has it or is loading it. A load
-/// that fails is abandoned, so that a waiter takes it over, and its error
-/// returned.
+/// that fails returns its error and drops its region, as an ERROR unwinds
+/// through it; the claim stays until the transaction's abort callback calls
+/// `SharedVersions::abort`, and a waiter then takes it over.
 pub(crate) fn acquire<P: SharedVersions, E>(
     port: &mut P,
     key: Key,
@@ -34,10 +35,7 @@ pub(crate) fn acquire<P: SharedVersions, E>(
             Found::Loading(loading) => port.wait(loading),
             Found::Missing => match port.claim(key, bytes) {
                 Claimed::Load(mut region) => {
-                    if let Err(error) = load(&mut region) {
-                        port.abandon(region);
-                        return Err(error);
-                    }
+                    load(&mut region)?;
                     if let Ok(view) = port.publish(region) {
                         return Ok(Acquired::Shared(view));
                     }
@@ -107,11 +105,14 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_load_is_abandoned_and_its_error_returned() {
+    fn a_failed_load_returns_its_error_and_the_abort_gives_it_up() {
         let memory = cluster(100);
         let mut backend = memory.backend();
         let failed = acquire(&mut backend, KEY, 10, |_| Err("cancelled".to_string()));
         assert_eq!(failed.err(), Some("cancelled".to_string()));
+        assert_eq!(memory.allocated(), 0, "its region is dropped with the error");
+        assert!(matches!(backend.lookup(KEY), Found::Loading(_)), "until the abort");
+        backend.abort();
         assert!(memory.slots().iter().all(|slot| slot.state == State::Empty));
         assert!(matches!(backend.lookup(KEY), Found::Missing));
         assert_eq!(memory.allocated(), 0, "its region is freed");
@@ -151,7 +152,7 @@ mod tests {
     }
 
     #[test]
-    fn a_waiter_takes_over_an_abandoned_load() {
+    fn a_waiter_takes_over_an_aborted_load() {
         let memory = cluster(100);
         let (claimed, wait_for_claim) = mpsc::channel();
         let (fail, failing) = mpsc::channel::<()>();
@@ -162,6 +163,7 @@ mod tests {
                 failing.recv().unwrap();
                 Err("cancelled".to_string())
             })
+            .inspect_err(|_| first.abort())
             .err()
         });
         wait_for_claim.recv().unwrap();

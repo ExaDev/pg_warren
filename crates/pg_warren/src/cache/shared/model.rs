@@ -30,7 +30,8 @@ enum Op {
     Read(usize, usize),
     /// Publishes the version it is loading.
     Publish(usize),
-    /// Fails its load (an ERROR: the abort callback abandons it).
+    /// Raises an ERROR, which drops the region it is loading, if any, and
+    /// runs the abort callback.
     Fail(usize),
     /// Ends its statement.
     EndStatement(usize),
@@ -168,9 +169,8 @@ fn apply(
         }
         Op::Fail(b) => {
             let backend = &mut backends[b];
-            if let Some((_, region)) = backend.pending.take() {
-                backend.port.abandon(region);
-            }
+            backend.pending = None;
+            backend.port.abort();
         }
         Op::EndStatement(b) => backends[b].port.unpin(),
         Op::DropViews(b) => backends[b].views.clear(),
