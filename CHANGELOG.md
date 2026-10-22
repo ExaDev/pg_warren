@@ -52,16 +52,6 @@
   statement: 2.1 s, from 14.5 s), and `pgbench` of one `degree` per
   transaction with 4 clients runs at about 140,000 tps, from 35,000.
 
-### Fixed
-
-- After `DROP EXTENSION pg_warren` and `CREATE EXTENSION pg_warren` in a
-  database, a backend that had read graphs before could serve the old
-  installation's cached versions and vectors for the new installation's
-  (version, graph and vector ids restart). A backend now drops what it
-  cached when pg_warren is installed again.
-
-### Performance
-
 - **`vector_map`'s no-NULL path** (`warren-core`'s `compute::map`;
   DESIGN.md §6.3). An expression built only from vectors, non-NULL
   literals, casts, arithmetic, comparisons, `NOT` and `CASE … ELSE` is
@@ -77,6 +67,14 @@
     580–665 ms), 1.3–2.2× on four (480–550 → 250–375 ms).
 
   Not re-measured through SQL at 10M nodes.
+
+### Fixed
+
+- After `DROP EXTENSION pg_warren` and `CREATE EXTENSION pg_warren` in a
+  database, a backend that had read graphs before could serve the old
+  installation's cached versions and vectors for the new installation's
+  (version, graph and vector ids restart). A backend now drops what it
+  cached when pg_warren is installed again.
 
 ## 0.4.0 — locality, the library, and communities (2026-10-22)
 
