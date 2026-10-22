@@ -71,6 +71,31 @@ mod tests {
     }
 
     #[pg_test]
+    fn mode_takes_the_most_frequent_message_and_include_self_counts_the_receivers_own(
+    ) -> Result<(), Error> {
+        small("t")?;
+        // Odd nodes send 1, even nodes 0.
+        let parity = "SELECT id, (id % 2)::int FROM t_nodes";
+        let both = gathered(parity, "integer", ", 'mode', 'both'")?;
+        assert_eq!(both.as_deref(), Some("1:0 2:1 3:0 4:1 5:1"));
+        // With its own message each of 1, 2 and 3 has a tie, which the
+        // smaller takes; 6 has no senders but its own message.
+        let own = gathered(parity, "integer", ", 'mode', include_self := true")?;
+        assert_eq!(own.as_deref(), Some("1:0 2:0 3:0 4:1 5:1 6:0"));
+        let collected = gathered(TENS, "bigint[]", ", include_self := true")?;
+        assert_eq!(
+            collected.as_deref(),
+            Some("1:{10,40} 2:{20,10} 3:{30,20} 4:{40,10,30} 5:{50,50} 6:{60}")
+        );
+        let text = failure("warren.gather('t', 'SELECT id, id::text FROM t_nodes', NULL::bigint, NULL::text, 'mode')")?;
+        assert_eq!(text.as_deref(), Some("42804: combine := mode does not accept text messages"));
+        let null =
+            failure("warren.gather('t', 'x', NULL::bigint, NULL::bigint, include_self := NULL)")?;
+        assert_eq!(null.as_deref(), Some("22004: include_self must not be NULL"));
+        Ok(())
+    }
+
+    #[pg_test]
     fn any_type_travels_and_text_concatenates() -> Result<(), Error> {
         small("t")?;
         let names = "SELECT id, 'n' || id FROM t_nodes";

@@ -46,6 +46,7 @@ struct Arguments<'a> {
     rels: Option<Vec<Option<String>>>,
     mask: Option<&'a str>,
     complement: bool,
+    include_self: bool,
     /// The witnesses' types.
     id_type: pg_sys::Oid,
     value_type: pg_sys::Oid,
@@ -286,6 +287,7 @@ impl<E: IdDatum> Run<'_, E> {
             direction: self.arguments.direction,
             relations: selected.as_deref().map_or(RelationSelection::All, RelationSelection::Only),
             mask: self.mask.map(|vector| Mask { vector, complement: self.arguments.complement }),
+            include_self: self.arguments.include_self,
         };
         let memory = &self.vectors.memory;
         let gathered =
@@ -356,7 +358,7 @@ CREATE FUNCTION warren.gather(graph text, messages text, id_type anyelement,
                               value_type anycompatible, combine text DEFAULT 'collect',
                               direction text DEFAULT 'in', rels text[] DEFAULT NULL,
                               mask text DEFAULT NULL, mask_complement boolean DEFAULT false,
-                              version bigint DEFAULT NULL)
+                              version bigint DEFAULT NULL, include_self boolean DEFAULT false)
 RETURNS TABLE (node_id anyelement, value anycompatible)
 VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'gather_wrapper';
 "#
@@ -373,6 +375,7 @@ fn gather(
     mask: Option<&str>,
     mask_complement: Option<bool>,
     version: Option<i64>,
+    include_self: Option<bool>,
     fcinfo: pg_sys::FunctionCallInfo,
 ) -> TableIterator<'static, (name!(node_id, AnyElement), name!(value, AnyElement))> {
     entry(|caller| {
@@ -389,6 +392,7 @@ fn gather(
             rels,
             mask,
             complement: mask_complement.ok_or(ComputeSqlError::NullArgument("mask_complement"))?,
+            include_self: include_self.ok_or(ComputeSqlError::NullArgument("include_self"))?,
             id_type,
             value_type,
         };

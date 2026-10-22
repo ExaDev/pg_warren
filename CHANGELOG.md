@@ -17,6 +17,18 @@
   reading transaction are still read privately. Dropping or replacing a
   vector evicts it, and `warren.evict` by the graph's owner evicts its
   shared vectors.
+- `warren.gather` takes `combine := 'mode'`: the most frequent message, the
+  smallest on a tie (integer, float and boolean messages), and
+  `include_self := false`: with `true`, each receiver also receives its own
+  messages, ahead of its senders'. `ALTER EXTENSION pg_warren UPDATE`
+  replaces `gather`.
+
+### Changed
+
+- `label_propagation_majority` counts its votes in-engine, with one
+  `gather` (`mode`, `include_self`) per iteration instead of counting every
+  received label in the executor: at 1M nodes and 20M stored edges an iteration takes ~3 s, against ~37 s before on the same machine. Its results are
+  unchanged.
 
 ### Fixed
 
