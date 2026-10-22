@@ -15,15 +15,15 @@ use super::bound::{admit_load, make_room, unfit, unfit_notice};
 use super::shared::{prune as prune_shared, shared, shared_hit};
 use super::statement::{notice_due, pin_vector, pin_version, version_pinned};
 use super::versions::{VersionCache, CACHE};
-use super::{load, trim, CacheError, LoadedVersion};
+use super::{installation, load, trim, CacheError, LoadedVersion};
 use crate::access::{as_catalog_owner, require_reader};
 use crate::catalog::{require_version, GraphDefinition, VersionId};
 use crate::read_only::{read_one, read_two};
 use crate::segment::SpiSegmentStore;
 use crate::source::IdDatum;
 use crate::vector::{
-    self, lookup_vector, remember, retain_transients, transient_versions, SpiVectorStore,
-    VectorError, VectorId, VectorRecord,
+    self, cached_vectors, forget, lookup_vector, remember, retain_transients, transient_versions,
+    SpiVectorStore, VectorError, VectorId, VectorRecord,
 };
 
 /// A graph and the version of it a call reads.
@@ -43,6 +43,7 @@ pub(crate) fn resolve(
     version: Option<VersionId>,
     action: &'static str,
 ) -> Result<Resolved, CacheError> {
+    forget_other_installations();
     let graph = GraphDefinition::find(name)?;
     require_reader(graph.owner, &graph.readers, &graph.name, action)?;
     let version = match version {
@@ -229,6 +230,21 @@ pub(super) fn prune_dropped() -> Result<(), CacheError> {
         retain_transients(&existing);
     }
     prune_shared()
+}
+
+/// Drops everything this backend's own caches hold (versions, cached
+/// vectors and transient vectors) if pg_warren was installed again since it
+/// was cached: version, vector and graph ids restart with an installation,
+/// so they would name the new one's. Called by `resolve` and `warren.evict`.
+pub(super) fn forget_other_installations() {
+    if !installation::changed() {
+        return;
+    }
+    CACHE.take();
+    for (vector, _, _) in cached_vectors() {
+        forget(vector);
+    }
+    retain_transients(&[]);
 }
 
 /// Drops this backend's cached versions of graph `graph_id`; returns how

@@ -4,7 +4,7 @@
 
 use pgrx::prelude::*;
 
-use super::open::{cached, evict_graph, prune_dropped, resolve};
+use super::open::{cached, evict_graph, forget_other_installations, prune_dropped, resolve};
 use super::shared;
 use super::CacheError;
 use crate::access::{entry, is_owner};
@@ -40,6 +40,7 @@ fn evict(name: &str) -> i64 {
 }
 
 fn evict_versions(name: &str) -> Result<i64, CacheError> {
+    forget_other_installations();
     let graph = GraphDefinition::find(name)?;
     prune_dropped()?;
     let owner = is_owner(graph.owner)?;

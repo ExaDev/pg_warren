@@ -20,6 +20,7 @@ use super::setting;
 use super::slot::Key;
 use super::SharedVersions;
 use crate::access::as_catalog_owner;
+use crate::cache::installation::installation;
 use crate::cache::load::{fill, plan, LoadedVersion};
 use crate::cache::open::{existing_versions, Resolved};
 use crate::cache::statement::{pin_shared, retire_due, shared_notice_due};
@@ -209,15 +210,6 @@ pub(super) fn through<E: IdDatum + Send + Sync>(
 pub(super) fn key(version: VersionId) -> Option<Key> {
     let (database, extension) = installation()?;
     Some(Key { database, extension, version })
-}
-
-/// This database and pg_warren's `pg_extension` oid in it, if installed.
-fn installation() -> Option<(pg_sys::Oid, pg_sys::Oid)> {
-    // SAFETY: reads this backend's database and looks pg_warren up in
-    // `pg_extension`, on the main thread inside a transaction.
-    let (database, extension) =
-        unsafe { (pg_sys::MyDatabaseId, pg_sys::get_extension_oid(c"pg_warren".as_ptr(), true)) };
-    (extension != pg_sys::Oid::INVALID).then_some((database, extension))
 }
 
 /// Evicts the shared versions of this database that no longer exist as of
