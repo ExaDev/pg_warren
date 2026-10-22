@@ -2,7 +2,7 @@
 
 use std::mem::size_of;
 
-use super::{decode, encode, encode_chunked, ChunkSink, Element, SegmentKind, HEADER_LEN};
+use super::{decode, encode, encode_chunked, ChunkSink, Element, SegmentKind, SEGMENT_HEADER_LEN};
 use crate::graph::{BuildCharge, BuildMemory, ExternalId, GraphError, IdMap, IdPair, Tombstones};
 
 impl<E: ExternalId> IdMap<E> {
@@ -35,7 +35,7 @@ impl<E: ExternalId> IdMap<E> {
     ) -> Result<(Self, BuildCharge), GraphError> {
         let mut charge = memory.charge(tombstones.len() as u64)?;
         let tombstones = Tombstones::decode(tombstones)?;
-        let pairs = (id_map.len().saturating_sub(HEADER_LEN) / IdPair::<E>::WIDTH) as u64;
+        let pairs = (id_map.len().saturating_sub(SEGMENT_HEADER_LEN) / IdPair::<E>::WIDTH) as u64;
         let per_pair = size_of::<IdPair<E>>() + size_of::<Option<E>>() + size_of::<E>();
         charge.grow(pairs.saturating_mul(per_pair as u64))?;
         let id_map = Self::decode(id_map, tombstones)?;

@@ -34,7 +34,7 @@ impl Membership {
 
 #[cfg(test)]
 mod tests {
-    use super::super::HEADER_LEN;
+    use super::super::SEGMENT_HEADER_LEN;
     use super::*;
 
     fn membership() -> Membership {
@@ -46,7 +46,7 @@ mod tests {
         let bytes = membership().encode().unwrap();
         assert_eq!(&bytes[..8], b"WRSG\x01\x07\x08\x00");
         assert_eq!(&bytes[8..16], &3u64.to_le_bytes());
-        assert_eq!(bytes.len(), HEADER_LEN + 3 * 8);
+        assert_eq!(bytes.len(), SEGMENT_HEADER_LEN + 3 * 8);
         assert_eq!(Membership::decode(&bytes, 2), Ok(membership()));
     }
 
