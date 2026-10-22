@@ -1,11 +1,16 @@
 //! Why the shared cache is unavailable (DESIGN.md §5.6, §14 item 30): where
 //! `warren.shared_cache_memory` is set but the shared cache cannot work,
 //! every version is loaded into the backend's own cache, as in 0.4.0, and
-//! never an error; a `NOTICE`, once per backend, says why.
+//! never an error; a `NOTICE`, once per backend, says why. At the default
+//! cap (§14 item 32) only a registry of another format is noticed: PG 15
+//! and 16 without the preload, and big-endian targets, are configurations
+//! the default cannot change, and their every backend would say so.
 
 use std::cell::Cell;
 
 use pgrx::{ereport, PgSqlErrorCode};
+
+use super::setting;
 
 #[cfg(any(feature = "pg17", feature = "pg18", test))]
 use super::dsm::FORMAT;
@@ -34,10 +39,21 @@ thread_local! {
 
 impl Unavailable {
     /// The notice, raised once per backend, that versions are loaded
-    /// privately.
+    /// privately, if [`noticed`](Self::noticed) with the cap as it is.
     pub(crate) fn notice(self) {
-        if !NOTICED.replace(true) {
+        if self.noticed(setting::at_default()) && !NOTICED.replace(true) {
             ereport!(NOTICE, PgSqlErrorCode::ERRCODE_SUCCESSFUL_COMPLETION, self.message());
+        }
+    }
+
+    /// Whether it is noticed, the cap `at_default` or set by hand: always
+    /// when set, and at the default only for a registry of another format,
+    /// which a restart after an upgrade resolves.
+    fn noticed(self, at_default: bool) -> bool {
+        match self {
+            #[cfg(any(feature = "pg17", feature = "pg18", test))]
+            Self::OtherFormat { .. } => true,
+            _ => !at_default,
         }
     }
 
@@ -74,6 +90,20 @@ mod tests {
         assert!(message.contains("warren.shared_cache_memory"));
         assert!(message.contains("shared_preload_libraries = 'pg_warren'"));
         assert!(Unavailable::BigEndian.message().contains("little-endian"));
+    }
+
+    #[test]
+    fn at_the_default_only_a_registry_of_another_format_is_noticed() {
+        assert!(!Unavailable::NotPreloaded.noticed(true), "PG 15 and 16 without the preload");
+        assert!(!Unavailable::BigEndian.noticed(true));
+        assert!(Unavailable::OtherFormat { found: 7 }.noticed(true), "a restart is needed");
+        for unavailable in [
+            Unavailable::NotPreloaded,
+            Unavailable::BigEndian,
+            Unavailable::OtherFormat { found: 7 },
+        ] {
+            assert!(unavailable.noticed(false), "{unavailable:?}, the cap set by hand");
+        }
     }
 
     #[test]
