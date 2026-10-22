@@ -97,7 +97,9 @@ unsafe impl Sync for SegmentRegion {}
 // SAFETY: a segment's mapping stays where it is until this backend
 // detaches it, which it does only once no view of the region is held (a
 // loaded version built over it keeps its mapping in use, `Mapped::in_use`,
-// and the backend's exit detaches nothing itself); its bytes, written by
+// and the backend's exit detaches nothing itself: Postgres does, after
+// the exit callbacks, among them the compute pool's, which stops any
+// kernel's threads still reading it after a FATAL); its bytes, written by
 // the loader before it builds any view, never change after.
 unsafe impl RegionMemory for SegmentRegion {
     fn bytes(&self) -> &[u8] {

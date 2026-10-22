@@ -344,7 +344,10 @@ impl SharedVersions for Dsm {
 
     /// Postgres detaches the mappings after the exit callbacks
     /// (`dsm_backend_shutdown`), so nothing here unmaps memory a call might
-    /// still hold.
+    /// still hold. A FATAL can exit while compute threads still read a
+    /// mapping (from the main thread's poll, without unwinding); the
+    /// compute pool's own exit callback (`compute_sql::settings`) stops
+    /// them first, so none reads after that detach.
     fn exit(&mut self) {
         with_backend(|backend| {
             let lock = backend.located.lock.as_ptr();
