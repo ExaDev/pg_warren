@@ -2,7 +2,7 @@
 # official postgres image for that major.
 #
 #   docker build -f docker/Dockerfile --build-arg PG_MAJOR=17 -t pg_warren:pg17 .
-#   docker run --rm -e POSTGRES_PASSWORD=postgres -p 5432:5432 pg_warren:pg17
+#   docker run --rm --shm-size=1g -e POSTGRES_PASSWORD=postgres -p 5432:5432 pg_warren:pg17
 #   psql ... -c 'CREATE EXTENSION pg_warren; SELECT warren.version();'
 #
 # Supported majors: 15, 16, 17, 18 (DESIGN.md §11).

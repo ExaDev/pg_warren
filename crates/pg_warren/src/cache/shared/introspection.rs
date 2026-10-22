@@ -213,7 +213,7 @@ fn names(keys: &[Key]) -> Result<HashMap<Key, Named>, CacheError> {
         let may_read = match readable.get(&row.graph) {
             Some(&may_read) => may_read,
             None => {
-                let may_read = is_reader(row.owner, &row.readers)?;
+                let may_read = is_reader(row.owner, &row.readers);
                 readable.insert(row.graph.clone(), may_read);
                 may_read
             }

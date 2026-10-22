@@ -43,7 +43,7 @@ fn evict_versions(name: &str) -> Result<i64, CacheError> {
     forget_other_installations();
     let graph = GraphDefinition::find(name)?;
     prune_dropped()?;
-    let owner = is_owner(graph.owner)?;
+    let owner = is_owner(graph.owner);
     let freed = evict_graph(graph.graph_id)
         + evict_vectors(graph.graph_id)
         + evict_transients(graph.graph_id)
