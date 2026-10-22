@@ -21,7 +21,7 @@ use proptest::prelude::*;
 
 use super::admission::Refusal;
 use super::memory::{Backend, Loading, Mapping, Memory};
-use super::session::{Release, Session};
+use super::session::Session;
 use super::slot::{Key, Process, Slot, State, Ticket};
 use super::{Claimed, Found, SharedVersions};
 
@@ -50,8 +50,8 @@ enum Op {
     EndStatement(usize),
     /// Its calls stop holding what they read.
     DropViews(usize),
-    /// Releases its mappings.
-    Release(usize, Release),
+    /// Releases its mappings of evicted versions.
+    Release(usize),
     /// Evicts a version.
     Evict(usize, usize),
     /// Releases its mapping of a version, ready or not (`warren.evict`).
@@ -65,7 +65,6 @@ enum Op {
 fn op() -> impl Strategy<Value = Op> {
     let backend = 0..BACKENDS;
     let version = 0..ENTRIES;
-    let release = prop_oneof![Just(Release::Evicted), Just(Release::Unheld)];
     prop_oneof![
         5 => (backend.clone(), version.clone()).prop_map(|(b, v)| Op::Read(b, v)),
         2 => backend.clone().prop_map(Op::Wait),
@@ -74,7 +73,7 @@ fn op() -> impl Strategy<Value = Op> {
         1 => (backend.clone(), version.clone()).prop_map(|(b, v)| Op::FailAttach(b, v)),
         3 => backend.clone().prop_map(Op::EndStatement),
         2 => backend.clone().prop_map(Op::DropViews),
-        3 => (backend.clone(), release).prop_map(|(b, r)| Op::Release(b, r)),
+        3 => backend.clone().prop_map(Op::Release),
         1 => (backend.clone(), version.clone()).prop_map(|(b, v)| Op::Evict(b, v)),
         1 => (backend.clone(), version).prop_map(|(b, v)| Op::Forget(b, v)),
         1 => backend.clone().prop_map(Op::Exit),
@@ -298,7 +297,7 @@ impl World {
             }
             Op::EndStatement(b) => self.backends[b].port.unpin(),
             Op::DropViews(b) => self.backends[b].views.clear(),
-            Op::Release(b, which) => self.backends[b].port.release(which),
+            Op::Release(b) => self.backends[b].port.release(),
             Op::Evict(b, version) => {
                 self.backends[b].port.evict(&|evicted| *evicted == key(version));
             }
@@ -397,36 +396,39 @@ impl World {
         Ok(())
     }
 
-    /// Every live backend ends what it does and releases what it holds,
-    /// evicted mappings first: then no slot drains, and every ready slot is
-    /// reclaimable, except those that vanished backends hold.
+    /// Every live backend ends what it does and releases its evicted
+    /// mappings: then no slot drains. Evicted then and released again,
+    /// every slot is empty: every ready slot was reclaimable. Slots that
+    /// vanished backends hold are the exceptions.
     fn settle(&mut self) -> Result<(), TestCaseError> {
         for backend in &mut self.backends {
             backend.pending = None;
             backend.port.abort();
             backend.views.clear();
             backend.port.unpin();
-            backend.port.release(Release::Evicted);
+            backend.port.release();
         }
         for (index, slot) in self.memory.slots().iter().enumerate() {
             if slot.state == State::Draining {
                 prop_assert!(self.held_by_vanished(index), "slot {} still drains", index);
             }
         }
+        let settled = table(&self.memory);
+        self.check(&settled)?;
+        if let Some(backend) = self.backends.first_mut() {
+            backend.port.evict(&|_| true);
+        }
         for backend in &mut self.backends {
-            backend.port.release(Release::Unheld);
+            backend.port.release();
         }
         let settled = table(&self.memory);
         self.check(&settled)?;
-        for (index, (slot, pins)) in settled.into_iter().enumerate() {
+        for (index, (slot, _)) in settled.into_iter().enumerate() {
             if self.held_by_vanished(index) {
                 continue;
             }
             match slot.state {
-                State::Ready => {
-                    let counts = (pins, slot.mappers);
-                    prop_assert_eq!(counts, (0, 0), "slot {} is not reclaimable", index);
-                }
+                State::Ready => prop_assert!(false, "slot {} is not reclaimable", index),
                 State::Loading => prop_assert!(self.is_vanished(slot.loader)),
                 State::Draining => prop_assert!(false, "slot {} still drains", index),
                 State::Empty => {}

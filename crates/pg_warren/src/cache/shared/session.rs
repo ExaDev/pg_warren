@@ -6,9 +6,9 @@
 //! `mappers` equal to what the backends hold, so that a backend's exit
 //! gives back everything it held.
 //!
-//! When unheld mappings are released is the adapter's policy (DESIGN.md
-//! §14 item 28): every unheld mapping (`Release::Unheld`), or only those of
-//! evicted slots (`Release::Evicted`).
+//! A mapping no call holds is released once its slot is evicted
+//! (DESIGN.md §14 item 28): a mapping of a ready slot stays across
+//! statements and messages.
 
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
@@ -50,18 +50,6 @@ pub(crate) trait Mapped {
     /// (a loaded version built over it, which the mapping keeps): such a
     /// mapping is held, and never released.
     fn in_use(&self) -> bool;
-}
-
-/// Which mappings to release. Neither releases a mapping a call holds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Release {
-    /// Those of slots evicted (draining) since they were mapped.
-    Evicted,
-    /// Every one.
-    // DESIGN.md §14 item 28's other answer, pending the owner: `dsm::DETACH`
-    // switches to it in one line.
-    #[cfg_attr(not(test), allow(dead_code))]
-    Unheld,
 }
 
 impl<M> Session<M> {
@@ -165,20 +153,20 @@ impl<M> Session<M> {
         }
     }
 
-    /// Releases the mappings `which` selects that no call holds, through
-    /// their `Arc` or what was read through them, one at a time (see
-    /// `release_one`).
+    /// Releases the mappings of slots evicted (draining) since they were
+    /// mapped that no call holds, through their `Arc` or what was read
+    /// through them, one at a time (see `release_one`). A mapping of a
+    /// ready slot stays, so the next statement does not attach it again
+    /// (DESIGN.md §14 item 28).
     pub(crate) fn release<S: SlotTable, P: PinTable>(
         &mut self,
         registry: &mut Registry<S, P>,
-        which: Release,
         detach: impl FnMut(Arc<M>),
     ) where
         M: Mapped,
     {
-        self.release_where(registry, detach, |registry, ticket| match which {
-            Release::Evicted => registry.state(ticket) != Some(State::Ready),
-            Release::Unheld => true,
+        self.release_where(registry, detach, |registry, ticket| {
+            registry.state(ticket) != Some(State::Ready)
         });
     }
 
@@ -386,30 +374,14 @@ mod tests {
         let mut session = Session::<u32>::new(PROCESS);
         assert!(session.open(&mut registry, tickets[0]).is_err());
         session.unpin(registry.pin_table());
-        session.release(&mut registry, Release::Unheld, |_| panic!("nothing mapped"));
+        session.release(&mut registry, |_| panic!("nothing mapped"));
         assert_eq!(counts(&registry, tickets[0]), (0, 1), "nothing was counted");
     }
 
-    #[test]
-    fn unheld_releases_every_mapping_no_call_holds() {
-        let (mut registry, tickets) = published(&[1, 2]);
-        let mut session = Session::new(PROCESS);
-        let held = read(&mut session, &mut registry, tickets[0]);
-        drop(read(&mut session, &mut registry, tickets[1]));
-        session.unpin(registry.pin_table());
-        let mut detached = Vec::new();
-        session.release(&mut registry, Release::Unheld, |mapping| detached.push(*mapping));
-        assert_eq!(detached, [2]);
-        assert_eq!(counts(&registry, tickets[0]), (0, 2), "a held mapping stays");
-        assert_eq!(counts(&registry, tickets[1]), (0, 1));
-        drop(held);
-        session.release(&mut registry, Release::Unheld, |mapping| detached.push(*mapping));
-        assert_eq!(detached, [2, 1]);
-    }
-
-    /// A mapping that calls may hold apart from its `Arc`.
+    /// A mapping that calls may hold apart from its `Arc`, while the flag
+    /// it shares is set.
     #[derive(Debug)]
-    struct Reading(AtomicBool);
+    struct Reading(Arc<AtomicBool>);
 
     impl Mapped for Reading {
         fn in_use(&self) -> bool {
@@ -424,21 +396,18 @@ mod tests {
         let Ok(Use::Attach(_)) = session.open(&mut registry, tickets[0]) else {
             panic!("not attached");
         };
-        let reading = Arc::new(Reading(AtomicBool::new(true)));
-        drop(session.mapped(&mut registry, tickets[0], Arc::clone(&reading)).unwrap());
-        drop(reading);
+        let in_use = Arc::new(AtomicBool::new(true));
+        let reading = Arc::new(Reading(Arc::clone(&in_use)));
+        drop(session.mapped(&mut registry, tickets[0], reading).unwrap());
         session.unpin(registry.pin_table());
-        session.release(&mut registry, Release::Unheld, |_| panic!("in use"));
-        assert_eq!(counts(&registry, tickets[0]), (0, 2));
-        let Some(Use::Mapped(mapping)) = session.open(&mut registry, tickets[0]).ok() else {
-            panic!("not mapped");
-        };
-        mapping.0.store(false, Ordering::Relaxed);
-        drop(mapping);
-        session.unpin(registry.pin_table());
+        registry.release(tickets[0]);
+        registry.evict(|_| true);
+        session.release(&mut registry, |_| panic!("in use"));
+        assert_eq!(counts(&registry, tickets[0]), (0, 1), "it still maps the draining slot");
+        in_use.store(false, Ordering::Relaxed);
         let mut released = 0;
-        session.release(&mut registry, Release::Unheld, |_| released += 1);
-        assert_eq!((released, counts(&registry, tickets[0])), (1, (0, 1)));
+        session.release(&mut registry, |_| released += 1);
+        assert_eq!((released, registry.state(tickets[0])), (1, None));
     }
 
     #[test]
@@ -452,7 +421,7 @@ mod tests {
         registry.evict(|key| key.id == 2);
         assert_eq!(registry.state(tickets[1]), Some(State::Draining));
         let mut detached = Vec::new();
-        session.release(&mut registry, Release::Evicted, |mapping| detached.push(*mapping));
+        session.release(&mut registry, |mapping| detached.push(*mapping));
         assert_eq!(detached, [2]);
         assert_eq!(registry.state(tickets[1]), None, "its last mapper emptied it");
         assert_eq!(counts(&registry, tickets[0]), (0, 2), "a ready slot stays mapped");
@@ -488,7 +457,7 @@ mod tests {
         registry.evict(|_| true);
         let mut detaches = 0;
         let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            session.release(&mut registry, Release::Evicted, |_| {
+            session.release(&mut registry, |_| {
                 detaches += 1;
                 assert!(detaches < 2, "an ERROR in dsm_detach");
             });

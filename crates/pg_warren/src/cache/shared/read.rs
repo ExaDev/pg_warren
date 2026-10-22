@@ -14,7 +14,7 @@ use pgrx::{ereport, pg_sys, PgSqlErrorCode};
 
 use super::acquire::{acquire, find, Acquired};
 use super::admission::Refusal;
-use super::dsm::{store_name, Dsm, DETACH, PREFIX};
+use super::dsm::{store_name, Dsm, PREFIX};
 use super::eviction::{self, evict_shared};
 use super::setting;
 use super::slot::{Key, Kind};
@@ -63,7 +63,7 @@ pub(crate) fn shared_hit<E: IdDatum + Send + Sync>(
     if let Some(attached) = port.pinned(key) {
         return Ok(Some(attached.version::<E>(resolved.version)?));
     }
-    port.release(DETACH);
+    port.release();
     pin_shared();
     match find(&mut port, key) {
         Some(attached) => Ok(Some(attached.version::<E>(resolved.version)?)),
@@ -124,7 +124,7 @@ pub(super) fn vector_through(
     if let Some(attached) = port.pinned(key) {
         return Ok(Some(attached.vector(record)?));
     }
-    port.release(DETACH);
+    port.release();
     pin_shared();
     let acquired = acquire(
         &mut port,
@@ -253,7 +253,7 @@ fn retire() {
 /// releases this backend's mappings of them that no call holds.
 pub(super) fn evict_through(mut port: Dsm, which: &dyn Fn(&Key) -> bool) {
     port.evict(which);
-    port.release(DETACH);
+    port.release();
 }
 
 /// The version `resolved` names through `port`, whatever transaction
@@ -271,7 +271,7 @@ pub(super) fn through<E: IdDatum + Send + Sync>(
     }
     // What the end of a transaction left to release (a `CALL` that
     // commits, a background worker), before this read takes its lock.
-    port.release(DETACH);
+    port.release();
     pin_shared();
     let (version, store_merged) = (resolved.version, resolved.graph.store_merged);
     let acquired = acquire(

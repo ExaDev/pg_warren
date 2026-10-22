@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use super::admission::Limits;
 use super::registry::{Claim, Gone, Listing, Lookup, Registry};
-use super::session::{Mapped, Release, Session, Unattached, Use};
+use super::session::{Mapped, Session, Unattached, Use};
 use super::slot::{Handle, Key, Process, Slot, Started, State, Ticket};
 use super::{Claimed, Found, SharedVersions};
 
@@ -313,9 +313,9 @@ impl SharedVersions for Backend {
         self.session.unpin(&self.cluster.pins);
     }
 
-    fn release(&mut self, which: Release) {
+    fn release(&mut self) {
         let mut store = self.cluster.lock();
-        self.session.release(&mut store.registry, which, drop);
+        self.session.release(&mut store.registry, drop);
     }
 
     fn evict(&mut self, which: &dyn Fn(&Key) -> bool) -> usize {
@@ -374,10 +374,6 @@ mod tests {
         backend.publish(region).unwrap()
     }
 
-    fn mappers(memory: &Memory) -> u32 {
-        memory.slots()[0].mappers
-    }
-
     #[test]
     fn a_vanished_loader_whose_pid_is_reused_is_taken_over() {
         let memory = cluster();
@@ -416,17 +412,6 @@ mod tests {
     }
 
     #[test]
-    fn an_unheld_mapping_of_a_ready_version_is_released() {
-        let memory = cluster();
-        let mut backend = memory.backend();
-        drop(published(&mut backend, 1));
-        backend.unpin();
-        backend.release(Release::Unheld);
-        assert_eq!(mappers(&memory), 0);
-        assert_eq!(backend.session().mapped_slots().count(), 0);
-    }
-
-    #[test]
     fn a_draining_version_mapped_by_two_backends_empties_once_both_release() {
         let memory = cluster();
         let (mut first, mut second) = (memory.backend(), memory.backend());
@@ -438,8 +423,8 @@ mod tests {
         first.unpin();
         second.unpin();
         assert_eq!(first.evict(&|_| true), 1);
-        first.release(Release::Evicted);
-        second.release(Release::Evicted);
+        first.release();
+        second.release();
         assert!(memory.slots().iter().all(|slot| slot.state == State::Empty));
         assert_eq!(memory.allocated(), 0, "its region is freed");
     }
@@ -464,7 +449,7 @@ mod tests {
         assert_eq!(memory.allocated(), 20, "nothing reloaded");
         drop(view);
         second.unpin();
-        first.release(Release::Evicted);
+        first.release();
         assert_eq!(memory.slots()[0].mappers, 2, "a ready version stays mapped");
     }
 }

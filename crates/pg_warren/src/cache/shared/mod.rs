@@ -48,18 +48,17 @@ pub(crate) fn end_statement() {
     dsm::Dsm::here().unpin();
 }
 
-/// At the end of a client message, releases the mappings no call holds
-/// that `dsm::DETACH` selects (DESIGN.md §14 item 28). It takes the
-/// registry's lock and detaches segments, so never at a transaction's end.
+/// At the end of a client message, releases the mappings of evicted slots
+/// that no call holds (DESIGN.md §14 item 28). It takes the registry's
+/// lock and detaches segments, so never at a transaction's end.
 pub(crate) fn end_message() {
-    dsm::Dsm::here().release(dsm::DETACH);
+    dsm::Dsm::here().release();
 }
 
 use std::sync::Arc;
 
 use admission::Refusal;
 use registry::{Gone, Listing};
-use session::Release;
 use slot::{Key, Ticket};
 
 /// The shared cache as one backend sees it (DESIGN.md §5.6, §14 item 30).
@@ -93,8 +92,9 @@ pub(crate) trait SharedVersions {
     /// runs at the end of a transaction (DESIGN.md §5.6).
     fn unpin(&mut self);
 
-    /// Releases the mappings `which` selects that no call holds.
-    fn release(&mut self, which: Release);
+    /// Releases the mappings of evicted slots that no call holds; those of
+    /// ready slots stay (DESIGN.md §14 item 28).
+    fn release(&mut self);
 
     /// Evicts the unpinned versions whose keys `which` selects; how many.
     /// (A read with `warren.shared_cache_memory` at 0, `warren.evict`, a

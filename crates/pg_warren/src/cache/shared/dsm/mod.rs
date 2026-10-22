@@ -26,7 +26,7 @@ use warren_core::compute::AnyVector;
 
 use super::admission::{Limits, Refusal};
 use super::registry::{Claim, Gone, Listing, Lookup, Registry};
-use super::session::{Mapped, Release, Session, Unattached, Use};
+use super::session::{Mapped, Session, Unattached, Use};
 use super::slot::{Handle, Key, Process, Slot, State, Ticket};
 use super::unavailable::Unavailable;
 use super::{setting, Claimed, Found, SharedVersions};
@@ -42,15 +42,6 @@ pub(crate) use placement::request_preload;
 #[cfg(any(feature = "pg17", feature = "pg18", test))]
 pub(in crate::cache::shared) use placement::FORMAT;
 pub(in crate::cache::shared) use segment::{store_name, PREFIX};
-
-/// When this backend releases the mappings no call holds (DESIGN.md §14
-/// item 28, pending the owner; built as recommended): at the end of each
-/// client message (and at its next read of the shared cache), those of
-/// evicted, draining slots only, so a version stays mapped between
-/// statements and a statement does not attach it again. `Release::Unheld`
-/// would release every mapping no call holds, so that an idle backend maps
-/// nothing.
-pub(in crate::cache::shared) const DETACH: Release = Release::Evicted;
 
 /// How long a waiter sleeps on a loading slot before it checks that the
 /// loader still exists, in milliseconds.
@@ -389,19 +380,17 @@ impl SharedVersions for Dsm {
     /// Releasing evicted mappings takes the lock only if a slot has
     /// started draining since this backend last released, or that release
     /// left one held: so a message's start costs one atomic read.
-    fn release(&mut self, which: Release) {
+    fn release(&mut self) {
         with_backend(|backend| {
             if backend.session.mapped_slots().next().is_none() {
                 return;
             }
             let drains = backend.drains();
-            if which == Release::Evicted
-                && !release_due(drains, backend.seen_drains, backend.pending)
-            {
+            if !release_due(drains, backend.seen_drains, backend.pending) {
                 return;
             }
             backend.releasing(|registry, session| {
-                session.release(registry, which, |attached| attached.detach());
+                session.release(registry, |attached| attached.detach());
             });
         });
     }
