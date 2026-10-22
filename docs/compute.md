@@ -240,7 +240,8 @@ and combined at each receiver, in-engine.
 ```
 warren.gather(graph, messages, NULL::<id type>, NULL::<result type>,
               combine := 'collect', direction := 'in', rels := NULL,
-              mask := NULL, mask_complement := false, version := NULL)
+              mask := NULL, mask_complement := false, version := NULL,
+              include_self := false)
   RETURNS TABLE (node_id, value)
 ```
 
@@ -263,8 +264,12 @@ warren.gather(graph, messages, NULL::<id type>, NULL::<result type>,
   its distinct neighbours in `direction` (`in`: nodes with an edge to it;
   `out`; `both`) over `rels`. Weights are not read. Receivers with no
   message, or outside `mask`, return no row.
-- Messages are combined in ascending sender dense id, then in the order
-  read, so results are the same for any `warren.threads`.
+- With `include_self := true`, each receiver also receives its own
+  messages, ahead of its senders' (and again as a sender if it has a
+  self-loop); a node with no senders then still gets a row.
+- Messages are combined in ascending sender dense id (a receiver's own
+  first, with `include_self`), then in the order read, so results are the
+  same for any `warren.threads`.
 
 | `combine` | Messages | Result type (the second witness) |
 |---|---|---|
@@ -275,6 +280,7 @@ warren.gather(graph, messages, NULL::<id type>, NULL::<result type>,
 | `min`, `max` | integer types, `real`, `double precision` | the message type |
 | `bool_or`, `bool_and` | `boolean` | `boolean` |
 | `concat` | `text`, `bytea` | `text`, `bytea` |
+| `mode` | integer types, `real`, `double precision`, `boolean` | the message type: the most frequent, the smallest on a tie |
 
 A wrong witness is an error that names the right one (42804).
 
@@ -493,13 +499,21 @@ sample can be chosen in SQL, or the same sources given to another tool.
   scaling here, and betweenness's NetworkX scaling by `n / k`, then estimate
   the whole graph only as far as the selected nodes are typical of it.
 
-The sources run one per compute thread at a time, each search touching only
-the nodes it reaches; each thread's scratch is 16 bytes per node in the id
-space (32 for betweenness, and 16 more when weighted, for Dijkstra's
-indexed heap), allocated before the searches start and charged to
+Betweenness, and every weighted search, runs the sources one per compute
+thread at a time, each search touching only the nodes it reaches; each
+thread's scratch is 32 bytes per node in the id space for betweenness (16
+for weighted closeness and harmonic), and 16 more when weighted, for
+Dijkstra's indexed heap. Unweighted closeness and harmonic search a batch
+of 64 sources together, one bit per source, in one breadth-first search
+spread over the compute threads: a node's row is read once for all the
+sources that have it in their frontier, which at 1M nodes makes 64
+sources 9–32 times faster (0.65–1.23 s instead of 10.1–20.7 s). Their scratch is 40 bytes per node, once,
+not per thread. All of it is
+allocated before the searches start and charged to
 `warren.max_compute_memory`, and `directed := false` builds the symmetric
 adjacency (16 bytes per stored edge, 32 weighted). Contributions are added
-in ascending source order whatever the thread count.
+in a fixed order (ascending source, or batch then distance) whatever the
+thread count.
 
 ```sql
 SELECT warren.betweenness_centrality('roads', 'between', normalized := false, directed := false);

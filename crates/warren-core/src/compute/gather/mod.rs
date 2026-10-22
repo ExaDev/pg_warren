@@ -13,6 +13,9 @@
 //!
 //! A receiver's messages are combined in *collect order*: ascending sender
 //! dense id, and a sender's own messages in the order they were pushed.
+//! With `include_self`, a receiver's own messages come first, as one more
+//! sender ahead of the others: a node with no senders still receives them,
+//! and one with a self-loop receives them twice.
 //! Every receiver is combined on its own, sequentially, so results do not
 //! depend on the number of threads.
 
@@ -21,6 +24,7 @@ mod gathered;
 mod messages;
 mod neighbourhood;
 mod outbox;
+mod tally;
 
 use rayon::prelude::*;
 
@@ -51,12 +55,21 @@ pub struct Gather<'a> {
     pub relations: RelationSelection<'a>,
     /// Only receivers the mask selects receive messages.
     pub mask: Option<Mask<'a>>,
+    /// Whether each receiver also receives its own messages, ahead of its
+    /// senders' (and again as a sender, if it has a self-loop).
+    pub include_self: bool,
 }
 
 impl Gather<'_> {
     /// Gather with `combiner` from in-neighbours over every relation.
     pub fn new(combiner: Combiner) -> Self {
-        Self { combiner, direction: Direction::In, relations: RelationSelection::All, mask: None }
+        Self {
+            combiner,
+            direction: Direction::In,
+            relations: RelationSelection::All,
+            mask: None,
+            include_self: false,
+        }
     }
 }
 
@@ -106,12 +119,14 @@ pub fn gather<M: Combine, I: Interrupts>(
                     return Err(Cancelled.into());
                 }
                 let mut part = Part::new(memory)?;
+                let mut tally = None;
                 let first = task * RECEIVERS_PER_TASK;
                 let receivers = first..id_space.min(first + RECEIVERS_PER_TASK);
                 for receiver in receivers.filter(|&receiver| selects(receiver)) {
-                    let received =
-                        neighbourhood.senders(receiver).flat_map(|sender| outbox.of(sender));
-                    part.receive(combiner, receiver as DenseId, received)?;
+                    let own = gather.include_self.then_some(receiver);
+                    let senders = own.into_iter().chain(neighbourhood.senders(receiver));
+                    let received = senders.flat_map(|sender| outbox.of(sender));
+                    part.receive(combiner, receiver as DenseId, received, &mut tally, memory)?;
                 }
                 part.settle();
                 Ok(part)

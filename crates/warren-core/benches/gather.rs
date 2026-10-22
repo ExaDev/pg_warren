@@ -1,6 +1,8 @@
 //! `gather` throughput over a random graph of about one million edges,
-//! every node sending one message: `sum` of `f64` messages and `collect`
-//! of `f64` and of 8-byte messages, pulled over the reverse CSR and pushed
+//! every node sending one message: `sum` of `f64` messages, `collect` of
+//! `f64` and of 8-byte messages, and `mode` of `f64` messages with each
+//! receiver's own (majority-vote label propagation's step), pulled over
+//! the reverse CSR and pushed
 //! without one, on one thread and on every available core (DESIGN.md §6.4,
 //! §6.9, §12).
 
@@ -61,9 +63,15 @@ fn bench_gather(c: &mut Criterion) {
         let Ok(workers) = Workers::new(threads) else { continue };
         for (form, graph) in [("pull_reverse", &with_reverse), ("push_forward", &forward_only)] {
             let name = |case: &str| format!("{case}/{form}/threads_{threads}");
-            for (case, combiner) in [("sum_f64", Combiner::Sum), ("collect_f64", Combiner::Collect)]
-            {
-                let spec = Gather::new(combiner);
+            let cases = [
+                ("sum_f64", Gather::new(Combiner::Sum)),
+                ("collect_f64", Gather::new(Combiner::Collect)),
+                (
+                    "mode_f64_include_self",
+                    Gather { include_self: true, ..Gather::new(Combiner::Mode) },
+                ),
+            ];
+            for (case, spec) in cases {
                 group.bench_function(name(case), |b| {
                     b.iter(|| run_gather(&workers, &memory, graph, &spec, &numbers))
                 });

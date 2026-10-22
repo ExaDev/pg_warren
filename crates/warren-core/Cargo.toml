@@ -17,6 +17,10 @@ proptest = "1"
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 
 [[bench]]
+name = "centrality"
+harness = false
+
+[[bench]]
 name = "compute"
 harness = false
 

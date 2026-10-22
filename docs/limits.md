@@ -530,6 +530,29 @@ Dijkstra's queue was a lazy-deletion heap that grew on the pool to an entry
 per improving relaxation; it is now an indexed heap of 16 bytes per node
 per search, allocated with the rest of the scratch (0.06 GB more for four
 searches at 1M nodes).
+
+The closeness and harmonic rows above, and the soak's below, predate
+multi-source search: unweighted closeness and harmonic now search 64
+sources at a time in one breadth-first search over all the compute
+threads (DESIGN.md §6.7), with 40 bytes of scratch per node per call
+rather than 16 per thread. Measured in the domain crate
+(`cargo bench -p warren-core --bench centrality`: 1M nodes, 10M random
+directed unweighted edges, `warren.threads`' equivalent 4, the same
+shared 4-vCPU Xeon with 15 GB, other builds running, load average 3–12;
+criterion means of 10 iterations, each run listed):
+
+| Sources | closeness, per source | closeness, batched | harmonic, per source | harmonic, batched |
+|---|---|---|---|---|
+| 16 | 3.8, 6.6 s | 0.52–0.72 s (4 runs) | 4.3, 2.7 s | 1.05, 0.54 s |
+| 64 | 10.1, 17.0 s | 0.73–1.05 s (4 runs) | 20.7, 11.0 s | 0.65–1.23 s (4 runs) |
+| 256 | 50.0, 37.5 s | 1.8–3.7 s (6 runs) | 80.5 s | 3.0, 3.5 s |
+
+At 64 sources that is 0.65–1.23 s against 10.1–20.7 s, 9–32 times
+faster. Betweenness from 16 sources took 13.2 and 16.5 s on the same
+graph (unchanged: one source per thread, so the benchmark no longer runs
+it). Weighted closeness and harmonic still search one source per thread.
+Not re-measured through SQL at 10M nodes.
+
 `directed := false` and `similar_pairs` first build the symmetric
 adjacency, 16 bytes per stored edge (32 weighted): at 10M nodes and 100M
 edges weighted undirected betweenness needs about 4.6 GB of scratch,
@@ -554,14 +577,29 @@ of the version; best of three, `bench/results/library/`):
 | `triangles` | 4.19 s |
 | `clustering` (`triangles` plus degrees) | 4.45 s |
 | `label_propagation`, 10 iterations (min-label, tier 1) | 0.97 s |
-| `label_propagation_majority`, 1 iteration | 21.3 s |
-| `label_propagation_majority`, 5 iterations | 100.5 s (~20 s an iteration) |
+| `label_propagation_majority`, 1 iteration (0.4.0) | 21.3 s |
+| `label_propagation_majority`, 5 iterations (0.4.0) | 100.5 s (~20 s an iteration) |
 
 The SpMV centralities cost 40–90 ms an iteration. Majority-vote label
-propagation is tier 2: each iteration `gather`s 20M labels and counts them
-in the executor (`unnest`, `GROUP BY`, `DISTINCT ON` over 21M rows), about
-300 times an SpMV iteration. An in-engine `mode` combiner for `gather` would
-make it one kernel call (DESIGN.md §6.7, missing primitives).
+propagation is tier 2. In 0.4.0 each iteration `gather`ed 20M labels and
+counted them in the executor (`unnest`, `GROUP BY`, `DISTINCT ON` over 21M
+rows), about 300 times an SpMV iteration. Since 0.5.0 `gather` counts them
+in-engine (`combine := 'mode'`, `include_self := true`; DESIGN.md §6.4,
+§6.7), and only the 1M winners pass through the executor. Measured on the
+same graph and build, old and new body side by side, on the same 4-vCPU
+machine while three other builds ran (load average ~9, so every time is
+slower than in the table above), each a fresh session:
+
+| What | 0.4.0 (`collect`, counted in SQL) | 0.5.0 (`mode`) |
+|---|---|---|
+| `label_propagation_majority`, 1 iteration | 37.5 s | 3.0 s |
+| `label_propagation_majority`, 5 iterations | 168.3 s | 13.2 s (~2.6 s an iteration) |
+
+Both give the same labels. Of an iteration's ~3 s, `gather` alone (the
+kernel and its 1M result rows) takes 2.8 s, so an iteration still costs
+several times an SpMV centrality's. Run to
+convergence (the default `max_iter` of 100) on this graph it took 300 s,
+about 100 iterations' worth: a synchronous majority vote need not settle.
 
 **Contraction at scale** (DESIGN.md §6.6, `bench/results/communities/`;
 release build, 4 shared vCPUs, through SQL, each call in a fresh session so
@@ -604,7 +642,7 @@ Seconds, and the backend's private peak, version included:
 | `core_number` | 22.8 s, 3.2 GB |
 | `strong_components_vector` | 15.8 s, 1.7 GB |
 | `minimum_spanning_forest` (rows counted) | 54.4 s |
-| `betweenness_centrality` / `closeness_centrality` / `harmonic_centrality`, 16 sources | 61.1 / 29.4 / 30.9 s, 2.0–2.6 GB |
+| `betweenness_centrality` / `closeness_centrality` / `harmonic_centrality`, 16 sources | 61.1 / 29.4 / 30.9 s, 2.0–2.6 GB (closeness and harmonic before multi-source search, above) |
 | `most_similar`, one node / `similarity`, 100,000 pairs | 2 ms / 0.55 s |
 | `similar_pairs`, `k := 10`, every 100th node | 10.2 s, 3.6 GB |
 | `louvain` | stopped for disk after 383 s (7.5 GB of segments written) |

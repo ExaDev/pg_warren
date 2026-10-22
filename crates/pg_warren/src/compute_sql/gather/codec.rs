@@ -126,7 +126,7 @@ impl Codec {
             Combiner::Count => INT8OID,
             Combiner::Collect => return ResultType::ArrayOf(sql),
             Combiner::Sum if matches!(sql, INT2OID | INT4OID) => INT8OID,
-            Combiner::Sum | Combiner::Min | Combiner::Max | Combiner::First => sql,
+            Combiner::Sum | Combiner::Min | Combiner::Max | Combiner::First | Combiner::Mode => sql,
             Combiner::BoolOr | Combiner::BoolAnd => BOOLOID,
             Combiner::Concat => sql,
         })
@@ -156,6 +156,8 @@ mod tests {
         assert_eq!(choose(FLOAT4OID, Combiner::Max), element(Dtype::F32, FLOAT4OID, FLOAT4OID));
         assert_eq!(choose(FLOAT8OID, Combiner::Collect), element(Dtype::F64, FLOAT8OID, FLOAT8OID));
         assert_eq!(choose(BOOLOID, Combiner::BoolAnd), element(Dtype::Bool, BOOLOID, BOOLOID));
+        assert_eq!(choose(INT4OID, Combiner::Mode), element(Dtype::I64, INT4OID, INT8OID));
+        assert_eq!(choose(BOOLOID, Combiner::Mode), element(Dtype::Bool, BOOLOID, BOOLOID));
     }
 
     #[test]
@@ -183,6 +185,8 @@ mod tests {
             (INT8OID, Combiner::BoolOr),
             (INT8OID, Combiner::Concat),
             (JSONBOID, Combiner::Concat),
+            (TEXTOID, Combiner::Mode),
+            (NUMERICOID, Combiner::Mode),
         ];
         for (message, combiner) in refused {
             assert!(
@@ -202,6 +206,7 @@ mod tests {
         assert_eq!(int4.result(Combiner::Min), ResultType::Of(INT4OID));
         assert_eq!(int4.result(Combiner::Count), ResultType::Of(INT8OID));
         assert_eq!(int4.result(Combiner::Collect), ResultType::ArrayOf(INT4OID));
+        assert_eq!(int4.result(Combiner::Mode), ResultType::Of(INT4OID));
         let real = Codec::choose(FLOAT4OID, Combiner::Sum).unwrap();
         assert_eq!(real.result(Combiner::Sum), ResultType::Of(FLOAT4OID));
         let flag = Codec::choose(BOOLOID, Combiner::BoolOr).unwrap();

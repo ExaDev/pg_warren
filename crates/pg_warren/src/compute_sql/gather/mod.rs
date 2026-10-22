@@ -46,6 +46,7 @@ struct Arguments<'a> {
     rels: Option<Vec<Option<String>>>,
     mask: Option<&'a str>,
     complement: bool,
+    include_self: bool,
     /// The witnesses' types.
     id_type: pg_sys::Oid,
     value_type: pg_sys::Oid,
@@ -286,6 +287,7 @@ impl<E: IdDatum> Run<'_, E> {
             direction: self.arguments.direction,
             relations: selected.as_deref().map_or(RelationSelection::All, RelationSelection::Only),
             mask: self.mask.map(|vector| Mask { vector, complement: self.arguments.complement }),
+            include_self: self.arguments.include_self,
         };
         let memory = &self.vectors.memory;
         let gathered =
@@ -356,7 +358,7 @@ CREATE FUNCTION warren.gather(graph text, messages text, id_type anyelement,
                               value_type anycompatible, combine text DEFAULT 'collect',
                               direction text DEFAULT 'in', rels text[] DEFAULT NULL,
                               mask text DEFAULT NULL, mask_complement boolean DEFAULT false,
-                              version bigint DEFAULT NULL)
+                              version bigint DEFAULT NULL, include_self boolean DEFAULT false)
 RETURNS TABLE (node_id anyelement, value anycompatible)
 VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'gather_wrapper';
 "#
@@ -389,6 +391,7 @@ fn gather(
             rels,
             mask,
             complement: mask_complement.ok_or(ComputeSqlError::NullArgument("mask_complement"))?,
+            include_self: include_self(fcinfo)?,
             id_type,
             value_type,
         };
@@ -397,6 +400,24 @@ fn gather(
             with_id_type!(resolved.graph.id_type, E => arguments.run::<E>(resolved, caller))?;
         Ok(TableIterator::new(rows))
     })
+}
+
+/// `include_self`, the eleventh argument, read from `fcinfo` rather than
+/// as a parameter: 0.4.0's definition of `warren.gather` passes ten
+/// arguments, and still calls this function between installing this
+/// library and `ALTER EXTENSION pg_warren UPDATE`. Absent, it is `false`,
+/// its default; an explicit NULL is refused.
+fn include_self(fcinfo: pg_sys::FunctionCallInfo) -> Result<bool, ComputeSqlError> {
+    const INCLUDE_SELF: usize = 10;
+    // SAFETY: fcinfo is this call's, and holds `nargs` arguments.
+    let passed = unsafe { (*fcinfo).nargs } as usize > INCLUDE_SELF;
+    match passed {
+        // SAFETY: fcinfo is this call's, argument 10 exists, and the SQL
+        // definition declares it `boolean`.
+        true => unsafe { pgrx::fcinfo::pg_getarg::<bool>(fcinfo, INCLUDE_SELF) }
+            .ok_or(ComputeSqlError::NullArgument("include_self")),
+        false => Ok(false),
+    }
 }
 
 #[cfg(any(test, feature = "pg_test"))]

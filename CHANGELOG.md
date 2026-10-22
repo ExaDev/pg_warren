@@ -4,6 +4,20 @@
 
 ### Upgrading
 
+- **Run `ALTER EXTENSION pg_warren UPDATE;` in every database that has the
+  extension**, after installing the new build and before using the new
+  version: the update creates `warren.shared_cache()` and replaces
+  `warren.gather`.
+- The update drops and recreates `warren.gather` (it gains
+  `include_self`; grants on it are kept). A view or a `BEGIN ATOMIC` SQL
+  function that calls `warren.gather` depends on it and makes `ALTER
+  EXTENSION pg_warren UPDATE` fail: drop it before the update and create
+  it again after. Functions with a string body (PL/pgSQL, or SQL written
+  as `AS $$ … $$`) do not depend on it and need nothing.
+- Until the update, `warren.gather` keeps its 0.4.0 definition, which
+  calls the new library without `include_self`; such a call behaves as
+  `include_self := false`, as in 0.4.0.
+
 - **The shared cache is on by default.** A loaded graph version is kept
   once per cluster in dynamic shared memory, up to
   `warren.shared_cache_memory` (default `4GB`, a server setting: set it in
@@ -43,6 +57,19 @@
   reading transaction are still read privately. Dropping or replacing a
   vector evicts it, and `warren.evict` by the graph's owner evicts its
   shared vectors.
+- `warren.gather` takes `combine := 'mode'`: the most frequent message, the
+  smallest on a tie (integer, float and boolean messages), and
+  `include_self := false`: with `true`, each receiver also receives its own
+  messages, ahead of its senders'. `ALTER EXTENSION pg_warren UPDATE`
+  replaces `gather`.
+
+### Changed
+
+- `label_propagation_majority` counts its votes in-engine, with one
+  `gather` (`mode`, `include_self`) per iteration instead of counting
+  every received label in the executor: at 1M nodes and 20M stored edges
+  an iteration takes ~3 s, against ~37 s before on the same machine. Its
+  results are unchanged.
 
 ### Performance
 
@@ -67,6 +94,17 @@
     580–665 ms), 1.3–2.2× on four (480–550 → 250–375 ms).
 
   Not re-measured through SQL at 10M nodes.
+
+- **Multi-source BFS for unweighted closeness and harmonic centrality**
+  (`warren-core`'s `compute::centrality`; DESIGN.md §6.7). Sources are
+  searched 64 at a time, one bit per source, each step in parallel over
+  the frontier, with 40 B of scratch per node.
+  - Measured at 1M nodes / 10M edges on 4 threads
+    (`benches/centrality.rs`): 64 sources of closeness or harmonic in
+    0.65–1.23 s instead of 10.1–20.7 s (9–32× faster).
+  - Closeness is bit-identical to before. Harmonic sums in a new,
+    deterministic order, within 1e-12 relative of the old result.
+  - Weighted graphs (Dijkstra) and betweenness are unchanged.
 
 ### Fixed
 
