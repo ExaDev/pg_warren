@@ -267,6 +267,11 @@ impl<S: SlotTable, P: PinTable> Registry<S, P> {
         chosen.into_iter().map(|index| self.retire(index)).collect()
     }
 
+    /// The keys of the occupied slots.
+    pub(crate) fn keys(&self) -> Vec<Key> {
+        self.slots().iter().filter(|slot| slot.occupied()).map(|slot| slot.key).collect()
+    }
+
     /// The state of the use `ticket` names, if the slot still holds it.
     pub(crate) fn state(&self, ticket: Ticket) -> Option<State> {
         let slot = self.slots().get(ticket.slot)?;

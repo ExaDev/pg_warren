@@ -12,7 +12,7 @@ use pgrx::notice;
 use warren_core::compute::{AnyVector, ComputeMemory};
 
 use super::bound::{admit_load, make_room, unfit, unfit_notice};
-use super::shared::shared;
+use super::shared::{prune as prune_shared, shared};
 use super::statement::{notice_due, pin_vector, pin_version, version_pinned};
 use super::versions::{VersionCache, CACHE};
 use super::{load, trim, CacheError, LoadedVersion};
@@ -195,7 +195,8 @@ pub(crate) fn keep_vector(graph_id: i32, id: VectorId, vector: Arc<AnyVector>) {
 
 /// Drops this backend's cached versions (and those evicted that a call
 /// still holds), and transient vectors (of every role), of versions that
-/// no longer exist as of the statement's snapshot:
+/// no longer exist as of the statement's snapshot, and evicts such
+/// versions from the shared cache (`shared::prune`):
 /// dropped with their graphs, by `drop_version` or by retention, here or in
 /// another backend, or rolled back. Transient vectors cannot be reloaded,
 /// so they are dropped only for deletions that have committed: not in a
@@ -213,7 +214,7 @@ pub(super) fn prune_dropped() -> Result<(), CacheError> {
     if unsafe { pg_sys::GetTopTransactionIdIfAny() } == pg_sys::TransactionId::INVALID {
         retain_transients(&existing);
     }
-    Ok(())
+    prune_shared()
 }
 
 /// Drops this backend's cached versions of graph `graph_id`; returns how
@@ -238,7 +239,7 @@ pub(super) fn expected_bytes<E: IdDatum>(version: VersionId) -> Result<u64, Cach
 }
 
 /// Which of `versions` still exist.
-fn existing_versions(versions: &[VersionId]) -> Result<Vec<VersionId>, CacheError> {
+pub(super) fn existing_versions(versions: &[VersionId]) -> Result<Vec<VersionId>, CacheError> {
     if versions.is_empty() {
         return Ok(Vec::new());
     }

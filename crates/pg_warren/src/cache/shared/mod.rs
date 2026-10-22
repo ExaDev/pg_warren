@@ -16,6 +16,7 @@
 mod acquire;
 mod admission;
 mod dsm;
+mod eviction;
 #[cfg(test)]
 mod memory;
 #[cfg(test)]
@@ -27,7 +28,7 @@ mod setting;
 mod slot;
 mod unavailable;
 
-pub(crate) use read::shared;
+pub(crate) use read::{evict_graph, prune, shared};
 
 /// Registers `warren.shared_cache_memory` and, while
 /// `shared_preload_libraries` loads pg_warren on PG 15 and 16, the hooks
@@ -93,9 +94,16 @@ pub(crate) trait SharedVersions {
     fn release(&mut self, which: Release);
 
     /// Evicts the unpinned versions whose keys `which` selects; how many.
-    /// (A read with `warren.shared_cache_memory` at 0 evicts every one;
-    /// step 6 of DESIGN.md §5.6 adds prune, promotion and `warren.evict`.)
+    /// (A read with `warren.shared_cache_memory` at 0, `warren.evict`, a
+    /// prune and the load of a graph's current version, `eviction`.)
     fn evict(&mut self, which: &dyn Fn(&Key) -> bool) -> usize;
+
+    /// Releases this backend's mappings of the versions whose keys `which`
+    /// selects, ready or evicted, that no call holds.
+    fn forget(&mut self, which: &dyn Fn(&Key) -> bool);
+
+    /// The keys of the versions the registry holds, in any state.
+    fn keys(&mut self) -> Vec<Key>;
 
     /// Gives back everything this backend holds, as it exits.
     fn exit(&mut self);

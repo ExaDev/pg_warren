@@ -15,12 +15,13 @@ use pgrx::{ereport, pg_sys, PgSqlErrorCode};
 use super::acquire::{acquire, Acquired};
 use super::admission::Refusal;
 use super::dsm::{store_name, Dsm, DETACH, PREFIX};
+use super::eviction::{self, evict_versions};
 use super::setting;
 use super::slot::Key;
 use super::SharedVersions;
 use crate::access::as_catalog_owner;
 use crate::cache::load::{fill, plan, LoadedVersion};
-use crate::cache::open::Resolved;
+use crate::cache::open::{existing_versions, Resolved};
 use crate::cache::statement::{pin_shared, retire_due, shared_notice_due};
 use crate::cache::CacheError;
 use crate::catalog::VersionId;
@@ -51,6 +52,35 @@ pub(crate) fn shared<E: IdDatum + Send + Sync>(
         return Ok(None);
     }
     through(port, resolved)
+}
+
+/// `warren.evict`'s share of the shared cache (DESIGN.md §14 item 34):
+/// evicts graph `graph`'s unpinned shared versions if `owner` (the caller
+/// is a member of its owner role), and releases this backend's mappings of
+/// them either way; how many it evicted. The graph's versions are those
+/// the statement's snapshot sees; a prune evicts the others.
+pub(crate) fn evict_graph(graph: i32, owner: bool) -> Result<usize, CacheError> {
+    // Only an owner needs the registry, to evict; at a cap of 0 a read
+    // evicts every shared version anyway.
+    let port = match owner && setting::cap() > 0 {
+        true => Dsm::open().ok(),
+        false => Dsm::used(),
+    };
+    let Some(mut port) = port else {
+        return Ok(0);
+    };
+    let versions = as_catalog_owner(|| {
+        Ok::<_, CacheError>(
+            read_one::<Vec<VersionId>>(
+                "SELECT coalesce(array_agg(version_id), '{}') FROM warren.versions
+                 WHERE graph_id = $1",
+                &[graph.into()],
+            )?
+            .unwrap_or_default(),
+        )
+    })?;
+    let keys: Vec<Key> = versions.into_iter().filter_map(key).collect();
+    Ok(evict_versions(&mut port, &keys, owner))
 }
 
 /// With `warren.shared_cache_memory` set to 0 (the setting is reloaded,
@@ -97,12 +127,14 @@ pub(super) fn through<E: IdDatum + Send + Sync>(
         &mut port,
         key,
         || {
+            // A miss: make room by evicting what no longer exists first.
+            prune()?;
             let plan = plan::<E>(&mut SpiSegmentStore, version, store_merged)?;
             Ok((PREFIX as u64 + plan.len() as u64, plan))
         },
         |plan, region| {
             fill::<E>(&mut SpiSegmentStore, version, plan, region.bytes_mut())?;
-            region.validate::<E>(version)
+            Ok::<_, CacheError>(region.validate::<E>(version)?)
         },
     )?;
     match acquired {
@@ -122,11 +154,32 @@ pub(super) fn through<E: IdDatum + Send + Sync>(
 /// The registry's key for `version` in this database's installation of
 /// pg_warren.
 pub(super) fn key(version: VersionId) -> Option<Key> {
+    let (database, extension) = installation()?;
+    Some(Key { database, extension, version })
+}
+
+/// This database and pg_warren's `pg_extension` oid in it, if installed.
+fn installation() -> Option<(pg_sys::Oid, pg_sys::Oid)> {
     // SAFETY: reads this backend's database and looks pg_warren up in
     // `pg_extension`, on the main thread inside a transaction.
     let (database, extension) =
         unsafe { (pg_sys::MyDatabaseId, pg_sys::get_extension_oid(c"pg_warren".as_ptr(), true)) };
-    (extension != pg_sys::Oid::INVALID).then_some(Key { database, extension, version })
+    (extension != pg_sys::Oid::INVALID).then_some((database, extension))
+}
+
+/// Evicts the shared versions of this database that no longer exist as of
+/// the statement's snapshot (dropped with their graphs, by `drop_version`
+/// or by retention, or with an earlier installation of pg_warren), and
+/// releases this backend's mappings of them (DESIGN.md §5.6): at a cache
+/// miss, private or shared, and at `warren.evict`. Only in a backend that
+/// has used the shared cache. Eviction is always safe: a version is
+/// immutable, so a snapshot that still sees one reloads it.
+pub(crate) fn prune() -> Result<(), CacheError> {
+    let (Some(mut port), Some((database, extension))) = (Dsm::used(), installation()) else {
+        return Ok(());
+    };
+    eviction::prune(&mut port, database, extension, existing_versions)?;
+    Ok(())
 }
 
 /// Whether this transaction (or one of its subtransactions) created

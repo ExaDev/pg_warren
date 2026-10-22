@@ -7,7 +7,7 @@
 use std::ffi::CStr;
 
 use pgrx::pg_sys;
-use pgrx::spi::Error;
+use pgrx::spi::{Error, Spi};
 
 use super::{with_backend, Dsm};
 use crate::cache::open::{resolve, Resolved};
@@ -18,8 +18,12 @@ use crate::cache::statement::end_statement;
 use crate::fixture::{refresh, ring};
 
 /// Sets `warren.shared_cache_memory` in this backend, as a reload of the
-/// configuration file would (it cannot be `SET`).
-fn set_cap(value: &CStr) {
+/// configuration file would (it cannot be `SET`), and holds the shared
+/// cache's tests apart until this one's transaction ends: their versions
+/// are uncommitted, so a prune in another test's backend, whose snapshot
+/// does not see them, would evict them.
+fn set_cap(value: &CStr) -> Result<(), Error> {
+    Spi::run("SELECT pg_catalog.pg_advisory_xact_lock(7234, 1)")?;
     // SAFETY: sets a setting by name on the main thread, in the context and
     // from the source of the configuration file.
     unsafe {
@@ -30,6 +34,7 @@ fn set_cap(value: &CStr) {
             pg_sys::GucSource::PGC_S_FILE,
         );
     }
+    Ok(())
 }
 
 /// Graph `name`, a ring of `nodes`, with a promoted version: its key and
@@ -79,15 +84,18 @@ mod tests {
 
     use super::{forget, graph, port, set_cap, slot, with_backend};
     use crate::cache::load::load;
+    use crate::cache::open::{resolve, Resolved};
     use crate::cache::shared::acquire::acquire;
     use crate::cache::shared::admission::Limits;
     use crate::cache::shared::dsm::PREFIX;
     use crate::cache::shared::read::{evict_through, shared, through};
     use crate::cache::shared::registry::Claim;
+    use crate::cache::shared::slot::Key;
     use crate::cache::shared::slot::Process;
     use crate::cache::shared::slot::State;
     use crate::cache::shared::{end_message, SharedVersions};
     use crate::cache::statement::end_statement;
+    use crate::fixture::refresh;
     use crate::segment::SpiSegmentStore;
 
     #[pg_test]
@@ -102,7 +110,7 @@ mod tests {
 
     #[pg_test]
     fn an_uncommitted_version_is_loaded_privately() -> Result<(), Error> {
-        set_cap(c"64MB");
+        set_cap(c"64MB")?;
         let (key, resolved) = graph("uncommitted", 50)?;
         assert!(shared::<i64>(&resolved).map_err(|_| Error::InvalidPosition)?.is_none());
         Spi::run("SELECT warren.prewarm('uncommitted')")?;
@@ -114,7 +122,7 @@ mod tests {
 
     #[pg_test]
     fn a_version_is_loaded_once_and_shared_by_later_statements() -> Result<(), Error> {
-        set_cap(c"64MB");
+        set_cap(c"64MB")?;
         let (key, resolved) = graph("shared_once", 2000)?;
         let read =
             || through::<i64>(port()?, &resolved).ok().flatten().ok_or(Error::InvalidPosition);
@@ -136,7 +144,7 @@ mod tests {
 
     #[pg_test]
     fn a_version_read_again_in_its_statement_skips_the_registry() -> Result<(), Error> {
-        set_cap(c"64MB");
+        set_cap(c"64MB")?;
         let (key, resolved) = graph("fast", 100)?;
         let read =
             || through::<i64>(port()?, &resolved).ok().flatten().ok_or(Error::InvalidPosition);
@@ -152,7 +160,7 @@ mod tests {
 
     #[pg_test]
     fn a_version_larger_than_the_cap_is_loaded_privately() -> Result<(), Error> {
-        set_cap(c"64kB");
+        set_cap(c"64kB")?;
         let (key, resolved) = graph("too_large", 20_000)?;
         let read = through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?;
         assert!(read.is_none());
@@ -162,7 +170,7 @@ mod tests {
 
     #[pg_test]
     fn a_load_whose_loader_is_gone_is_taken_over() -> Result<(), Error> {
-        set_cap(c"64MB");
+        set_cap(c"64MB")?;
         let (key, resolved) = graph("orphaned", 100)?;
         // A claim by a backend no longer running (no live backend has its
         // pid), as one killed outright mid-load would leave it, if the
@@ -184,7 +192,7 @@ mod tests {
 
     #[pg_test]
     fn a_failed_load_gives_its_slot_up_at_the_abort() -> Result<(), Error> {
-        set_cap(c"64MB");
+        set_cap(c"64MB")?;
         let (key, _) = graph("aborted", 50)?;
         let sized = || Ok::<_, String>((PREFIX as u64 + 4096, ()));
         let failed = acquire(&mut port()?, key, sized, |_, _| Err("cancelled".to_owned()));
@@ -200,7 +208,7 @@ mod tests {
     fn the_eviction_of_a_read_at_a_cap_of_0_releases_its_mappings() -> Result<(), Error> {
         // What a read with the cap at 0 does to every shared version, here
         // to this test's alone: the tests share the registry.
-        set_cap(c"64MB");
+        set_cap(c"64MB")?;
         let (key, resolved) = graph("retired", 100)?;
         drop(through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?);
         end_statement();
@@ -213,7 +221,7 @@ mod tests {
 
     #[pg_test]
     fn a_draining_version_read_again_is_revived() -> Result<(), Error> {
-        set_cap(c"64MB");
+        set_cap(c"64MB")?;
         let (key, resolved) = graph("revived", 100)?;
         let read =
             || through::<i64>(port()?, &resolved).ok().flatten().ok_or(Error::InvalidPosition);
@@ -232,7 +240,7 @@ mod tests {
 
     #[pg_test]
     fn a_piece_of_a_version_held_past_it_keeps_the_mapping() -> Result<(), Error> {
-        set_cap(c"64MB");
+        set_cap(c"64MB")?;
         let (key, resolved) = graph("piece", 100)?;
         let read = through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?;
         let piece = read.ok_or(Error::InvalidPosition)?.id_map.clone();
@@ -249,7 +257,7 @@ mod tests {
 
     #[pg_test]
     fn an_evicted_version_is_released_at_the_end_of_the_message() -> Result<(), Error> {
-        set_cap(c"64MB");
+        set_cap(c"64MB")?;
         let (key, resolved) = graph("evicted", 100)?;
         drop(through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?);
         end_statement();
@@ -260,5 +268,65 @@ mod tests {
         end_message();
         assert_eq!(slot(key), None, "its last mapper released it");
         Ok(())
+    }
+
+    #[pg_test]
+    fn evict_by_an_owner_evicts_the_graphs_unpinned_shared_versions() -> Result<(), Error> {
+        set_cap(c"64MB")?;
+        let (key, resolved) = graph("evicted_by_owner", 100)?;
+        drop(through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?);
+        let evict = "SELECT warren.evict('evicted_by_owner')";
+        assert_eq!(Spi::get_one::<i64>(evict)?, Some(0), "its statement pins it");
+        assert_eq!(slot(key), Some((State::Ready, 1, 0)), "pinned, its mapping released");
+        end_statement();
+        assert_eq!(Spi::get_one::<i64>(evict)?, Some(1), "counted with the private entries");
+        assert_eq!(slot(key), None, "evicted, and released by this backend");
+        Ok(())
+    }
+
+    #[pg_test]
+    fn evict_by_another_role_only_releases_its_own_mappings() -> Result<(), Error> {
+        set_cap(c"64MB")?;
+        let (key, resolved) = graph("evicted_by_stranger", 100)?;
+        drop(through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?);
+        end_statement();
+        Spi::run("CREATE ROLE evict_stranger; SET ROLE evict_stranger")?;
+        let evicted = Spi::get_one::<i64>("SELECT warren.evict('evicted_by_stranger')")?;
+        Spi::run("RESET ROLE")?;
+        assert_eq!(evicted, Some(0));
+        assert_eq!(slot(key), Some((State::Ready, 0, 0)), "still shared, mapped by no one");
+        forget(key)
+    }
+
+    /// Graph `name`'s version shared, then superseded by a refresh whose
+    /// retention drops it: its key and the new version's resolution.
+    fn superseded(name: &str) -> Result<(Key, Resolved), Error> {
+        let (key, resolved) = graph(name, 100)?;
+        drop(through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?);
+        end_statement();
+        refresh(name, true)?;
+        assert_eq!(slot(key), Some((State::Ready, 0, 1)));
+        let resolved = resolve(name, None, "read").map_err(|_| Error::InvalidPosition)?;
+        Ok((key, resolved))
+    }
+
+    #[pg_test]
+    fn a_private_load_prunes_shared_versions_that_no_longer_exist() -> Result<(), Error> {
+        set_cap(c"64MB")?;
+        let (key, _) = superseded("pruned_privately")?;
+        Spi::run("SELECT warren.prewarm('pruned_privately')")?;
+        assert_eq!(slot(key), None, "evicted, and released by this backend");
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_shared_load_prunes_shared_versions_that_no_longer_exist() -> Result<(), Error> {
+        set_cap(c"64MB")?;
+        let (key, resolved) = superseded("pruned_shared")?;
+        let current = through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?;
+        assert!(current.is_some());
+        assert_eq!(slot(key), None, "evicted, and released by this backend");
+        drop(current);
+        forget(super::key(resolved.version).ok_or(Error::InvalidPosition)?)
     }
 }

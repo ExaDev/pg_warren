@@ -15,5 +15,5 @@ pub(crate) use error::AccessError;
 pub(crate) use guard::{entry, with_read_only, with_search_path, Caller, SqlError};
 pub(crate) use identity::{as_catalog_owner, as_role, current_user};
 pub(crate) use privilege::{
-    is_reader, is_superuser, require_creator_or_owner, require_owner, require_reader,
+    is_owner, is_reader, is_superuser, require_creator_or_owner, require_owner, require_reader,
 };

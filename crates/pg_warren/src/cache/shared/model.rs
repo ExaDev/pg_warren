@@ -1,7 +1,7 @@
 //! The shared cache against a reference model (DESIGN.md §5.6): random
 //! interleavings of what several backends do (read, wait for a load and
 //! take it over, finish a load, raise an ERROR in a load or an attach, end
-//! a statement, drop what calls hold, release mappings, evict, exit, and
+//! a statement, drop what calls hold, release mappings (or one version's), evict, exit, and
 //! vanish without the exit callback) on a `Memory` cluster, checking after
 //! each step that the cap holds, that no pinned version is evicted, that
 //! each version has at most one loading or ready slot, that every loading
@@ -53,6 +53,8 @@ enum Op {
     Release(usize, Release),
     /// Evicts a version.
     Evict(usize, usize),
+    /// Releases its mapping of a version, ready or not (`warren.evict`).
+    Forget(usize, usize),
     /// Exits (FATAL); a new backend takes its place.
     Exit(usize),
     /// Vanishes without its exit callback; a new backend takes its place.
@@ -72,7 +74,8 @@ fn op() -> impl Strategy<Value = Op> {
         3 => backend.clone().prop_map(Op::EndStatement),
         2 => backend.clone().prop_map(Op::DropViews),
         3 => (backend.clone(), release).prop_map(|(b, r)| Op::Release(b, r)),
-        1 => (backend.clone(), version).prop_map(|(b, v)| Op::Evict(b, v)),
+        1 => (backend.clone(), version.clone()).prop_map(|(b, v)| Op::Evict(b, v)),
+        1 => (backend.clone(), version).prop_map(|(b, v)| Op::Forget(b, v)),
         1 => backend.clone().prop_map(Op::Exit),
         1 => backend.prop_map(Op::Vanish),
     ]
@@ -291,6 +294,9 @@ impl World {
             Op::Release(b, which) => self.backends[b].port.release(which),
             Op::Evict(b, version) => {
                 self.backends[b].port.evict(&|evicted| *evicted == key(version));
+            }
+            Op::Forget(b, version) => {
+                self.backends[b].port.forget(&|forgotten| *forgotten == key(version));
             }
             Op::Exit(b) => {
                 let fresh = Simulated::new(&self.memory);
