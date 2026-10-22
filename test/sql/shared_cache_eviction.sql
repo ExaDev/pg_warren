@@ -45,7 +45,9 @@ FROM dblink('b', $$SELECT warren.evict('g2')$$) AS t(evicted bigint);
 SELECT * FROM dblink('c', $$SELECT warren.prewarm('g1')$$) AS t(version bigint);
 SELECT assert.equal(shared_segments(:v1), :one, 'g1 is revived, not loaded again');
 SELECT assert.equal(evicted, 1 - :one, 'c reads the shared g1')
-FROM dblink('c', $$SELECT warren.evict('g1')$$) AS t(evicted bigint);
+FROM dblink('c', $$SELECT own_evictions('g1')$$) AS t(evicted bigint);
+-- That released c's mapping (DESIGN.md §14 item 34): c maps g1 again.
+SELECT * FROM dblink('c', $$SELECT warren.prewarm('g1')$$) AS t(version bigint);
 
 -- b's next load of g2 drains g1 again; once a and c have each released
 -- it at their next read, it is freed and then g2 fits.

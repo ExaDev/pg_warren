@@ -8,7 +8,10 @@
 --   the prefix pg_warren writes at their start (magic `WRSV`, this
 --   database's oid at bytes 8..12 and the version id at bytes 16..24,
 --   little-endian); shared_segment_size(version),
---   the size of the one that does.
+--   the size of the one that does;
+-- own_evictions(graph), warren.evict(graph) called as a role that does not
+--   own the graph, so that it frees what this backend holds and evicts no
+--   shared version (DESIGN.md §14 item 34).
 CREATE EXTENSION IF NOT EXISTS dblink;
 SELECT warren.version() IS NOT NULL AS loaded \gset
 SELECT coalesce(current_setting('warren.shared_cache_memory', true), '0') <> '0'
@@ -39,4 +42,18 @@ $$;
 CREATE FUNCTION shared_segment_size(version bigint) RETURNS bigint LANGUAGE sql AS $$
     SELECT max((pg_catalog.pg_stat_file('/dev/shm/' || name, true)).size)
     FROM shared_segment_files(version) AS name
+$$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'warren_stranger') THEN
+        CREATE ROLE warren_stranger;
+    END IF;
+END
+$$;
+CREATE FUNCTION own_evictions(graph text) RETURNS bigint LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_catalog.set_config('role', 'warren_stranger', true);
+    RETURN warren.evict(graph);
+END
 $$;
