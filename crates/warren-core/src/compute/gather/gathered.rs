@@ -1,6 +1,7 @@
 //! What `gather` returns: one row per receiver that got a message, in
 //! ascending dense-id order, ready to stream to SQL.
 
+use super::tally::Tally;
 use super::{Combine, Combiner};
 use crate::compute::memory::Allowance;
 use crate::compute::{ComputeError, ComputeMemory, Message};
@@ -80,8 +81,8 @@ pub struct RowAt {
 pub enum Received<'a, M: Message> {
     /// `count`: the number of messages received.
     Count(i64),
-    /// `sum`, `min`, `max`, `first`, `concat`, `bool_or`, `bool_and`: one
-    /// message of the messages' type.
+    /// `sum`, `min`, `max`, `first`, `concat`, `bool_or`, `bool_and`,
+    /// `mode`: one message of the messages' type.
     Message(M::View<'a>),
     /// `collect`: the messages received, in collect order.
     Messages(Collected<'a, M>),
@@ -168,12 +169,13 @@ impl<M: Combine> Part<M> {
     }
 
     /// Combines the messages `receiver` received, in collect order, adding
-    /// the receiver if there are any.
+    /// the receiver if there are any; `mode` counts them in `tally`.
     pub(super) fn receive<'a>(
         &mut self,
         combiner: Combiner,
         receiver: DenseId,
         mut received: impl Iterator<Item = M::View<'a>> + Clone,
+        tally: &mut Tally<'a, M>,
     ) -> Result<(), ComputeError> {
         let any = match combiner {
             Combiner::Count => {
@@ -198,6 +200,10 @@ impl<M: Combine> Part<M> {
             }
             Combiner::First => match received.next() {
                 Some(first) => self.push(first).map(|()| true)?,
+                None => false,
+            },
+            Combiner::Mode => match tally.mode(received)? {
+                Some(mode) => self.push(mode).map(|()| true)?,
                 None => false,
             },
             Combiner::Concat => {

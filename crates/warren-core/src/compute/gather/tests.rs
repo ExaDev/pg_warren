@@ -144,6 +144,32 @@ fn boolean_combiners_fold_bool_messages() {
 }
 
 #[test]
+fn mode_takes_the_most_frequent_message_and_the_smallest_on_a_tie() {
+    let sent = [(0, 5.0), (1, 5.0), (2, 7.0), (2, 5.0), (2, 7.0)];
+    // In: 0 gets [7, 5, 7], 1 gets [5], 2 gets [5, 5].
+    assert_eq!(combined::<f64>(Combiner::Mode, &sent), ones([7.0, 5.0, 5.0]));
+    // Both: 0 gets [5, 7, 5, 7], a tie.
+    let both = Gather { direction: Direction::Both, ..Gather::new(Combiner::Mode) };
+    let rows = run::<f64>(&example(true), &both, &sent).unwrap();
+    assert_eq!(rows[0], (0, Owned::One(5.0)));
+    let integers = sent.map(|(sender, value)| (sender, value as i64));
+    assert_eq!(combined::<i64>(Combiner::Mode, &integers), ones([7, 5, 5]));
+    let flags = [(2, true), (2, false), (2, true), (0, false), (1, true)];
+    assert_eq!(combined::<bool>(Combiner::Mode, &flags), ones([true, false, false]));
+}
+
+#[test]
+fn mode_counts_messages_equal_in_sql_order_as_one_and_keeps_the_first() {
+    // 0 gets [NaN, -0, 0, NaN, 1, 1]: NaN and zero tie at two, and zero is
+    // the smaller; -0 comes first.
+    let sent = [(2, f64::NAN), (2, -0.0), (2, 0.0), (2, f64::NAN), (2, 1.0), (2, 1.0)];
+    let rows = combined::<f64>(Combiner::Mode, &sent);
+    assert!(matches!(rows[..], [(0, Owned::One(zero))] if zero == 0.0 && zero.is_sign_negative()));
+    let rows = combined::<f64>(Combiner::Mode, &[(2, f64::NAN), (2, 1.0), (2, f64::NAN)]);
+    assert!(matches!(rows[..], [(0, Owned::One(nan))] if nan.is_nan()));
+}
+
+#[test]
 fn byte_messages_collect_concatenate_and_count() {
     let sent: [(DenseId, &[u8]); 5] = [(2, b"c"), (0, b"a"), (2, b"d"), (1, b""), (3, b"z")];
     let bytes = |values: [&[&[u8]]; 3]| -> Rows<Vec<u8>> {
@@ -181,6 +207,43 @@ fn a_combiner_the_message_kind_does_not_accept_is_an_error() {
             message: MessageKind::Element(crate::compute::Dtype::F64)
         })
     );
+}
+
+#[test]
+fn with_include_self_a_receiver_gets_its_own_messages_first() {
+    let mask = vector(vec![1i64, 0, 1, 1]);
+    for reverse in [true, false] {
+        let graph = example(reverse);
+        let own = Gather { include_self: true, ..Gather::new(Combiner::Collect) };
+        // Node 3 has no senders, but its own message.
+        assert_eq!(
+            run::<f64>(&graph, &own, &SENT).unwrap(),
+            [
+                (0, many(&[1.0, 3.0, 4.0])),
+                (1, many(&[2.0, 1.0])),
+                (2, many(&[3.0, 4.0, 1.0, 2.0])),
+                (3, many(&[9.0]))
+            ]
+        );
+        let masked = Gather { mask: Some(Mask { vector: &mask, complement: false }), ..own };
+        assert_eq!(
+            run::<f64>(&graph, &masked, &SENT).unwrap(),
+            [(0, many(&[1.0, 3.0, 4.0])), (2, many(&[3.0, 4.0, 1.0, 2.0])), (3, many(&[9.0]))]
+        );
+    }
+}
+
+#[test]
+fn a_self_loop_makes_a_receiver_its_own_sender_as_well() {
+    // 0 → 0, 1 → 0: with include_self, 0 votes twice for its own label.
+    for reverse in [true, false] {
+        let graph = reference::graph(2, 1, &vec![(0, 0, 0, 1.0), (0, 1, 0, 1.0)], false, reverse);
+        let own = Gather { include_self: true, ..Gather::new(Combiner::Collect) };
+        let sent = [(0, 5.0), (1, 1.0)];
+        assert_eq!(run::<f64>(&graph, &own, &sent).unwrap()[0], (0, many(&[5.0, 5.0, 1.0])));
+        let mode = Gather { combiner: Combiner::Mode, ..own };
+        assert_eq!(run::<f64>(&graph, &mode, &sent).unwrap()[0], (0, Owned::One(5.0)));
+    }
 }
 
 fn vector<E: Element>(values: Vec<E>) -> AnyVector
@@ -348,6 +411,7 @@ struct Scenario {
     selected: Option<Vec<usize>>,
     mask: Option<(Vec<f64>, bool)>,
     combiner: Combiner,
+    include_self: bool,
 }
 
 impl Scenario {
@@ -385,6 +449,7 @@ impl Scenario {
             selected: self.selected.as_deref(),
             direction: self.direction,
             selects,
+            include_self: self.include_self,
             sent,
         }
     }
@@ -400,7 +465,7 @@ fn scenarios() -> impl Strategy<Value = Scenario> {
             prop_oneof![Just(Direction::In), Just(Direction::Out), Just(Direction::Both)],
             prop::option::of(prop::collection::vec(0..relation_count, 0..3)),
             prop::option::of((prop::collection::vec(mask_value, id_space as usize), any::<bool>())),
-            prop::sample::select(Combiner::all().collect::<Vec<_>>()),
+            (prop::sample::select(Combiner::all().collect::<Vec<_>>()), any::<bool>()),
         )
             .prop_map(
                 move |(
@@ -409,7 +474,7 @@ fn scenarios() -> impl Strategy<Value = Scenario> {
                     direction,
                     selected,
                     mask,
-                    combiner,
+                    (combiner, include_self),
                 )| Scenario {
                     id_space,
                     relation_count,
@@ -422,6 +487,7 @@ fn scenarios() -> impl Strategy<Value = Scenario> {
                     selected,
                     mask,
                     combiner,
+                    include_self,
                 },
             )
     })
@@ -458,6 +524,7 @@ fn check<M: Own>(
             .as_ref()
             .zip(s.mask.as_ref())
             .map(|(vector, &(_, complement))| Mask { vector, complement }),
+        include_self: s.include_self,
     };
     let memory = memory();
     let mut messages = Messages::<M>::new(&memory).unwrap();

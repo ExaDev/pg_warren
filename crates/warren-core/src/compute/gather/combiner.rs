@@ -1,6 +1,7 @@
 //! Combiners: how `gather` folds the messages a receiver gets into its
 //! value (DESIGN.md §6.4, `combine`).
 
+use std::cmp::Ordering;
 use std::fmt::{self, Display};
 use std::str::FromStr;
 
@@ -34,10 +35,15 @@ pub enum Combiner {
     BoolOr,
     /// Whether every message is true: `bool` messages only.
     BoolAnd,
+    /// The most frequent message, the smallest in SQL order on a tie:
+    /// `f32`, `f64`, `i64` or `bool` messages. Messages equal in SQL order
+    /// (`0` and `-0`, every `NaN`) are one value; the one returned is the
+    /// first of them in collect order.
+    Mode,
 }
 
 impl Combiner {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::Collect,
         Self::Count,
         Self::Sum,
@@ -47,6 +53,7 @@ impl Combiner {
         Self::Concat,
         Self::BoolOr,
         Self::BoolAnd,
+        Self::Mode,
     ];
 
     /// Every combiner.
@@ -66,6 +73,7 @@ impl Combiner {
             Self::Concat => "concat",
             Self::BoolOr => "bool_or",
             Self::BoolAnd => "bool_and",
+            Self::Mode => "mode",
         }
     }
 
@@ -77,6 +85,7 @@ impl Combiner {
             Self::Sum | Self::Min | Self::Max => numeric,
             Self::BoolOr | Self::BoolAnd => kind == MessageKind::Element(Dtype::Bool),
             Self::Concat => kind == MessageKind::Bytes,
+            Self::Mode => matches!(kind, MessageKind::Element(_)),
         };
         match accepted {
             true => Ok(()),
@@ -86,10 +95,10 @@ impl Combiner {
 }
 
 /// A message type `gather` can combine: how the folding combiners (`sum`,
-/// `min`, `max`, `bool_or`, `bool_and`) fold two messages, and how
-/// `concat` joins them. A combiner [`Combiner::check`] refuses for the
-/// message kind, or one that does not fold or concatenate, is a
-/// [`ComputeError::CombinerType`] error here too.
+/// `min`, `max`, `bool_or`, `bool_and`) fold two messages, how `concat`
+/// joins them, and how `mode` picks one. A combiner [`Combiner::check`]
+/// refuses for the message kind, or one that does not fold, concatenate or
+/// pick, is a [`ComputeError::CombinerType`] error here too.
 pub trait Combine: Message + Sized {
     /// `a` folded with `b` under `combiner`.
     fn fold<'a>(
@@ -107,6 +116,13 @@ pub trait Combine: Message + Sized {
         parts: impl Iterator<Item = Self::View<'a>> + Clone,
         charge: impl FnOnce(u64) -> Result<(), ComputeError>,
     ) -> Result<bool, ComputeError>;
+
+    /// The [`Combiner::Mode`] of `tally`, a receiver's messages each with
+    /// its position in collect order, reordering `tally`; `None` if it is
+    /// empty.
+    fn mode<'a>(
+        tally: &mut [(Self::View<'a>, usize)],
+    ) -> Result<Option<Self::View<'a>>, ComputeError>;
 }
 
 impl<E: SemiringElement> Combine for E {
@@ -128,6 +144,22 @@ impl<E: SemiringElement> Combine for E {
         _: impl FnOnce(u64) -> Result<(), ComputeError>,
     ) -> Result<bool, ComputeError> {
         Err(ComputeError::CombinerType { combiner: Combiner::Concat, message: E::KIND })
+    }
+
+    fn mode<'a>(
+        tally: &mut [(Self::View<'a>, usize)],
+    ) -> Result<Option<Self::View<'a>>, ComputeError> {
+        // In SQL order, then collect order, so each run of equal messages
+        // starts with its first; the longest run wins, the first on a tie.
+        tally.sort_unstable_by(|(a, i), (b, j)| a.sql_cmp(*b).then(i.cmp(j)));
+        let equal = |(a, _): &(E, usize), (b, _): &(E, usize)| a.sql_cmp(*b) == Ordering::Equal;
+        let mut mode: Option<(E, usize)> = None;
+        for run in tally.chunk_by(equal) {
+            if mode.is_none_or(|(_, count)| run.len() > count) {
+                mode = Some((run[0].0, run.len()));
+            }
+        }
+        Ok(mode.map(|(message, _)| message))
     }
 }
 
@@ -157,6 +189,10 @@ impl Combine for Bytes {
             .map_err(|_| ComputeError::OutOfMemory { bytes: size })?;
         Ok(true)
     }
+
+    fn mode<'a>(_: &mut [(Self::View<'a>, usize)]) -> Result<Option<Self::View<'a>>, ComputeError> {
+        Err(ComputeError::CombinerType { combiner: Combiner::Mode, message: MessageKind::Bytes })
+    }
 }
 
 impl Display for Combiner {
@@ -180,8 +216,8 @@ impl FromStr for Combiner {
 mod tests {
     use super::*;
 
-    const NAMES: [&str; 9] =
-        ["collect", "count", "sum", "min", "max", "first", "concat", "bool_or", "bool_and"];
+    const NAMES: [&str; 10] =
+        ["collect", "count", "sum", "min", "max", "first", "concat", "bool_or", "bool_and", "mode"];
 
     #[test]
     fn combiners_parse_from_their_names() {
@@ -218,6 +254,7 @@ mod tests {
             assert_eq!(accepted(boolean), [false, false, false, true, false]);
         }
         assert_eq!(accepted(Combiner::Concat), [false, false, false, false, true]);
+        assert_eq!(accepted("mode".parse().unwrap()), [true, true, true, true, false]);
         assert_eq!(
             Combiner::Sum.check(MessageKind::Bytes),
             Err(ComputeError::CombinerType {
