@@ -22,11 +22,11 @@ use super::SharedVersions;
 use crate::access::as_catalog_owner;
 use crate::cache::installation::installation;
 use crate::cache::load::{fill, plan, LoadedVersion};
-use crate::cache::open::{existing_versions, Resolved};
+use crate::cache::open::Resolved;
 use crate::cache::statement::{pin_shared, retire_due, shared_notice_due};
 use crate::cache::CacheError;
 use crate::catalog::VersionId;
-use crate::read_only::read_one;
+use crate::read_only::{latest_readable, read_one, read_one_latest};
 use crate::segment::SpiSegmentStore;
 use crate::source::IdDatum;
 
@@ -212,19 +212,41 @@ pub(super) fn key(version: VersionId) -> Option<Key> {
     Some(Key { database, extension, version })
 }
 
-/// Evicts the shared versions of this database that no longer exist as of
-/// the statement's snapshot (dropped with their graphs, by `drop_version`
-/// or by retention, or with an earlier installation of pg_warren), and
-/// releases this backend's mappings of them (DESIGN.md §5.6): at a cache
-/// miss, private or shared, and at `warren.evict`. Only in a backend that
-/// has used the shared cache. Eviction is always safe: a version is
-/// immutable, so a snapshot that still sees one reloads it.
+/// Evicts the shared versions of this database that no longer exist
+/// (dropped with their graphs, by `drop_version` or by retention, or with
+/// an earlier installation of pg_warren), and releases this backend's
+/// mappings of them (DESIGN.md §5.6): at a cache miss, private or shared,
+/// and at `warren.evict`. Only in a backend that has used the shared
+/// cache, and not in parallel mode, which cannot read the latest committed
+/// state. Existence is judged by that state, not by the caller's snapshot:
+/// a slot only ever holds a committed version (its creator reads it
+/// privately until it commits), so one the latest snapshot does not see
+/// was deleted, and the deletion committed; an older snapshot would see
+/// none of the versions committed since it was taken. Eviction is always
+/// safe: a version is immutable, so a snapshot that still sees one
+/// reloads it.
 pub(crate) fn prune() -> Result<(), CacheError> {
     let (Some(mut port), Some((database, extension))) = (Dsm::used(), installation()) else {
         return Ok(());
     };
-    eviction::prune(&mut port, database, extension, existing_versions)?;
+    if latest_readable() {
+        eviction::prune(&mut port, database, extension, committed_versions)?;
+    }
     Ok(())
+}
+
+/// Which of `versions` exist in the latest committed state.
+fn committed_versions(versions: &[VersionId]) -> Result<Vec<VersionId>, CacheError> {
+    as_catalog_owner(|| {
+        Ok::<_, CacheError>(
+            read_one_latest::<Vec<VersionId>>(
+                "SELECT coalesce(array_agg(version_id), '{}') FROM warren.versions
+                 WHERE version_id = ANY ($1)",
+                &[versions.to_vec().into()],
+            )?
+            .unwrap_or_default(),
+        )
+    })
 }
 
 /// Whether this transaction (or one of its subtransactions) created

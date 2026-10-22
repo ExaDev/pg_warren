@@ -269,7 +269,7 @@ pub(super) fn expected_bytes<E: IdDatum>(version: VersionId) -> Result<u64, Cach
 }
 
 /// Which of `versions` still exist.
-pub(super) fn existing_versions(versions: &[VersionId]) -> Result<Vec<VersionId>, CacheError> {
+fn existing_versions(versions: &[VersionId]) -> Result<Vec<VersionId>, CacheError> {
     if versions.is_empty() {
         return Ok(Vec::new());
     }
