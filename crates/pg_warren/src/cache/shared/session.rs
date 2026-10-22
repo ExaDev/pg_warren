@@ -13,12 +13,12 @@ use std::sync::Arc;
 
 use super::admission::Limits;
 use super::registry::{Claim, Gone, Registry, SlotTable};
-use super::slot::{Handle, Key, Pid, State, Ticket};
+use super::slot::{Handle, Key, Process, State, Ticket};
 
 /// A backend's pins, mappings and claims; `M` is a mapped region.
 #[derive(Debug)]
 pub(crate) struct Session<M> {
-    pid: Pid,
+    process: Process,
     /// The slots the current statement pins.
     pins: Vec<Ticket>,
     /// The regions this backend maps.
@@ -47,14 +47,14 @@ pub(crate) enum Release {
 }
 
 impl<M> Session<M> {
-    /// The session of backend `pid`, which holds nothing.
-    pub(crate) fn new(pid: Pid) -> Self {
-        Self { pid, pins: Vec::new(), mappings: Vec::new(), loading: Vec::new() }
+    /// The session of the backend `process`, which holds nothing.
+    pub(crate) fn new(process: Process) -> Self {
+        Self { process, pins: Vec::new(), mappings: Vec::new(), loading: Vec::new() }
     }
 
-    /// The backend's process id.
-    pub(crate) fn pid(&self) -> Pid {
-        self.pid
+    /// The backend's process.
+    pub(crate) fn process(&self) -> Process {
+        self.process
     }
 
     /// Uses a ready slot in the current statement, pinning it once per
@@ -104,7 +104,7 @@ impl<M> Session<M> {
         bytes: u64,
         limits: Limits,
     ) -> Claim {
-        let claim = registry.claim(key, bytes, self.pid, limits);
+        let claim = registry.claim(key, bytes, self.process, limits);
         if let Claim::Load { ticket, .. } = claim {
             self.loading.push(ticket);
         }
@@ -213,7 +213,8 @@ mod tests {
     use crate::cache::shared::registry::Lookup;
     use crate::cache::shared::slot::Slot;
 
-    const PID: Pid = 7;
+    const PROCESS: Process = Process { pid: 7, started: 1 };
+    const OTHER: Process = Process { pid: 1, started: 2 };
 
     fn key(version: i64) -> Key {
         Key { database: Oid::from(1), extension: Oid::from(2), version }
@@ -232,7 +233,7 @@ mod tests {
         let tickets = versions
             .iter()
             .map(|&version| {
-                let Claim::Load { ticket, .. } = registry.claim(key(version), 10, 1, limits())
+                let Claim::Load { ticket, .. } = registry.claim(key(version), 10, OTHER, limits())
                 else {
                     panic!("not claimed");
                 };
@@ -262,7 +263,7 @@ mod tests {
     #[test]
     fn a_statement_pins_and_attaches_a_slot_once() {
         let (mut registry, tickets) = published(&[1]);
-        let mut session = Session::new(PID);
+        let mut session = Session::new(PROCESS);
         assert!(matches!(session.open(&mut registry, tickets[0]), Ok(Use::Attach(Handle(1)))));
         let mapping = session.mapped(&mut registry, tickets[0], Arc::new(1)).unwrap();
         let again = read(&mut session, &mut registry, tickets[0]);
@@ -273,7 +274,7 @@ mod tests {
     #[test]
     fn a_mapper_is_counted_only_once_its_attach_succeeds() {
         let (mut registry, tickets) = published(&[1]);
-        let mut session = Session::<u32>::new(PID);
+        let mut session = Session::<u32>::new(PROCESS);
         assert!(matches!(session.open(&mut registry, tickets[0]), Ok(Use::Attach(Handle(1)))));
         assert_eq!(counts(&registry, tickets[0]), (1, 1), "an attach that fails counts nothing");
         session.unpin(&mut registry);
@@ -284,7 +285,7 @@ mod tests {
     #[test]
     fn the_next_statement_pins_again_through_the_same_mapping() {
         let (mut registry, tickets) = published(&[1]);
-        let mut session = Session::new(PID);
+        let mut session = Session::new(PROCESS);
         drop(read(&mut session, &mut registry, tickets[0]));
         session.unpin(&mut registry);
         assert_eq!(counts(&registry, tickets[0]), (0, 2));
@@ -296,7 +297,7 @@ mod tests {
     fn a_slot_no_longer_ready_cannot_be_opened() {
         let (mut registry, tickets) = published(&[1]);
         registry.evict(|_| true);
-        let mut session = Session::<u32>::new(PID);
+        let mut session = Session::<u32>::new(PROCESS);
         assert!(session.open(&mut registry, tickets[0]).is_err());
         session.unpin(&mut registry);
         session.release(&mut registry, Release::Unheld, |_| panic!("nothing mapped"));
@@ -306,7 +307,7 @@ mod tests {
     #[test]
     fn unheld_releases_every_mapping_no_call_holds() {
         let (mut registry, tickets) = published(&[1, 2]);
-        let mut session = Session::new(PID);
+        let mut session = Session::new(PROCESS);
         let held = read(&mut session, &mut registry, tickets[0]);
         drop(read(&mut session, &mut registry, tickets[1]));
         session.unpin(&mut registry);
@@ -323,7 +324,7 @@ mod tests {
     #[test]
     fn evicted_releases_only_mappings_of_draining_slots() {
         let (mut registry, tickets) = published(&[1, 2]);
-        let mut session = Session::new(PID);
+        let mut session = Session::new(PROCESS);
         drop(read(&mut session, &mut registry, tickets[0]));
         drop(read(&mut session, &mut registry, tickets[1]));
         session.unpin(&mut registry);
@@ -340,11 +341,11 @@ mod tests {
     #[test]
     fn a_published_load_is_pinned_and_mapped_by_its_loader() {
         let mut registry = Registry::new(vec![Slot::EMPTY; 2]);
-        let mut session = Session::new(PID);
+        let mut session = Session::new(PROCESS);
         let Claim::Load { ticket, .. } = session.claim(&mut registry, key(1), 10, limits()) else {
             panic!("not claimed");
         };
-        assert_eq!(registry.loader(ticket), Some(PID));
+        assert_eq!(registry.loader(ticket), Some(PROCESS));
         let mapping = session.publish(&mut registry, ticket, Handle(9), Arc::new(9)).unwrap();
         assert_eq!(counts(&registry, ticket), (1, 1));
         let again = read(&mut session, &mut registry, ticket);
@@ -355,7 +356,7 @@ mod tests {
     #[test]
     fn an_abort_gives_up_its_loads_and_keeps_its_pins_and_mappings() {
         let (mut registry, tickets) = published(&[1]);
-        let mut session = Session::new(PID);
+        let mut session = Session::new(PROCESS);
         let held = read(&mut session, &mut registry, tickets[0]);
         let Claim::Load { ticket, .. } = session.claim(&mut registry, key(2), 10, limits()) else {
             panic!("not claimed");
@@ -372,7 +373,7 @@ mod tests {
     #[test]
     fn an_exit_gives_back_its_pins_claims_and_mappings() {
         let (mut registry, tickets) = published(&[1, 2]);
-        let mut session = Session::new(PID);
+        let mut session = Session::new(PROCESS);
         let held = read(&mut session, &mut registry, tickets[0]);
         drop(read(&mut session, &mut registry, tickets[1]));
         let Claim::Load { ticket: loading, .. } =

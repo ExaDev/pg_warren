@@ -14,7 +14,7 @@ use std::time::Duration;
 use super::admission::Limits;
 use super::registry::{Claim, Gone, Lookup, Registry};
 use super::session::{Release, Session, Use};
-use super::slot::{Handle, Key, Pid, Slot, State, Ticket};
+use super::slot::{Handle, Key, Process, Slot, Started, State, Ticket};
 use super::{Claimed, Found, SharedVersions};
 
 /// A cluster's shared cache.
@@ -43,9 +43,11 @@ struct Store {
     capacity: u64,
     /// The bytes of the regions alive.
     allocated: Arc<AtomicU64>,
-    /// The backends alive.
-    live: HashSet<Pid>,
-    last_pid: Pid,
+    /// The backends alive. A new backend takes the lowest pid none of
+    /// them has, so pids are reused, as an operating system reuses them.
+    live: HashSet<Process>,
+    /// The last backend's start, a counter.
+    last_started: Started,
 }
 
 /// A region: a version's bytes, counted in its store while alive.
@@ -119,7 +121,7 @@ impl Memory {
             capacity,
             allocated: Arc::new(AtomicU64::new(0)),
             live: HashSet::new(),
-            last_pid: 0,
+            last_started: 0,
         };
         let cluster = Cluster { store: Mutex::new(store), changed: Condvar::new(), wait };
         Self { cluster: Arc::new(cluster) }
@@ -128,10 +130,11 @@ impl Memory {
     /// A new backend.
     pub(crate) fn backend(&self) -> Backend {
         let mut store = self.cluster.lock();
-        store.last_pid += 1;
-        let pid = store.last_pid;
-        store.live.insert(pid);
-        Backend { cluster: Arc::clone(&self.cluster), session: Session::new(pid) }
+        let pid = (1..).find(|&pid| store.live.iter().all(|live| live.pid != pid));
+        store.last_started += 1;
+        let process = Process { pid: pid.unwrap_or_default(), started: store.last_started };
+        store.live.insert(process);
+        Backend { cluster: Arc::clone(&self.cluster), session: Session::new(process) }
     }
 
     /// The registry's slots now.
@@ -167,7 +170,7 @@ impl Backend {
     /// Leaves the cluster without giving back what it holds, as a backend
     /// whose exit callback never ran would.
     pub(crate) fn vanish(self) {
-        self.cluster.lock().live.remove(&self.session.pid());
+        self.cluster.lock().live.remove(&self.session.process());
     }
 }
 
@@ -240,7 +243,8 @@ impl SharedVersions for Backend {
                 store.registry.state(loading) == Some(State::Loading)
             })
             .unwrap();
-        let gone = store.registry.loader(loading).is_some_and(|pid| !store.live.contains(&pid));
+        let gone =
+            store.registry.loader(loading).is_some_and(|loader| !store.live.contains(&loader));
         if waited.timed_out() && gone {
             store.registry.abandon(loading);
             self.cluster.changed.notify_all();
@@ -269,7 +273,7 @@ impl SharedVersions for Backend {
     fn exit(&mut self) {
         let mut store = self.cluster.lock();
         self.session.exit(&mut store.registry, drop);
-        store.live.remove(&self.session.pid());
+        store.live.remove(&self.session.process());
         self.cluster.changed.notify_all();
     }
 }
@@ -299,6 +303,24 @@ mod tests {
 
     fn mappers(memory: &Memory) -> u32 {
         memory.slots()[0].mappers
+    }
+
+    #[test]
+    fn a_vanished_loader_whose_pid_is_reused_is_taken_over() {
+        let memory = cluster();
+        let mut lost = memory.backend();
+        let Claimed::Load(_region) = lost.claim(key(1), 10) else {
+            panic!("not claimed");
+        };
+        let Found::Loading(loading) = memory.backend().lookup(key(1)) else {
+            panic!("not loading");
+        };
+        let pid = lost.session().process().pid;
+        lost.vanish();
+        let reused = memory.backend();
+        assert_eq!(reused.session().process().pid, pid, "a new backend has the loader's pid");
+        memory.backend().wait(loading);
+        assert!(matches!(memory.backend().lookup(key(1)), Found::Missing), "taken over");
     }
 
     #[test]

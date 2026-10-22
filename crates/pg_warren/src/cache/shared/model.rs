@@ -230,7 +230,7 @@ fn check(
             let loaders: Vec<_> =
                 sessions().filter(|session| session.loading().contains(&ticket)).collect();
             prop_assert_eq!(loaders.len(), 1, "slot {} has no live loader", index);
-            prop_assert_eq!(loaders[0].pid(), slot.loader);
+            prop_assert_eq!(loaders[0].process(), slot.loader);
         }
     }
     for backend in backends {

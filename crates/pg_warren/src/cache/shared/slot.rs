@@ -8,6 +8,23 @@ use crate::catalog::VersionId;
 /// A backend's process id.
 pub(crate) type Pid = i32;
 
+/// When a backend started: `MyStartTimestamp` in the `Dsm` adapter, a
+/// counter in the `Memory` fake.
+pub(crate) type Started = i64;
+
+/// A backend's process: its pid and when it started, since a pid is
+/// reused once its process exits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct Process {
+    pub(crate) pid: Pid,
+    pub(crate) started: Started,
+}
+
+impl Process {
+    /// No process: the loader of a slot nobody loads.
+    const NONE: Self = Self { pid: 0, started: 0 };
+}
+
 /// What a slot holds: a version of one installation of pg_warren in one
 /// database. `version_id` restarts after `DROP EXTENSION` and `CREATE
 /// EXTENSION`, whose extension oid differs.
@@ -71,7 +88,7 @@ pub(crate) struct Slot {
     /// Backends that map its region.
     pub(super) mappers: u32,
     /// The backend that claimed it to load.
-    pub(super) loader: Pid,
+    pub(super) loader: Process,
     /// The generation of the claim that filled it.
     pub(super) generation: u64,
 }
@@ -86,7 +103,7 @@ impl Slot {
         last_used: 0,
         pins: 0,
         mappers: 0,
-        loader: 0,
+        loader: Process::NONE,
         generation: 0,
     };
 

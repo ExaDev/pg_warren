@@ -17,7 +17,7 @@
 //! `Ticket`, so one on a slot since emptied and claimed again does nothing.
 
 use super::admission::{admit, Limits, Refusal};
-use super::slot::{Handle, Key, Pid, Slot, State, Ticket};
+use super::slot::{Handle, Key, Process, Slot, State, Ticket};
 
 /// A table of slots: a `Vec` in the `Memory` fake, an array in shared
 /// memory in the `Dsm` adapter.
@@ -93,7 +93,7 @@ impl<S: SlotTable> Registry<S> {
 
     /// Claims a slot for `loader` to load `key`'s version of `bytes` into,
     /// evicting what admission chooses; nothing changes if it is refused.
-    pub(crate) fn claim(&mut self, key: Key, bytes: u64, loader: Pid, limits: Limits) -> Claim {
+    pub(crate) fn claim(&mut self, key: Key, bytes: u64, loader: Process, limits: Limits) -> Claim {
         if self.lookup(key) != Lookup::Missing {
             return Claim::Taken;
         }
@@ -190,7 +190,7 @@ impl<S: SlotTable> Registry<S> {
     }
 
     /// The backend loading the use `ticket` names, while it loads.
-    pub(crate) fn loader(&self, ticket: Ticket) -> Option<Pid> {
+    pub(crate) fn loader(&self, ticket: Ticket) -> Option<Process> {
         let loading = self.state(ticket) == Some(State::Loading);
         loading.then(|| self.slots()[ticket.slot].loader)
     }
@@ -227,7 +227,7 @@ mod tests {
 
     use super::*;
 
-    const LOADER: Pid = 100;
+    const LOADER: Process = Process { pid: 100, started: 1 };
 
     fn key(version: i64) -> Key {
         Key { database: Oid::from(1), extension: Oid::from(2), version }
@@ -268,7 +268,10 @@ mod tests {
         let ticket = claimed(&mut registry, 1, 10);
         assert_eq!(registry.lookup(key(1)), Lookup::Loading(ticket));
         assert_eq!(registry.loader(ticket), Some(LOADER));
-        assert_eq!(registry.claim(key(1), 10, LOADER + 1, limits(100)), Claim::Taken);
+        assert_eq!(
+            registry.claim(key(1), 10, Process { pid: 101, ..LOADER }, limits(100)),
+            Claim::Taken
+        );
         assert_eq!(registry.state(ticket), Some(State::Loading));
         assert_eq!(registry.slots()[ticket.slot].bytes, 10);
     }
