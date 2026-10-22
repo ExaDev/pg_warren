@@ -52,16 +52,6 @@
   statement: 2.1 s, from 14.5 s), and `pgbench` of one `degree` per
   transaction with 4 clients runs at about 140,000 tps, from 35,000.
 
-### Fixed
-
-- After `DROP EXTENSION pg_warren` and `CREATE EXTENSION pg_warren` in a
-  database, a backend that had read graphs before could serve the old
-  installation's cached versions and vectors for the new installation's
-  (version, graph and vector ids restart). A backend now drops what it
-  cached when pg_warren is installed again.
-
-### Performance
-
 - **Multi-source BFS for unweighted closeness and harmonic centrality**
   (`warren-core`'s `compute::centrality`; DESIGN.md §6.7). Sources are
   searched 64 at a time, one bit per source, each step in parallel over
@@ -72,6 +62,14 @@
   - Closeness is bit-identical to before. Harmonic sums in a new,
     deterministic order, within 1e-12 relative of the old result.
   - Weighted graphs (Dijkstra) and betweenness are unchanged.
+
+### Fixed
+
+- After `DROP EXTENSION pg_warren` and `CREATE EXTENSION pg_warren` in a
+  database, a backend that had read graphs before could serve the old
+  installation's cached versions and vectors for the new installation's
+  (version, graph and vector ids restart). A backend now drops what it
+  cached when pg_warren is installed again.
 
 ## 0.4.0 — locality, the library, and communities (2026-10-22)
 
