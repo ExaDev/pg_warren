@@ -240,7 +240,8 @@ and combined at each receiver, in-engine.
 ```
 warren.gather(graph, messages, NULL::<id type>, NULL::<result type>,
               combine := 'collect', direction := 'in', rels := NULL,
-              mask := NULL, mask_complement := false, version := NULL)
+              mask := NULL, mask_complement := false, version := NULL,
+              include_self := false)
   RETURNS TABLE (node_id, value)
 ```
 
@@ -263,8 +264,12 @@ warren.gather(graph, messages, NULL::<id type>, NULL::<result type>,
   its distinct neighbours in `direction` (`in`: nodes with an edge to it;
   `out`; `both`) over `rels`. Weights are not read. Receivers with no
   message, or outside `mask`, return no row.
-- Messages are combined in ascending sender dense id, then in the order
-  read, so results are the same for any `warren.threads`.
+- With `include_self := true`, each receiver also receives its own
+  messages, ahead of its senders' (and again as a sender if it has a
+  self-loop); a node with no senders then still gets a row.
+- Messages are combined in ascending sender dense id (a receiver's own
+  first, with `include_self`), then in the order read, so results are the
+  same for any `warren.threads`.
 
 | `combine` | Messages | Result type (the second witness) |
 |---|---|---|
@@ -275,6 +280,7 @@ warren.gather(graph, messages, NULL::<id type>, NULL::<result type>,
 | `min`, `max` | integer types, `real`, `double precision` | the message type |
 | `bool_or`, `bool_and` | `boolean` | `boolean` |
 | `concat` | `text`, `bytea` | `text`, `bytea` |
+| `mode` | integer types, `real`, `double precision`, `boolean` | the message type: the most frequent, the smallest on a tie |
 
 A wrong witness is an error that names the right one (42804).
 
