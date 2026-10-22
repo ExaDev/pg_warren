@@ -156,6 +156,23 @@ mod tests {
     }
 
     #[pg_test]
+    fn a_piece_of_a_version_held_past_it_keeps_the_mapping() -> Result<(), Error> {
+        set_cap(c"64MB");
+        let (key, resolved) = graph("piece", 100)?;
+        let read = through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?;
+        let piece = read.ok_or(Error::InvalidPosition)?.id_map.clone();
+        end_statement();
+        assert_eq!(port()?.evict(&|evicted| *evicted == key), 1);
+        end_message();
+        assert_eq!(slot(key), Some((State::Draining, 0, 1)), "the piece still reads the segment");
+        assert_eq!(piece.external_id(99), Some(100), "and reads it");
+        drop(piece);
+        end_message();
+        assert_eq!(slot(key), None, "released once nothing read through it is held");
+        Ok(())
+    }
+
+    #[pg_test]
     fn an_evicted_version_is_released_at_the_end_of_the_message() -> Result<(), Error> {
         set_cap(c"64MB");
         let (key, resolved) = graph("evicted", 100)?;

@@ -19,7 +19,7 @@ mod segment;
 use std::any::Any;
 use std::cell::RefCell;
 use std::sync::atomic::AtomicU32;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use pgrx::{ereport, pg_sys, PgSqlErrorCode};
 
@@ -30,6 +30,7 @@ use super::slot::{Handle, Key, Process, Slot, State, Ticket};
 use super::unavailable::Unavailable;
 use super::{setting, Claimed, Found, SharedVersions};
 use crate::cache::load::{read, LoadError, LoadedVersion};
+use crate::cache::region::Region;
 use crate::catalog::VersionId;
 use crate::source::IdDatum;
 use placement::{Located, Shared, SLOTS};
@@ -71,7 +72,16 @@ pub(crate) struct Dsm(());
 /// loaded version built over it, kept while the mapping is.
 pub(crate) struct Attached {
     segment: Segment,
-    loaded: OnceLock<Arc<dyn Any + Send + Sync>>,
+    held: Mutex<Held>,
+}
+
+/// What a mapping keeps of the version built over its segment: the loaded
+/// version, while no call needs it rebuilt, and the region every view of
+/// it (and of any piece cloned out of it) keeps alive.
+#[derive(Default)]
+struct Held {
+    loaded: Option<Arc<dyn Any + Send + Sync>>,
+    region: Weak<Region>,
 }
 
 /// A segment claimed to load a version into, and, once it has loaded and
@@ -80,7 +90,7 @@ pub(crate) struct Loading {
     ticket: Ticket,
     segment: Segment,
     region: SegmentRegion,
-    loaded: Option<Arc<dyn Any + Send + Sync>>,
+    held: Held,
 }
 
 impl Dsm {
@@ -210,7 +220,7 @@ impl SharedVersions for Dsm {
         let Some(segment) = segment::attach(handle, key) else {
             broken("a ready version's segment cannot be attached or holds another version")
         };
-        let attached = Arc::new(Attached { segment, loaded: OnceLock::new() });
+        let attached = Arc::new(Attached { segment, held: Mutex::default() });
         let mapped = with_backend(|backend| {
             backend.locked(|registry, session| session.mapped(registry, ticket, attached))
         });
@@ -231,7 +241,7 @@ impl SharedVersions for Dsm {
                 match segment::create(bytes, key) {
                     Some(segment) => {
                         let region = segment.region();
-                        Claimed::Load(Loading { ticket, segment, region, loaded: None })
+                        Claimed::Load(Loading { ticket, segment, region, held: Held::default() })
                     }
                     None => {
                         self.abort();
@@ -249,15 +259,10 @@ impl SharedVersions for Dsm {
     }
 
     fn publish(&mut self, loading: Loading) -> Result<Arc<Attached>, Gone> {
-        let Loading { ticket, segment, loaded, .. } = loading;
+        let Loading { ticket, segment, held, .. } = loading;
         segment.keep();
         let handle = segment.handle();
-        let kept = OnceLock::new();
-        if let Some(loaded) = loaded {
-            // A new cell: set once.
-            let _ = kept.set(loaded);
-        }
-        let attached = Arc::new(Attached { segment, loaded: kept });
+        let attached = Arc::new(Attached { segment, held: Mutex::new(held) });
         let published = with_backend(|backend| {
             let published = backend
                 .locked(|registry, session| session.publish(registry, ticket, handle, attached));
@@ -384,8 +389,18 @@ fn take_over_if_gone(loading: Ticket) {
 }
 
 impl Mapped for Attached {
+    /// Whether a call holds the loaded version, or anything read through
+    /// it: a piece cloned out of it (an id map, a CSR) shares its views of
+    /// the region, not the loaded version. When no call holds the loaded
+    /// version, the mapping drops its own (to be rebuilt if it is read
+    /// again), so that what keeps the region alive is what calls hold.
     fn in_use(&self) -> bool {
-        self.loaded.get().is_some_and(|loaded| Arc::strong_count(loaded) > 1)
+        let mut held = self.held();
+        if held.loaded.as_ref().is_some_and(|loaded| Arc::strong_count(loaded) > 1) {
+            return true;
+        }
+        held.loaded = None;
+        held.region.strong_count() > 0
     }
 }
 
@@ -398,24 +413,28 @@ impl Attached {
         &self,
         version: VersionId,
     ) -> Result<Arc<LoadedVersion<E>>, LoadError> {
-        if let Some(loaded) = self.loaded.get() {
+        let mut held = self.held();
+        if let Some(loaded) = &held.loaded {
             return Arc::clone(loaded)
                 .downcast()
                 .map_err(|_| broken("a shared version was read with another id type"));
         }
-        let loaded = Arc::new(read::<E>(Box::new(self.segment.region()), version)?);
-        let kept: Arc<dyn Any + Send + Sync> = loaded.clone();
-        // Set only here, on the main thread, and only when empty.
-        let _ = self.loaded.set(kept);
+        let (loaded, region) = read::<E>(Box::new(self.segment.region()), version)?;
+        let loaded = Arc::new(loaded);
+        *held = Held { loaded: Some(loaded.clone()), region };
         Ok(loaded)
+    }
+
+    fn held(&self) -> MutexGuard<'_, Held> {
+        self.held.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Detaches the mapping, once nothing holds it or what was built over
     /// it (`Session::release` checks): the loaded version is dropped first.
     fn detach(self: Arc<Self>) {
         if let Ok(attached) = Arc::try_unwrap(self) {
-            let Self { segment, loaded } = attached;
-            drop(loaded);
+            let Self { segment, held } = attached;
+            drop(held);
             segment.detach();
         }
     }
@@ -435,8 +454,9 @@ impl Loading {
         &mut self,
         version: VersionId,
     ) -> Result<(), LoadError> {
-        let loaded: Arc<LoadedVersion<E>> = Arc::new(read::<E>(Box::new(self.region), version)?);
-        self.loaded = Some(loaded);
+        let (loaded, region) = read::<E>(Box::new(self.region), version)?;
+        let loaded: Arc<LoadedVersion<E>> = Arc::new(loaded);
+        self.held = Held { loaded: Some(loaded), region };
         Ok(())
     }
 }

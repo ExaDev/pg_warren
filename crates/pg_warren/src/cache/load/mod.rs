@@ -10,6 +10,8 @@ mod views;
 pub(super) use fill::fill;
 pub(super) use plan::plan;
 
+use std::sync::{Arc, Weak};
+
 use pgrx::PgSqlErrorCode;
 use thiserror::Error;
 use warren_core::graph::{
@@ -133,16 +135,18 @@ pub(crate) fn load<E: IdDatum>(
     let plan = plan::<E>(segments, version, store_merged)?;
     let mut memory = HeapMemory::zeroed(plan.len())?;
     fill::<E>(segments, version, &plan, memory.bytes_mut())?;
-    read(Box::new(memory), version)
+    Ok(read(Box::new(memory), version)?.0)
 }
 
 /// The version `memory` holds, filled by [`fill`], read through views of
-/// its region and validated as [`load`] validates it.
+/// its region and validated as [`load`] validates it, and the region,
+/// which lives while any view of it does.
 pub(super) fn read<E: IdDatum>(
     memory: Box<dyn RegionMemory>,
     version: VersionId,
-) -> Result<LoadedVersion<E>, LoadError> {
-    views::loaded(&Region::open(memory, version)?)
+) -> Result<(LoadedVersion<E>, Weak<Region>), LoadError> {
+    let region = Region::open(memory, version)?;
+    Ok((views::loaded(&region)?, Arc::downgrade(&region)))
 }
 
 #[cfg(test)]
