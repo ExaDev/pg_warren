@@ -139,6 +139,14 @@ test/run.py --no-install test/sql/staged_build_rollback.sql   # one test, curren
 # The same suite with a trusted install: each database's pg_warren is created
 # by a non-superuser that owns the database (DESIGN.md §7). CI runs both.
 test/run.py --no-install --trusted
+# The shared cache (DESIGN.md §5.6): the default mode, `on`, is the default
+# configuration (warren.shared_cache_memory = 4GB: shared on PG 17 and 18,
+# private on PG 15 and 16, which need the preload); `preload` adds
+# shared_preload_libraries = 'pg_warren' and a cap, so every major shares;
+# `off` sets the cap to 0. CI runs the shared-cache tests in each mode on
+# every major, and the whole suite preloaded on PG 16.
+test/run.py --no-install --shared-cache preload
+test/run.py --no-install --shared-cache off test/sql/shared_cache_*.sql
 
 # A fixture on its own (Appendix A scales by default; see --help per kind)
 bench/generate.py sbm --communities 4 --community-size 50 --out /tmp/sbm
@@ -148,6 +156,28 @@ bench/generate.py sbm --communities 4 --community-size 50 --out /tmp/sbm
 # results in bench/results/<pg_warren version>/<graph>.json
 bench/run.sh
 bench/run.sh smoke --no-install --results bench/tmp   # quick check, as CI does
+
+# The shared cache under a pooler (needs pgbouncer and pgbench on PATH, and a
+# release build installed in --pg-config's tree): results in bench/results/pooler/
+bench/pooler.py a --scale 1000 --connections 1 4 --seconds 3 \
+    --extension-revision "$(git rev-parse --short HEAD)" --extension-profile release
+```
+
+`bench/pooler.py` and `bench/soak.py` start their own scratch cluster from
+`--pg-config`'s binaries and load the `pg_warren` installed there. To
+benchmark a release build without replacing the debug build that `cargo pgrx
+test` and `test/run.py` install into the system tree (and that other
+checkouts may be using), copy the server's tree somewhere the cluster user
+can read, and install the build there: Postgres finds its libraries and
+extensions relative to its binaries.
+
+```sh
+T=/var/tmp/pgtree; mkdir -p $T/usr/lib/postgresql/16 $T/usr/share/postgresql
+cp -a /usr/lib/postgresql/16/bin /usr/lib/postgresql/16/lib $T/usr/lib/postgresql/16/
+cp -a /usr/share/postgresql/16 $T/usr/share/postgresql/
+(cd crates/pg_warren && cargo pgrx package --pg-config "$(command -v pg_config)")
+cp -r target/release/pg_warren-pg16/usr/* $T/usr/ && chmod -R a+rX $T
+bench/pooler.py … --pg-config $T/usr/lib/postgresql/16/bin/pg_config
 ```
 
 To add a SQL test, write `test/sql/<name>.sql` with `assert.*` calls and

@@ -45,10 +45,12 @@ pub mod pg_test {
     pub fn setup(_options: Vec<&str>) {}
 
     /// The preload places the shared cache's registry on PG 15 and 16
-    /// (DESIGN.md §5.6); `warren.shared_cache_memory` stays 0, so only the
-    /// shared cache's own tests use it.
+    /// (DESIGN.md §5.6); `warren.shared_cache_memory` is 0, so only the
+    /// shared cache's own tests use it: they publish versions their
+    /// transactions created, which a prune in another test's backend,
+    /// whose snapshot does not see them, would evict.
     #[must_use]
     pub fn postgresql_conf_options() -> Vec<&'static str> {
-        vec!["shared_preload_libraries = 'pg_warren'"]
+        vec!["shared_preload_libraries = 'pg_warren'", "warren.shared_cache_memory = 0"]
     }
 }

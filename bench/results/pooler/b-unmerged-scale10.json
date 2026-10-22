@@ -1,0 +1,3188 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/pooler.py",
+   "a",
+   "b-unmerged",
+   "--own-scale",
+   "10",
+   "--pg-config",
+   "/var/tmp/m9-pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "e32dd67",
+   "--extension-profile",
+   "release"
+  ],
+  "harness": {
+   "revision": "feef7c5342b9b501cfcd837c4ee5c84b74765752",
+   "dirty": true
+  },
+  "extension": {
+   "revision": "e32dd67",
+   "profile": "release",
+   "library": "/var/tmp/m9-pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "460de8f3460a04a6a104351d0dcadba367eaf154b0283455e459e50c24bf269c"
+  }
+ },
+ "case": "b-unmerged",
+ "nodes": 1000000,
+ "edges": 10000000,
+ "own_scale": 10,
+ "seconds": 20,
+ "cap": "4GB",
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v140",
+  "load_average": [
+   21.84716796875,
+   11.80908203125,
+   9.005859375
+  ]
+ },
+ "started_at": "2026-10-22T14:12:34+00:00",
+ "runs": [
+  {
+   "mode": "off",
+   "scenario": "one-graph",
+   "connections": 1,
+   "graphs": 1,
+   "version_bytes": 336124246,
+   "memory_before": {
+    "backends": 0,
+    "rss_anon": 0,
+    "pss": 0,
+    "shared_versions": 0,
+    "private_and_shared": 0,
+    "max_rss_anon": 0
+   },
+   "cold_first_calls": {
+    "seconds": [
+     0.3976
+    ],
+    "median": 0.3976,
+    "max": 0.3976,
+    "min": 0.3976
+   },
+   "neighbours_first": {
+    "tps": 8428.452678,
+    "latency_ms": 0.119,
+    "transactions": 168568,
+    "failed": 0
+   },
+   "neighbours": {
+    "tps": 8552.620921,
+    "latency_ms": 0.117,
+    "transactions": 171053,
+    "failed": 0
+   },
+   "bfs": {
+    "tps": 1526.448779,
+    "latency_ms": 0.655,
+    "transactions": 30529,
+    "failed": 0
+   },
+   "memory": {
+    "backends": [
+     {
+      "pid": 1246,
+      "VmHWM": 734957568,
+      "RssAnon": 356593664,
+      "RssShmem": 362790912,
+      "Pss": 718403584,
+      "Pss_Anon": 354813952,
+      "Pss_Shmem": 356400128
+     }
+    ],
+    "totals": {
+     "backends": 1,
+     "rss_anon": 356593664,
+     "pss": 718403584,
+     "shared_versions": 0,
+     "private_and_shared": 356593664,
+     "max_rss_anon": 356593664
+    },
+    "dev_shm_used": 1097728,
+    "registry": [
+     [
+      "cluster",
+      "",
+      "0",
+      "0",
+      "0"
+     ]
+    ]
+   },
+   "pagerank": {
+    "seconds": 4.608337
+   },
+   "memory_after_pagerank": {
+    "backends": 1,
+    "rss_anon": 352083968,
+    "pss": 728450048,
+    "shared_versions": 0,
+    "private_and_shared": 352083968,
+    "max_rss_anon": 352083968
+   }
+  },
+  {
+   "mode": "off",
+   "scenario": "one-graph",
+   "connections": 10,
+   "graphs": 1,
+   "version_bytes": 336124246,
+   "memory_before": {
+    "backends": 0,
+    "rss_anon": 0,
+    "pss": 0,
+    "shared_versions": 0,
+    "private_and_shared": 0,
+    "max_rss_anon": 0
+   },
+   "cold_first_calls": {
+    "seconds": [
+     2.5992,
+     2.4149,
+     2.3214,
+     2.2706,
+     2.5883,
+     2.5119,
+     2.4791,
+     2.5723,
+     2.6096,
+     2.5336
+    ],
+    "median": 2.5228,
+    "max": 2.6096,
+    "min": 2.2706
+   },
+   "neighbours_first": {
+    "tps": 41058.478468,
+    "latency_ms": 0.244,
+    "transactions": 821163,
+    "failed": 0
+   },
+   "neighbours": {
+    "tps": 40170.629008,
+    "latency_ms": 0.249,
+    "transactions": 803389,
+    "failed": 0
+   },
+   "bfs": {
+    "tps": 6242.262727,
+    "latency_ms": 1.602,
+    "transactions": 124859,
+    "failed": 0
+   },
+   "memory": {
+    "backends": [
+     {
+      "pid": 1369,
+      "VmHWM": 734932992,
+      "RssAnon": 356597760,
+      "RssShmem": 362827776,
+      "Pss": 391989248,
+      "Pss_Anon": 354608128,
+      "Pss_Shmem": 36145152
+     },
+     {
+      "pid": 1373,
+      "VmHWM": 735002624,
+      "RssAnon": 356601856,
+      "RssShmem": 362827776,
+      "Pss": 392050688,
+      "Pss_Anon": 354614272,
+      "Pss_Shmem": 36145152
+     },
+     {
+      "pid": 1374,
+      "VmHWM": 735002624,
+      "RssAnon": 356597760,
+      "RssShmem": 362831872,
+      "Pss": 392047616,
+      "Pss_Anon": 354610176,
+      "Pss_Shmem": 36145152
+     },
+     {
+      "pid": 1375,
+      "VmHWM": 735002624,
+      "RssAnon": 356601856,
+      "RssShmem": 362827776,
+      "Pss": 392050688,
+      "Pss_Anon": 354614272,
+      "Pss_Shmem": 36145152
+     },
+     {
+      "pid": 1376,
+      "VmHWM": 735002624,
+      "RssAnon": 356601856,
+      "RssShmem": 362827776,
+      "Pss": 392050688,
+      "Pss_Anon": 354614272,
+      "Pss_Shmem": 36145152
+     },
+     {
+      "pid": 1377,
+      "VmHWM": 734932992,
+      "RssAnon": 356597760,
+      "RssShmem": 362827776,
+      "Pss": 392038400,
+      "Pss_Anon": 354610176,
+      "Pss_Shmem": 36145152
+     },
+     {
+      "pid": 1378,
+      "VmHWM": 735002624,
+      "RssAnon": 356597760,
+      "RssShmem": 362831872,
+      "Pss": 392047616,
+      "Pss_Anon": 354610176,
+      "Pss_Shmem": 36146176
+     },
+     {
+      "pid": 1379,
+      "VmHWM": 735002624,
+      "RssAnon": 356601856,
+      "RssShmem": 362827776,
+      "Pss": 392050688,
+      "Pss_Anon": 354614272,
+      "Pss_Shmem": 36145152
+     },
+     {
+      "pid": 1380,
+      "VmHWM": 735002624,
+      "RssAnon": 356601856,
+      "RssShmem": 362827776,
+      "Pss": 392050688,
+      "Pss_Anon": 354614272,
+      "Pss_Shmem": 36145152
+     },
+     {
+      "pid": 1381,
+      "VmHWM": 734998528,
+      "RssAnon": 356597760,
+      "RssShmem": 362827776,
+      "Pss": 392046592,
+      "Pss_Anon": 354610176,
+      "Pss_Shmem": 36145152
+     }
+    ],
+    "totals": {
+     "backends": 10,
+     "rss_anon": 3565998080,
+     "pss": 3920422912,
+     "shared_versions": 0,
+     "private_and_shared": 3565998080,
+     "max_rss_anon": 356601856
+    },
+    "dev_shm_used": 1097728,
+    "registry": [
+     [
+      "cluster",
+      "",
+      "0",
+      "0",
+      "0"
+     ]
+    ]
+   },
+   "pagerank": {
+    "seconds": 4.862379
+   },
+   "memory_after_pagerank": {
+    "backends": 10,
+    "rss_anon": 3561500672,
+    "pss": 3930601472,
+    "shared_versions": 0,
+    "private_and_shared": 3561500672,
+    "max_rss_anon": 356601856
+   }
+  },
+  {
+   "mode": "off",
+   "scenario": "one-graph",
+   "connections": 50,
+   "graphs": 1,
+   "version_bytes": 336124246,
+   "skipped": "private copies need about 16.81 GB, over the budget of 10.12 GB"
+  },
+  {
+   "mode": "off",
+   "scenario": "own-graph",
+   "connections": 1,
+   "graphs": 1,
+   "version_bytes": 33612110,
+   "memory_before": {
+    "backends": 0,
+    "rss_anon": 0,
+    "pss": 0,
+    "shared_versions": 0,
+    "private_and_shared": 0,
+    "max_rss_anon": 0
+   },
+   "cold_first_calls": {
+    "seconds": [
+     0.0439
+    ],
+    "median": 0.0439,
+    "max": 0.0439,
+    "min": 0.0439
+   },
+   "neighbours_first": {
+    "tps": 11115.116997,
+    "latency_ms": 0.09,
+    "transactions": 222284,
+    "failed": 0
+   },
+   "neighbours": {
+    "tps": 11276.579754,
+    "latency_ms": 0.089,
+    "transactions": 225513,
+    "failed": 0
+   },
+   "bfs": {
+    "tps": 2220.280398,
+    "latency_ms": 0.45,
+    "transactions": 44402,
+    "failed": 0
+   },
+   "memory": {
+    "backends": [
+     {
+      "pid": 1520,
+      "VmHWM": 102191104,
+      "RssAnon": 39989248,
+      "RssShmem": 47284224,
+      "Pss": 85924864,
+      "Pss_Anon": 38209536,
+      "Pss_Shmem": 41196544
+     }
+    ],
+    "totals": {
+     "backends": 1,
+     "rss_anon": 39989248,
+     "pss": 85924864,
+     "shared_versions": 0,
+     "private_and_shared": 39989248,
+     "max_rss_anon": 39989248
+    },
+    "dev_shm_used": 1097728,
+    "registry": [
+     [
+      "cluster",
+      "",
+      "0",
+      "0",
+      "0"
+     ]
+    ]
+   }
+  },
+  {
+   "mode": "off",
+   "scenario": "own-graph",
+   "connections": 10,
+   "graphs": 10,
+   "version_bytes": 33612110,
+   "memory_before": {
+    "backends": 0,
+    "rss_anon": 0,
+    "pss": 0,
+    "shared_versions": 0,
+    "private_and_shared": 0,
+    "max_rss_anon": 0
+   },
+   "cold_first_calls": {
+    "seconds": [
+     0.0917,
+     0.1028,
+     0.0845,
+     0.1186,
+     0.1186,
+     0.0938,
+     0.1106,
+     0.0985,
+     0.0839,
+     0.099
+    ],
+    "median": 0.0987,
+    "max": 0.1186,
+    "min": 0.0839
+   },
+   "neighbours_first": {
+    "tps": 53524.270948,
+    "latency_ms": 0.187,
+    "transactions": 1070738,
+    "failed": 0
+   },
+   "neighbours": {
+    "tps": 60452.08422,
+    "latency_ms": 0.165,
+    "transactions": 1209239,
+    "failed": 0
+   },
+   "bfs": {
+    "tps": 8784.161914,
+    "latency_ms": 1.138,
+    "transactions": 175720,
+    "failed": 0
+   },
+   "memory": {
+    "backends": [
+     {
+      "pid": 1699,
+      "VmHWM": 102313984,
+      "RssAnon": 39989248,
+      "RssShmem": 47407104,
+      "Pss": 75235328,
+      "Pss_Anon": 37999616,
+      "Pss_Shmem": 36093952
+     },
+     {
+      "pid": 1701,
+      "VmHWM": 102903808,
+      "RssAnon": 39989248,
+      "RssShmem": 47996928,
+      "Pss": 75231232,
+      "Pss_Anon": 38001664,
+      "Pss_Shmem": 36041728
+     },
+     {
+      "pid": 1705,
+      "VmHWM": 103432192,
+      "RssAnon": 39989248,
+      "RssShmem": 48525312,
+      "Pss": 75387904,
+      "Pss_Anon": 38001664,
+      "Pss_Shmem": 36198400
+     },
+     {
+      "pid": 1707,
+      "VmHWM": 103428096,
+      "RssAnon": 39989248,
+      "RssShmem": 48521216,
+      "Pss": 75298816,
+      "Pss_Anon": 38001664,
+      "Pss_Shmem": 36109312
+     },
+     {
+      "pid": 1709,
+      "VmHWM": 103428096,
+      "RssAnon": 39989248,
+      "RssShmem": 48521216,
+      "Pss": 75354112,
+      "Pss_Anon": 38001664,
+      "Pss_Shmem": 36164608
+     },
+     {
+      "pid": 1711,
+      "VmHWM": 103297024,
+      "RssAnon": 39989248,
+      "RssShmem": 48390144,
+      "Pss": 75219968,
+      "Pss_Anon": 38001664,
+      "Pss_Shmem": 36029440
+     },
+     {
+      "pid": 1715,
+      "VmHWM": 103563264,
+      "RssAnon": 39989248,
+      "RssShmem": 48656384,
+      "Pss": 75355136,
+      "Pss_Anon": 38001664,
+      "Pss_Shmem": 36165632
+     },
+     {
+      "pid": 1717,
+      "VmHWM": 104017920,
+      "RssAnon": 39989248,
+      "RssShmem": 49111040,
+      "Pss": 75501568,
+      "Pss_Anon": 38001664,
+      "Pss_Shmem": 36312064
+     },
+     {
+      "pid": 1719,
+      "VmHWM": 104214528,
+      "RssAnon": 39989248,
+      "RssShmem": 49307648,
+      "Pss": 75523072,
+      "Pss_Anon": 38001664,
+      "Pss_Shmem": 36332544
+     },
+     {
+      "pid": 1721,
+      "VmHWM": 104206336,
+      "RssAnon": 39989248,
+      "RssShmem": 49299456,
+      "Pss": 75741184,
+      "Pss_Anon": 38001664,
+      "Pss_Shmem": 36551680
+     }
+    ],
+    "totals": {
+     "backends": 10,
+     "rss_anon": 399892480,
+     "pss": 753848320,
+     "shared_versions": 0,
+     "private_and_shared": 399892480,
+     "max_rss_anon": 39989248
+    },
+    "dev_shm_used": 1097728,
+    "registry": [
+     [
+      "cluster",
+      "",
+      "0",
+      "0",
+      "0"
+     ]
+    ]
+   }
+  },
+  {
+   "mode": "off",
+   "scenario": "own-graph",
+   "connections": 50,
+   "graphs": 50,
+   "version_bytes": 33612110,
+   "memory_before": {
+    "backends": 0,
+    "rss_anon": 0,
+    "pss": 0,
+    "shared_versions": 0,
+    "private_and_shared": 0,
+    "max_rss_anon": 0
+   },
+   "cold_first_calls": {
+    "seconds": [
+     1.1496,
+     1.2585,
+     0.7009,
+     1.6372,
+     0.8162,
+     1.4877,
+     1.5719,
+     1.7789,
+     0.9089,
+     0.8283,
+     0.9391,
+     1.6576,
+     1.5531,
+     1.1263,
+     1.6882,
+     1.1387,
+     1.667,
+     1.704,
+     0.7898,
+     1.2982,
+     0.6983,
+     1.459,
+     1.1323,
+     1.2285,
+     1.1845,
+     1.2945,
+     0.9054,
+     1.0068,
+     0.9813,
+     1.1044,
+     0.884,
+     0.9916,
+     0.7962,
+     0.805,
+     0.765,
+     0.9302,
+     0.7007,
+     0.8836,
+     0.9542,
+     0.9252,
+     0.8115,
+     0.6959,
+     0.7615,
+     0.7172,
+     0.7121,
+     0.6067,
+     0.7556,
+     0.6038,
+     0.5646,
+     0.2395
+    ],
+    "median": 0.9347,
+    "max": 1.7789,
+    "min": 0.2395
+   },
+   "neighbours_first": {
+    "tps": 47863.621943,
+    "latency_ms": 1.045,
+    "transactions": 956674,
+    "failed": 0
+   },
+   "neighbours": {
+    "tps": 49810.880156,
+    "latency_ms": 1.004,
+    "transactions": 997509,
+    "failed": 0
+   },
+   "bfs": {
+    "tps": 6973.346079,
+    "latency_ms": 7.17,
+    "transactions": 139578,
+    "failed": 0
+   },
+   "memory": {
+    "backends": [
+     {
+      "pid": 2279,
+      "VmHWM": 107495424,
+      "RssAnon": 39997440,
+      "RssShmem": 52580352,
+      "Pss": 49423360,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 11253760
+     },
+     {
+      "pid": 2281,
+      "VmHWM": 133910528,
+      "RssAnon": 39997440,
+      "RssShmem": 78995456,
+      "Pss": 56613888,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 18441216
+     },
+     {
+      "pid": 2283,
+      "VmHWM": 128139264,
+      "RssAnon": 39997440,
+      "RssShmem": 73224192,
+      "Pss": 53146624,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 14972928
+     },
+     {
+      "pid": 2285,
+      "VmHWM": 146694144,
+      "RssAnon": 39997440,
+      "RssShmem": 91779072,
+      "Pss": 60225536,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 22052864
+     },
+     {
+      "pid": 2287,
+      "VmHWM": 151220224,
+      "RssAnon": 39997440,
+      "RssShmem": 96305152,
+      "Pss": 58973184,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 20800512
+     },
+     {
+      "pid": 2289,
+      "VmHWM": 161308672,
+      "RssAnon": 39997440,
+      "RssShmem": 106393600,
+      "Pss": 61794304,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 23620608
+     },
+     {
+      "pid": 2291,
+      "VmHWM": 139702272,
+      "RssAnon": 39997440,
+      "RssShmem": 84787200,
+      "Pss": 56030208,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 17856512
+     },
+     {
+      "pid": 2293,
+      "VmHWM": 148832256,
+      "RssAnon": 39997440,
+      "RssShmem": 93917184,
+      "Pss": 58585088,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 20412416
+     },
+     {
+      "pid": 2295,
+      "VmHWM": 171737088,
+      "RssAnon": 39997440,
+      "RssShmem": 116822016,
+      "Pss": 63207424,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 25034752
+     },
+     {
+      "pid": 2297,
+      "VmHWM": 146006016,
+      "RssAnon": 39997440,
+      "RssShmem": 91090944,
+      "Pss": 58932224,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 20758528
+     },
+     {
+      "pid": 2299,
+      "VmHWM": 165613568,
+      "RssAnon": 39997440,
+      "RssShmem": 110698496,
+      "Pss": 62292992,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 24120320
+     },
+     {
+      "pid": 2301,
+      "VmHWM": 156164096,
+      "RssAnon": 39997440,
+      "RssShmem": 101249024,
+      "Pss": 62025728,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 23852032
+     },
+     {
+      "pid": 2303,
+      "VmHWM": 138711040,
+      "RssAnon": 39997440,
+      "RssShmem": 83795968,
+      "Pss": 60167168,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 21994496
+     },
+     {
+      "pid": 2305,
+      "VmHWM": 108371968,
+      "RssAnon": 39997440,
+      "RssShmem": 53456896,
+      "Pss": 48698368,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 10525696
+     },
+     {
+      "pid": 2307,
+      "VmHWM": 134115328,
+      "RssAnon": 39997440,
+      "RssShmem": 79200256,
+      "Pss": 56330240,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 18157568
+     },
+     {
+      "pid": 2309,
+      "VmHWM": 134832128,
+      "RssAnon": 39997440,
+      "RssShmem": 79917056,
+      "Pss": 55981056,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 17807360
+     },
+     {
+      "pid": 2311,
+      "VmHWM": 109461504,
+      "RssAnon": 39997440,
+      "RssShmem": 54546432,
+      "Pss": 48230400,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 10056704
+     },
+     {
+      "pid": 2313,
+      "VmHWM": 133881856,
+      "RssAnon": 39997440,
+      "RssShmem": 78966784,
+      "Pss": 55219200,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 17046528
+     },
+     {
+      "pid": 2315,
+      "VmHWM": 108953600,
+      "RssAnon": 39997440,
+      "RssShmem": 54038528,
+      "Pss": 48275456,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 10102784
+     },
+     {
+      "pid": 2317,
+      "VmHWM": 146481152,
+      "RssAnon": 39997440,
+      "RssShmem": 91566080,
+      "Pss": 59437056,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 21263360
+     },
+     {
+      "pid": 2319,
+      "VmHWM": 120410112,
+      "RssAnon": 39997440,
+      "RssShmem": 65495040,
+      "Pss": 54119424,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 15945728
+     },
+     {
+      "pid": 2321,
+      "VmHWM": 132521984,
+      "RssAnon": 39997440,
+      "RssShmem": 77606912,
+      "Pss": 56372224,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 18198528
+     },
+     {
+      "pid": 2323,
+      "VmHWM": 125947904,
+      "RssAnon": 39997440,
+      "RssShmem": 71032832,
+      "Pss": 56345600,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 18172928
+     },
+     {
+      "pid": 2325,
+      "VmHWM": 126631936,
+      "RssAnon": 39997440,
+      "RssShmem": 71716864,
+      "Pss": 56408064,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 18234368
+     },
+     {
+      "pid": 2327,
+      "VmHWM": 128135168,
+      "RssAnon": 39997440,
+      "RssShmem": 73220096,
+      "Pss": 55977984,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 17804288
+     },
+     {
+      "pid": 2329,
+      "VmHWM": 106991616,
+      "RssAnon": 39997440,
+      "RssShmem": 52076544,
+      "Pss": 50970624,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 12797952
+     },
+     {
+      "pid": 2331,
+      "VmHWM": 106549248,
+      "RssAnon": 39997440,
+      "RssShmem": 51634176,
+      "Pss": 50463744,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 12290048
+     },
+     {
+      "pid": 2333,
+      "VmHWM": 119275520,
+      "RssAnon": 39997440,
+      "RssShmem": 64360448,
+      "Pss": 55066624,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 16892928
+     },
+     {
+      "pid": 2335,
+      "VmHWM": 121176064,
+      "RssAnon": 39997440,
+      "RssShmem": 66260992,
+      "Pss": 53636096,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 15462400
+     },
+     {
+      "pid": 2337,
+      "VmHWM": 106975232,
+      "RssAnon": 39997440,
+      "RssShmem": 52060160,
+      "Pss": 51298304,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 13125632
+     },
+     {
+      "pid": 2339,
+      "VmHWM": 105963520,
+      "RssAnon": 39997440,
+      "RssShmem": 51048448,
+      "Pss": 49119232,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 10946560
+     },
+     {
+      "pid": 2341,
+      "VmHWM": 113786880,
+      "RssAnon": 39997440,
+      "RssShmem": 58871808,
+      "Pss": 51898368,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 13724672
+     },
+     {
+      "pid": 2343,
+      "VmHWM": 107368448,
+      "RssAnon": 39997440,
+      "RssShmem": 52453376,
+      "Pss": 49871872,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 11699200
+     },
+     {
+      "pid": 2345,
+      "VmHWM": 110051328,
+      "RssAnon": 39997440,
+      "RssShmem": 55136256,
+      "Pss": 51692544,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 13518848
+     },
+     {
+      "pid": 2347,
+      "VmHWM": 105754624,
+      "RssAnon": 39997440,
+      "RssShmem": 50839552,
+      "Pss": 49240064,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 11067392
+     },
+     {
+      "pid": 2349,
+      "VmHWM": 105574400,
+      "RssAnon": 39997440,
+      "RssShmem": 50659328,
+      "Pss": 48885760,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 10713088
+     },
+     {
+      "pid": 2351,
+      "VmHWM": 107814912,
+      "RssAnon": 39997440,
+      "RssShmem": 52899840,
+      "Pss": 48941056,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 10767360
+     },
+     {
+      "pid": 2353,
+      "VmHWM": 105836544,
+      "RssAnon": 39997440,
+      "RssShmem": 50921472,
+      "Pss": 48892928,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 10719232
+     },
+     {
+      "pid": 2355,
+      "VmHWM": 105586688,
+      "RssAnon": 39997440,
+      "RssShmem": 50671616,
+      "Pss": 48717824,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 10545152
+     },
+     {
+      "pid": 2357,
+      "VmHWM": 106131456,
+      "RssAnon": 39997440,
+      "RssShmem": 51216384,
+      "Pss": 48336896,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 10164224
+     },
+     {
+      "pid": 2359,
+      "VmHWM": 105897984,
+      "RssAnon": 39997440,
+      "RssShmem": 50982912,
+      "Pss": 48748544,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 10575872
+     },
+     {
+      "pid": 2361,
+      "VmHWM": 106467328,
+      "RssAnon": 39997440,
+      "RssShmem": 51552256,
+      "Pss": 48800768,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 10627072
+     },
+     {
+      "pid": 2363,
+      "VmHWM": 105619456,
+      "RssAnon": 39997440,
+      "RssShmem": 50704384,
+      "Pss": 49075200,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 10902528
+     },
+     {
+      "pid": 2365,
+      "VmHWM": 106713088,
+      "RssAnon": 39997440,
+      "RssShmem": 51798016,
+      "Pss": 48238592,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 10065920
+     },
+     {
+      "pid": 2367,
+      "VmHWM": 105021440,
+      "RssAnon": 39997440,
+      "RssShmem": 50106368,
+      "Pss": 48265216,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 10091520
+     },
+     {
+      "pid": 2369,
+      "VmHWM": 106254336,
+      "RssAnon": 39997440,
+      "RssShmem": 51339264,
+      "Pss": 47803392,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 9630720
+     },
+     {
+      "pid": 2371,
+      "VmHWM": 105242624,
+      "RssAnon": 39997440,
+      "RssShmem": 50327552,
+      "Pss": 48211968,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 10039296
+     },
+     {
+      "pid": 2373,
+      "VmHWM": 105058304,
+      "RssAnon": 39997440,
+      "RssShmem": 50143232,
+      "Pss": 47887360,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 9713664
+     },
+     {
+      "pid": 2377,
+      "VmHWM": 104734720,
+      "RssAnon": 39997440,
+      "RssShmem": 49819648,
+      "Pss": 47586304,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 9412608
+     },
+     {
+      "pid": 2379,
+      "VmHWM": 104951808,
+      "RssAnon": 39997440,
+      "RssShmem": 50036736,
+      "Pss": 48024576,
+      "Pss_Anon": 37905408,
+      "Pss_Shmem": 9851904
+     }
+    ],
+    "totals": {
+     "backends": 50,
+     "rss_anon": 1999872000,
+     "pss": 2652486656,
+     "shared_versions": 0,
+     "private_and_shared": 1999872000,
+     "max_rss_anon": 39997440
+    },
+    "dev_shm_used": 1097728,
+    "registry": [
+     [
+      "cluster",
+      "",
+      "0",
+      "0",
+      "0"
+     ]
+    ]
+   }
+  },
+  {
+   "mode": "shared",
+   "scenario": "one-graph",
+   "connections": 1,
+   "graphs": 1,
+   "version_bytes": 336124246,
+   "memory_before": {
+    "backends": 0,
+    "rss_anon": 0,
+    "pss": 0,
+    "shared_versions": 0,
+    "private_and_shared": 0,
+    "max_rss_anon": 0
+   },
+   "cold_first_calls": {
+    "seconds": [
+     0.5652
+    ],
+    "median": 0.5652,
+    "max": 0.5652,
+    "min": 0.5652
+   },
+   "neighbours_first": {
+    "tps": 8396.923358,
+    "latency_ms": 0.119,
+    "transactions": 167934,
+    "failed": 0
+   },
+   "neighbours": {
+    "tps": 8748.07813,
+    "latency_ms": 0.114,
+    "transactions": 174962,
+    "failed": 0
+   },
+   "bfs": {
+    "tps": 1534.495832,
+    "latency_ms": 0.652,
+    "transactions": 30691,
+    "failed": 0
+   },
+   "memory": {
+    "backends": [
+     {
+      "pid": 2432,
+      "VmHWM": 734670848,
+      "RssAnon": 12480512,
+      "RssShmem": 706527232,
+      "Pss": 718187520,
+      "Pss_Anon": 10704896,
+      "Pss_Shmem": 700107776
+     }
+    ],
+    "totals": {
+     "backends": 1,
+     "rss_anon": 12480512,
+     "pss": 718187520,
+     "shared_versions": 344126190,
+     "private_and_shared": 356606702,
+     "max_rss_anon": 12480512
+    },
+    "dev_shm_used": 345227264,
+    "registry": [
+     [
+      "version",
+      "ready",
+      "344126190",
+      "0",
+      "1"
+     ],
+     [
+      "cluster",
+      "",
+      "344126190",
+      "0",
+      "1"
+     ]
+    ]
+   },
+   "pagerank": {
+    "seconds": 4.551569
+   },
+   "memory_after_pagerank": {
+    "backends": 1,
+    "rss_anon": 7983104,
+    "pss": 728052736,
+    "shared_versions": 344126190,
+    "private_and_shared": 352109294,
+    "max_rss_anon": 7983104
+   }
+  },
+  {
+   "mode": "shared",
+   "scenario": "one-graph",
+   "connections": 10,
+   "graphs": 1,
+   "version_bytes": 336124246,
+   "memory_before": {
+    "backends": 0,
+    "rss_anon": 0,
+    "pss": 0,
+    "shared_versions": 0,
+    "private_and_shared": 0,
+    "max_rss_anon": 0
+   },
+   "cold_first_calls": {
+    "seconds": [
+     0.4148,
+     0.7154,
+     0.7338,
+     0.7462,
+     0.7083,
+     0.6744,
+     0.6623,
+     0.663,
+     0.727,
+     0.584
+    ],
+    "median": 0.6914,
+    "max": 0.7462,
+    "min": 0.4148
+   },
+   "neighbours_first": {
+    "tps": 42748.979086,
+    "latency_ms": 0.234,
+    "transactions": 854978,
+    "failed": 0
+   },
+   "neighbours": {
+    "tps": 45321.26089,
+    "latency_ms": 0.221,
+    "transactions": 906422,
+    "failed": 0
+   },
+   "bfs": {
+    "tps": 7212.537845,
+    "latency_ms": 1.386,
+    "transactions": 144253,
+    "failed": 0
+   },
+   "memory": {
+    "backends": [
+     {
+      "pid": 2549,
+      "VmHWM": 734724096,
+      "RssAnon": 12480512,
+      "RssShmem": 706580480,
+      "Pss": 541432832,
+      "Pss_Anon": 10494976,
+      "Pss_Shmem": 529356800
+     },
+     {
+      "pid": 2553,
+      "VmHWM": 213467136,
+      "RssAnon": 4182016,
+      "RssShmem": 193892352,
+      "Pss": 22774784,
+      "Pss_Anon": 2194432,
+      "Pss_Shmem": 19312640
+     },
+     {
+      "pid": 2554,
+      "VmHWM": 213409792,
+      "RssAnon": 4190208,
+      "RssShmem": 193896448,
+      "Pss": 22784000,
+      "Pss_Anon": 2202624,
+      "Pss_Shmem": 19312640
+     },
+     {
+      "pid": 2555,
+      "VmHWM": 213532672,
+      "RssAnon": 4190208,
+      "RssShmem": 193892352,
+      "Pss": 22782976,
+      "Pss_Anon": 2202624,
+      "Pss_Shmem": 19311616
+     },
+     {
+      "pid": 2556,
+      "VmHWM": 213270528,
+      "RssAnon": 4186112,
+      "RssShmem": 193843200,
+      "Pss": 22766592,
+      "Pss_Anon": 2198528,
+      "Pss_Shmem": 19307520
+     },
+     {
+      "pid": 2557,
+      "VmHWM": 213516288,
+      "RssAnon": 4186112,
+      "RssShmem": 193892352,
+      "Pss": 22778880,
+      "Pss_Anon": 2198528,
+      "Pss_Shmem": 19311616
+     },
+     {
+      "pid": 2558,
+      "VmHWM": 213311488,
+      "RssAnon": 4190208,
+      "RssShmem": 193871872,
+      "Pss": 22773760,
+      "Pss_Anon": 2202624,
+      "Pss_Shmem": 19310592
+     },
+     {
+      "pid": 2559,
+      "VmHWM": 213426176,
+      "RssAnon": 4231168,
+      "RssShmem": 193892352,
+      "Pss": 22823936,
+      "Pss_Anon": 2243584,
+      "Pss_Shmem": 19312640
+     },
+     {
+      "pid": 2560,
+      "VmHWM": 213532672,
+      "RssAnon": 4186112,
+      "RssShmem": 193892352,
+      "Pss": 22778880,
+      "Pss_Anon": 2198528,
+      "Pss_Shmem": 19312640
+     },
+     {
+      "pid": 2561,
+      "VmHWM": 213590016,
+      "RssAnon": 4186112,
+      "RssShmem": 193892352,
+      "Pss": 22778880,
+      "Pss_Anon": 2198528,
+      "Pss_Shmem": 19312640
+     }
+    ],
+    "totals": {
+     "backends": 10,
+     "rss_anon": 50208768,
+     "pss": 746475520,
+     "shared_versions": 344126190,
+     "private_and_shared": 394334958,
+     "max_rss_anon": 12480512
+    },
+    "dev_shm_used": 345227264,
+    "registry": [
+     [
+      "version",
+      "ready",
+      "344126190",
+      "0",
+      "10"
+     ],
+     [
+      "cluster",
+      "",
+      "344126190",
+      "0",
+      "10"
+     ]
+    ]
+   },
+   "pagerank": {
+    "seconds": 4.488258
+   },
+   "memory_after_pagerank": {
+    "backends": 10,
+    "rss_anon": 53678080,
+    "pss": 764793856,
+    "shared_versions": 344126190,
+    "private_and_shared": 397804270,
+    "max_rss_anon": 12480512
+   }
+  },
+  {
+   "mode": "shared",
+   "scenario": "one-graph",
+   "connections": 50,
+   "graphs": 1,
+   "version_bytes": 336124246,
+   "memory_before": {
+    "backends": 0,
+    "rss_anon": 0,
+    "pss": 0,
+    "shared_versions": 0,
+    "private_and_shared": 0,
+    "max_rss_anon": 0
+   },
+   "cold_first_calls": {
+    "seconds": [
+     0.429,
+     1.8065,
+     1.8733,
+     1.8047,
+     1.8327,
+     1.874,
+     1.9761,
+     1.7894,
+     1.785,
+     1.8385,
+     1.8111,
+     1.8874,
+     1.8089,
+     1.7981,
+     1.7916,
+     1.8986,
+     1.8495,
+     1.92,
+     1.7721,
+     1.8023,
+     1.8812,
+     1.8699,
+     1.9401,
+     1.8775,
+     1.8552,
+     1.7603,
+     1.7476,
+     1.9073,
+     1.8998,
+     1.7757,
+     1.869,
+     1.7246,
+     1.7491,
+     1.8994,
+     1.8137,
+     1.7924,
+     1.7471,
+     1.7945,
+     1.7133,
+     1.8708,
+     1.784,
+     1.8516,
+     1.7036,
+     1.8657,
+     1.785,
+     1.7718,
+     1.7374,
+     1.7105,
+     1.6681,
+     1.7574
+    ],
+    "median": 1.8056,
+    "max": 1.9761,
+    "min": 0.429
+   },
+   "neighbours_first": {
+    "tps": 23180.077759,
+    "latency_ms": 2.157,
+    "transactions": 463622,
+    "failed": 0
+   },
+   "neighbours": {
+    "tps": 28006.564992,
+    "latency_ms": 1.785,
+    "transactions": 560132,
+    "failed": 0
+   },
+   "bfs": {
+    "tps": 8039.121311,
+    "latency_ms": 6.22,
+    "transactions": 160828,
+    "failed": 0
+   },
+   "memory": {
+    "backends": [
+     {
+      "pid": 2813,
+      "VmHWM": 734724096,
+      "RssAnon": 12476416,
+      "RssShmem": 706584576,
+      "Pss": 524960768,
+      "Pss_Anon": 10388480,
+      "Pss_Shmem": 513924096
+     },
+     {
+      "pid": 2817,
+      "VmHWM": 213553152,
+      "RssAnon": 4182016,
+      "RssShmem": 193896448,
+      "Pss": 6259712,
+      "Pss_Anon": 2089984,
+      "Pss_Shmem": 3878912
+     },
+     {
+      "pid": 2818,
+      "VmHWM": 213385216,
+      "RssAnon": 4182016,
+      "RssShmem": 193900544,
+      "Pss": 6259712,
+      "Pss_Anon": 2089984,
+      "Pss_Shmem": 3879936
+     },
+     {
+      "pid": 2819,
+      "VmHWM": 213405696,
+      "RssAnon": 4177920,
+      "RssShmem": 193896448,
+      "Pss": 6254592,
+      "Pss_Anon": 2085888,
+      "Pss_Shmem": 3878912
+     },
+     {
+      "pid": 2820,
+      "VmHWM": 213585920,
+      "RssAnon": 4182016,
+      "RssShmem": 193896448,
+      "Pss": 6258688,
+      "Pss_Anon": 2089984,
+      "Pss_Shmem": 3878912
+     },
+     {
+      "pid": 2821,
+      "VmHWM": 213381120,
+      "RssAnon": 4182016,
+      "RssShmem": 193896448,
+      "Pss": 6258688,
+      "Pss_Anon": 2089984,
+      "Pss_Shmem": 3878912
+     },
+     {
+      "pid": 2822,
+      "VmHWM": 213385216,
+      "RssAnon": 4182016,
+      "RssShmem": 193900544,
+      "Pss": 6259712,
+      "Pss_Anon": 2089984,
+      "Pss_Shmem": 3878912
+     },
+     {
+      "pid": 2823,
+      "VmHWM": 213393408,
+      "RssAnon": 4182016,
+      "RssShmem": 193896448,
+      "Pss": 6258688,
+      "Pss_Anon": 2089984,
+      "Pss_Shmem": 3878912
+     },
+     {
+      "pid": 2824,
+      "VmHWM": 213381120,
+      "RssAnon": 4182016,
+      "RssShmem": 193896448,
+      "Pss": 6258688,
+      "Pss_Anon": 2089984,
+      "Pss_Shmem": 3878912
+     },
+     {
+      "pid": 2825,
+      "VmHWM": 213393408,
+      "RssAnon": 4182016,
+      "RssShmem": 193896448,
+      "Pss": 6258688,
+      "Pss_Anon": 2089984,
+      "Pss_Shmem": 3878912
+     },
+     {
+      "pid": 2826,
+      "VmHWM": 213336064,
+      "RssAnon": 4182016,
+      "RssShmem": 193851392,
+      "Pss": 6254592,
+      "Pss_Anon": 2089984,
+      "Pss_Shmem": 3874816
+     },
+     {
+      "pid": 2827,
+      "VmHWM": 213405696,
+      "RssAnon": 4177920,
+      "RssShmem": 193843200,
+      "Pss": 6249472,
+      "Pss_Anon": 2085888,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2828,
+      "VmHWM": 213540864,
+      "RssAnon": 4177920,
+      "RssShmem": 193843200,
+      "Pss": 6249472,
+      "Pss_Anon": 2085888,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2829,
+      "VmHWM": 213487616,
+      "RssAnon": 4194304,
+      "RssShmem": 193843200,
+      "Pss": 6265856,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2830,
+      "VmHWM": 213422080,
+      "RssAnon": 4194304,
+      "RssShmem": 193847296,
+      "Pss": 6266880,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3874816
+     },
+     {
+      "pid": 2831,
+      "VmHWM": 213352448,
+      "RssAnon": 4194304,
+      "RssShmem": 193843200,
+      "Pss": 6265856,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2832,
+      "VmHWM": 213344256,
+      "RssAnon": 4194304,
+      "RssShmem": 193843200,
+      "Pss": 6265856,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2833,
+      "VmHWM": 213487616,
+      "RssAnon": 4190208,
+      "RssShmem": 193843200,
+      "Pss": 6261760,
+      "Pss_Anon": 2098176,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2834,
+      "VmHWM": 213348352,
+      "RssAnon": 4190208,
+      "RssShmem": 193847296,
+      "Pss": 6262784,
+      "Pss_Anon": 2098176,
+      "Pss_Shmem": 3874816
+     },
+     {
+      "pid": 2835,
+      "VmHWM": 213536768,
+      "RssAnon": 4194304,
+      "RssShmem": 193843200,
+      "Pss": 6265856,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2836,
+      "VmHWM": 213417984,
+      "RssAnon": 4194304,
+      "RssShmem": 193843200,
+      "Pss": 6265856,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2837,
+      "VmHWM": 213340160,
+      "RssAnon": 4190208,
+      "RssShmem": 193843200,
+      "Pss": 6261760,
+      "Pss_Anon": 2098176,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2838,
+      "VmHWM": 213344256,
+      "RssAnon": 4194304,
+      "RssShmem": 193847296,
+      "Pss": 6266880,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3874816
+     },
+     {
+      "pid": 2839,
+      "VmHWM": 213344256,
+      "RssAnon": 4194304,
+      "RssShmem": 193847296,
+      "Pss": 6266880,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2840,
+      "VmHWM": 213336064,
+      "RssAnon": 4190208,
+      "RssShmem": 193843200,
+      "Pss": 6261760,
+      "Pss_Anon": 2098176,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2841,
+      "VmHWM": 213417984,
+      "RssAnon": 4190208,
+      "RssShmem": 193843200,
+      "Pss": 6261760,
+      "Pss_Anon": 2098176,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2842,
+      "VmHWM": 213348352,
+      "RssAnon": 4194304,
+      "RssShmem": 193847296,
+      "Pss": 6266880,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3874816
+     },
+     {
+      "pid": 2843,
+      "VmHWM": 213549056,
+      "RssAnon": 4194304,
+      "RssShmem": 193843200,
+      "Pss": 6265856,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2844,
+      "VmHWM": 213602304,
+      "RssAnon": 4190208,
+      "RssShmem": 193843200,
+      "Pss": 6261760,
+      "Pss_Anon": 2098176,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2845,
+      "VmHWM": 213344256,
+      "RssAnon": 4194304,
+      "RssShmem": 193843200,
+      "Pss": 6265856,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2846,
+      "VmHWM": 213344256,
+      "RssAnon": 4194304,
+      "RssShmem": 193847296,
+      "Pss": 6266880,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3874816
+     },
+     {
+      "pid": 2847,
+      "VmHWM": 213340160,
+      "RssAnon": 4194304,
+      "RssShmem": 193843200,
+      "Pss": 6266880,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2848,
+      "VmHWM": 213340160,
+      "RssAnon": 4194304,
+      "RssShmem": 193843200,
+      "Pss": 6266880,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2849,
+      "VmHWM": 213475328,
+      "RssAnon": 4194304,
+      "RssShmem": 193843200,
+      "Pss": 6266880,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2850,
+      "VmHWM": 213409792,
+      "RssAnon": 4190208,
+      "RssShmem": 193847296,
+      "Pss": 6262784,
+      "Pss_Anon": 2098176,
+      "Pss_Shmem": 3874816
+     },
+     {
+      "pid": 2851,
+      "VmHWM": 213495808,
+      "RssAnon": 4194304,
+      "RssShmem": 193843200,
+      "Pss": 6266880,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2852,
+      "VmHWM": 213409792,
+      "RssAnon": 4186112,
+      "RssShmem": 193847296,
+      "Pss": 6258688,
+      "Pss_Anon": 2094080,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2853,
+      "VmHWM": 213405696,
+      "RssAnon": 4190208,
+      "RssShmem": 193843200,
+      "Pss": 6262784,
+      "Pss_Anon": 2098176,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2854,
+      "VmHWM": 213344256,
+      "RssAnon": 4194304,
+      "RssShmem": 193847296,
+      "Pss": 6266880,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3874816
+     },
+     {
+      "pid": 2855,
+      "VmHWM": 213331968,
+      "RssAnon": 4186112,
+      "RssShmem": 193843200,
+      "Pss": 6258688,
+      "Pss_Anon": 2094080,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2856,
+      "VmHWM": 213340160,
+      "RssAnon": 4194304,
+      "RssShmem": 193843200,
+      "Pss": 6266880,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2857,
+      "VmHWM": 213352448,
+      "RssAnon": 4194304,
+      "RssShmem": 193843200,
+      "Pss": 6266880,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2858,
+      "VmHWM": 213393408,
+      "RssAnon": 4194304,
+      "RssShmem": 193847296,
+      "Pss": 6266880,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3874816
+     },
+     {
+      "pid": 2859,
+      "VmHWM": 213417984,
+      "RssAnon": 4194304,
+      "RssShmem": 193843200,
+      "Pss": 6266880,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2860,
+      "VmHWM": 213340160,
+      "RssAnon": 4194304,
+      "RssShmem": 193843200,
+      "Pss": 6266880,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2861,
+      "VmHWM": 213409792,
+      "RssAnon": 4194304,
+      "RssShmem": 193843200,
+      "Pss": 6266880,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2862,
+      "VmHWM": 213348352,
+      "RssAnon": 4190208,
+      "RssShmem": 193847296,
+      "Pss": 6262784,
+      "Pss_Anon": 2098176,
+      "Pss_Shmem": 3874816
+     },
+     {
+      "pid": 2863,
+      "VmHWM": 213389312,
+      "RssAnon": 4194304,
+      "RssShmem": 193843200,
+      "Pss": 6266880,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3873792
+     },
+     {
+      "pid": 2864,
+      "VmHWM": 213426176,
+      "RssAnon": 4194304,
+      "RssShmem": 193847296,
+      "Pss": 6267904,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3874816
+     },
+     {
+      "pid": 2865,
+      "VmHWM": 213393408,
+      "RssAnon": 4194304,
+      "RssShmem": 193843200,
+      "Pss": 6267904,
+      "Pss_Anon": 2102272,
+      "Pss_Shmem": 3874816
+     }
+    ],
+    "totals": {
+     "backends": 50,
+     "rss_anon": 217784320,
+     "pss": 831852544,
+     "shared_versions": 344126190,
+     "private_and_shared": 561910510,
+     "max_rss_anon": 12476416
+    },
+    "dev_shm_used": 345227264,
+    "registry": [
+     [
+      "version",
+      "ready",
+      "344126190",
+      "0",
+      "50"
+     ],
+     [
+      "cluster",
+      "",
+      "344126190",
+      "0",
+      "50"
+     ]
+    ]
+   },
+   "pagerank": {
+    "seconds": 4.581077
+   },
+   "memory_after_pagerank": {
+    "backends": 50,
+    "rss_anon": 221233152,
+    "pss": 850220032,
+    "shared_versions": 344126190,
+    "private_and_shared": 565359342,
+    "max_rss_anon": 12476416
+   }
+  },
+  {
+   "mode": "shared",
+   "scenario": "own-graph",
+   "connections": 1,
+   "graphs": 1,
+   "version_bytes": 33612110,
+   "memory_before": {
+    "backends": 0,
+    "rss_anon": 0,
+    "pss": 0,
+    "shared_versions": 0,
+    "private_and_shared": 0,
+    "max_rss_anon": 0
+   },
+   "cold_first_calls": {
+    "seconds": [
+     0.0677
+    ],
+    "median": 0.0677,
+    "max": 0.0677,
+    "min": 0.0677
+   },
+   "neighbours_first": {
+    "tps": 11005.577695,
+    "latency_ms": 0.091,
+    "transactions": 220094,
+    "failed": 0
+   },
+   "neighbours": {
+    "tps": 11066.725885,
+    "latency_ms": 0.09,
+    "transactions": 221314,
+    "failed": 0
+   },
+   "bfs": {
+    "tps": 1974.531603,
+    "latency_ms": 0.506,
+    "transactions": 39488,
+    "failed": 0
+   },
+   "memory": {
+    "backends": [
+     {
+      "pid": 2995,
+      "VmHWM": 46567424,
+      "RssAnon": 3952640,
+      "RssShmem": 28094464,
+      "Pss": 32733184,
+      "Pss_Anon": 2173952,
+      "Pss_Shmem": 24321024
+     }
+    ],
+    "totals": {
+     "backends": 1,
+     "rss_anon": 3952640,
+     "pss": 32733184,
+     "shared_versions": 34414062,
+     "private_and_shared": 38366702,
+     "max_rss_anon": 3952640
+    },
+    "dev_shm_used": 35512320,
+    "registry": [
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "cluster",
+      "",
+      "34414062",
+      "0",
+      "1"
+     ]
+    ]
+   }
+  },
+  {
+   "mode": "shared",
+   "scenario": "own-graph",
+   "connections": 10,
+   "graphs": 10,
+   "version_bytes": 33612110,
+   "memory_before": {
+    "backends": 0,
+    "rss_anon": 0,
+    "pss": 0,
+    "shared_versions": 0,
+    "private_and_shared": 0,
+    "max_rss_anon": 0
+   },
+   "cold_first_calls": {
+    "seconds": [
+     0.1165,
+     0.183,
+     0.1492,
+     0.1805,
+     0.197,
+     0.1724,
+     0.1828,
+     0.1626,
+     0.1648,
+     0.1379
+    ],
+    "median": 0.1686,
+    "max": 0.197,
+    "min": 0.1165
+   },
+   "neighbours_first": {
+    "tps": 50408.208707,
+    "latency_ms": 0.198,
+    "transactions": 1007871,
+    "failed": 0
+   },
+   "neighbours": {
+    "tps": 51938.93169,
+    "latency_ms": 0.193,
+    "transactions": 1038838,
+    "failed": 0
+   },
+   "bfs": {
+    "tps": 7651.129576,
+    "latency_ms": 1.307,
+    "transactions": 152991,
+    "failed": 0
+   },
+   "memory": {
+    "backends": [
+     {
+      "pid": 3136,
+      "VmHWM": 46571520,
+      "RssAnon": 3952640,
+      "RssShmem": 28098560,
+      "Pss": 22899712,
+      "Pss_Anon": 1957888,
+      "Pss_Shmem": 19843072
+     },
+     {
+      "pid": 3138,
+      "VmHWM": 46571520,
+      "RssAnon": 3952640,
+      "RssShmem": 28098560,
+      "Pss": 23019520,
+      "Pss_Anon": 1965056,
+      "Pss_Shmem": 19900416
+     },
+     {
+      "pid": 3140,
+      "VmHWM": 46575616,
+      "RssAnon": 3952640,
+      "RssShmem": 28102656,
+      "Pss": 23020544,
+      "Pss_Anon": 1965056,
+      "Pss_Shmem": 19901440
+     },
+     {
+      "pid": 3142,
+      "VmHWM": 46571520,
+      "RssAnon": 3952640,
+      "RssShmem": 28098560,
+      "Pss": 23019520,
+      "Pss_Anon": 1965056,
+      "Pss_Shmem": 19900416
+     },
+     {
+      "pid": 3144,
+      "VmHWM": 46571520,
+      "RssAnon": 3952640,
+      "RssShmem": 28098560,
+      "Pss": 23019520,
+      "Pss_Anon": 1965056,
+      "Pss_Shmem": 19900416
+     },
+     {
+      "pid": 3146,
+      "VmHWM": 46571520,
+      "RssAnon": 3952640,
+      "RssShmem": 28098560,
+      "Pss": 23019520,
+      "Pss_Anon": 1965056,
+      "Pss_Shmem": 19900416
+     },
+     {
+      "pid": 3148,
+      "VmHWM": 46575616,
+      "RssAnon": 3952640,
+      "RssShmem": 28102656,
+      "Pss": 23020544,
+      "Pss_Anon": 1965056,
+      "Pss_Shmem": 19901440
+     },
+     {
+      "pid": 3150,
+      "VmHWM": 46571520,
+      "RssAnon": 3952640,
+      "RssShmem": 28098560,
+      "Pss": 23019520,
+      "Pss_Anon": 1965056,
+      "Pss_Shmem": 19900416
+     },
+     {
+      "pid": 3152,
+      "VmHWM": 46571520,
+      "RssAnon": 3952640,
+      "RssShmem": 28098560,
+      "Pss": 23019520,
+      "Pss_Anon": 1965056,
+      "Pss_Shmem": 19900416
+     },
+     {
+      "pid": 3154,
+      "VmHWM": 46571520,
+      "RssAnon": 3952640,
+      "RssShmem": 28098560,
+      "Pss": 23019520,
+      "Pss_Anon": 1965056,
+      "Pss_Shmem": 19900416
+     }
+    ],
+    "totals": {
+     "backends": 10,
+     "rss_anon": 39526400,
+     "pss": 230077440,
+     "shared_versions": 344140620,
+     "private_and_shared": 383667020,
+     "max_rss_anon": 3952640
+    },
+    "dev_shm_used": 345243648,
+    "registry": [
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "cluster",
+      "",
+      "344140620",
+      "0",
+      "10"
+     ]
+    ]
+   }
+  },
+  {
+   "mode": "shared",
+   "scenario": "own-graph",
+   "connections": 50,
+   "graphs": 50,
+   "version_bytes": 33612110,
+   "memory_before": {
+    "backends": 0,
+    "rss_anon": 0,
+    "pss": 0,
+    "shared_versions": 0,
+    "private_and_shared": 0,
+    "max_rss_anon": 0
+   },
+   "cold_first_calls": {
+    "seconds": [
+     0.1374,
+     0.1199,
+     0.1292,
+     0.1752,
+     0.1277,
+     0.155,
+     0.1664,
+     0.1482,
+     0.1425,
+     0.1787,
+     0.8642,
+     1.4125,
+     1.5321,
+     1.1587,
+     2.6386,
+     2.9004,
+     1.6756,
+     2.2468,
+     2.5539,
+     2.8758,
+     3.1674,
+     3.1328,
+     3.1126,
+     2.7798,
+     2.9694,
+     3.0062,
+     2.7917,
+     2.8272,
+     2.9279,
+     2.9838,
+     2.6631,
+     2.998,
+     2.7114,
+     2.6035,
+     2.6955,
+     2.7345,
+     2.7202,
+     1.2419,
+     2.4001,
+     2.5532,
+     2.368,
+     0.4639,
+     2.1592,
+     2.2838,
+     2.1184,
+     2.2078,
+     2.1313,
+     2.1726,
+     2.1262,
+     2.0745
+    ],
+    "median": 2.2653,
+    "max": 3.1674,
+    "min": 0.1199
+   },
+   "neighbours_first": {
+    "tps": 42952.923907,
+    "latency_ms": 1.164,
+    "transactions": 859190,
+    "failed": 0
+   },
+   "neighbours": {
+    "tps": 45063.485226,
+    "latency_ms": 1.11,
+    "transactions": 902278,
+    "failed": 0
+   },
+   "bfs": {
+    "tps": 6740.806128,
+    "latency_ms": 7.418,
+    "transactions": 134728,
+    "failed": 0
+   },
+   "memory": {
+    "backends": [
+     {
+      "pid": 3535,
+      "VmHWM": 46735360,
+      "RssAnon": 3952640,
+      "RssShmem": 28262400,
+      "Pss": 21378048,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19261440
+     },
+     {
+      "pid": 3537,
+      "VmHWM": 46735360,
+      "RssAnon": 3952640,
+      "RssShmem": 28262400,
+      "Pss": 21378048,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19261440
+     },
+     {
+      "pid": 3539,
+      "VmHWM": 46739456,
+      "RssAnon": 3952640,
+      "RssShmem": 28266496,
+      "Pss": 21386240,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19265536
+     },
+     {
+      "pid": 3541,
+      "VmHWM": 46735360,
+      "RssAnon": 3952640,
+      "RssShmem": 28262400,
+      "Pss": 21385216,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19264512
+     },
+     {
+      "pid": 3543,
+      "VmHWM": 46735360,
+      "RssAnon": 3952640,
+      "RssShmem": 28262400,
+      "Pss": 21385216,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19264512
+     },
+     {
+      "pid": 3545,
+      "VmHWM": 46735360,
+      "RssAnon": 3952640,
+      "RssShmem": 28262400,
+      "Pss": 21385216,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19264512
+     },
+     {
+      "pid": 3547,
+      "VmHWM": 46727168,
+      "RssAnon": 3940352,
+      "RssShmem": 28266496,
+      "Pss": 21372928,
+      "Pss_Anon": 1848320,
+      "Pss_Shmem": 19264512
+     },
+     {
+      "pid": 3549,
+      "VmHWM": 46735360,
+      "RssAnon": 3952640,
+      "RssShmem": 28262400,
+      "Pss": 21385216,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19264512
+     },
+     {
+      "pid": 3551,
+      "VmHWM": 46735360,
+      "RssAnon": 3952640,
+      "RssShmem": 28262400,
+      "Pss": 21385216,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19264512
+     },
+     {
+      "pid": 3553,
+      "VmHWM": 46735360,
+      "RssAnon": 3952640,
+      "RssShmem": 28262400,
+      "Pss": 21385216,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19264512
+     },
+     {
+      "pid": 3555,
+      "VmHWM": 46743552,
+      "RssAnon": 3952640,
+      "RssShmem": 28270592,
+      "Pss": 21386240,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19265536
+     },
+     {
+      "pid": 3557,
+      "VmHWM": 46735360,
+      "RssAnon": 3952640,
+      "RssShmem": 28262400,
+      "Pss": 21385216,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19264512
+     },
+     {
+      "pid": 3559,
+      "VmHWM": 46702592,
+      "RssAnon": 3952640,
+      "RssShmem": 28229632,
+      "Pss": 21384192,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19263488
+     },
+     {
+      "pid": 3561,
+      "VmHWM": 46735360,
+      "RssAnon": 3952640,
+      "RssShmem": 28262400,
+      "Pss": 21384192,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19263488
+     },
+     {
+      "pid": 3563,
+      "VmHWM": 46739456,
+      "RssAnon": 3952640,
+      "RssShmem": 28266496,
+      "Pss": 21385216,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19264512
+     },
+     {
+      "pid": 3565,
+      "VmHWM": 46735360,
+      "RssAnon": 3952640,
+      "RssShmem": 28262400,
+      "Pss": 21384192,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19263488
+     },
+     {
+      "pid": 3567,
+      "VmHWM": 46735360,
+      "RssAnon": 3952640,
+      "RssShmem": 28262400,
+      "Pss": 21384192,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19263488
+     },
+     {
+      "pid": 3569,
+      "VmHWM": 46735360,
+      "RssAnon": 3952640,
+      "RssShmem": 28262400,
+      "Pss": 21384192,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19263488
+     },
+     {
+      "pid": 3571,
+      "VmHWM": 46739456,
+      "RssAnon": 3952640,
+      "RssShmem": 28266496,
+      "Pss": 21385216,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19264512
+     },
+     {
+      "pid": 3573,
+      "VmHWM": 46735360,
+      "RssAnon": 3952640,
+      "RssShmem": 28262400,
+      "Pss": 21384192,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19263488
+     },
+     {
+      "pid": 3575,
+      "VmHWM": 46735360,
+      "RssAnon": 3952640,
+      "RssShmem": 28262400,
+      "Pss": 21384192,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19263488
+     },
+     {
+      "pid": 3577,
+      "VmHWM": 46735360,
+      "RssAnon": 3952640,
+      "RssShmem": 28262400,
+      "Pss": 21384192,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19263488
+     },
+     {
+      "pid": 3579,
+      "VmHWM": 46739456,
+      "RssAnon": 3952640,
+      "RssShmem": 28266496,
+      "Pss": 21385216,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19264512
+     },
+     {
+      "pid": 3581,
+      "VmHWM": 46739456,
+      "RssAnon": 3952640,
+      "RssShmem": 28266496,
+      "Pss": 21385216,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19264512
+     },
+     {
+      "pid": 3583,
+      "VmHWM": 46735360,
+      "RssAnon": 3952640,
+      "RssShmem": 28262400,
+      "Pss": 21384192,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19263488
+     },
+     {
+      "pid": 3585,
+      "VmHWM": 46718976,
+      "RssAnon": 3952640,
+      "RssShmem": 28246016,
+      "Pss": 21384192,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19263488
+     },
+     {
+      "pid": 3587,
+      "VmHWM": 46723072,
+      "RssAnon": 3952640,
+      "RssShmem": 28250112,
+      "Pss": 21385216,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19264512
+     },
+     {
+      "pid": 3589,
+      "VmHWM": 46604288,
+      "RssAnon": 3952640,
+      "RssShmem": 28131328,
+      "Pss": 21378048,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19257344
+     },
+     {
+      "pid": 3591,
+      "VmHWM": 46604288,
+      "RssAnon": 3952640,
+      "RssShmem": 28131328,
+      "Pss": 21378048,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19257344
+     },
+     {
+      "pid": 3593,
+      "VmHWM": 46604288,
+      "RssAnon": 3952640,
+      "RssShmem": 28131328,
+      "Pss": 21378048,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19257344
+     },
+     {
+      "pid": 3595,
+      "VmHWM": 46608384,
+      "RssAnon": 3952640,
+      "RssShmem": 28135424,
+      "Pss": 21378048,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19257344
+     },
+     {
+      "pid": 3597,
+      "VmHWM": 46604288,
+      "RssAnon": 3952640,
+      "RssShmem": 28131328,
+      "Pss": 21378048,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19257344
+     },
+     {
+      "pid": 3599,
+      "VmHWM": 46604288,
+      "RssAnon": 3952640,
+      "RssShmem": 28131328,
+      "Pss": 21378048,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19257344
+     },
+     {
+      "pid": 3601,
+      "VmHWM": 46604288,
+      "RssAnon": 3952640,
+      "RssShmem": 28131328,
+      "Pss": 21373952,
+      "Pss_Anon": 1857536,
+      "Pss_Shmem": 19257344
+     },
+     {
+      "pid": 3603,
+      "VmHWM": 46608384,
+      "RssAnon": 3952640,
+      "RssShmem": 28135424,
+      "Pss": 21374976,
+      "Pss_Anon": 1857536,
+      "Pss_Shmem": 19257344
+     },
+     {
+      "pid": 3605,
+      "VmHWM": 46587904,
+      "RssAnon": 3952640,
+      "RssShmem": 28114944,
+      "Pss": 21373952,
+      "Pss_Anon": 1857536,
+      "Pss_Shmem": 19256320
+     },
+     {
+      "pid": 3607,
+      "VmHWM": 46608384,
+      "RssAnon": 3952640,
+      "RssShmem": 28135424,
+      "Pss": 21373952,
+      "Pss_Anon": 1857536,
+      "Pss_Shmem": 19257344
+     },
+     {
+      "pid": 3609,
+      "VmHWM": 46604288,
+      "RssAnon": 3952640,
+      "RssShmem": 28131328,
+      "Pss": 21373952,
+      "Pss_Anon": 1857536,
+      "Pss_Shmem": 19257344
+     },
+     {
+      "pid": 3611,
+      "VmHWM": 46592000,
+      "RssAnon": 3952640,
+      "RssShmem": 28119040,
+      "Pss": 21378048,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19257344
+     },
+     {
+      "pid": 3613,
+      "VmHWM": 46587904,
+      "RssAnon": 3952640,
+      "RssShmem": 28114944,
+      "Pss": 21377024,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19256320
+     },
+     {
+      "pid": 3615,
+      "VmHWM": 46587904,
+      "RssAnon": 3952640,
+      "RssShmem": 28114944,
+      "Pss": 21377024,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19256320
+     },
+     {
+      "pid": 3617,
+      "VmHWM": 46587904,
+      "RssAnon": 3952640,
+      "RssShmem": 28114944,
+      "Pss": 21377024,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19256320
+     },
+     {
+      "pid": 3619,
+      "VmHWM": 46592000,
+      "RssAnon": 3952640,
+      "RssShmem": 28119040,
+      "Pss": 21378048,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19257344
+     },
+     {
+      "pid": 3621,
+      "VmHWM": 46587904,
+      "RssAnon": 3952640,
+      "RssShmem": 28114944,
+      "Pss": 21377024,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19256320
+     },
+     {
+      "pid": 3623,
+      "VmHWM": 46592000,
+      "RssAnon": 3952640,
+      "RssShmem": 28119040,
+      "Pss": 21377024,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19256320
+     },
+     {
+      "pid": 3625,
+      "VmHWM": 46604288,
+      "RssAnon": 3952640,
+      "RssShmem": 28131328,
+      "Pss": 21378048,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19257344
+     },
+     {
+      "pid": 3627,
+      "VmHWM": 46608384,
+      "RssAnon": 3952640,
+      "RssShmem": 28135424,
+      "Pss": 21378048,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19258368
+     },
+     {
+      "pid": 3629,
+      "VmHWM": 46592000,
+      "RssAnon": 3952640,
+      "RssShmem": 28119040,
+      "Pss": 21378048,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19257344
+     },
+     {
+      "pid": 3631,
+      "VmHWM": 46596096,
+      "RssAnon": 3952640,
+      "RssShmem": 28123136,
+      "Pss": 21379072,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19258368
+     },
+     {
+      "pid": 3633,
+      "VmHWM": 46592000,
+      "RssAnon": 3952640,
+      "RssShmem": 28119040,
+      "Pss": 21379072,
+      "Pss_Anon": 1860608,
+      "Pss_Shmem": 19258368
+     }
+    ],
+    "totals": {
+     "backends": 50,
+     "rss_anon": 197619712,
+     "pss": 1069038592,
+     "shared_versions": 1720703100,
+     "private_and_shared": 1918322812,
+     "max_rss_anon": 3952640
+    },
+    "dev_shm_used": 1721827328,
+    "registry": [
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "version",
+      "ready",
+      "34414062",
+      "0",
+      "1"
+     ],
+     [
+      "cluster",
+      "",
+      "1720703100",
+      "0",
+      "50"
+     ]
+    ]
+   }
+  }
+ ],
+ "pg_warren": "0.5.0",
+ "postgres": "16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
+ "finished_at": "2026-10-22T14:25:26+00:00",
+ "load_average_after": [
+  24.20703125,
+  12.9931640625,
+  9.9765625
+ ]
+}

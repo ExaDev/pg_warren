@@ -116,7 +116,18 @@ mod tests {
     use warren_core::compute::AnyVector;
 
     #[pg_test]
-    fn the_shared_cache_is_off_by_default() -> Result<(), Error> {
+    fn the_shared_cache_is_on_by_default() -> Result<(), Error> {
+        let default = Spi::get_one::<String>(
+            "SELECT boot_val || unit FROM pg_catalog.pg_settings
+             WHERE name = 'warren.shared_cache_memory'",
+        )?;
+        assert_eq!(default.as_deref(), Some("4194304kB"), "4GB (DESIGN.md §14 item 32)");
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_cap_of_zero_turns_the_shared_cache_off() -> Result<(), Error> {
+        set_cap(c"0")?;
         let setting = Spi::get_one::<String>("SHOW warren.shared_cache_memory")?;
         assert_eq!(setting.as_deref(), Some("0"));
         let (key, resolved) = graph("off", 50)?;
