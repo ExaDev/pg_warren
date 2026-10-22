@@ -2,7 +2,7 @@
 //! without tombstones, as a new, promoted version (DESIGN.md §5.2).
 
 use pgrx::prelude::*;
-use warren_core::graph::{BuildMemory, ExternalId, NodeOrder};
+use warren_core::graph::{BuildMemory, NodeOrder};
 use warren_core::version::compact as renumber;
 
 use super::error::VersionOperationError;
@@ -13,7 +13,7 @@ use crate::catalog::{
     parse_node_order, version_record, GraphDefinition, NewVersion, VersionId, VersionStats,
 };
 use crate::segment::{write_version, SegmentStore, SpiSegmentStore, CHUNK_SIZE};
-use crate::source::with_id_type;
+use crate::source::{with_id_type, IdDatum};
 use crate::vector::{move_vectors, moved_notice, SpiVectorStore, VectorStore};
 
 /// `warren.compact`: renumbers graph `name`'s current version to remove its
@@ -84,7 +84,7 @@ pub(crate) struct CompactionOrder<'a> {
 /// holds the same edges. The source's persisted vectors move to it, with
 /// their rows in the new dense ids. Returns the version and the vectors
 /// moved.
-pub(crate) fn compact_version<E: ExternalId>(
+pub(crate) fn compact_version<E: IdDatum>(
     graph: &GraphDefinition,
     source: VersionId,
     carried: &VersionStats,

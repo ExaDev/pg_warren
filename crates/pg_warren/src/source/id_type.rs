@@ -47,7 +47,14 @@ impl IdType {
 
 /// An external id type with its Postgres value type: what the adapter
 /// reads from source rows and SQL arguments and returns to SQL.
-pub(crate) trait IdDatum: ExternalId + Send + Sync + 'static {
+///
+/// # Safety
+///
+/// A loaded version's id map is read in place from its region (DESIGN.md
+/// §5.6), so every pattern of `size_of::<Self>()` initialized bytes must
+/// be a valid id, the type must have no padding, and its alignment must be
+/// at most 8.
+pub(crate) unsafe trait IdDatum: ExternalId + Send + Sync + 'static {
     /// The Rust type pgrx reads and writes the SQL value as.
     type Sql: FromDatum + IntoDatum;
 
@@ -62,7 +69,8 @@ pub(crate) trait IdDatum: ExternalId + Send + Sync + 'static {
     fn from_integer(value: i64) -> Option<Self>;
 }
 
-impl IdDatum for i32 {
+// SAFETY: an integer: any bits are a value, no padding, alignment 4.
+unsafe impl IdDatum for i32 {
     type Sql = i32;
 
     fn from_sql(value: i32) -> Self {
@@ -78,7 +86,8 @@ impl IdDatum for i32 {
     }
 }
 
-impl IdDatum for i64 {
+// SAFETY: an integer: any bits are a value, no padding, alignment 8.
+unsafe impl IdDatum for i64 {
     type Sql = i64;
 
     fn from_sql(value: i64) -> Self {
@@ -94,7 +103,8 @@ impl IdDatum for i64 {
     }
 }
 
-impl IdDatum for [u8; 16] {
+// SAFETY: bytes: any bits are a value, no padding, alignment 1.
+unsafe impl IdDatum for [u8; 16] {
     type Sql = Uuid;
 
     fn from_sql(value: Uuid) -> Self {
