@@ -3,11 +3,11 @@ cluster settings."""
 
 import pytest
 
-from harness.shared_cache import CAP, MODES, settings
+from harness.shared_cache import CAP, DEFAULT_MODE, MODES, settings
 
 
-def test_off_adds_nothing():
-    assert settings("off") == ()
+def test_off_sets_the_cap_to_zero():
+    assert settings("off") == ("warren.shared_cache_memory = 0",)
 
 
 def test_preload_loads_pg_warren_at_startup_and_sets_the_cap():
@@ -15,11 +15,15 @@ def test_preload_loads_pg_warren_at_startup_and_sets_the_cap():
                                    f"warren.shared_cache_memory = '{CAP}'")
 
 
-def test_on_sets_only_the_cap():
-    assert settings("on") == (f"warren.shared_cache_memory = '{CAP}'",)
+def test_on_is_the_default_configuration():
+    assert settings("on") == ()
 
 
 def test_every_mode_is_named():
     assert set(MODES) == {"off", "preload", "on"}
     with pytest.raises(KeyError):
         settings("shared")
+
+
+def test_the_suite_runs_in_the_default_configuration_unless_told_otherwise():
+    assert DEFAULT_MODE == "on"

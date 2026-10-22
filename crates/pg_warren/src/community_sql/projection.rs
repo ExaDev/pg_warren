@@ -125,7 +125,7 @@ impl Pair {
         if named.graph_id != parent.graph_id {
             // Name the parent only to a caller who may read it.
             let actual = GraphDefinition::find(&parent.graph)?;
-            if !is_reader(actual.owner, &actual.readers)? {
+            if !is_reader(actual.owner, &actual.readers) {
                 return Err(CommunitySqlError::NotContractedFrom {
                     quotient: quotient.graph.name,
                     version: quotient.version,

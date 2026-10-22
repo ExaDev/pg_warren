@@ -87,12 +87,28 @@ SETTINGS = (
     "checkpoint_timeout = '15min'", "autovacuum = off",
 )
 MEMORY_FIELDS = ("VmHWM", "VmRSS", "RssAnon", "RssFile", "RssShmem")
+
+
+def cluster_settings(shared_cache_memory):
+    """The cluster's settings: with a shared cache cap, pg_warren preloaded
+    (so the shared cache exists on PG 15 and 16, DESIGN.md §5.6) and the
+    cap; without, the server's default (on PG 15 and 16, versions private)."""
+    if shared_cache_memory is None:
+        return SETTINGS
+    return (*SETTINGS, "shared_preload_libraries = 'pg_warren'",
+            f"warren.shared_cache_memory = '{shared_cache_memory}'")
+
+
+def shared_bytes_sql(version):
+    """The bytes the shared cache holds of `version` (0 if it is private)."""
+    return (f"SELECT coalesce(sum(bytes), 0) FROM warren.shared_cache() "
+            f"WHERE kind = 'version' AND version = {version}")
 SETTINGS_SQL = (
     "SELECT name || '=' || current_setting(name) FROM pg_settings WHERE name IN "
     "('shared_buffers', 'work_mem', 'maintenance_work_mem', 'max_wal_size', 'wal_level', 'fsync', "
     "'synchronous_commit', 'full_page_writes', 'jit', 'max_parallel_workers_per_gather', "
     "'statement_timeout', 'warren.max_cache_memory', 'warren.max_build_memory', 'warren.max_compute_memory', "
-    "'warren.threads') ORDER BY 1")
+    "'warren.threads', 'warren.shared_cache_memory', 'shared_preload_libraries') ORDER BY 1")
 
 
 @dataclass(frozen=True)
@@ -337,6 +353,17 @@ def pagerank_fits(cached, id_space, cap):
     return cached + PAGERANK_SCRATCH_VECTORS * 8 * id_space <= cap
 
 
+def needs_raised_pass(result, id_space):
+    """Whether a case is measured again at the raised cap: its version, or
+    the version and `pagerank`'s scratch, does not fit
+    `warren.max_cache_memory` (or its size is unknown), unless the shared
+    cache holds the version, which no backend's cap counts."""
+    if result.get("shared_bytes"):
+        return False
+    cached = result["cached_bytes"]
+    return cached is None or not pagerank_fits(cached, id_space, result["cache_memory_bytes"])
+
+
 def size(value):
     for unit, scale in (("GB", 1e9), ("MB", 1e6), ("kB", 1e3)):
         if value >= scale:
@@ -513,7 +540,8 @@ class Session:
                   "rows": last["rows"][:5], "first_rows": [r["rows"][0] if r["rows"] else None for r in runs],
                   "notices": last["notices"][:5], "warnings": last["warnings"][:5],
                   "rss_anon_before": before["RssAnon"], "peak_rss_anon": max(peak_anon[0], after["RssAnon"]),
-                  "vm_hwm": after["VmHWM"], "rss_anon_after": after["RssAnon"]}
+                  "vm_hwm": after["VmHWM"], "rss_anon_after": after["RssAnon"],
+                  "rss_shmem_after": after["RssShmem"]}
         errors = [e for r in runs for e in r["errors"]]
         if errors:
             result["errors"] = errors[:5]
@@ -657,11 +685,13 @@ class Soak:
                 s.run(setting)
             probe = self.stage(result, "cold_load_probe", s.measure(f"SELECT warren.prewarm('{GRAPH}')"))
             result["cached_bytes"] = cached_bytes(probe["notices"], v1["version"])
+            result["shared_bytes"] = int(s.run(shared_bytes_sql(v1["version"]))["rows"][0])
+            if result["shared_bytes"]:
+                # The first pass's prewarm is then the cold load into the shared cache.
+                s.run(f"SELECT warren.evict('{GRAPH}')")
         result["cache_memory_bytes"] = cap_bytes(self.options.cache_memory_kb)
         self._queries(result, "default", cap=self.first_cap())
-        fits = result["cached_bytes"] is not None and pagerank_fits(result["cached_bytes"], v1["id_space"],
-                                                                    result["cache_memory_bytes"])
-        if not fits:
+        if needs_raised_pass(result, v1["id_space"]):
             self._queries(result, "raised", cap=self.options.raised_cache_memory)
         if self.options.eigen and self.options.eigen_steps and case.name == "a":
             self._eigen_steps(case, result)
@@ -1000,6 +1030,9 @@ def main(argv):
                          help="warren.max_cache_memory of the first pass, in kB (default: the 4GB default)")
     options.add_argument("--raised-cache-memory", default="8GB",
                          help="warren.max_cache_memory for the second pass of a case that does not fit")
+    options.add_argument("--shared-cache-memory",
+                         help="preload pg_warren and set warren.shared_cache_memory to this (e.g. 8GB); "
+                              "default: the server's default, private on PG 15 and 16")
     options.add_argument("--statement-timeout", help="statement_timeout of the read workloads, e.g. 15min")
     options.add_argument("--node-order", choices=["id", "locality"], default="id",
                          help="create_graph's node_order: how the first build orders dense ids")
@@ -1019,7 +1052,8 @@ def main(argv):
     args.results.mkdir(parents=True, exist_ok=True)
     found = provenance([sys.argv[0], *argv], args.extension_revision, args.extension_profile,
                        installed_library(args.pg_config))
-    with Cluster(args.pg_config, args.runas, parent=args.parent, settings=SETTINGS) as cluster:
+    with Cluster(args.pg_config, args.runas, parent=args.parent,
+                 settings=cluster_settings(args.shared_cache_memory)) as cluster:
         soak = Soak(cluster, args, found)
         for name in args.cases:
             case = CASES[name].scaled(args.scale) if args.scale > 1 else CASES[name]

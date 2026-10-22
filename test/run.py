@@ -30,9 +30,9 @@ def main(argv):
     options.add_argument("--keep", action="store_true", help="keep the cluster directory for inspection")
     options.add_argument("--trusted", action="store_true",
                          help="install pg_warren as a non-superuser that owns each test database")
-    options.add_argument("--shared-cache", choices=sorted(shared_cache.MODES), default="off",
-                         help="the cluster's shared cache (DESIGN.md §5.6): off (default); preload "
-                              "(shared_preload_libraries and a cap); on (a cap: shared on PG 17+)")
+    options.add_argument("--shared-cache", choices=sorted(shared_cache.MODES), default=shared_cache.DEFAULT_MODE,
+                         help="the cluster's shared cache (DESIGN.md §5.6): on (default: the default cap, "
+                              "shared on PG 17+); preload (shared_preload_libraries and a cap); off (a cap of 0)")
     args = options.parse_args(argv)
     tests = [SqlTest.load(p) for p in (args.tests or sorted(TESTS.glob("*.sql")))]
     installer = Installer.trusted() if args.trusted else Installer()
