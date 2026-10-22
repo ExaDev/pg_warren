@@ -6,8 +6,10 @@
 //! installation's versions and vectors. The extension's oid is looked up
 //! once per backend (an index scan of `pg_extension`) and kept until a
 //! change to `pg_namespace` is processed: dropping the extension drops its
-//! schema, `warren`, so a reinstall always invalidates it, in this backend
-//! at its next command and in others at their next transaction.
+//! schema, `warren`, so a reinstall always invalidates it: in the backend
+//! that made it at its next command, and in others when they next process
+//! shared invalidations, which can be mid-transaction (at a lock
+//! acquisition).
 
 use std::cell::Cell;
 
