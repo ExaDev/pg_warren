@@ -69,6 +69,17 @@ FROM dblink('d', $$SELECT warren.evict('g1')$$) AS t(evicted bigint);
 SELECT count(*) FROM dblink_get_result('c') AS t(degree bigint, slept text);
 SELECT count(*) FROM dblink_get_result('c') AS t(degree bigint, slept text);
 
+-- Set to 0 by a reload, the cap frees what is shared: c's next read
+-- evicts g2 and releases its mapping, the last.
+\if :shared
+ALTER SYSTEM SET warren.shared_cache_memory = 0;
+SELECT pg_reload_conf();
+SELECT pg_sleep(0.5);
+\endif
+SELECT assert.equal(shared_segments(:v2), :one, 'g2 stays until a backend reads');
+SELECT * FROM dblink('c', $$SELECT warren.prewarm('g2')$$) AS t(version bigint);
+SELECT assert.equal(shared_segments(:v2), 0::bigint, 'g2 is freed at a cap of 0');
+
 SELECT dblink_disconnect(session) FROM unnest(ARRAY['a', 'b', 'c', 'd']) AS session;
 \if :shared
 ALTER SYSTEM RESET warren.shared_cache_memory;

@@ -55,6 +55,8 @@ struct Statement {
     /// Whether the notice that the shared cache refused a version has
     /// been raised.
     noticed_shared: bool,
+    /// Whether it evicted the shared cache, its cap set to 0.
+    retired_shared: bool,
 }
 
 /// Pins version `version` until the statement or transaction ends.
@@ -97,6 +99,13 @@ pub(super) fn pin_shared() {
 pub(super) fn shared_notice_due() -> bool {
     register();
     !STATEMENT.with_borrow_mut(|statement| std::mem::replace(&mut statement.noticed_shared, true))
+}
+
+/// Whether evicting the shared cache, its cap set to 0, is due: once per
+/// pin.
+pub(super) fn retire_due() -> bool {
+    register();
+    !STATEMENT.with_borrow_mut(|statement| std::mem::replace(&mut statement.retired_shared, true))
 }
 
 /// Ends the pin: releases what it holds, ends the statement's pins of

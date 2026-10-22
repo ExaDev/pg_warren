@@ -93,9 +93,8 @@ pub(crate) trait SharedVersions {
     fn release(&mut self, which: Release);
 
     /// Evicts the unpinned versions whose keys `which` selects; how many.
-    /// (Step 6 of DESIGN.md §5.6 evicts through it: prune, promotion and
-    /// `warren.evict`; until then only tests do.)
-    #[cfg(any(test, feature = "pg_test"))]
+    /// (A read with `warren.shared_cache_memory` at 0 evicts every one;
+    /// step 6 of DESIGN.md §5.6 adds prune, promotion and `warren.evict`.)
     fn evict(&mut self, which: &dyn Fn(&Key) -> bool) -> usize;
 
     /// Gives back everything this backend holds, as it exits.

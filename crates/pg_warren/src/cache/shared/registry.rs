@@ -246,7 +246,6 @@ impl<S: SlotTable, P: PinTable> Registry<S, P> {
 
     /// Evicts the unpinned ready slots whose keys `which` selects; the
     /// regions to unpin.
-    #[cfg(any(test, feature = "pg_test"))]
     pub(crate) fn evict(&mut self, which: impl Fn(&Key) -> bool) -> Vec<Handle> {
         let pins = self.pins();
         let chosen: Vec<usize> = self

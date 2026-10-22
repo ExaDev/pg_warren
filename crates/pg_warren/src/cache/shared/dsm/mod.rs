@@ -103,6 +103,12 @@ impl Dsm {
         Self(())
     }
 
+    /// The port, if this backend has used the shared cache: without
+    /// finding or creating the registry, unlike [`Dsm::open`].
+    pub(crate) fn used() -> Option<Self> {
+        BACKEND.with_borrow(Option::is_some).then_some(Self(()))
+    }
+
     /// The port, after finding (or on PG 17 and 18 creating) the registry
     /// on this backend's first use and registering the callbacks that give
     /// back what it holds; why the shared cache is unavailable otherwise.
@@ -347,7 +353,6 @@ impl SharedVersions for Dsm {
         });
     }
 
-    #[cfg(any(test, feature = "pg_test"))]
     fn evict(&mut self, which: &dyn Fn(&Key) -> bool) -> usize {
         let evicted = with_backend(|backend| backend.locked(|registry, _| registry.evict(which)));
         let evicted = evicted.unwrap_or_default();

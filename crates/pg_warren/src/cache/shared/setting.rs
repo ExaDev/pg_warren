@@ -1,7 +1,8 @@
 //! `warren.shared_cache_memory` (DESIGN.md §5.6, §14 items 31 and 32): the
 //! bytes of shared versions the cluster holds, loading, ready and draining
 //! together; `0`, the default until M9's step 8, turns the shared cache
-//! off.
+//! off, and a reload that sets it to `0` evicts what is shared
+//! (`read::retire`).
 
 use pgrx::{GucContext, GucFlags, GucRegistry, GucSetting};
 
@@ -16,7 +17,8 @@ pub(super) fn define() {
            and mapped by every backend that reads them. 0 turns it off.",
         c"A version that does not fit is loaded into the reading backend's own cache, \
            within warren.max_cache_memory; unpinned versions are evicted least recently \
-           used first to make room.",
+           used first to make room. Set to 0, the shared versions are evicted as backends \
+           next read a graph, and freed once none maps them.",
         &SHARED_CACHE_MEMORY,
         0,
         i32::MAX,

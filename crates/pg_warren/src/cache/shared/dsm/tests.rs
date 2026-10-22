@@ -81,7 +81,7 @@ mod tests {
     use crate::cache::load::load;
     use crate::cache::shared::acquire::acquire;
     use crate::cache::shared::dsm::PREFIX;
-    use crate::cache::shared::read::{shared, through};
+    use crate::cache::shared::read::{evict_through, shared, through};
     use crate::cache::shared::slot::State;
     use crate::cache::shared::{end_message, SharedVersions};
     use crate::cache::statement::end_statement;
@@ -152,6 +152,21 @@ mod tests {
         // What the transaction's abort callback does after the ERROR.
         port()?.abort();
         assert_eq!(slot(key), None, "a waiter loads it");
+        Ok(())
+    }
+
+    #[pg_test]
+    fn the_eviction_of_a_read_at_a_cap_of_0_releases_its_mappings() -> Result<(), Error> {
+        // What a read with the cap at 0 does to every shared version, here
+        // to this test's alone: the tests share the registry.
+        set_cap(c"64MB");
+        let (key, resolved) = graph("retired", 100)?;
+        drop(through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?);
+        end_statement();
+        end_message();
+        assert_eq!(slot(key), Some((State::Ready, 0, 1)));
+        evict_through(port()?, &|evicted| *evicted == key);
+        assert_eq!(slot(key), None, "evicted, and released by this backend");
         Ok(())
     }
 

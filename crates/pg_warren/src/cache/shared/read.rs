@@ -5,7 +5,8 @@
 //! otherwise, or when admission refuses it, the caller loads it into the
 //! backend's own cache, as in 0.4.0. A refusal whose cause is
 //! configuration (the cap, the room for segments) says so in a `NOTICE`
-//! once per statement.
+//! once per statement. With the cap set to 0, a read evicts what is
+//! shared instead.
 
 use std::sync::Arc;
 
@@ -20,7 +21,7 @@ use super::SharedVersions;
 use crate::access::as_catalog_owner;
 use crate::cache::load::{fill, plan, LoadedVersion};
 use crate::cache::open::Resolved;
-use crate::cache::statement::{pin_shared, shared_notice_due};
+use crate::cache::statement::{pin_shared, retire_due, shared_notice_due};
 use crate::cache::CacheError;
 use crate::catalog::VersionId;
 use crate::read_only::read_one;
@@ -36,6 +37,7 @@ pub(crate) fn shared<E: IdDatum + Send + Sync>(
     resolved: &Resolved,
 ) -> Result<Option<Arc<LoadedVersion<E>>>, CacheError> {
     if setting::cap() == 0 {
+        retire();
         return Ok(None);
     }
     let port = match Dsm::open() {
@@ -49,6 +51,28 @@ pub(crate) fn shared<E: IdDatum + Send + Sync>(
         return Ok(None);
     }
     through(port, resolved)
+}
+
+/// With `warren.shared_cache_memory` set to 0 (the setting is reloaded,
+/// not restarted), evicts every unpinned shared version and releases this
+/// backend's evicted mappings, once per statement, so that the memory comes
+/// back as the backends holding them release them. Only in a backend that
+/// has used the shared cache: every backend that maps a version has, and a
+/// backend that has not need not find (on PG 17 and 18, create) the
+/// registry for it.
+fn retire() {
+    if let Some(port) = Dsm::used() {
+        if retire_due() {
+            evict_through(port, &|_| true);
+        }
+    }
+}
+
+/// Evicts the unpinned shared versions whose keys `which` selects, then
+/// releases this backend's mappings of them that no call holds.
+pub(super) fn evict_through(mut port: Dsm, which: &dyn Fn(&Key) -> bool) {
+    port.evict(which);
+    port.release(DETACH);
 }
 
 /// The version `resolved` names through `port`, whatever transaction
