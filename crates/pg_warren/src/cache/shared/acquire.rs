@@ -18,31 +18,40 @@ pub(crate) enum Acquired<V> {
     Private(Refusal),
 }
 
-/// Version `key`, of `bytes`, from the shared cache, loaded by `load` into
-/// a claimed region if no other backend has it or is loading it. A load
+/// Version `key` from the shared cache. If no other backend has it or is
+/// loading it, `plan` sizes it (its region's bytes, and what `load` needs
+/// to fill it), once, and `load` fills a claimed region. A load
 /// that fails returns its error and drops its region, as an ERROR unwinds
-/// through it; the claim stays until the transaction's abort callback calls
-/// `SharedVersions::abort`, and a waiter then takes it over.
-pub(crate) fn acquire<P: SharedVersions, E>(
+/// through it; the claim stays until the transaction's abort callback
+/// calls `SharedVersions::abort`, and a waiter then takes it over.
+pub(crate) fn acquire<P: SharedVersions, T, E>(
     port: &mut P,
     key: Key,
-    bytes: u64,
-    mut load: impl FnMut(&mut P::Region) -> Result<(), E>,
+    mut plan: impl FnMut() -> Result<(u64, T), E>,
+    mut load: impl FnMut(&T, &mut P::Region) -> Result<(), E>,
 ) -> Result<Acquired<P::View>, E> {
+    let mut planned = None;
     loop {
         match port.lookup(key) {
             Found::Ready(view) => return Ok(Acquired::Shared(view)),
             Found::Loading(loading) => port.wait(loading),
-            Found::Missing => match port.claim(key, bytes) {
-                Claimed::Load(mut region) => {
-                    load(&mut region)?;
-                    if let Ok(view) = port.publish(region) {
-                        return Ok(Acquired::Shared(view));
+            Found::Missing => {
+                let made = match planned.take() {
+                    Some(made) => made,
+                    None => plan()?,
+                };
+                let (bytes, made) = planned.insert(made);
+                match port.claim(key, *bytes) {
+                    Claimed::Load(mut region) => {
+                        load(made, &mut region)?;
+                        if let Ok(view) = port.publish(region) {
+                            return Ok(Acquired::Shared(view));
+                        }
                     }
+                    Claimed::Taken => {}
+                    Claimed::Refused(refusal) => return Ok(Acquired::Private(refusal)),
                 }
-                Claimed::Taken => {}
-                Claimed::Refused(refusal) => return Ok(Acquired::Private(refusal)),
-            },
+            }
         }
     }
 }
@@ -64,6 +73,11 @@ mod tests {
 
     fn cluster(cap: u64) -> Memory {
         Memory::new(4, cap, u64::MAX, Duration::from_millis(10))
+    }
+
+    /// A plan of `bytes` bytes.
+    fn sized(bytes: u64) -> impl FnMut() -> Result<(u64, ()), String> {
+        move || Ok((bytes, ()))
     }
 
     /// Writes the version's bytes.
@@ -88,19 +102,31 @@ mod tests {
             loads.fetch_add(1, Ordering::SeqCst);
             fill(region)
         };
-        let view = shared(acquire(&mut loader, KEY, 10, &mut counted).unwrap());
+        let view =
+            shared(acquire(&mut loader, KEY, sized(10), |_, region| counted(region)).unwrap());
         assert_eq!(view.bytes(), [7; 10]);
         let mut reader = memory.backend();
-        let found = shared(acquire(&mut reader, KEY, 10, &mut counted).unwrap());
+        let found =
+            shared(acquire(&mut reader, KEY, sized(10), |_, region| counted(region)).unwrap());
         assert_eq!(view.bytes().as_ptr(), found.bytes().as_ptr(), "one region");
         assert_eq!(loads.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_version_found_is_neither_planned_nor_loaded() {
+        let memory = cluster(100);
+        drop(shared(acquire(&mut memory.backend(), KEY, sized(10), |_, r| fill(r)).unwrap()));
+        let unplanned = || -> Result<(u64, ()), String> { panic!("planned") };
+        let found = acquire(&mut memory.backend(), KEY, unplanned, |_, _| panic!("loaded"));
+        assert_eq!(shared(found.unwrap()).bytes(), [7; 10]);
     }
 
     #[test]
     fn a_refused_version_is_read_privately_without_loading() {
         let memory = cluster(0);
         let mut backend = memory.backend();
-        let acquired = acquire(&mut backend, KEY, 10, |_| Err("loaded".to_string())).unwrap();
+        let acquired =
+            acquire(&mut backend, KEY, sized(10), |_, _| Err("loaded".to_string())).unwrap();
         assert!(matches!(acquired, Acquired::Private(Refusal::Disabled)));
     }
 
@@ -108,7 +134,7 @@ mod tests {
     fn a_failed_load_returns_its_error_and_the_abort_gives_it_up() {
         let memory = cluster(100);
         let mut backend = memory.backend();
-        let failed = acquire(&mut backend, KEY, 10, |_| Err("cancelled".to_string()));
+        let failed = acquire(&mut backend, KEY, sized(10), |_, _| Err("cancelled".to_string()));
         assert_eq!(failed.err(), Some("cancelled".to_string()));
         assert_eq!(memory.allocated(), 0, "its region is dropped with the error");
         assert!(matches!(backend.lookup(KEY), Found::Loading(_)), "until the abort");
@@ -130,7 +156,7 @@ mod tests {
                 thread::spawn(move || {
                     start.wait();
                     let view = shared(
-                        acquire(&mut backend, KEY, 10, |region| {
+                        acquire(&mut backend, KEY, sized(10), |_, region| {
                             loads.fetch_add(1, Ordering::SeqCst);
                             thread::sleep(Duration::from_millis(50));
                             fill(region)
@@ -163,7 +189,7 @@ mod tests {
         let (fail, failing) = mpsc::channel::<()>();
         let mut first = memory.backend();
         let loader = thread::spawn(move || {
-            acquire(&mut first, KEY, 10, |_| {
+            acquire(&mut first, KEY, sized(10), |_, _| {
                 claimed.send(()).unwrap();
                 failing.recv().unwrap();
                 Err("cancelled".to_string())
@@ -173,7 +199,9 @@ mod tests {
         });
         wait_for_claim.recv().unwrap();
         let mut second = memory.backend();
-        let waiter = thread::spawn(move || shared(acquire(&mut second, KEY, 10, fill).unwrap()));
+        let waiter = thread::spawn(move || {
+            shared(acquire(&mut second, KEY, sized(10), |_, r| fill(r)).unwrap())
+        });
         thread::sleep(Duration::from_millis(30));
         fail.send(()).unwrap();
         assert_eq!(loader.join().unwrap(), Some("cancelled".to_string()));
@@ -189,6 +217,9 @@ mod tests {
         };
         lost.vanish();
         let mut waiter = memory.backend();
-        assert_eq!(shared(acquire(&mut waiter, KEY, 10, fill).unwrap()).bytes(), [7; 10]);
+        assert_eq!(
+            shared(acquire(&mut waiter, KEY, sized(10), |_, r| fill(r)).unwrap()).bytes(),
+            [7; 10]
+        );
     }
 }
