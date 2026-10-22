@@ -107,8 +107,8 @@ impl Communities {
     }
 }
 
-// Not under Miri: the tests build their graphs with the compute reference,
-// which is not compiled under Miri.
+// Not under Miri: the compute pool's work stealing runs through
+// crossbeam-epoch, which Miri's Stacked Borrows model rejects.
 #[cfg(test)]
 #[cfg(not(miri))]
 mod tests {

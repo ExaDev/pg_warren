@@ -1,6 +1,18 @@
 # Changelog
 
-## 0.4.0 — in development
+## 0.5.0 — in development
+
+## 0.4.0 — locality, the library, and communities (2026-10-22)
+
+Milestone M8 of DESIGN.md §13. Dense ids can be ordered for locality; the
+algorithm library gains the planned groups 1 and 2 (centralities, HITS,
+clustering, majority-vote label propagation, k-cores, strong components,
+DAG order and longest paths, spanning forests, sampled shortest-path
+centralities, neighbourhood similarity); and contraction gives
+community-level graphs, with Louvain and Leiden written over it in
+PL/pgSQL. The 100M-edge soak was re-run: no §12 row moved beyond the
+machine's run-to-run spread, and Louvain and Leiden have known limits at
+10M nodes (under Performance).
 
 ### Upgrading
 
@@ -9,14 +21,15 @@
   `warren.*` function. 0.4.0 changes the schema: the update adds the column
   `warren.graphs.node_order` (existing graphs are backfilled `'id'`, the
   order they were built in) and the `node_order` arguments of
-  `create_graph` and `compact`, creates the new library functions,
-  structural kernels, centralities and similarity functions below, and
-  replaces `pagerank` (a fix below). For
+  `create_graph` and `compact`, and replaces `pagerank` (a fix below). For
   contraction it adds a `CHECK` on `warren.graphs.source`, makes
-  `warren.versions.parent_version` `ON DELETE SET NULL`, adds the trigger
-  that clears `warren.versions.label_vector` and its index, and creates
-  `contract`, `project` and `lift`; for communities, `louvain`, `leiden`,
-  `modularity`, `local_moving` and `leiden_refine`.
+  `warren.versions.parent_version` `ON DELETE SET NULL`, indexes
+  `versions.parent_version` and `versions.label_vector`, and adds the
+  trigger that clears `versions.label_vector` when that vector is deleted
+  (its trigger function `warren.label_vector_is_forgotten()` is revoked
+  from `PUBLIC`). It creates every new function below. The new library is
+  loaded at once, but the catalog changes only with the update, so calls in
+  between can fail.
 - `create_graph` and `compact` are dropped and re-created by the update
   (each gains an argument). Unlike 0.3.0's update, this one grants again
   every privilege that was set on them, so a `GRANT` or `REVOKE` you made
@@ -25,41 +38,61 @@
   functions' owner: the original grantor, and so grant-option chains, are
   not kept.
 
+### Behaviour changes
+
+- **Graph names beginning with `_warren_` are reserved** for the level
+  graphs of `louvain` and `leiden`: `create_graph` and `contract` refuse
+  them with 42939 (`reserved_name`), as vector names with that prefix
+  already were. Graphs so named before 0.4.0 keep working.
+- `compact` is no longer `STRICT`: `compact(NULL)` raises 22004
+  (`null_value_not_allowed`, `name must not be NULL`) instead of returning
+  NULL.
+- Errors from `warren-core`'s graph structures in `compact` and `diff` now
+  carry their own SQLSTATE rather than 22023: running out of memory is
+  53200 (`out_of_memory`), the build memory limit 53400, a size limit
+  54000 (`program_limit_exceeded`), and a corrupt or inconsistent version
+  (an internal error) XX001 (`data_corrupted`). `diff`'s refusals across a
+  compaction, and other version mismatches, stay 22023.
+
 ### New
 
 - **Locality ordering of dense ids** (DESIGN.md §14 item 22):
-  `create_graph(…, node_order := 'locality')` (default `'id'`) numbers the
-  first build's nodes so that neighbours get nearby dense ids (Reverse
+  `create_graph(…, node_order := 'locality')` (default `'id'`; anything
+  else is refused with 22023, `invalid_parameter_value`) numbers the first
+  build's nodes so that neighbours get nearby dense ids (Reverse
   Cuthill–McKee over the undirected view of the edges), so the per-node
   data a kernel reads at each edge shares cache lines. Ids are ordered only
-  where they may change: the first build and `compact`. Later refreshes keep
-  surviving ids and append new nodes, so locality decays as the graph
-  changes; `compact` restores it. Results are the same in either order,
-  read by external id. `warren.info` reports `node_order`. Measured on
-  4 vCPUs (DESIGN.md §14 item 22): see below under Performance.
+  where they may change: the first build and `compact`. Later refreshes
+  keep surviving ids and append new nodes, so locality decays as the graph
+  changes; `compact` restores it. Until a graph is first promoted each
+  staged first build gets its own order, so `diff`, `distance` and
+  `vector_norm_diff` refuse two whose orders differ (22023). Results are
+  the same in either order, read by external id. `warren.info` reports
+  `node_order`. The ordering's scratch is charged to
+  `warren.max_build_memory`; it is not cancellable (about 10 s at 10M
+  nodes and 100M edges). Gains are under Performance.
 - **`compact(name, node_order DEFAULT NULL)`:** compacts in the given order
   (NULL: the graph's own); an order given becomes the graph's, so later
   compactions follow it. This is how an existing graph gets locality order.
   The order's scratch is charged to `warren.max_build_memory` (53400 past
   it). Persisted vectors move by node, as before.
-
 - **Library, group 1 (DESIGN.md §6.7)**, PL/pgSQL over the primitives like
   `pagerank`, each checked against NetworkX on random graphs:
-  `eigenvector_centrality`, `katz_centrality` (with a per-node β from a
-  seed vector) and `hits` (hubs and authorities, two vectors), following
-  NetworkX's iteration, normalisation and stopping rule, so they agree to
-  rounding; `clustering`, the local clustering coefficient from `triangles`
-  and degrees; and `label_propagation_majority`, a deterministic,
-  synchronous majority-vote label propagation (smallest label on a tie;
-  NetworkX's is random or semi-synchronous, so it is checked against a
-  Python reimplementation of its rule). Where NetworkX raises on
-  non-convergence, these write the last iterate with a `WARNING`; a run
-  whose values stop being finite (Katz with `alpha` too large for the
-  graph) is an error, 22003, and writes nothing. NULL arguments are
-  refused with 22004. At 1M
-  nodes and 10M undirected edges on 4 vCPUs the SpMV centralities take
-  40–90 ms an iteration and `clustering` 4.5 s; majority-vote label
-  propagation, a tier-2 program, ~20 s an iteration (docs/limits.md).
+  `eigenvector_centrality(graph, out, tol, max_iter, rels, weighted,
+  version)`, `katz_centrality(graph, out, alpha, beta, seed, normalized,
+  tol, max_iter, …)` (a per-node β from a seed vector) and `hits(graph,
+  hubs, authorities, tol, max_iter, normalized, …)` (two vectors),
+  following NetworkX's iteration, normalisation, defaults and stopping
+  rule, so they agree to rounding; `clustering(graph, out, rels,
+  version)`, the local clustering coefficient from `triangles` and
+  degrees; and `label_propagation_majority(graph, out, seed, max_iter,
+  rels, version)`, a deterministic, synchronous majority-vote label
+  propagation (smallest label on a tie; NetworkX's is random or
+  semi-synchronous, so it is checked against a Python reimplementation of
+  its rule). Where NetworkX raises on non-convergence, these write the last
+  iterate with a `WARNING`; a run whose values stop being finite (Katz with
+  `alpha` too large for the graph) is an error, 22003, and writes nothing.
+  NULL arguments are refused with 22004.
 - **Structural kernels** (DESIGN.md §6.7, planned library group 2), each
   checked against NetworkX on a random graph with self-loops, parallel
   edges in one relation and across two, a deleted node and, for the DAG,
@@ -83,41 +116,41 @@
     component, directions ignored (Borůvka).
 
   They run on one compute thread, charge their scratch to
-  `warren.max_compute_memory` and can be cancelled. Timings at 1M and 10M
-  nodes are in docs/limits.md.
+  `warren.max_compute_memory` and can be cancelled.
 - **Shortest-path centralities** (DESIGN.md §6.7, planned library group
   2): `betweenness_centrality(graph, out, k, seed, normalized, endpoints,
   directed, sources, rels, weighted, persist, version)`,
   `closeness_centrality(…, wf_improved, …)` and `harmonic_centrality(…)`
   write an `f64` vector and return their number of sources. Exact with
-  `k := NULL` (every live node a source); otherwise from `k` sources
-  sampled with `seed` (default 0; the same sample on any thread count, and
-  after a refresh unless a new node's key displaces a sampled one or a
-  sampled node is deleted; `compact` re-keys every node), or from the nodes
-  a width-1 vector `sources` selects (non-zero values, as a mask).
-  Brandes' algorithm, breadth-first or (weighted: every edge followed must
-  weigh more than 0 and every distance stay finite, else 22023; self-loops
-  are ignored) Dijkstra, along edges or (`directed := false`) in the
-  undirected simple graph, one source per compute thread at a time, summed
-  in source order so results are bit-identical on any thread count.
-  Betweenness is rescaled exactly as NetworkX 3.7 (including its sampling
-  adjustment); closeness (with `wf_improved`) and harmonic centrality use
-  incoming distances as NetworkX does, and from a sample are estimated from
-  each node's sampled sources (docs/compute.md has the estimator and when
-  its error bound holds). Checked against NetworkX given the same sources
-  (`test/sql/oracle_paths.sql`, `oracle_paths_sampled.sql`).
+  `k := NULL` (the default: every live node a source); otherwise from `k`
+  sources sampled with `seed` (default 0; the same sample on any thread
+  count, and after a refresh unless a new node's key displaces a sampled
+  one or a sampled node is deleted; `compact` re-keys every node), or from
+  the nodes a width-1 vector `sources` selects (non-zero values, as a
+  mask). Brandes' algorithm, breadth-first or (weighted: every edge
+  followed must weigh more than 0 and every distance stay finite, else
+  22023; self-loops are ignored) Dijkstra, along edges or (`directed :=
+  false`) in the undirected simple graph, one source per compute thread at
+  a time, summed in source order so results are bit-identical on any
+  thread count. Betweenness is rescaled exactly as NetworkX 3.7 (including
+  its sampling adjustment); closeness (with `wf_improved`) and harmonic
+  centrality use incoming distances as NetworkX does, and from a sample
+  are estimated from each node's sampled sources (docs/compute.md has the
+  estimator and when its error bound holds). Checked against NetworkX
+  given the same sources (`test/sql/oracle_paths*.sql`). Exact forms are
+  for small graphs: a source costs 20–30 s on one thread at 10M nodes.
 - **Neighbourhood similarity for link prediction** (DESIGN.md §6.7):
   `similarity(graph, pairs, id_type, measure, rels, version)` scores the
   pairs a query returns, `most_similar(graph, node, k, measure, rels,
   version)` ranks one node's candidates and `similar_pairs(graph, id_type,
-  k, measure, nodes, rels, version)` each node's, by `jaccard`,
-  `adamic_adar` or `common_neighbours` over the undirected simple graph,
-  as NetworkX's link-prediction functions (`test/sql/oracle_similarity.sql`).
-  Candidates are non-neighbours sharing a neighbour, best first, ties by
-  dense id; no all-pairs form. With reverse CSRs, `similarity` and
-  `most_similar` read only the rows they need. A node paired with itself
-  scores Adamic–Adar +∞ where it shares a degree-1 neighbour (NetworkX
-  raises). Timings at 1M and 10M nodes are in docs/limits.md.
+  k, measure, nodes, rels, version)` each node's (`k` default 10), by
+  `jaccard` (the default), `adamic_adar` or `common_neighbours` over the
+  undirected simple graph, as NetworkX's link-prediction functions
+  (`test/sql/oracle_similarity.sql`). Candidates are non-neighbours
+  sharing a neighbour, best first, ties by dense id; no all-pairs form.
+  With reverse CSRs, `similarity` and `most_similar` read only the rows
+  they need. A node paired with itself scores Adamic–Adar +∞ where it
+  shares a degree-1 neighbour (NetworkX raises).
 - **Contraction, projection and lifting** (DESIGN.md §6.6,
   [docs/communities.md](docs/communities.md)):
   - `contract(graph, label_vector, out_graph, weighted, drop_self_loops,
@@ -130,19 +163,23 @@
     sum of its members'; relations are kept. The first contraction
     creates the graph (`source` `'contraction'`, owned by the caller);
     later ones add versions, staged or promoted, with stable dense ids per
-    label. The version records the parent version and label vector it came
-    from, and stores the membership. `refresh` and `compact` refuse such a
-    graph (42809). Non-integral or NaN labels are refused (22023).
+    label, and must come from the same parent graph (22023). With
+    `out_graph := NULL` it creates a new graph named
+    `_warren_level_<version id>`. The version records the parent version
+    and label vector it came from, and stores the membership. `refresh`
+    and `compact` refuse such a graph (42809). Non-integral or NaN labels
+    are refused (22023). Its build scratch is charged to
+    `warren.max_build_memory`.
   - `project(graph, x, out_graph, y, agg, persist, version)`: each
-    community's `sum`, `mean`, `max`, `min` or `count` of `x` over its
-    members, row by row for matrices (`mean` of embeddings gives
-    centroids); `lift(out_graph, y, graph, x, persist, version)`: each
-    node gets its community's row. Both use exactly the version the
+    community's `sum` (the default), `mean`, `max`, `min` or `count` of
+    `x` over its members, row by row for matrices (`mean` of embeddings
+    gives centroids); `lift(out_graph, y, graph, x, persist, version)`:
+    each node gets its community's row. Both use exactly the version the
     quotient was contracted from.
   - A parent version a quotient version derives from is kept beyond
     `retain_versions` (with a `NOTICE`); dropping it unlinks the quotient
     (`project`/`lift` then fail with 55000). `warren.info` reports the
-    graph's new `source` key (`query` or `contraction`) and each version's
+    graph's `source` (`query` or `contraction`) and each version's
     `parent_version`, `parent_graph` and `label_vector` (NULL to a caller
     who cannot read the parent graph).
   - Checked against NetworkX's `quotient_graph` and SQL `GROUP BY`/joins
@@ -150,34 +187,31 @@
 - **Louvain and Leiden** (DESIGN.md §6.7 group 3,
   [docs/communities.md](docs/communities.md)): `louvain(graph, out,
   resolution, seed, max_levels, tolerance, weighted, levels_prefix,
-  version)` and `leiden(…, randomness, iterations, …)` write a label
-  vector of communities that maximise modularity and return its
-  modularity; `levels_prefix` keeps each level's partition. Leiden's
-  communities are always connected. Leiden runs `iterations` passes (2 by
-  default, as igraph's `community_leiden`), each after the first starting
-  from the partition the last found, and stops early after a pass that
-  changes nothing; a negative value runs until then (at most 100), and 0
-  is refused. On 20 planted blocks one pass scores 0.794 and two find the
-  planted blocks (0.855), as igraph's two do. Graph names beginning with `_warren_` are now
-  reserved for their level graphs: `create_graph` and `contract` refuse
-  them (42939), and `contract(graph, labels, NULL)` creates a new level
-  graph named after its version. Both are PL/pgSQL over `contract`, `project`, `lift`
-  and two new kernels, `local_moving` (a level's moving, parallel and
-  deterministic: the same result for any thread count and a given seed)
-  and `leiden_refine` (Traag et al.'s refinement). `modularity(graph,
-  labels, resolution, weighted, version)` scores any partition; it counts
-  an undirected self-loop once, as `contract` does: on an undirected graph
-  it equals NetworkX's `community.modularity` with each self-loop's weight
-  halved (`test/sql/oracle_modularity.sql`), and on a directed graph it
-  scores the undirected view (an edge and its reverse add up), not
-  NetworkX's directed (Leicht–Newman) modularity. Checked against
-  NetworkX's `louvain_communities` on stochastic block models
-  (`test/sql/oracle_louvain*.sql`: modularity, NMI against the planted
-  partition, connectedness). At 1M nodes and 5M edges on 4 vCPUs
-  `louvain` takes 5.8 s and `leiden` 8.3 s for one iteration, at 10M
-  nodes 93 s and 119 s; Leiden's default two iterations take about twice
-  one at 1M (20.9 s, on a slower day) and raise modularity there from
-  0.837 to 0.898 (docs/limits.md).
+  version)` and `leiden(graph, out, resolution, seed, max_levels,
+  tolerance, randomness, iterations, weighted, levels_prefix, version)`
+  write a label vector of communities that maximise modularity and return
+  its modularity; `levels_prefix` keeps each level's partition. Leiden's
+  communities are always connected. **Leiden runs `iterations` passes (2
+  by default, as igraph's `community_leiden`)**, each after the first
+  starting from the partition the last found, and stops early after a
+  pass that changes nothing; a negative value runs until then (at most
+  100, then a `WARNING`), and 0 is refused (22023). On the bench's 20
+  planted blocks (modularity 0.855) one pass scores 0.794 and two reach
+  0.855, as igraph's two do (the planted blocks with one node moved). Both
+  are PL/pgSQL over `contract`, `project`, `lift` and two new kernels,
+  `local_moving` (a level's moving, parallel and deterministic: the same
+  result for any thread count and a given seed) and `leiden_refine`
+  (Traag et al.'s refinement); each level's graph is a quotient of `graph`
+  made by `contract(graph, labels, NULL)`, and only one exists at a time.
+  `modularity(graph, labels, resolution, weighted, version)` scores any
+  partition; it counts an undirected self-loop once, as `contract` does:
+  on an undirected graph it equals NetworkX's `community.modularity` with
+  each self-loop's weight halved (`test/sql/oracle_modularity.sql`), and
+  on a directed graph it scores the undirected view (an edge and its
+  reverse add up), not NetworkX's directed (Leicht–Newman) modularity.
+  Checked against NetworkX's `louvain_communities` on stochastic block
+  models (`test/sql/oracle_louvain*.sql`: modularity, NMI against the
+  planted partition, connectedness).
 
 ### Fixes
 
@@ -186,19 +220,104 @@
   tombstoned rows, and `vector_map` evaluates those rows too. It now
   multiplies by the reciprocal of the seed's sum.
 
-### Behaviour changes
+### Performance
 
-- An unknown `node_order` is refused with 22023
-  (`invalid_parameter_value`).
-- `compact` is no longer `STRICT`: `compact(NULL)` raises 22004
-  (`null_value_not_allowed`, `name must not be NULL`) instead of returning
-  NULL.
-- Errors from `warren-core`'s graph structures in `compact` and `diff` now
-  carry their own SQLSTATE rather than 22023: running out of memory is
-  53200 (`out_of_memory`), the build memory limit 53400, and a corrupt or
-  inconsistent version (an internal error) XX001
-  (`data_corrupted`). `diff`'s refusals across a compaction, and other
-  version mismatches, stay 22023.
+Measured on the 4-vCPU Xeon of DESIGN.md §12, release builds,
+`warren.threads = 4`, every limit at its default unless stated.
+
+- **Locality order** (`warren-core`'s kernels, `examples/locality.rs`;
+  DESIGN.md §14 item 22): at 10M nodes and 100M edges, on a
+  community-structured graph whose ids carry no structure, SpMV is 1.51×
+  faster on one thread and 1.63× on four, BFS 1.25× and `components`
+  1.66×; on a power-law graph 1.04–1.25×. The ordering costs 10–12 s at
+  the first build or `compact`. On the soak's uniform random graph, which
+  has no locality to recover, it gains nothing measurable through SQL, and
+  its first build peaks at 2.51 GB of private memory against 1.55 GB in
+  id order (163 s against 160 s; within the 4 GB and 8 min targets).
+- **The 100M-edge soak, re-run for 0.4.0** (DESIGN.md §12,
+  `bench/results/soak/*-040*.json`): no §12 row moved beyond the
+  machine's run-to-run spread, every peak is unchanged to 0.01 GB, and no
+  target is newly met. An A/B of the one-relation case against 0.3.0's
+  build, three runs each, found no stage reproducibly slower (median
+  ratios 0.87–1.05). The five-relation graph without the merged CSR now
+  misses the `components()` target (11.8 s against 10.1 s; 10.2 s at an
+  8GB cap in the same run), as borderline as before.
+- **The new library at 10M nodes and 100M edges** (the soak's
+  one-relation graph, 1.2 GB cached; seconds, and the backend's private
+  peak with the version): eigenvector, Katz and HITS for 20 iterations
+  15.0, 9.8 and 17.3 s (1.8–2.0 GB); `clustering` 47.5 s (3.0 GB);
+  `core_number` 22.8 s (3.2 GB); `strong_components_vector` 15.8 s;
+  `minimum_spanning_forest` 54.4 s; betweenness, closeness and harmonic
+  from 16 sources 61.1, 29.4 and 30.9 s (2.0–2.6 GB); `most_similar` 2 ms;
+  `similarity` of 100,000 pairs 0.55 s; `similar_pairs` over every 100th
+  node 10.2 s (3.6 GB). With five weighted relations and no merged CSR
+  each takes 1.4–3.5× as long; with the merged CSR (6.0 GB, over the
+  cache cap) each call also pays the ~22 s load, and `similar_pairs` is
+  refused (53400). At 1M nodes and 10M undirected edges the SpMV
+  centralities take 40–90 ms an iteration, `clustering` 4.5 s, and
+  `label_propagation_majority`, a tier-2 program, about 20 s an
+  iteration (docs/limits.md).
+- **Louvain and Leiden on a graph with communities** (blocks of 1,000
+  nodes, five undirected edges per node, 90% inside the block;
+  `bench/results/communities/`): at 1M nodes `louvain` takes 5.8 s and
+  one `leiden` iteration 8.3 s (modularity 0.837 each); the default two
+  iterations took 20.9 s on a slower day (one iteration 10.4 s there) and
+  raise modularity to 0.898 (the planted blocks: 0.899). At 10M nodes, at
+  their defaults (`blocks-10m-defaults.json`): `louvain` 115.4 s, 5
+  levels, modularity 0.840, peak 4.31 GB private, 2.5 GB of segments and
+  2.6 GB of WAL written; `leiden` 246.5 s, 18 levels, modularity 0.8996
+  (the planted blocks: 0.8995), peak 5.28 GB, 7.8 GB of segments and
+  8.2 GB of WAL written.
+- **Known limits at 10M nodes** (docs/limits.md, "Known limitations"):
+  - *Leiden on graphs with little community structure is refused.* On the
+    soak's uniform random graphs (10M nodes, 100M edges) `leiden` fails
+    with 53400 at the default limits in its first level's refinement,
+    whose 88 bytes a node do not fit `warren.max_compute_memory` beside
+    the 3.2 GB undirected view and the moving state. Raise
+    `warren.max_compute_memory` for such graphs.
+  - *Louvain's disk.* Every level writes its graph as a version, and a
+    level's rows stay on disk until `VACUUM` after the run's transaction
+    ends. On a random graph every level's quotient stays nearly as large
+    as the graph: the soak stopped `louvain` for disk after 383 s, having
+    written 7.5 GB of segments and 9.1 GB of WAL (0.61 GB of segments at
+    1M nodes). Even on the 10M block graph (0.72 GB of segments) the
+    defaults write 2.5 GB (`louvain`) and 7.8 GB (`leiden`). The planned
+    fix is an in-memory `contract` (DESIGN.md §6.7, §13).
+  - *A backend's peak during `refresh` or `contract` is bounded by the
+    cache, compute and build limits together*, not by the first two: on
+    the five-relation graph `louvain` peaked at 9.50 GB private against
+    8.59 GB for cache and compute, the rest `contract`'s build scratch (at
+    1M nodes, with all three limits at the least it needs, its peak was
+    within 1.4% of their sum, that 1.4% Postgres's own memory).
+  - On the five-relation graph with its merged CSR (over the cache cap)
+    `louvain` and `leiden` are refused (53400): the undirected view does
+    not fit beside the version's excess over the cap.
+  - As in 0.3.0, BFS through SQL is about 10–11× a recursive CTE rather
+    than 20×, `reachable_set` 23–26M rather than 50M edges/s, and `eigen`
+    does not converge within 10 minutes on a uniform random graph of this
+    size.
+
+### Documentation
+
+- [docs/communities.md](docs/communities.md): contraction, projection,
+  lifting, Louvain, Leiden and modularity, with examples that run in CI
+  as the other docs' do;
+  docs/compute.md covers the group 1 and 2 functions (the sampled
+  estimators and their error bounds); docs/semantics.md covers
+  `node_order`; docs/limits.md adds node order, the library's timings at
+  1M and 10M nodes, contraction at scale, the 0.4.0 soak and the cost of
+  each new function.
+- DESIGN.md records the 0.4.0 decisions (locality, §14 item 22; the
+  library's groups 1–3 and contraction, §6.6, §6.7; open questions, §14
+  items 23–24), the deferral of a native in-memory Louvain/Leiden kernel
+  in favour of an in-memory `contract` (§6.7), the road to 1.0 (§13
+  M9–M12, §14 item 25), and the design of 0.5.0's shared cache (§5.6, §14
+  items 26–39).
+- The upgrade check also covers grants on re-created functions (in the
+  catalog and in dumps), initial privileges against a fresh install's, a
+  planted operator that the update must not run, and contraction state
+  written by each release; the dump check round-trips a quotient. Miri
+  runs on pushes to main rather than on pull requests.
 
 ## 0.3.0 — hardening: bounded memory, trusted install, 100M-edge scale (2026-10-20)
 
