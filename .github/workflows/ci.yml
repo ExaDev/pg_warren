@@ -191,6 +191,13 @@ jobs:
         # through psql and pg_restore, each statement in its own transaction;
         # a trusted install's installer dumps without the catalog's data.
         run: python3 test/dump.py --no-install --pg-config "$PG_CONFIG"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: bench/requirements.txt
+      - name: The harness's Python dependencies (test/run.py imports the oracle)
+        run: pip install -r bench/requirements.txt
       - name: Shared cache across backends (test/run.py --shared-cache)
         # DESIGN.md §5.6: the multi-backend tests, with the shared cache off,
         # preloaded with a cap, and with a cap alone (shared on PG 17 and 18,
@@ -198,7 +205,7 @@ jobs:
         # the whole suite preloaded on PG 16.
         run: |
           for mode in off preload on; do
-            python3 test/run.py --no-install --shared-cache "$mode" --pg-config "$PG_CONFIG" test/sql/shared_cache_*.sql
+            python test/run.py --no-install --shared-cache "$mode" --pg-config "$PG_CONFIG" test/sql/shared_cache_*.sql
           done
       - name: Schema drift against sql/pg_warren--<version>.sql
         if: matrix.pg == '16'
