@@ -177,9 +177,20 @@ impl Backend {
     }
 
     /// Leaves the cluster without giving back what it holds, as a backend
-    /// whose exit callback never ran would.
-    pub(crate) fn vanish(self) {
+    /// whose exit callback never ran would; it does nothing more.
+    pub(crate) fn vanish(&mut self) {
         self.cluster.lock().live.remove(&self.session.process());
+    }
+
+    /// Looks `key` up as `lookup` does, but the attach raises an ERROR, as
+    /// a failing `dsm_attach` would: whether it got as far as the attach.
+    /// The caller runs the abort callback.
+    pub(crate) fn fail_attach(&mut self, key: Key) -> bool {
+        let mut store = self.cluster.lock();
+        let Lookup::Ready(ticket) = store.registry.lookup(key) else {
+            return false;
+        };
+        matches!(self.session.open(&mut store.registry, ticket), Ok(Use::Attach(_)))
     }
 }
 
