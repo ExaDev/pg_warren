@@ -252,7 +252,7 @@ impl World {
     fn held_by_vanished(&self, index: usize) -> bool {
         self.vanished.iter().any(|backend| {
             let session = backend.session();
-            session.pinned().iter().any(|ticket| ticket.slot == index)
+            session.pinned().into_iter().any(|ticket| ticket.slot == index)
                 || session.mapped_slots().any(|ticket| ticket.slot == index)
         })
     }

@@ -77,7 +77,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use super::{forget, graph, port, set_cap, slot};
+    use super::{forget, graph, port, set_cap, slot, with_backend};
     use crate::cache::load::load;
     use crate::cache::shared::acquire::acquire;
     use crate::cache::shared::dsm::PREFIX;
@@ -129,6 +129,22 @@ mod tests {
         forget(key)?;
         assert_eq!(slot(key), None);
         Ok(())
+    }
+
+    #[pg_test]
+    fn a_version_read_again_in_its_statement_skips_the_registry() -> Result<(), Error> {
+        set_cap(c"64MB");
+        let (key, resolved) = graph("fast", 100)?;
+        let read =
+            || through::<i64>(port()?, &resolved).ok().flatten().ok_or(Error::InvalidPosition);
+        let first = read()?;
+        let clocks = with_backend(|backend| backend.locked(|registry, _| registry.clocks()));
+        let again = read()?;
+        let after = with_backend(|backend| backend.locked(|registry, _| registry.clocks()));
+        assert_eq!(clocks, after, "no lookup, pin or release in the registry");
+        assert!(Arc::ptr_eq(&first, &again));
+        drop((first, again));
+        forget(key)
     }
 
     #[pg_test]

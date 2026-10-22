@@ -7,7 +7,7 @@
 //! majors have no registry, and the shared cache is unavailable.
 
 use std::ptr::{addr_of_mut, NonNull};
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicU32, AtomicU64};
 
 use pgrx::pg_sys;
 
@@ -23,24 +23,27 @@ pub(super) const SLOTS: usize = 128;
 /// The registry's format, changed whenever its layout or a version
 /// segment's does; backends of builds with different formats use
 /// different registries.
-pub(in crate::cache::shared) const FORMAT: u32 = 1;
+pub(in crate::cache::shared) const FORMAT: u32 = 2;
 
 /// The name of the registry: its named DSM segment on PG 17 and 18, its
 /// `ShmemInitStruct` entry on PG 15 and 16. It ends with [`FORMAT`].
-pub(super) const NAME: &std::ffi::CStr = c"pg_warren.cache.1";
+pub(super) const NAME: &std::ffi::CStr = c"pg_warren.cache.2";
 
 /// The LWLock tranche's name, which each backend registers.
 const TRANCHE: &std::ffi::CStr = c"pg_warren";
 
 /// The registry in shared memory: its lock (PG 17 and 18; PG 15 and 16
-/// take one from a named tranche), clocks, slots, pins and a condition
-/// variable per slot, broadcast when it leaves `loading`.
+/// take one from a named tranche), clocks, the clocks' drain count as an
+/// atomic, slots, pins and a condition variable per slot, broadcast when
+/// it leaves `loading`.
 #[repr(C)]
 pub(super) struct Shared {
     format: u32,
     tranche: i32,
     lock: pg_sys::LWLock,
     pub(super) clocks: Clocks,
+    /// `clocks`' drain count, for backends to read without the lock.
+    pub(super) drains: AtomicU64,
     pub(super) slots: [Slot; SLOTS],
     pub(super) pins: [AtomicU32; SLOTS],
     pub(super) changed: [pg_sys::ConditionVariable; SLOTS],
@@ -67,6 +70,7 @@ unsafe fn initialize(shared: *mut Shared, tranche: i32) {
         addr_of_mut!((*shared).tranche).write(tranche);
         pg_sys::LWLockInitialize(addr_of_mut!((*shared).lock), tranche);
         addr_of_mut!((*shared).clocks).write(Clocks::NEW);
+        addr_of_mut!((*shared).drains).write(AtomicU64::new(0));
         addr_of_mut!((*shared).slots).write([Slot::EMPTY; SLOTS]);
         addr_of_mut!((*shared).pins).write([const { AtomicU32::new(0) }; SLOTS]);
         for slot in 0..SLOTS {

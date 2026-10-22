@@ -57,11 +57,19 @@ pub(crate) struct Clocks {
     clock: u64,
     /// The last claim's generation.
     generation: u64,
+    /// How many slots have started draining: a backend that maps nothing
+    /// evicted since it last looked need not take the lock to release.
+    drains: u64,
 }
 
 impl Clocks {
     /// The clocks of a new registry.
-    pub(crate) const NEW: Self = Self { clock: 0, generation: 0 };
+    pub(crate) const NEW: Self = Self { clock: 0, generation: 0, drains: 0 };
+
+    /// How many slots have started draining.
+    pub(crate) fn drains(self) -> u64 {
+        self.drains
+    }
 }
 
 /// What the registry holds for a key.
@@ -276,7 +284,11 @@ impl<S: SlotTable, P: PinTable> Registry<S, P> {
     fn retire(&mut self, index: usize) -> Handle {
         let slot = &mut self.slots.as_mut()[index];
         slot.state = if slot.mappers == 0 { State::Empty } else { State::Draining };
-        slot.handle
+        let handle = slot.handle;
+        if slot.state == State::Draining {
+            self.clocks.drains += 1;
+        }
+        handle
     }
 
     /// The slot holding the use `ticket` names, if it does.
@@ -449,6 +461,21 @@ mod tests {
         assert_eq!(registry.evict(|_| true), vec![], "evicted once");
         registry.release(mapped);
         assert_eq!(registry.state(mapped), None, "its last mapper empties it");
+    }
+
+    #[test]
+    fn the_drain_count_counts_slots_that_start_draining() {
+        let mut registry = registry(3);
+        let mapped = loaded(&mut registry, 1, 10);
+        let unmapped = loaded(&mut registry, 2, 10);
+        registry.release(unmapped);
+        assert_eq!(registry.clocks().drains(), 0);
+        registry.evict(|key| key.version == 2);
+        assert_eq!(registry.clocks().drains(), 0, "emptied at once, not drained");
+        registry.evict(|key| key.version == 1);
+        assert_eq!(registry.clocks().drains(), 1);
+        registry.release(mapped);
+        assert_eq!(registry.clocks().drains(), 1, "its end is not counted");
     }
 
     #[test]

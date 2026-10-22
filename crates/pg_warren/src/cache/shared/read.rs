@@ -84,6 +84,10 @@ pub(super) fn through<E: IdDatum + Send + Sync>(
     let Some(key) = key(resolved.version) else {
         return Ok(None);
     };
+    // Read again in its statement: no lookup, pin or release.
+    if let Some(attached) = port.pinned(key) {
+        return Ok(Some(attached.version::<E>(resolved.version)?));
+    }
     // What the end of a transaction left to release (a `CALL` that
     // commits, a background worker), before this read takes its lock.
     port.release(DETACH);

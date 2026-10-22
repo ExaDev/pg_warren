@@ -21,8 +21,8 @@ use super::slot::{Handle, Key, Process, State, Ticket};
 #[derive(Debug)]
 pub(crate) struct Session<M> {
     process: Process,
-    /// The slots the current statement pins.
-    pins: Vec<Ticket>,
+    /// The slots the current statement pins, with their keys.
+    pins: Vec<(Ticket, Key)>,
     /// The regions this backend maps.
     mappings: Vec<(Ticket, Arc<M>)>,
     /// The slots this backend claimed and is loading.
@@ -86,9 +86,9 @@ impl<M> Session<M> {
         if registry.state(ticket) != Some(State::Ready) {
             return Err(Gone);
         }
-        if !self.pins.contains(&ticket) {
+        if !self.pins.iter().any(|(pinned, _)| *pinned == ticket) {
             registry.pin(ticket)?;
-            self.pins.push(ticket);
+            self.pins.push((ticket, registry.slots()[ticket.slot].key));
         }
         match self.mappings.iter().find(|(mapped, _)| *mapped == ticket) {
             Some((_, mapping)) => Ok(Use::Mapped(Arc::clone(mapping))),
@@ -144,7 +144,7 @@ impl<M> Session<M> {
     ) -> Result<Arc<M>, Gone> {
         self.loading.retain(|&loading| loading != ticket);
         registry.publish(ticket, handle)?;
-        self.pins.push(ticket);
+        self.pins.push((ticket, registry.slots()[ticket.slot].key));
         Ok(self.held(ticket, mapping))
     }
 
@@ -160,7 +160,7 @@ impl<M> Session<M> {
 
     /// Ends the current statement's pins, without the registry's lock.
     pub(crate) fn unpin(&mut self, pins: &[AtomicU32]) {
-        for ticket in self.pins.drain(..) {
+        for (ticket, _) in self.pins.drain(..) {
             unpin(pins, ticket);
         }
     }
@@ -225,8 +225,16 @@ impl<M> Session<M> {
 impl<M> Session<M> {
     /// The slots the current statement pins.
     #[cfg(test)]
-    pub(crate) fn pinned(&self) -> &[Ticket] {
-        &self.pins
+    pub(crate) fn pinned(&self) -> Vec<Ticket> {
+        self.pins.iter().map(|(ticket, _)| *ticket).collect()
+    }
+
+    /// This backend's mapping of `key`'s version, if the current statement
+    /// pins it: its pin keeps the slot ready, so it is read again without
+    /// the registry.
+    pub(crate) fn pinned_mapping(&self, key: Key) -> Option<&Arc<M>> {
+        let (ticket, _) = self.pins.iter().find(|(_, pinned)| *pinned == key)?;
+        self.mapping(*ticket)
     }
 
     /// This backend's mapping of the slot `ticket` names, if it has one.
@@ -459,6 +467,19 @@ mod tests {
         let refused = session.mapped(&mut registry, tickets[0], Arc::clone(&mapping));
         assert!(matches!(refused, Err(Unattached(given)) if Arc::ptr_eq(&given, &mapping)));
         assert_eq!(session.mapped_slots().count(), 0);
+    }
+
+    #[test]
+    fn a_version_the_statement_pins_is_read_again_without_the_registry() {
+        let (mut registry, tickets) = published(&[1, 2]);
+        let mut session = Session::new(PROCESS);
+        assert!(session.pinned_mapping(key(1)).is_none(), "not read yet");
+        let mapping = read(&mut session, &mut registry, tickets[0]);
+        let again = session.pinned_mapping(key(1)).expect("pinned and mapped");
+        assert!(Arc::ptr_eq(&mapping, again));
+        assert!(session.pinned_mapping(key(2)).is_none(), "another version");
+        session.unpin(registry.pin_table());
+        assert!(session.pinned_mapping(key(1)).is_none(), "the next statement pins again");
     }
 
     #[test]

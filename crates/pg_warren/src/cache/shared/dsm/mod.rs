@@ -18,7 +18,7 @@ mod segment;
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use pgrx::{ereport, pg_sys, PgSqlErrorCode};
@@ -63,6 +63,11 @@ thread_local! {
 struct Backend {
     located: Located,
     session: Session<Attached>,
+    /// The registry's drain count at this backend's last release.
+    seen_drains: u64,
+    /// Whether that release left a mapping of a slot no longer ready (one
+    /// a call held), to release later.
+    pending: bool,
 }
 
 /// The shared cache through the registry and DSM segments: the port for
@@ -103,6 +108,12 @@ impl Dsm {
         Self(())
     }
 
+    /// This backend's mapping of `key`'s version, if the current statement
+    /// pins it already: read again without the registry.
+    pub(crate) fn pinned(&self, key: Key) -> Option<Arc<Attached>> {
+        with_backend(|backend| backend.session.pinned_mapping(key).cloned()).flatten()
+    }
+
     /// The port, if this backend has used the shared cache: without
     /// finding or creating the registry, unlike [`Dsm::open`].
     pub(crate) fn used() -> Option<Self> {
@@ -125,7 +136,8 @@ impl Dsm {
                 // SAFETY: as above.
                 started: unsafe { pg_sys::MyStartTimestamp },
             };
-            BACKEND.set(Some(Backend { located, session: Session::new(process) }));
+            let session = Session::new(process);
+            BACKEND.set(Some(Backend { located, session, seen_drains: 0, pending: false }));
             callbacks::register();
         }
         Ok(Self(()))
@@ -184,11 +196,19 @@ impl Backend {
                 Registry::resume((*shared).clocks, &mut (*shared).slots, &(*shared).pins);
             let result = f(&mut registry, &mut self.session);
             (*shared).clocks = registry.clocks();
+            (*shared).drains.store(registry.clocks().drains(), Ordering::Release);
             result
         };
         // SAFETY: released as it was taken, on the main thread.
         unsafe { pg_sys::LWLockRelease(lock) };
         result
+    }
+
+    /// The registry's drain count, read without its lock.
+    fn drains(&self) -> u64 {
+        // SAFETY: the registry stays mapped; the count is an atomic, which
+        // any backend reads through a shared reference.
+        unsafe { (*self.shared()).drains.load(Ordering::Acquire) }
     }
 
     /// Wakes the backends waiting on slot `slot`.
@@ -343,13 +363,28 @@ impl SharedVersions for Dsm {
 
     /// Takes the registry's lock and detaches segments, so never at a
     /// transaction's end.
+    /// Releasing evicted mappings takes the lock only if a slot has
+    /// started draining since this backend last released, or that release
+    /// left one held: so a message's start costs one atomic read.
     fn release(&mut self, which: Release) {
         with_backend(|backend| {
-            if backend.session.mapped_slots().next().is_some() {
-                backend.locked(|registry, session| {
-                    session.release(registry, which, |attached| attached.detach());
-                });
+            if backend.session.mapped_slots().next().is_none() {
+                return;
             }
+            let drains = backend.drains();
+            if which == Release::Evicted
+                && !release_due(drains, backend.seen_drains, backend.pending)
+            {
+                return;
+            }
+            let (drains, pending) = backend.locked(|registry, session| {
+                session.release(registry, which, |attached| attached.detach());
+                let pending = session
+                    .mapped_slots()
+                    .any(|mapped| registry.state(mapped) != Some(State::Ready));
+                (registry.clocks().drains(), pending)
+            });
+            (backend.seen_drains, backend.pending) = (drains, pending);
         });
     }
 
@@ -382,6 +417,13 @@ impl SharedVersions for Dsm {
             loading.iter().for_each(|ticket| backend.broadcast(ticket.slot));
         });
     }
+}
+
+/// Whether a release of evicted mappings is due: a slot has started
+/// draining since the last (`drains` against `seen`), or that release left
+/// one held (`pending`).
+fn release_due(drains: u64, seen: u64, pending: bool) -> bool {
+    pending || drains != seen
 }
 
 /// Revives the draining slot `ticket` names, which holds `key`'s version,
@@ -508,6 +550,18 @@ impl Loading {
         let loaded: Arc<LoadedVersion<E>> = Arc::new(loaded);
         self.held = Held { loaded: Some(loaded), region };
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod release_tests {
+    use super::release_due;
+
+    #[test]
+    fn a_release_is_due_after_a_drain_or_while_one_is_pending() {
+        assert!(!release_due(3, 3, false), "nothing drained since the last release");
+        assert!(release_due(4, 3, false), "a slot started draining since");
+        assert!(release_due(3, 3, true), "a mapping of a draining slot was held then");
     }
 }
 
