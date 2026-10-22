@@ -62,3 +62,16 @@ partition: modularity 0.8401, 1,425 communities, 5 levels), peak private
 memory 4.31 GB, 2.48 GB of segments and 2.61 GB of WAL written. `leiden`
 246.5 s, 18 levels, modularity 0.8996 (the planted blocks: 0.8995),
 5,528 communities, peak 5.28 GB, 7.81 GB of segments and 8.22 GB of WAL.
+
+## Level graphs on a random graph (DESIGN.md §14 item 40)
+
+`random-1m-level-graphs.txt`: `louvain` and `leiden` (defaults) on the
+0.4.0 soak's case a at a tenth of the scale (1M nodes, 10M uniform random
+directed edges), as instrumented copies of the library that report each
+phase's time and each level graph's size; the file's header says how it
+ran. Before (0038ad5) and after level graphs stored forward CSRs only and
+the refinement charged its peak: the same communities at every level and
+the same modularity (0.14045 and 0.20212) to every digit, with `louvain`'s
+level segments 536 → 293 MB and `leiden`'s 1.76 → 0.95 GB (WAL 616 → 359
+MB and 2.00 → 1.14 GB). Level 1 only pairs nodes up (448,022 communities),
+so the first levels keep 94–99% of the edges.

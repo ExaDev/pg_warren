@@ -28,7 +28,8 @@ use warren_core::graph::NodeOrder;
 /// the new version's id. Names beginning with `_warren_` are reserved:
 /// with `out_graph` NULL, the version goes into a new *level graph* of
 /// the caller's named `_warren_level_<the version's id>`, a name no graph
-/// can have had (DESIGN.md §6.7: the library's levels). Each live node belongs to the community of its
+/// can have had, which stores each relation's forward CSR only (DESIGN.md
+/// §6.7: the library's levels). Each live node belongs to the community of its
 /// label, which must be an integer; the quotient's node ids (`bigint`)
 /// are the labels. Edges between communities are summed by weight (or
 /// counted if not `weighted`); edges inside a community make its
@@ -109,7 +110,10 @@ fn contract(
 /// Graph `name`, which a contraction of `parent` adds a version to: an
 /// existing graph derived by contraction, from graphs of the same shape
 /// (direction and relations), whose owner role the caller is a member of;
-/// or a new one, owned by the caller, which it must be if `fresh`.
+/// or a new one, owned by the caller, which it must be if `fresh`. A new
+/// graph has its parent's CSR layout, but a fresh one, a level graph,
+/// stores each relation's forward CSR only (DESIGN.md §6.7): what a level
+/// is read for, the undirected view, `lift` and `project`, reads no more.
 fn quotient_graph(
     name: &str,
     fresh: bool,
@@ -130,8 +134,8 @@ fn quotient_graph(
                 directed: parent.directed,
                 weighted: true,
                 has_relations: parent.has_relations,
-                build_reverse: parent.build_reverse,
-                store_merged: parent.store_merged,
+                build_reverse: parent.build_reverse && !fresh,
+                store_merged: parent.store_merged && !fresh,
                 retain_versions: 2,
                 node_order: NodeOrder::Id,
             }
@@ -439,6 +443,32 @@ mod tests {
                 "_warren_level_{first}:{first}:true _warren_level_{second}:{second}:true"
             ))
         );
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_level_graph_stores_each_relations_forward_csr_only() -> Result<(), Error> {
+        labelled()?;
+        let level = contract("warren.contract('t', 'l', NULL)")?;
+        let named = contract("warren.contract('t', 'l', 'q')")?;
+        let layout = |graph: String| {
+            Spi::get_one::<String>(&format!(
+                "SELECT format('%s|%s', i ->> 'build_reverse', i ->> 'store_merged')
+                 FROM warren.info('{graph}') i"
+            ))
+        };
+        assert_eq!(layout(format!("_warren_level_{level}"))?.as_deref(), Some("false|false"));
+        assert_eq!(layout("q".to_owned())?.as_deref(), Some("true|true"));
+        let segments = |version: i64| {
+            rows(&format!(
+                "SELECT DISTINCT segment FROM warren.segments
+                 WHERE version_id = {version} AND (segment LIKE 'rev\\_%' OR segment LIKE '%:merged')
+                 ORDER BY 1"
+            ))
+        };
+        assert_eq!(segments(level)?.as_deref(), Some(""));
+        assert_ne!(segments(named)?.as_deref(), Some(""));
+        assert_eq!(out_weights(&format!("_warren_level_{level}"))?, out_weights("q")?);
         Ok(())
     }
 
