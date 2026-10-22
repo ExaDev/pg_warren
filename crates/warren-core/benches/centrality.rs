@@ -1,6 +1,7 @@
 //! The sampled shortest-path centralities (DESIGN.md §6.7) over a random
 //! directed graph larger than the caches: one million nodes and ten million
-//! unweighted edges, from 16, 64 and 256 sources, on four threads.
+//! unweighted edges, from 16, 64 and 256 sources (betweenness from 16 and
+//! 64), on four threads.
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use warren_core::compute::{
@@ -65,6 +66,10 @@ fn bench_centrality(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("harmonic", k), |b| {
             b.iter(|| harmonic_centrality(&workers, &memory, &mut quiet, &paths, &sampling))
         });
+        if k > 64 {
+            // A minute an iteration, one source per thread at a time.
+            continue;
+        }
         group.bench_function(BenchmarkId::new("betweenness", k), |b| {
             b.iter(|| {
                 betweenness_centrality(&workers, &memory, &mut quiet, &paths, &sampling, scale)

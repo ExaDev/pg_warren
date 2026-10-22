@@ -11,10 +11,19 @@
 //! parallel over the nodes. So the totals are summed in one order whatever
 //! the thread count, and a seed gives the same result, bit for bit, on any
 //! pool. A round waits for its slowest source.
+//!
+//! Closeness and harmonic centrality on unweighted rows instead search
+//! from a batch of sources at a time (64, or 256 when there are more than
+//! 64), in one multi-source breadth-first search parallel over nodes,
+//! which reports per node how many sources first reach it at each
+//! distance; batches run in ascending source order and a node's totals are
+//! added to in order of batch, then distance, again whatever the thread
+//! count.
 
 mod adjacency;
 mod betweenness;
 mod closeness;
+mod multi_source;
 mod paths;
 mod sources;
 #[cfg(test)]
@@ -28,9 +37,11 @@ pub use sources::Sampling;
 use rayon::prelude::*;
 
 use adjacency::Adjacency;
+use multi_source::SourceBatch;
 use paths::Paths;
 use sources::Sources;
 
+use super::product::Matrix;
 use super::{ComputeError, ComputeMemory, Vector, Workers};
 use crate::graph::{DenseId, GraphCsr, RelationSelection, Tombstones};
 use crate::interrupts::{Cancellation, Interrupts, Work};
@@ -103,7 +114,32 @@ trait Measure: Sync {
     ) -> Result<Vector<f64>, ComputeError>;
 }
 
-/// Runs `measure` over the sources `sampling` chooses.
+/// What a centrality adds up over batches of sources searched together,
+/// on unweighted rows.
+trait Batched: Measure {
+    /// The per-node totals, added to from any thread.
+    type Counts: Sync;
+
+    /// Zeroed totals over `id_space` nodes.
+    fn counts(&self, memory: &ComputeMemory, id_space: u64) -> Result<Self::Counts, ComputeError>;
+
+    /// Adds that `sources` sources other than `node` first reach it at
+    /// `distance`: once per node and distance in a batch, on one thread.
+    fn add(&self, counts: &Self::Counts, node: DenseId, sources: u32, distance: u32);
+
+    /// The centrality from the totals over `sources`, `live` the number of
+    /// live nodes.
+    fn finish_counts(
+        &self,
+        counts: Self::Counts,
+        memory: &ComputeMemory,
+        sources: &Sources,
+        live: u64,
+    ) -> Result<Vector<f64>, ComputeError>;
+}
+
+/// Runs `measure` over the sources `sampling` chooses, one source at a time
+/// on each thread.
 fn run<M: Measure, I: Interrupts>(
     workers: &Workers,
     memory: &ComputeMemory,
@@ -112,10 +148,89 @@ fn run<M: Measure, I: Interrupts>(
     sampling: &Sampling<'_>,
     measure: &M,
 ) -> Result<Centrality, ComputeError> {
+    let matrix = Adjacency::matrix(paths, memory)?;
+    run_one_by_one(workers, memory, interrupts, paths, sampling, measure, matrix)
+}
+
+/// Runs `measure` over the sources `sampling` chooses, in batches when the
+/// rows are unweighted, else one source at a time on each thread.
+fn run_batched<M: Batched, I: Interrupts>(
+    workers: &Workers,
+    memory: &ComputeMemory,
+    interrupts: &mut I,
+    paths: &ShortestPaths<'_, '_>,
+    sampling: &Sampling<'_>,
+    measure: &M,
+) -> Result<Centrality, ComputeError> {
+    let matrix = Adjacency::matrix(paths, memory)?;
+    if matrix.is_weighted() {
+        return run_one_by_one(workers, memory, interrupts, paths, sampling, measure, matrix);
+    }
+    let live = paths.tombstones.id_space() - paths.tombstones.count();
+    match sampling.k.map_or(live, |k| k.min(live)) > SourceBatch::<1>::WIDTH as u64 {
+        true => run_in_batches::<_, _, WIDE>(
+            workers, memory, interrupts, paths, sampling, measure, matrix,
+        ),
+        false => {
+            run_in_batches::<_, _, 1>(workers, memory, interrupts, paths, sampling, measure, matrix)
+        }
+    }
+}
+
+/// The words of sources per node of a batch when there are more sources
+/// than one word holds: four words, 256 sources.
+const WIDE: usize = 4;
+
+/// Runs `measure` over `matrix`'s unweighted rows, in batches of
+/// [`SourceBatch::WIDTH`] sources.
+fn run_in_batches<M: Batched, I: Interrupts, const L: usize>(
+    workers: &Workers,
+    memory: &ComputeMemory,
+    interrupts: &mut I,
+    paths: &ShortestPaths<'_, '_>,
+    sampling: &Sampling<'_>,
+    measure: &M,
+    matrix: Matrix<'_>,
+) -> Result<Centrality, ComputeError> {
+    let tombstones = paths.tombstones;
+    let id_space = tombstones.id_space();
+    let counts = measure.counts(memory, id_space)?;
+    let mut batch = SourceBatch::<L>::new(memory, id_space)?;
+    // As in `run_one_by_one`: only the adjacency, the sample and a
+    // multi-relation row scratch are charged on the pool.
+    memory.reclaim_for(
+        Adjacency::bytes(paths, &matrix).saturating_add(Sources::bytes(sampling, tombstones)),
+    );
+    let sources = workers.run(interrupts, |cancellation| {
+        let adjacency = Adjacency::new(paths, matrix, memory, cancellation)?;
+        let sources = Sources::choose(memory, cancellation, sampling, tombstones)?;
+        let reached = |node, sources, distance| measure.add(&counts, node, sources, distance);
+        for batch_sources in sources.nodes().chunks(SourceBatch::<L>::WIDTH) {
+            batch.search(&adjacency, batch_sources, memory, cancellation, &reached)?;
+        }
+        Ok(sources)
+    })?;
+    drop(batch);
+    let live = id_space - tombstones.count();
+    let mut values = measure.finish_counts(counts, memory, &sources, live)?;
+    values.clear_tombstoned(tombstones)?;
+    Ok(Centrality { values, sources: sources.nodes().len() as u64 })
+}
+
+/// Runs `measure` over `matrix`'s rows, one source at a time on each
+/// thread.
+fn run_one_by_one<M: Measure, I: Interrupts>(
+    workers: &Workers,
+    memory: &ComputeMemory,
+    interrupts: &mut I,
+    paths: &ShortestPaths<'_, '_>,
+    sampling: &Sampling<'_>,
+    measure: &M,
+    matrix: Matrix<'_>,
+) -> Result<Centrality, ComputeError> {
     let tombstones = paths.tombstones;
     let id_space = tombstones.id_space();
     let live = id_space - tombstones.count();
-    let matrix = Adjacency::matrix(paths, memory)?;
     let weighted = matrix.is_weighted();
     let sources_at_most = sampling.k.map_or(live, |k| k.min(live)).max(1);
     let slots = (workers.threads() as u64).min(sources_at_most) as usize;
