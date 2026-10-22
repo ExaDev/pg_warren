@@ -191,6 +191,15 @@ jobs:
         # through psql and pg_restore, each statement in its own transaction;
         # a trusted install's installer dumps without the catalog's data.
         run: python3 test/dump.py --no-install --pg-config "$PG_CONFIG"
+      - name: Shared cache across backends (test/run.py --shared-cache)
+        # DESIGN.md §5.6: the multi-backend tests, with the shared cache off,
+        # preloaded with a cap, and with a cap alone (shared on PG 17 and 18,
+        # unavailable and so private on PG 15 and 16). The harness job runs
+        # the whole suite preloaded on PG 16.
+        run: |
+          for mode in off preload on; do
+            python3 test/run.py --no-install --shared-cache "$mode" --pg-config "$PG_CONFIG" test/sql/shared_cache_*.sql
+          done
       - name: Schema drift against sql/pg_warren--<version>.sql
         if: matrix.pg == '16'
         run: PG=pg16 sql/schema-drift.sh
@@ -245,6 +254,10 @@ jobs:
         # non-superuser that owns the database, as on hosted Postgres, so the
         # catalog's owner (the bootstrap superuser) and the extension's differ.
         run: python test/run.py --no-install --trusted --pg-config "$PG_CONFIG"
+      - name: SQL harness with the shared cache preloaded (test/run.py --shared-cache preload)
+        # DESIGN.md §5.6: every test again, with versions shared between
+        # backends.
+        run: python test/run.py --no-install --shared-cache preload --pg-config "$PG_CONFIG"
       - name: Benchmark matrix smoke run
         run: bench/run.sh smoke --no-install --pg-config "$PG_CONFIG" --results bench/tmp
 
