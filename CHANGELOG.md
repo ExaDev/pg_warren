@@ -26,6 +26,22 @@
   (version, graph and vector ids restart). A backend now drops what it
   cached when pg_warren is installed again.
 
+### Performance
+
+- **`vector_map`'s no-NULL path** (`warren-core`'s `compute::map`;
+  DESIGN.md §6.3). An expression built only from vectors, non-NULL
+  literals, casts, arithmetic, comparisons, `NOT` and `CASE … ELSE` is
+  never NULL. It is now evaluated without NULL flags, with each operator
+  chosen once per chunk rather than per element. Results are
+  bit-identical, and any error is still reported by the general path.
+- Measured in `warren-core` at 4M nodes and 40M edges
+  (`benches/spmv_out_of_cache.rs`), on a shared 4-vCPU machine, so the
+  spread is wide:
+  - `pagerank`'s four maps: 2.2–2.4× faster on one thread;
+  - a whole iteration: 1.3–1.4× faster on one thread, 1.3–2× on four.
+
+  Not re-measured through SQL at 10M nodes.
+
 ## 0.4.0 — locality, the library, and communities (2026-10-22)
 
 Milestone M8 of DESIGN.md §13. Dense ids can be ordered for locality; the
