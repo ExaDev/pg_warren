@@ -79,6 +79,17 @@
   statement: 2.1 s, from 14.5 s), and `pgbench` of one `degree` per
   transaction with 4 clients runs at about 140,000 tps, from 35,000.
 
+- **Multi-source BFS for unweighted closeness and harmonic centrality**
+  (`warren-core`'s `compute::centrality`; DESIGN.md §6.7). Sources are
+  searched 64 at a time, one bit per source, each step in parallel over
+  the frontier, with 40 B of scratch per node.
+  - Measured at 1M nodes / 10M edges on 4 threads
+    (`benches/centrality.rs`): 64 sources of closeness or harmonic in
+    0.65–1.23 s instead of 10.1–20.7 s (9–32× faster).
+  - Closeness is bit-identical to before. Harmonic sums in a new,
+    deterministic order, within 1e-12 relative of the old result.
+  - Weighted graphs (Dijkstra) and betweenness are unchanged.
+
 ### Fixed
 
 - After `DROP EXTENSION pg_warren` and `CREATE EXTENSION pg_warren` in a
