@@ -78,8 +78,8 @@ impl Tombstones {
         Self::from_segment(id_space, words.into())
     }
 
-    /// [`Self::from_words`] over a segment buffer, owned or a shared view,
-    /// with the same checks.
+    /// A bitmap from its words in a segment buffer, owned or a shared view,
+    /// which must cover exactly `id_space` bits.
     pub fn from_segment(id_space: u64, words: SegmentBuffer<u64>) -> Result<Self, GraphError> {
         if words.len() != word_count(id_space) {
             return Err(GraphError::SegmentLength {

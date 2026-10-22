@@ -211,9 +211,10 @@ impl<E: ExternalId> IdMap<E> {
     }
 
     /// An id map from its pairs, its inverse map and its tombstones, as
-    /// segment buffers, owned or shared views: the checks of
-    /// [`Self::from_parts`], and that `by_dense` is the pairs' inverse,
-    /// which it reads rather than builds.
+    /// segment buffers, owned or shared views. It checks that the pairs are
+    /// strictly sorted by external id, that the dense ids are exactly
+    /// `0..id_space`, that the tombstones cover the same id space, and that
+    /// `by_dense` is the pairs' inverse, which it reads rather than builds.
     pub fn from_segments(
         by_external: SegmentBuffer<IdPair<E>>,
         by_dense: SegmentBuffer<E>,
