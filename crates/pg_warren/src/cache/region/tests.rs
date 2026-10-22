@@ -29,6 +29,30 @@ fn heap_memory_is_aligned_and_zeroed() {
     assert!(memory.bytes().iter().all(|&byte| byte == 0));
 }
 
+/// This process's resident bytes.
+#[cfg(target_os = "linux")]
+fn resident() -> usize {
+    let statm = std::fs::read_to_string("/proc/self/statm").unwrap();
+    let pages: usize = statm.split_whitespace().nth(1).unwrap().parse().unwrap();
+    // SAFETY: `sysconf` only reads a configuration value.
+    pages * unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize
+}
+
+/// The fill writes every array, so zeroing the region beforehand would be
+/// a second pass over it: a large region's zeroed pages are mapped lazily
+/// and stay untouched until written.
+#[test]
+#[cfg(target_os = "linux")]
+fn zeroed_heap_memory_is_not_touched_until_written() {
+    let bytes = 256 << 20;
+    let before = resident();
+    let memory = HeapMemory::zeroed(bytes).unwrap();
+    let grown = resident().saturating_sub(before);
+    assert!(grown < bytes / 4, "{grown} of {bytes} bytes resident");
+    assert_eq!(memory.bytes().as_ptr() as usize % ALIGNMENT, 0);
+    assert_eq!(memory.bytes()[bytes - 1], 0);
+}
+
 #[test]
 fn memory_that_cannot_be_allocated_is_an_error_not_an_abort() {
     let bytes = isize::MAX as usize - 2 * ALIGNMENT;
