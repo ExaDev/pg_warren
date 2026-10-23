@@ -8,7 +8,7 @@ use pgrx::PgOid;
 
 use super::version::VersionId;
 use super::CatalogError;
-use crate::access::as_catalog_owner;
+use crate::access::{as_catalog_owner, require_owner};
 use crate::read_only::read_one;
 use crate::source::IdType;
 use warren_core::graph::NodeOrder;
@@ -37,9 +37,11 @@ const STILL_THERE: &str =
     "SELECT EXISTS (SELECT FROM warren.versions WHERE version_id = $1 AND graph_id = $2)";
 
 /// [`GraphDefinition::lock`]'s re-read once it holds the lock:
-/// `current_version` as in [`FIND`], and `node_order`, which a compaction
-/// that held the lock may have changed.
-const REREAD: &str = "SELECT g.current_version, v.version_id, g.node_order
+/// `current_version` as in [`FIND`], `node_order`, which a compaction that
+/// held the lock may have changed, and `owner` and `readers`, which a
+/// `set_owner` that held it may have changed.
+const REREAD: &str = "SELECT g.current_version, v.version_id, g.node_order, g.owner::oid,
+                             g.readers::oid[]
                       FROM warren.graphs g
                       LEFT JOIN warren.versions v
                              ON v.version_id = g.current_version AND v.graph_id = g.graph_id
@@ -209,9 +211,13 @@ impl GraphDefinition {
     /// Locks the graph's row until the end of the transaction, so that
     /// refreshes of one graph run one at a time, and re-reads its current
     /// version and node order, which a refresh or compaction that held the
-    /// lock may have changed. A graph dropped since [`find`](Self::find) is
-    /// not found.
-    pub(crate) fn lock(&mut self) -> Result<(), CatalogError> {
+    /// lock may have changed, and its owner and readers, which a
+    /// `set_owner` that held it may have changed. Then checks again that
+    /// the caller is a member of the owner role, to do `action`: a check
+    /// made before the lock may have been of the owner a transfer replaced
+    /// (DESIGN.md §5.7). A graph dropped since [`find`](Self::find) is not
+    /// found.
+    pub(crate) fn lock(&mut self, action: &'static str) -> Result<(), CatalogError> {
         // A row lock is a write (it assigns a transaction id): only the
         // functions that build or drop versions take it. The lock and the
         // re-read are two statements: when the lock waits for another
@@ -219,20 +225,28 @@ impl GraphDefinition {
         // the locked row (EvalPlanQual), so a version joined in the same
         // statement would be the one from before the wait. The re-read,
         // as a statement of its own, takes a snapshot after the lock.
-        let (stored, current, node_order) = as_catalog_owner(|| {
+        let (stored, current, node_order, owner, readers) = as_catalog_owner(|| {
             Spi::connect_mut(|client| {
                 let locked = client.update(LOCK, Some(1), &[self.graph_id.into()])?.len();
                 if locked == 0 {
                     return Err(CatalogError::GraphNotFound(self.name.clone()));
                 }
                 let row = client.update(REREAD, Some(1), &[self.graph_id.into()])?.first();
-                Ok((row.get::<i64>(1)?, row.get::<i64>(2)?, row.get::<String>(3)?))
+                Ok((
+                    row.get::<i64>(1)?,
+                    row.get::<i64>(2)?,
+                    row.get::<String>(3)?,
+                    row.get::<pg_sys::Oid>(4)?,
+                    row.get::<Vec<pg_sys::Oid>>(5)?,
+                ))
             })
         })?;
         self.node_order = parse_node_order(&node_order.unwrap_or_default())?;
         self.current_version = current;
         self.stray_current_version = stray(stored, current);
-        Ok(())
+        self.owner = owner.unwrap_or(pg_sys::Oid::INVALID);
+        self.readers = readers.unwrap_or_default();
+        Ok(require_owner(self.owner, &self.name, action)?)
     }
 
     /// Locks the graph's row `FOR SHARE` until the end of the transaction,

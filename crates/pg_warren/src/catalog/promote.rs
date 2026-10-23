@@ -19,7 +19,7 @@ fn promote(name: &str, version: i64) {
 fn promote_by_name(name: &str, version: VersionId) -> Result<(), CatalogError> {
     let mut graph = GraphDefinition::find(name)?;
     require_owner(graph.owner, &graph.name, "promote")?;
-    graph.lock()?;
+    graph.lock("promote")?;
     require_version(&graph, version)?;
     require_current_id_space(&graph, version)?;
     promote_version(&graph, version)

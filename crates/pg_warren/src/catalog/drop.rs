@@ -18,7 +18,7 @@ fn drop_version(name: &str, version: i64) {
 fn drop_version_by_name(name: &str, version: VersionId) -> Result<(), CatalogError> {
     let mut graph = GraphDefinition::find(name)?;
     require_owner(graph.owner, &graph.name, "drop versions of")?;
-    graph.lock()?;
+    graph.lock("drop versions of")?;
     delete_version(&graph, version)
 }
 

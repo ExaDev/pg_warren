@@ -31,7 +31,7 @@ fn transfer(name: &str, owner: pg_sys::Oid) -> Result<(), CatalogError> {
     let mut graph = GraphDefinition::find(name)?;
     require_owner(graph.owner, &graph.name, ACTION)?;
     require_can_become(owner, &graph.name)?;
-    graph.lock()?;
+    graph.lock(ACTION)?;
     let built_from_queries = graph.source == GraphSource::Query;
     if built_from_queries {
         open_sources_as(&graph, owner)?;
