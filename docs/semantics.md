@@ -275,6 +275,97 @@ SELECT warren.set_owner('social', 'analytics');   -- owner, and may SET ROLE ana
   the graph's row, so a call queued behind a transfer by a role that no
   longer owns the graph is refused (42501).
 
+**Dropping a role.** A graph's owner, its readers and a vector's creator
+are recorded as role OIDs, which `DROP ROLE` cannot see: it neither refuses
+nor cleans up, and a role created later may receive a dropped role's OID,
+and with it what that OID still names. Postgres's procedure for dropping a
+role that owns objects is `REASSIGN OWNED` then `DROP OWNED` in each
+database, then `DROP ROLE`; but `REASSIGN OWNED` and `DROP ROLE` run no
+extension code, so `REASSIGN OWNED` moves no graph. pg_warren has SQL
+counterparts of the two per-database commands:
+
+```sql
+SELECT warren.reassign_owned('alice', 'bob');  -- alice's graphs and vectors become bob's
+SELECT warren.drop_owned('alice');             -- drops alice's graphs, and the rest below
+```
+
+- `reassign_owned(old, new)` gives every graph `old` owns to `new` with
+  `set_owner`'s rules, except that, like `REASSIGN OWNED`, it opens no source
+  query (the writable-schema `NOTICE` is still raised), and makes `new` the
+  creator of every vector `old` wrote. `old`'s reader entries stay, as its
+  privileges do under `REASSIGN OWNED`. It returns the number of graphs
+  moved.
+- `drop_owned(role)` drops every graph `role` owns (as `drop_graph` does,
+  with their versions and everyone's vectors), deletes the vectors it wrote
+  on other graphs, and removes it from every graph's readers. It returns
+  the number of graphs dropped.
+- Both need the privileges of the role they move from or drop (a member
+  that does not inherit them has not), as the commands do, and
+  `reassign_owned` also the right to `SET ROLE` to the new owner (on
+  PostgreSQL 15, membership): otherwise 42501.
+
+**In each database that has pg_warren, before `DROP ROLE alice`:**
+
+```sql
+REASSIGN OWNED BY alice TO bob;
+SELECT warren.reassign_owned('alice', 'bob');   -- or warren.drop_owned('alice')
+DROP OWNED BY alice;
+-- then, once, in any database: DROP ROLE alice;
+```
+
+**The optional event trigger.** A superuser may make `DROP OWNED` itself
+take care of graphs, in each database that has pg_warren:
+
+```sql
+CREATE EVENT TRIGGER warren_drop_owned ON ddl_command_start
+    WHEN TAG IN ('DROP OWNED') EXECUTE FUNCTION warren.on_drop_owned();
+```
+
+With it, `DROP OWNED BY alice` is refused (2BP01, as `DROP ROLE` refuses
+while a role owns objects) while `alice` owns graphs, naming them. So the
+standard procedure, run without `warren.reassign_owned`, stops rather than
+leaving graphs behind (`REASSIGN OWNED` did not move them): run
+`warren.reassign_owned` or `warren.drop_owned`, then `DROP OWNED` again.
+When `alice` owns no graph, `DROP OWNED` also removes her reader entries
+and deletes the vectors she wrote, as `drop_owned` does. A role that does
+not exist, or whose privileges the caller lacks, is left to `DROP OWNED`'s
+own error. The extension never creates the trigger, and nothing needs it:
+only a superuser can create an event trigger, and a trusted install works
+without it. While it exists, `DROP EXTENSION pg_warren` needs `CASCADE`,
+which drops the trigger too. `pg_dump` dumps it, so restoring such a dump
+as a non-superuser fails at its `CREATE EVENT TRIGGER` (and `ALTER EVENT
+TRIGGER … OWNER TO`) statements; everything else restores. Event triggers
+do not fire in single-user mode, nor with `event_triggers = off`
+(PostgreSQL 17+). Calling `warren.on_drop_owned()` directly is refused
+(39P03).
+
+**After a `DROP ROLE` that skipped all this** (or ran before the trigger
+existed), sweep:
+
+```sql
+SELECT * FROM warren.orphans();       -- (kind, graph, role): what names a dropped role
+SELECT warren.drop_orphans();         -- drops orphaned graphs, prunes the rest
+```
+
+`orphans()` lists graphs whose owner no longer exists (`kind` `graph`),
+reader entries naming dropped roles (`reader`), and vectors whose creator
+was dropped (`vector`, one row per graph and role), each with the dropped
+role's OID. A superuser and members of the extension's owner (the role
+that ran `CREATE EXTENSION`: the installer, in a trusted install) see
+every row; others see the `reader` and `vector` rows of graphs they own.
+`drop_orphans()` drops the orphaned graphs, removes the reader entries,
+deletes the vectors, and returns the number of graphs dropped. Run it
+soon: once a dropped role's OID is reused, nothing can tell its graphs
+from the new role's.
+
+Who may act on a graph whose owner was dropped (an *orphan*): a superuser
+or a member of the extension's owner may drop it (`drop_graph`,
+`drop_orphans`); only a superuser may give it a new owner with
+`set_owner` (adopt it), since its versions were built with what the
+dropped owner could see (42501 for anyone else). The extension's owner
+could drop every graph with `DROP EXTENSION` anyway, so dropping an orphan
+gives it nothing new. Every other call on an orphan fails (42704).
+
 **Vectors.** Readers share one name space of vectors per version. A persisted
 vector may be replaced or dropped only by the role that wrote it or by the
 graph's owner. Transient vectors are private to the role that wrote them.
@@ -357,7 +448,7 @@ leader. So:
 
 | Label | Functions |
 |---|---|
-| `PARALLEL SAFE` (may run in a worker) | the graph reads that use no vector: `neighbours`, `degree`, `has_edge`, `id_map`, `info`, and the traversals `reachable`, `shortest_path`, `dijkstra`, `bfs`, `reachable_set`, `components`, `walk`; and `version`, `s`, `steps`, `shared_cache`, which read no graph |
+| `PARALLEL SAFE` (may run in a worker) | the graph reads that use no vector: `neighbours`, `degree`, `has_edge`, `id_map`, `info`, and the traversals `reachable`, `shortest_path`, `dijkstra`, `bfs`, `reachable_set`, `components`, `walk`; and `version`, `s`, `steps`, `shared_cache`, `orphans`, which read no graph |
 | `PARALLEL RESTRICTED` (run in the leader, never in a worker) | the vector reads (`vector_values`, `matrix_rows`, `vector_topk`, `vector_stats`, `vector_reduce`, `vector_norm_diff`, `modularity`, `minimum_spanning_forest`, `similarity`, `most_similar`, `similar_pairs`), `explain_map`, `diff`, `distance`, `prewarm`, `evict`, `last_stats` |
 | `PARALLEL UNSAFE` (no parallel plan) | everything that writes or may persist: graph management, the vector constructors, `spmv`, `spmm`, `vector_map`, `gather`, `triangles`, the structural kernels that write a vector (`core_number`, `strong_components_vector`, `topological_order`, `dag_longest_path`), `eigen`, the library, `drop_vector` |
 
