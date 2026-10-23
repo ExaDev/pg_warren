@@ -18,7 +18,14 @@ SELECT warren.create_graph('g', 'SELECT id FROM nodes',
 SELECT warren.refresh('g');
 CREATE ROLE watcher;
 CREATE ROLE monitor IN ROLE pg_read_all_stats;
-GRANT USAGE ON SCHEMA assert TO watcher, monitor;  -- test plumbing
+CREATE ROLE alice LOGIN;
+CREATE ROLE reporter;
+GRANT USAGE ON SCHEMA assert TO watcher, monitor, alice, reporter;  -- test plumbing
+-- refresh_g(): a SECURITY DEFINER refresh of g, which alice may call but
+-- whose graph she may not read.
+CREATE FUNCTION refresh_g() RETURNS bigint LANGUAGE sql SECURITY DEFINER
+    SET search_path = pg_catalog AS $$ SELECT warren.refresh('g') $$;
+GRANT EXECUTE ON FUNCTION refresh_g() TO alice;
 
 SELECT dblink_connect('a', :'conninfo');
 SELECT pid AS a_pid FROM dblink('a', 'SELECT pg_backend_pid()') AS t(pid int) \gset
@@ -90,14 +97,38 @@ SELECT assert.equal(
     'mine t t t', 'another role sees what a runs and since when');
 RESET ROLE;
 SET ROLE monitor;
-SELECT assert.equal((SELECT phase FROM warren.progress() WHERE pid = :a_pid), 'step 1',
-                    'pg_read_all_stats sees how far');
+SELECT assert.equal((SELECT format('%s %s', phase, coalesce(graph, '-'))
+                     FROM warren.progress() WHERE pid = :a_pid), 'step 1 -',
+                    'pg_read_all_stats sees how far, but not the name of a graph it may not read');
 RESET ROLE;
 SELECT pg_advisory_unlock(8);
 SELECT * FROM dblink_get_result('a') AS t(x text);
 SELECT count(*) FROM dblink_get_result('a') AS t(x text);  -- the empty result ending the query
 SELECT assert.equal((SELECT count(*) FROM warren.progress() WHERE pid = :a_pid), 0::bigint,
                     'the command ends with the statement');
+
+-- 2b. A SECURITY DEFINER refresh, watched from the invoker's other session:
+-- alice sees her own session's progress, but not the name of a graph she
+-- may not read.
+SELECT dblink_connect('alice', format('dbname=%s user=alice host=%s port=%s', current_database(),
+                      split_part(current_setting('unix_socket_directories'), ',', 1),
+                      current_setting('port')));
+SELECT pid AS alice_pid FROM dblink('alice', 'SELECT pg_backend_pid()') AS t(pid int) \gset
+SELECT set_config('test.a_pid', :'alice_pid', false);
+SELECT pg_advisory_lock(7);
+SELECT dblink_send_query('alice', $$SELECT public.refresh_g()$$);
+SELECT until_a($$operation_phase = 'reading edges'$$);
+SET ROLE alice;
+SELECT assert.equal(
+    (SELECT format('%s %s %s', command, coalesce(graph, '-'), phase)
+     FROM warren.progress() WHERE pid = :alice_pid),
+    'refresh - reading edges', 'alice sees her refresh, not its graph''s name');
+RESET ROLE;
+SELECT pg_advisory_unlock(7);
+SELECT * FROM dblink_get_result('alice') AS t(version bigint);
+SELECT count(*) FROM dblink_get_result('alice') AS t(x text);  -- the empty result ending the query
+SELECT dblink_disconnect('alice');
+SELECT set_config('test.a_pid', :'a_pid', false);
 
 -- 3. louvain reports its levels, and the native calls inside it their own.
 SELECT dblink_send_query('a', $$SELECT warren.louvain('g', 'communities')$$);
@@ -122,6 +153,23 @@ SELECT assert.that((SELECT count(*) > 0 FROM seen WHERE command = 'eigen' AND op
                    'eigen reports its steps');
 SELECT dblink_disconnect('a');
 \else
+SELECT dblink_disconnect('a');
+\endif
+
+-- A report refused for its counts remembers nothing: once the caller may no
+-- longer read the graph, a report on it is refused.
+SELECT warren.grant('g', 'reporter');
+SET ROLE reporter;
+SELECT assert.raises($$SELECT warren.report_progress('c', 'g', 'p', -1)$$, 'a negative count', '22023');
+RESET ROLE;
+SELECT warren.revoke('g', 'reporter');
+SET ROLE reporter;
+SELECT assert.raises($$SELECT warren.report_progress('c', 'g', 'p')$$,
+                     'no longer a reader of g', '42501');
+RESET ROLE;
+
+\if :activity
+\else
 DO $$ BEGIN
     PERFORM warren.report_progress('mine', 'g', 'step 1');
     PERFORM assert.equal(
@@ -130,8 +178,10 @@ DO $$ BEGIN
 END $$;
 SELECT assert.equal((SELECT count(*) FROM warren.progress()), 0::bigint,
                     'and its command ended with its statement');
-SELECT dblink_disconnect('a');
 \endif
-REVOKE USAGE ON SCHEMA assert FROM watcher, monitor;
+REVOKE USAGE ON SCHEMA assert FROM watcher, monitor, alice, reporter;
+DROP FUNCTION refresh_g();
 DROP ROLE watcher;
 DROP ROLE monitor;
+DROP ROLE alice;
+DROP ROLE reporter;

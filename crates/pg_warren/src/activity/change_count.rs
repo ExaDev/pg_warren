@@ -57,13 +57,15 @@ impl<const N: usize> Counted<N> {
         self.changes.load(Ordering::Acquire)
     }
 
-    /// A copy of the words that no write tore.
-    pub(super) fn read(&self) -> [u64; N] {
+    /// A copy of the words that no write tore, running `retry` between
+    /// tries: the adapter backs off and checks for interrupts there, so a
+    /// count left odd cannot hold a reader that is cancelled.
+    pub(super) fn read(&self, retry: &mut impl FnMut()) -> [u64; N] {
         loop {
             if let Some(words) = self.try_read() {
                 return words;
             }
-            std::hint::spin_loop();
+            retry();
         }
     }
 
@@ -90,9 +92,9 @@ mod tests {
     #[test]
     fn a_write_is_read_back_whole() {
         let counted = Counted::<3>::zero();
-        assert_eq!(counted.read(), [0, 0, 0]);
+        assert_eq!(counted.read(&mut std::hint::spin_loop), [0, 0, 0]);
         counted.write(&[1, 2, 3]);
-        assert_eq!(counted.read(), [1, 2, 3]);
+        assert_eq!(counted.read(&mut std::hint::spin_loop), [1, 2, 3]);
         assert_eq!(counted.changes(), 2);
     }
 
@@ -107,13 +109,27 @@ mod tests {
     }
 
     #[test]
+    fn a_reader_retries_through_its_caller_until_a_write_ends() {
+        let counted = Counted::<1>::zero();
+        counted.begin();
+        let mut retries = 0;
+        let words = counted.read(&mut || {
+            retries += 1;
+            if retries == 3 {
+                counted.end();
+            }
+        });
+        assert_eq!((words, retries), ([0], 3), "the caller ran between each try");
+    }
+
+    #[test]
     fn additions_saturate() {
         let counted = Counted::<1>::zero();
         counted.write(&[u64::MAX - 1]);
         counted.begin();
         counted.add(&[5]);
         counted.end();
-        assert_eq!(counted.read(), [u64::MAX]);
+        assert_eq!(counted.read(&mut std::hint::spin_loop), [u64::MAX]);
     }
 
     /// A writer thread stands in for a backend writing its slot, a reader
@@ -132,12 +148,12 @@ mod tests {
             });
             let mut last = 0;
             while !done.load(Ordering::Acquire) {
-                let words = counted.read();
+                let words = counted.read(&mut std::hint::spin_loop);
                 assert!(words.iter().all(|&word| word == words[0]), "torn: {words:?}");
                 assert!(words[0] >= last, "went back from {last} to {}", words[0]);
                 last = words[0];
             }
         });
-        assert_eq!(counted.read(), [20_000; 8]);
+        assert_eq!(counted.read(&mut std::hint::spin_loop), [20_000; 8]);
     }
 }

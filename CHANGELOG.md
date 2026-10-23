@@ -55,7 +55,9 @@
     statement and version; then a `cluster` row that includes backends
     that have exited. Another role's backend shows only who it is, unless
     the caller has that role's privileges or `pg_read_all_stats`, as in
-    `pg_stat_activity`. It needs no configuration on PostgreSQL 17 and 18
+    `pg_stat_activity`; a backend's role is its authenticated user, as
+    `pg_stat_activity`'s `usesysid`, whatever `SET SESSION AUTHORIZATION`
+    sets. Parallel workers have no row. It needs no configuration on PostgreSQL 17 and 18
     and `shared_preload_libraries` on 15 and 16; without it, the caller's
     own row only, with a `NOTICE`.
   - A backend waiting for another's load of a shared version shows
@@ -77,7 +79,8 @@
     `louvain` and `leiden` their levels, with local moving's sweeps and
     refinement inside. Another role's row shows what runs and since when,
     not how far, unless the caller has that role's privileges or
-    `pg_read_all_stats`. Other backends' rows need no configuration on
+    `pg_read_all_stats`; a graph's name shows only to callers who may
+    read the graph. Other backends' rows need no configuration on
     PostgreSQL 17 and 18 and `shared_preload_libraries` on 15 and 16.
   - `warren.report_progress(command, graph, phase, done, total)` reports a
     PL/pgSQL program's own progress until the statement ends. The library's

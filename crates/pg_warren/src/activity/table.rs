@@ -55,8 +55,13 @@ impl<L: Lock> Table<'_, L> {
         true
     }
 
-    /// Writes `values` into slot `index`, which this backend holds.
-    pub(super) fn write(&self, index: usize, values: &Values) {
+    /// Writes `values` into slot `index`, which this backend holds and
+    /// last wrote `before` into, if they differ: a cache hit that changes
+    /// nothing writes nothing.
+    pub(super) fn update(&self, index: usize, before: &Values, values: &Values) {
+        if values == before {
+            return;
+        }
         if let Some(slot) = self.slots.get(index) {
             slot.write(&values.encode());
         }
@@ -78,25 +83,25 @@ impl<L: Lock> Table<'_, L> {
     }
 
     /// A copy of the table: the totals of exited backends and every claimed
-    /// slot, retried until no backend exited or was claimed while it was
-    /// made.
-    pub(super) fn copy(&self) -> Copied {
+    /// slot, retried, running `retry` between tries, until no backend
+    /// exited or was claimed while it was made.
+    pub(super) fn copy(&self, retry: &mut impl FnMut()) -> Copied {
         loop {
             let before = self.exited.changes();
             if before.is_multiple_of(2) {
-                let exited = Counters::decode(&self.exited.read());
+                let exited = Counters::decode(&self.exited.read(retry));
                 let backends = self
                     .slots
                     .iter()
                     .enumerate()
-                    .map(|(index, slot)| (index, Values::decode(&slot.read())))
+                    .map(|(index, slot)| (index, Values::decode(&slot.read(retry))))
                     .filter(|(_, values)| values.holder.pid != 0)
                     .collect();
                 if self.exited.changes() == before {
                     return Copied { exited, backends };
                 }
             }
-            std::hint::spin_loop();
+            retry();
         }
     }
 }
@@ -154,13 +159,13 @@ mod tests {
         let table = memory.table();
         assert!(table.claim(2, holder(42), &counted(5)));
         assert!(!table.claim(4, holder(43), &counted(0)), "past MaxBackends");
-        let copied = table.copy();
+        let copied = table.copy(&mut std::hint::spin_loop);
         assert_eq!(copied.backends.len(), 1);
         assert_eq!(copied.backends[0].0, 2);
         assert_eq!(copied.backends[0].1.holder, holder(42));
         assert_eq!(copied.totals().lookups, 5);
         table.release(2, &counted(7).counters);
-        let copied = table.copy();
+        let copied = table.copy(&mut std::hint::spin_loop);
         assert!(copied.backends.is_empty());
         assert_eq!(copied.exited.lookups, 7, "the counters it exited with");
     }
@@ -172,10 +177,39 @@ mod tests {
         table.claim(0, holder(1), &counted(3));
         table.release(0, &counted(3).counters);
         table.claim(0, holder(2), &counted(0));
-        let copied = table.copy();
+        let copied = table.copy(&mut std::hint::spin_loop);
         assert_eq!(copied.backends[0].1.holder.pid, 2);
         assert_eq!(copied.backends[0].1.counters.lookups, 0, "a new backend counts from 0");
         assert_eq!(copied.totals().lookups, 3);
+    }
+
+    #[test]
+    fn only_a_change_is_published() {
+        let memory = Memory::new(1);
+        let table = memory.table();
+        table.claim(0, holder(1), &counted(1));
+        let values = Values { holder: holder(1), ..counted(1) };
+        let changes = memory.slots[0].changes();
+        table.update(0, &values, &values);
+        assert_eq!(memory.slots[0].changes(), changes, "nothing changed, nothing written");
+        table.update(0, &values, &Values { holder: holder(1), ..counted(2) });
+        assert_eq!(memory.slots[0].changes(), changes + 2);
+        assert_eq!(table.copy(&mut std::hint::spin_loop).totals().lookups, 2);
+    }
+
+    #[test]
+    fn a_copy_retries_through_its_caller_while_a_backend_exits() {
+        let memory = Memory::new(1);
+        let table = memory.table();
+        memory.exited.begin();
+        let mut retries = 0;
+        table.copy(&mut || {
+            retries += 1;
+            if retries == 2 {
+                memory.exited.end();
+            }
+        });
+        assert_eq!(retries, 2);
     }
 
     #[test]
@@ -188,7 +222,7 @@ mod tests {
             table.claim(index, holder(10 + index as i32), &counted(0));
             table.release(index, &refused);
         }
-        let exited = table.copy().exited;
+        let exited = table.copy(&mut std::hint::spin_loop).exited;
         assert_eq!((exited.lookups, exited.refused(Refused::NoRoom)), (3, 3));
     }
 
@@ -210,8 +244,9 @@ mod tests {
                         let pid = (index as i32 + 1) * 1000 + life as i32;
                         table.claim(index, holder(pid), &counted(0));
                         for lookups in 1..=3 {
+                            let before = Values { holder: holder(pid), ..counted(lookups - 1) };
                             let values = Values { holder: holder(pid), ..counted(lookups) };
-                            table.write(index, &values);
+                            table.update(index, &before, &values);
                         }
                         table.release(index, &counted(3).counters);
                     }
@@ -222,7 +257,7 @@ mod tests {
             scope.spawn(move || {
                 let mut last = 0;
                 while exited.load(Ordering::Acquire) < BACKENDS {
-                    let copied = table.copy();
+                    let copied = table.copy(&mut std::hint::spin_loop);
                     for (index, values) in &copied.backends {
                         assert_eq!(values.holder.pid / 1000, *index as i32 + 1, "another's slot");
                     }
@@ -232,7 +267,7 @@ mod tests {
                 }
             });
         });
-        let copied = memory.table().copy();
+        let copied = memory.table().copy(&mut std::hint::spin_loop);
         assert!(copied.backends.is_empty());
         assert_eq!(copied.exited.lookups, BACKENDS as u64 * LIVES * 3);
     }

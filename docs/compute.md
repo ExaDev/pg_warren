@@ -391,7 +391,9 @@ library function, iteration or level *done* of *total*) and the native
 call running inside it now (`refresh`, `load`, `eigen`, `local_moving`,
 `contract`, …), its phase, units done and counters. Another role's row
 shows what runs and since when, not how far, unless the caller has that
-role's privileges or `pg_read_all_stats`, as in `pg_stat_activity`. On
+role's privileges or `pg_read_all_stats`, as in `pg_stat_activity` (a
+backend's role is the user it connected as); its graph's name shows only
+if the caller may read the graph. On
 PostgreSQL 15 and 16 other backends' rows need
 `shared_preload_libraries = 'pg_warren'`. A program of your own reports
 the same way, with `warren.report_progress(command, graph, phase, done,

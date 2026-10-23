@@ -8,7 +8,7 @@
 //!
 //! | Part | Contents |
 //! |---|---|
-//! | header | format, LWLock tranche, slot count, creation time, the LWLock, the counters of exited backends |
+//! | header | format, slot count, creation time, the counters of exited backends; on PG 17 and 18 the LWLock and its tranche (on 15 and 16 the lock is the preload's named tranche's) |
 //! | slots | one per backend, `MaxBackends` of them |
 
 use std::mem::{align_of, size_of};
@@ -35,10 +35,12 @@ const TRANCHE: &std::ffi::CStr = c"pg_warren.activity";
 #[repr(C)]
 struct Header {
     format: u32,
+    #[cfg(any(feature = "pg17", feature = "pg18"))]
     tranche: i32,
     slots: u64,
     /// When the table was created, as a `timestamptz`.
     created: i64,
+    #[cfg(any(feature = "pg17", feature = "pg18"))]
     lock: pg_sys::LWLock,
     exited: Counted<COUNTER_WORDS>,
 }
@@ -100,23 +102,20 @@ impl Located {
     }
 }
 
-/// Sets up a table of `slots` slots at `header`, whose lock is in tranche
-/// `tranche`.
+/// Sets up a table of `slots` slots at `header`, but for its lock.
 ///
 /// # Safety
 ///
 /// `header` points to `table_bytes(slots)` writable bytes, aligned for
 /// `Header`, that no other process uses until this returns; on the main
 /// thread.
-unsafe fn initialize(header: *mut Header, slots: usize, tranche: i32) {
+unsafe fn initialize(header: *mut Header, slots: usize) {
     // SAFETY: the caller's contract; each field is written whole before
     // anything reads it, and every slot is zeroed, which is free.
     unsafe {
         addr_of_mut!((*header).format).write(FORMAT);
-        addr_of_mut!((*header).tranche).write(tranche);
         addr_of_mut!((*header).slots).write(slots as u64);
         addr_of_mut!((*header).created).write(pg_sys::GetCurrentTimestamp());
-        pg_sys::LWLockInitialize(addr_of_mut!((*header).lock), tranche);
         addr_of_mut!((*header).exited).write(Counted::zero());
         let first = header.cast::<u8>().add(SLOTS_AT).cast::<Slot>();
         for slot in 0..slots {
@@ -137,10 +136,11 @@ pub(crate) enum Missing {
     /// PG 15 or 16 without `shared_preload_libraries = 'pg_warren'`.
     #[cfg(any(feature = "pg15", feature = "pg16"))]
     NotPreloaded,
-    /// PG 17 or 18, where the store has too little room to create it; it
-    /// is looked for again at the next use.
+    /// PG 17 or 18, where the store had too little room to create it in
+    /// the statement that started at `statement`; it is looked for again
+    /// in the next statement that uses pg_warren.
     #[cfg(any(feature = "pg17", feature = "pg18"))]
-    NoRoom,
+    NoRoom { statement: i64 },
     /// A table of another format: a build that a restart has not yet
     /// replaced created it.
     #[cfg(any(feature = "pg17", feature = "pg18"))]
@@ -153,15 +153,26 @@ pub(crate) enum Missing {
 }
 
 impl Missing {
-    /// Whether a later use looks for the table again: only where it had no
-    /// room, which may have been made since.
-    pub(super) fn looked_for_again(self) -> bool {
-        #[cfg(any(feature = "pg17", feature = "pg18"))]
-        if self == Self::NoRoom {
-            return true;
-        }
+    /// Whether a use in the statement that started at `statement` looks
+    /// for the table again: only where it had no room, which may have been
+    /// made since, and at most once a statement, since looking reads the
+    /// store's free space and takes the DSM registry's lock.
+    #[cfg(any(feature = "pg17", feature = "pg18"))]
+    pub(super) fn looked_for_again(self, statement: i64) -> bool {
+        matches!(self, Self::NoRoom { statement: looked } if looked != statement)
+    }
+
+    /// As above: on PG 15 and 16 the table is never looked for again.
+    #[cfg(any(feature = "pg15", feature = "pg16"))]
+    pub(super) fn looked_for_again(self, _statement: i64) -> bool {
         false
     }
+}
+
+/// When the current statement started, as a `timestamptz`.
+pub(super) fn statement_start() -> i64 {
+    // SAFETY: reads the transaction state's timestamp; inside a call.
+    unsafe { pg_sys::GetCurrentStatementStartTimestamp() }
 }
 
 /// The table, found or created on first use (PG 17 and 18), unless the
@@ -172,7 +183,7 @@ pub(super) fn locate() -> Result<Located, Missing> {
     let room = crate::shared_memory::named_segment_room(bytes);
     let available = crate::shared_memory::store_space().map_or(0, |(available, _)| available);
     if available < room {
-        return Err(Missing::NoRoom);
+        return Err(Missing::NoRoom { statement: statement_start() });
     }
     let mut found = false;
     // SAFETY: on the main thread inside a transaction; the name is a
@@ -182,7 +193,7 @@ pub(super) fn locate() -> Result<Located, Missing> {
     let header =
         unsafe { pg_sys::GetNamedDSMSegment(NAME.as_ptr(), bytes, Some(create), &mut found) };
     let Some(header) = NonNull::new(header.cast::<Header>()) else {
-        return Err(Missing::NoRoom);
+        return Err(Missing::NoRoom { statement: statement_start() });
     };
     // SAFETY: the segment holds an initialized table, mapped for the rest
     // of the session; its format and tranche are written once.
@@ -204,10 +215,16 @@ pub(super) fn locate() -> Result<Located, Missing> {
 unsafe extern "C-unwind" fn create(segment: *mut std::ffi::c_void) {
     // SAFETY: a new tranche id, from the main thread.
     let tranche = unsafe { pg_sys::LWLockNewTrancheId() };
+    let header = segment.cast::<Header>();
     // SAFETY: `GetNamedDSMSegment` passes a new, page-aligned segment of
     // `table_bytes(max_backends())` bytes and holds its own lock while this
-    // runs.
-    unsafe { initialize(segment.cast(), max_backends(), tranche) };
+    // runs; the lock and its tranche are written whole before any backend
+    // can find the segment.
+    unsafe {
+        initialize(header, max_backends());
+        addr_of_mut!((*header).tranche).write(tranche);
+        pg_sys::LWLockInitialize(addr_of_mut!((*header).lock), tranche);
+    }
 }
 
 /// Nothing to request: on PG 17 and 18 the table is a named DSM segment.
@@ -293,7 +310,7 @@ mod preloaded {
             let header =
                 pg_sys::ShmemInitStruct(NAME.as_ptr(), table_bytes(slots), &mut found).cast();
             if !found {
-                initialize(header, slots, 0);
+                initialize(header, slots);
             }
             pg_sys::LWLockRelease(init_lock);
             TABLE.store(header, Ordering::Release);
@@ -316,6 +333,15 @@ mod preloaded {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(feature = "pg17", feature = "pg18"))]
+    #[test]
+    fn a_table_without_room_is_looked_for_again_once_per_statement() {
+        let missing = Missing::NoRoom { statement: 100 };
+        assert!(!missing.looked_for_again(100), "not again in the same statement");
+        assert!(missing.looked_for_again(200), "again in the next");
+        assert!(!Missing::OtherFormat.looked_for_again(200));
+    }
 
     #[test]
     fn the_tables_name_carries_its_format() {

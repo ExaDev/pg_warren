@@ -15,7 +15,7 @@ use pgrx::pg_sys::Oid;
 use pgrx::prelude::*;
 use pgrx::JsonB;
 
-use super::backend::{claim, located, own};
+use super::backend::{between_tries, claim, located, own};
 use super::slot::{Counters, Holder, Memory, Refused, Values};
 use super::table::Copied;
 use super::visibility::shown_to_caller;
@@ -72,7 +72,9 @@ fn backend_row(values: &Values, shown: &impl Fn(Oid) -> bool) -> Row {
 fn current_rows() -> Vec<Row> {
     claim();
     match located() {
-        Ok((table, _)) => rows(&table.table().copy(), table.created(), shown_to_caller),
+        Ok(table) => {
+            rows(&table.table().copy(&mut between_tries()), table.created(), shown_to_caller)
+        }
         Err(_) => {
             notice_without_table();
             vec![backend_row(&own_holding(), &shown_to_caller)]

@@ -175,14 +175,12 @@ fn report_progress(
             clear();
             return Ok(());
         };
-        let report = Report {
-            command,
-            graph: graph.map(graph_id).transpose()?,
-            phase: phase.unwrap_or_default(),
-            done: units(done, "done")?,
-            total: units(total, "total")?,
-        };
+        let (done, total) = (units(done, "done")?, units(total, "total")?);
+        // Before the graph is resolved and remembered: whatever the call
+        // remembers is forgotten when the statement ends.
         register();
+        let graph = graph.map(graph_id).transpose()?;
+        let report = Report { command, graph, phase: phase.unwrap_or_default(), done, total };
         let now = now();
         record(|values| values.command = reported(&values.command, report, now));
         Ok::<_, ReportError>(())
@@ -301,7 +299,11 @@ mod tests {
             row
         };
         assert_eq!(seen("onlooker")?.as_deref(), Some("mine - - - - - t"));
-        assert_eq!(seen("overseer")?.as_deref(), Some("mine watched secret phase 1 2 - t"));
+        assert_eq!(
+            seen("overseer")?.as_deref(),
+            Some("mine - secret phase 1 2 - t"),
+            "how far, but not the name of a graph it may not read"
+        );
         Ok(())
     }
 }

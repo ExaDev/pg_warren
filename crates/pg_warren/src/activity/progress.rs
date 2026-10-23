@@ -2,7 +2,8 @@
 //! running a command, with its command frame and the operation inside it;
 //! an operation with no command around it is its own command. A graph is
 //! shown by its name, as the caller's snapshot sees it in this database,
-//! or else by its id.
+//! where the caller may read it, as `shared_cache()`, `cache()` and
+//! `info()` show graphs; otherwise as NULL.
 //!
 //! Privacy follows `pg_stat_activity` and `pg_stat_progress_*`
 //! (`visibility`): a row's pid, database, role, command and start times
@@ -16,12 +17,12 @@ use pgrx::pg_sys::Oid;
 use pgrx::prelude::*;
 use pgrx::JsonB;
 
-use super::backend::{claim, located};
+use super::backend::{between_tries, claim, located};
 use super::backends::{notice_without_table, own_holding};
 use super::frame::{Frame, Operation};
 use super::slot::{Holder, Values};
 use super::visibility::shown_to_caller;
-use crate::access::{as_catalog_owner, entry, AccessError};
+use crate::access::{as_catalog_owner, entry, is_reader, AccessError};
 
 /// One row of `warren.progress()`.
 #[derive(Debug, Clone, PartialEq)]
@@ -61,8 +62,8 @@ pub(crate) fn rows<'v>(
 fn current_rows() -> Vec<Row> {
     claim();
     match located() {
-        Ok((table, _)) => {
-            let copied = table.table().copy();
+        Ok(table) => {
+            let copied = table.table().copy(&mut between_tries());
             rows(copied.backends.iter().map(|(_, values)| values), shown_to_caller)
         }
         Err(_) => {
@@ -73,7 +74,7 @@ fn current_rows() -> Vec<Row> {
 }
 
 /// The names of the graphs of `rows` in this database that the caller
-/// sees, by id, as the statement's snapshot sees them.
+/// sees and may read, by id, as the statement's snapshot sees them.
 fn graph_names(rows: &[Row]) -> Result<HashMap<i32, String>, AccessError> {
     // SAFETY: the backend's database, set before any query.
     let here = unsafe { pgrx::pg_sys::MyDatabaseId };
@@ -84,22 +85,30 @@ fn graph_names(rows: &[Row]) -> Result<HashMap<i32, String>, AccessError> {
         .collect();
     ids.sort_unstable();
     ids.dedup();
-    let mut names = HashMap::new();
+    let mut graphs = Vec::new();
     if ids.is_empty() {
-        return Ok(names);
+        return Ok(HashMap::new());
     }
     as_catalog_owner(|| {
         Spi::connect(|client| {
-            let query = "SELECT graph_id, name FROM warren.graphs WHERE graph_id = ANY ($1)";
+            let query = "SELECT graph_id, name, owner::oid, readers::oid[] FROM warren.graphs
+                         WHERE graph_id = ANY ($1)";
             for row in client.select(query, None, &[ids.into()])? {
-                if let (Some(id), Some(name)) = (row.get::<i32>(1)?, row.get::<String>(2)?) {
-                    names.insert(id, name);
+                if let (Some(id), Some(name), Some(owner)) =
+                    (row.get::<i32>(1)?, row.get::<String>(2)?, row.get::<Oid>(3)?)
+                {
+                    graphs.push((id, name, owner, row.get::<Vec<Oid>>(4)?.unwrap_or_default()));
                 }
             }
             Ok::<_, AccessError>(())
         })
     })?;
-    Ok(names)
+    // As the caller, not the catalog owner.
+    Ok(graphs
+        .into_iter()
+        .filter(|(_, _, owner, readers)| is_reader(*owner, readers))
+        .map(|(id, name, _, _)| (id, name))
+        .collect())
 }
 
 /// `value` where the caller sees a row's details.
@@ -187,7 +196,7 @@ fn progress() -> TableIterator<
         let names = graph_names(&rows)?;
         let rows = rows.into_iter().map(|row| {
             let (command, operation) = (row.command, row.operation.frame);
-            let graph = command.graph.map(|id| names.get(&id).cloned().unwrap_or(id.to_string()));
+            let graph = command.graph.and_then(|id| names.get(&id).cloned());
             (
                 row.holder.pid,
                 row.holder.database,
