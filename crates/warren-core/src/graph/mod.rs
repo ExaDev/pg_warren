@@ -34,13 +34,17 @@ pub use direction::Direction;
 pub use edge_list::{EdgeIntake, EdgeList};
 pub use error::GraphError;
 pub use id_map::{
-    ExternalId, FixedKeys, FixedRebuild, IdKeys, IdMap, IdPair, KeysRebuild, NodeIds,
+    ExternalId, FixedKeys, FixedRebuild, FreshKeys, IdKeys, IdMap, IdOrder, IdPair, KeysRebuild,
+    NodeIds, TextIds, TextIndex, TextKeys, TextRebuild,
 };
 pub use membership::Membership;
 pub(crate) use membership::NO_COMMUNITY;
 pub use node_order::{NodeOrder, Permutation};
 pub use relation::{RelationDictionary, RelationIndex, RelationSelection};
-pub use segment::{ChunkSink, CsrPart, CsrSegments, SegmentKind, SEGMENT_HEADER_LEN};
+pub use segment::{
+    check_id_bytes_header, ChunkSink, CsrPart, CsrSegments, SegmentKind, TextIdPart,
+    TextIdSegments, SEGMENT_HEADER_LEN,
+};
 #[cfg(test)]
 pub(crate) use segment_buffer::HeapSegment;
 pub use segment_buffer::{SegmentBuffer, SharedSegment};

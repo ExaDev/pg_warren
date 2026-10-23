@@ -9,7 +9,7 @@
 //! | 4 | format, currently 1 |
 //! | 5 | [`SegmentKind`] |
 //! | 6 | element width in bytes (0 for variable-width elements) |
-//! | 7 | reserved, must be 0 |
+//! | 7 | for `id_bytes`, the database encoding (`pg_database.encoding`); for every other kind reserved, 0 |
 //! | 8..16 | element count (`u64`); for tombstones, the id space in bits |
 //!
 //! Decoding never panics on malformed input: it checks the header, the
@@ -20,9 +20,11 @@ mod csr;
 mod id_map;
 mod membership;
 mod relation;
+mod text_id_map;
 mod tombstones;
 
 pub use csr::{CsrPart, CsrSegments};
+pub use text_id_map::{TextIdPart, TextIdSegments};
 
 use super::{memory, BuildMemory, DenseId, ExternalId, GraphError, IdPair};
 
@@ -50,6 +52,14 @@ pub enum SegmentKind {
     /// `membership`: each parent node's community in a quotient version
     /// (`u64`, `u64::MAX` for none; DESIGN.md §6.6).
     Membership = 7,
+    /// `id_offsets`: where each text id starts in `id_bytes` (`u64`,
+    /// `id_space + 1`; DESIGN.md §5.7).
+    IdOffsets = 8,
+    /// `id_bytes`: every text id's bytes in dense-id order, with the
+    /// database encoding in header byte 7.
+    IdBytes = 9,
+    /// `id_order`: the dense ids sorted by text id (`u32` or `u64`).
+    IdOrder = 10,
 }
 
 impl SegmentKind {
@@ -57,29 +67,64 @@ impl SegmentKind {
     /// as decoding does, before its payload is read: that it is a segment
     /// of this kind, with elements `width` bytes wide, whose payload is
     /// `payload_len` bytes. Returns the header's count (for tombstones,
-    /// the id space in bits, stored in whole `u64` words).
+    /// the id space in bits, stored in whole `u64` words). An `id_bytes`
+    /// header is refused here: [`check_id_bytes_header`] checks it with its
+    /// encoding.
     pub fn check_header(
         self,
         header: &[u8],
         width: usize,
         payload_len: u64,
     ) -> Result<u64, GraphError> {
-        let header = header.get(..SEGMENT_HEADER_LEN).ok_or(GraphError::SegmentTruncated)?;
-        let (header, _) = read_header(header, self)?;
-        expect_width(&header, width)?;
-        let elements = match self {
-            Self::Tombstones => header.count.div_ceil(64),
-            _ => header.count,
-        };
-        expect_length(payload_len, elements, width)?;
-        Ok(header.count)
+        if self == Self::IdBytes {
+            return Err(GraphError::IdBytesEncodingUnchecked);
+        }
+        checked_header(self, header, width, payload_len).map(|header| header.count)
     }
+}
+
+/// Checks an `id_bytes` header (its first [`SEGMENT_HEADER_LEN`] bytes)
+/// as decoding does, before its payload is read: its kind, a width of 1, a
+/// payload of `payload_len` bytes, and that it records `encoding`, the
+/// database's (DESIGN.md §5.7). Returns the header's count, the bytes'
+/// length. Whether the bytes are valid in that encoding is not checked
+/// here (see DESIGN.md §5.7).
+pub fn check_id_bytes_header(
+    header: &[u8],
+    payload_len: u64,
+    encoding: u8,
+) -> Result<u64, GraphError> {
+    let header = checked_header(SegmentKind::IdBytes, header, 1, payload_len)?;
+    match header.encoding == encoding {
+        true => Ok(header.count),
+        false => Err(GraphError::IdEncoding { expected: encoding, found: header.encoding }),
+    }
+}
+
+/// [`SegmentKind::check_header`]'s checks, returning the header.
+fn checked_header(
+    kind: SegmentKind,
+    header: &[u8],
+    width: usize,
+    payload_len: u64,
+) -> Result<Header, GraphError> {
+    let header = header.get(..SEGMENT_HEADER_LEN).ok_or(GraphError::SegmentTruncated)?;
+    let (header, _) = read_header(header, kind)?;
+    expect_width(&header, width)?;
+    let elements = match kind {
+        SegmentKind::Tombstones => header.count.div_ceil(64),
+        _ => header.count,
+    };
+    expect_length(payload_len, elements, width)?;
+    Ok(header)
 }
 
 /// A decoded segment header.
 pub(crate) struct Header {
     pub(crate) width: u8,
     pub(crate) count: u64,
+    /// Byte 7: an `id_bytes` segment's encoding, else 0.
+    pub(crate) encoding: u8,
 }
 
 /// A fixed-width element of a segment payload.
@@ -110,6 +155,7 @@ macro_rules! little_endian_element {
     };
 }
 
+little_endian_element!(u8);
 little_endian_element!(u32);
 little_endian_element!(u64);
 little_endian_element!(f64);
@@ -128,16 +174,18 @@ impl<E: ExternalId> Element for IdPair<E> {
     }
 }
 
-/// A new segment buffer holding just the header, with room for the payload.
+/// A new segment buffer holding just the header, with room for the payload;
+/// `encoding` is header byte 7, 0 for every kind but `id_bytes`.
 pub(crate) fn with_header(
     kind: SegmentKind,
     width: usize,
     count: u64,
     payload_len: usize,
+    encoding: u8,
 ) -> Result<Vec<u8>, GraphError> {
     let mut out = memory::with_capacity(SEGMENT_HEADER_LEN + payload_len)?;
     out.extend_from_slice(&MAGIC);
-    out.extend_from_slice(&[FORMAT, kind as u8, width as u8, 0]);
+    out.extend_from_slice(&[FORMAT, kind as u8, width as u8, encoding]);
     out.extend_from_slice(&count.to_le_bytes());
     Ok(out)
 }
@@ -158,11 +206,24 @@ pub(crate) fn encode_chunked<E: Element, X: From<GraphError>>(
     memory: &BuildMemory,
     each: &mut ChunkSink<'_, X>,
 ) -> Result<u64, X> {
+    encode_chunked_in(kind, 0, count, elements, chunk_size, memory, each)
+}
+
+/// [`encode_chunked`] with header byte 7 set to `encoding`.
+pub(crate) fn encode_chunked_in<E: Element, X: From<GraphError>>(
+    kind: SegmentKind,
+    encoding: u8,
+    count: u64,
+    elements: &[E],
+    chunk_size: usize,
+    memory: &BuildMemory,
+    each: &mut ChunkSink<'_, X>,
+) -> Result<u64, X> {
     let chunk_size = chunk_size.max(1);
     let length = SEGMENT_HEADER_LEN + elements.len() * E::WIDTH;
     let capacity = chunk_size.min(length).max(SEGMENT_HEADER_LEN) + E::WIDTH;
     let _charge = memory.charge(capacity as u64)?;
-    let mut chunk = with_header(kind, E::WIDTH, count, capacity - SEGMENT_HEADER_LEN)?;
+    let mut chunk = with_header(kind, E::WIDTH, count, capacity - SEGMENT_HEADER_LEN, encoding)?;
     let mut full = |chunk: &mut Vec<u8>| -> Result<(), X> {
         while chunk.len() >= chunk_size {
             each(&chunk[..chunk_size])?;
@@ -183,7 +244,17 @@ pub(crate) fn encode_chunked<E: Element, X: From<GraphError>>(
 
 /// Encodes `elements` as a segment of `kind`.
 pub(crate) fn encode<E: Element>(kind: SegmentKind, elements: &[E]) -> Result<Vec<u8>, GraphError> {
-    let mut out = with_header(kind, E::WIDTH, elements.len() as u64, elements.len() * E::WIDTH)?;
+    encode_in(kind, 0, elements)
+}
+
+/// [`encode`] with header byte 7 set to `encoding`.
+pub(crate) fn encode_in<E: Element>(
+    kind: SegmentKind,
+    encoding: u8,
+    elements: &[E],
+) -> Result<Vec<u8>, GraphError> {
+    let (count, payload_len) = (elements.len() as u64, elements.len() * E::WIDTH);
+    let mut out = with_header(kind, E::WIDTH, count, payload_len, encoding)?;
     elements.iter().for_each(|element| element.write(&mut out));
     Ok(out)
 }
@@ -201,10 +272,10 @@ pub(crate) fn read_header(bytes: &[u8], kind: SegmentKind) -> Result<(Header, &[
     if header[5] != kind as u8 {
         return Err(GraphError::SegmentKind { expected: kind as u8, found: header[5] });
     }
-    if header[7] != 0 {
+    if header[7] != 0 && kind != SegmentKind::IdBytes {
         return Err(GraphError::SegmentReserved { found: header[7] });
     }
-    let header = Header { width: header[6], count: u64::read(&header[8..]) };
+    let header = Header { width: header[6], count: u64::read(&header[8..]), encoding: header[7] };
     Ok((header, payload))
 }
 

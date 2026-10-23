@@ -15,7 +15,7 @@ impl RelationDictionary {
     pub fn encode(&self) -> Result<Vec<u8>, GraphError> {
         let payload_len = self.names().iter().map(|name| 4 + name.len()).sum();
         let mut bytes =
-            with_header(SegmentKind::RelationDictionary, 0, self.len() as u64, payload_len)?;
+            with_header(SegmentKind::RelationDictionary, 0, self.len() as u64, payload_len, 0)?;
         for name in self.names() {
             let len = u32::try_from(name.len()).map_err(|_| GraphError::RelationNameTooLong)?;
             len.write(&mut bytes);
