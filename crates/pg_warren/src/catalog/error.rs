@@ -104,6 +104,29 @@ pub(crate) enum CatalogError {
     /// installed (DESIGN.md §14 item 44a); the message names them.
     #[error("{0}")]
     OwnsGraphs(String),
+    /// `reassign_owned` would take what the new role stores on a graph
+    /// past its quota on readers' vectors there (DESIGN.md §5.7).
+    #[error(
+        "reassigning the persisted vectors of role \"{from}\" on graph \"{graph}\" ({moved} bytes) \
+         would take those of role \"{to}\" to {after} bytes, past its quota of {quota} bytes (it \
+         stores {before}); drop some of them first, or ask the graph's owner for a larger quota"
+    )]
+    QuotaExceeded {
+        /// The role whose vectors move.
+        from: String,
+        /// The role they move to.
+        to: String,
+        /// The graph.
+        graph: String,
+        /// The bytes that move.
+        moved: u64,
+        /// `to`'s quota on the graph.
+        quota: u64,
+        /// What `to` stores there before the move.
+        before: u64,
+        /// And after it.
+        after: u64,
+    },
     /// An SPI call failed.
     #[error(transparent)]
     Spi(#[from] pgrx::spi::Error),
@@ -134,6 +157,7 @@ impl SqlError for CatalogError {
                 PgSqlErrorCode::ERRCODE_E_R_I_E_EVENT_TRIGGER_PROTOCOL_VIOLATED
             }
             Self::OwnsGraphs(_) => PgSqlErrorCode::ERRCODE_DEPENDENT_OBJECTS_STILL_EXIST,
+            Self::QuotaExceeded { .. } => PgSqlErrorCode::ERRCODE_CONFIGURATION_LIMIT_EXCEEDED,
             Self::Spi(_) => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
         }
     }

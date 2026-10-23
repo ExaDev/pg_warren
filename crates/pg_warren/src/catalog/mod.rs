@@ -15,6 +15,7 @@ mod graph;
 mod info;
 mod owner;
 mod promote;
+pub(crate) mod quota;
 mod readers;
 mod retention;
 mod version;

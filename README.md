@@ -290,12 +290,12 @@ See [CHANGELOG.md](CHANGELOG.md). This is pre-1.0 software: the SQL surface
 may still change between minor versions, with an upgrade script each time.
 
 Not there yet: the rest of the road to 1.0 (DESIGN.md §13) is text ids,
-quotas and observability (M10; ownership transfer, `warren.set_owner`, and
-cleanup after a dropped role, `warren.reassign_owned`, `warren.drop_owned`,
-the optional `DROP OWNED` trigger and `warren.drop_orphans`, the
-cache's views, `warren.cache()` and `warren.backends()`, and progress,
-`warren.progress()` and `warren.report_progress()`, are built for
-0.6.0);
+and observability (M10; ownership transfer, `warren.set_owner`, cleanup
+after a dropped role, `warren.reassign_owned`, `warren.drop_owned`, the
+optional `DROP OWNED` trigger and `warren.drop_orphans`, quotas on readers'
+vectors, `warren.set_vector_quota`, the cache's views, `warren.cache()` and
+`warren.backends()`, and progress, `warren.progress()` and
+`warren.report_progress()`, are built for 0.6.0);
 benchmarks and robustness on real graphs and deployments, and packages
 (M11); and a reviewed, frozen SQL surface (M12, 1.0.0). Incremental
 maintenance, general sparse matrix algebra (contraction's `PᵀAP` is the

@@ -1,6 +1,7 @@
 //! The catalog tables, created by the extension script (DESIGN.md §5.1):
-//! `warren.graphs`, `versions`, `segments`, `vectors` and `vector_chunks`,
-//! revoked from `PUBLIC` and registered with `pg_extension_config_dump`.
+//! `warren.graphs`, `versions`, `segments`, `vectors`, `vector_chunks`
+//! and `vector_quotas`, revoked from `PUBLIC` and registered with
+//! `pg_extension_config_dump`.
 
 // Emitted at the end of the script (`finalize`), after `CREATE SCHEMA warren`.
 // Functions reach these tables only at run time, through SPI.
@@ -25,7 +26,8 @@ CREATE TABLE warren.graphs (
     current_version  bigint,
     store_merged     boolean NOT NULL DEFAULT true,
     node_order       text NOT NULL DEFAULT 'id'
-                     CHECK (node_order IN ('id'::pg_catalog.text, 'locality'::pg_catalog.text))
+                     CHECK (node_order IN ('id'::pg_catalog.text, 'locality'::pg_catalog.text)),
+    reader_vector_quota bigint CHECK (reader_vector_quota >= 0)
 );
 
 CREATE TABLE warren.versions (
@@ -79,6 +81,17 @@ CREATE TABLE warren.vector_chunks (
 );
 -- IEEE floats rarely compress, so skip pglz's attempt on every write.
 ALTER TABLE warren.vector_chunks ALTER COLUMN data SET STORAGE EXTERNAL;
+-- A quota sums one role's vectors on one graph (DESIGN.md §5.7).
+CREATE INDEX vectors_created_by ON warren.vectors (graph_id, created_by);
+
+-- Per-role quotas on readers' persisted vectors, overriding
+-- graphs.reader_vector_quota (DESIGN.md §5.7, §14 item 46).
+CREATE TABLE warren.vector_quotas (
+    graph_id  int NOT NULL REFERENCES warren.graphs ON DELETE CASCADE,
+    role      regrole NOT NULL,
+    bytes     bigint NOT NULL CHECK (bytes >= 0),
+    PRIMARY KEY (graph_id, role)
+);
 
 -- graphs.current_version is not a foreign key: with versions.graph_id it
 -- would make a cycle, and pg_dump cannot order the data of tables in a
@@ -164,6 +177,7 @@ SELECT pg_catalog.pg_extension_config_dump('warren.segments', '');
 SELECT pg_catalog.pg_extension_config_dump('warren.vectors', '');
 SELECT pg_catalog.pg_extension_config_dump('warren.vectors_vector_id_seq', '');
 SELECT pg_catalog.pg_extension_config_dump('warren.vector_chunks', '');
+SELECT pg_catalog.pg_extension_config_dump('warren.vector_quotas', '');
 "#,
     name = "catalog",
     finalize,
@@ -231,6 +245,37 @@ mod tests {
         Ok(())
     }
 
+    /// A quota sums one role's vectors on one graph (DESIGN.md §5.7).
+    #[pg_test]
+    fn vectors_are_indexed_by_graph_and_creator() -> Result<(), Error> {
+        let index = Spi::get_one::<String>(
+            "SELECT pg_get_indexdef('warren.vectors_created_by'::regclass)",
+        )?;
+        assert_eq!(
+            index.as_deref(),
+            Some("CREATE INDEX vectors_created_by ON warren.vectors USING btree (graph_id, created_by)")
+        );
+        Ok(())
+    }
+
+    #[pg_test]
+    fn quotas_are_bytes_not_negative() -> Result<(), Error> {
+        ring("quota_check", 3, 2)?;
+        assert_eq!(
+            sqlstate("UPDATE warren.graphs SET reader_vector_quota = -1")?.as_deref(),
+            Some("23514")
+        );
+        assert_eq!(
+            sqlstate(
+                "INSERT INTO warren.vector_quotas SELECT graph_id, 'quota_check_owner', -1
+                 FROM warren.graphs"
+            )?
+            .as_deref(),
+            Some("23514")
+        );
+        Ok(())
+    }
+
     #[pg_test]
     fn versions_are_indexed_by_parent_and_label_vector() -> Result<(), Error> {
         let indexes = Spi::get_one::<String>(
@@ -293,7 +338,7 @@ mod tests {
                  build_reverse boolean not null, weighted boolean not null, \
                  has_relations boolean not null, retain_versions integer not null, \
                  current_version bigint, store_merged boolean not null, \
-                 node_order text not null"
+                 node_order text not null, reader_vector_quota bigint"
             )
         );
         Ok(())
@@ -338,6 +383,10 @@ mod tests {
             columns("vector_chunks")?.as_deref(),
             Some("vector_id bigint not null, chunk_no integer not null, data bytea not null")
         );
+        assert_eq!(
+            columns("vector_quotas")?.as_deref(),
+            Some("graph_id integer not null, role regrole not null, bytes bigint not null")
+        );
         Ok(())
     }
 
@@ -374,7 +423,8 @@ mod tests {
             dumped.as_deref(),
             Some(
                 "warren.graphs, warren.graphs_graph_id_seq, warren.segments, \
-                 warren.vector_chunks, warren.vectors, warren.vectors_vector_id_seq, \
+                 warren.vector_chunks, warren.vector_quotas, warren.vectors, \
+                 warren.vectors_vector_id_seq, \
                  warren.versions, warren.versions_version_id_seq"
             )
         );
