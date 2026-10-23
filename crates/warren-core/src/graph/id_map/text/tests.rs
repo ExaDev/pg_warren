@@ -158,23 +158,12 @@ fn renumbering_moves_bytes_and_offsets_and_maps_the_order() {
     assert_eq!(refused, before, "nothing is renumbered");
 }
 
-/// The three arrays as shared views of heap segments.
+/// The three arrays as shared views of heap segments, through
+/// `from_text_segments`, which checks them.
 fn shared(id_map: &IdMap<TextKeys>) -> IdMap<TextKeys> {
-    let keys = id_map.keys();
-    IdMap::from_text_segments(
-        SegmentBuffer::shared(HeapSegment::of(keys.id_bytes())),
-        SegmentBuffer::shared(HeapSegment::of(keys.id_offsets())),
-        shared_order(keys.id_order()),
-        id_map.tombstones().clone(),
-    )
-    .unwrap()
-}
-
-fn shared_order(order: &IdOrder) -> IdOrder {
-    match order {
-        IdOrder::U32(order) => IdOrder::U32(SegmentBuffer::shared(HeapSegment::of(order))),
-        IdOrder::U64(order) => IdOrder::U64(SegmentBuffer::shared(HeapSegment::of(order))),
-    }
+    let view = id_map.shared_views();
+    let TextKeys { bytes, offsets, order } = view.keys.clone();
+    IdMap::from_text_segments(bytes, offsets, order, view.tombstones().clone()).unwrap()
 }
 
 #[test]

@@ -221,4 +221,22 @@ impl IdMap<TextKeys> {
 }
 
 #[cfg(test)]
+impl IdMap<TextKeys> {
+    /// The same id map with every buffer a shared view of a heap segment.
+    pub(crate) fn shared_views(&self) -> Self {
+        use crate::graph::HeapSegment;
+        let order = match &self.keys.order {
+            IdOrder::U32(order) => IdOrder::U32(SegmentBuffer::shared(HeapSegment::of(order))),
+            IdOrder::U64(order) => IdOrder::U64(SegmentBuffer::shared(HeapSegment::of(order))),
+        };
+        let keys = TextKeys {
+            bytes: SegmentBuffer::shared(HeapSegment::of(&self.keys.bytes)),
+            offsets: SegmentBuffer::shared(HeapSegment::of(&self.keys.offsets)),
+            order,
+        };
+        Self { keys, tombstones: self.tombstones.shared_views() }
+    }
+}
+
+#[cfg(test)]
 mod tests;
