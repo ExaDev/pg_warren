@@ -236,8 +236,8 @@ what a traversal reveals. So access is per graph:
 
 | Role | May |
 |---|---|
-| Owner (the role that ran `create_graph`, or was given the graph with `set_owner`, and its members) | everything: `refresh`, `promote`, `drop_version`, `compact`, `drop_graph`, `grant`, `revoke`, `set_owner`, and all reads |
-| Reader (a role in `readers`, and its members) | traversal, compute, `info`, `diff`, `distance`, `eigen`, `prewarm`, and writing vectors |
+| Owner (the role that ran `create_graph`, or was given the graph with `set_owner`, and its members) | everything: `refresh`, `promote`, `drop_version`, `compact`, `drop_graph`, `grant`, `revoke`, `set_owner`, `set_vector_quota`, and all reads |
+| Reader (a role in `readers`, and its members) | traversal, compute, `info`, `diff`, `distance`, `eigen`, `prewarm`, `vector_usage`, and writing vectors (within its quota) |
 | Anyone | `evict` (it frees only the caller's memory), `last_stats`, `version` |
 
 ```sql
@@ -297,8 +297,8 @@ SELECT warren.drop_owned('alice');             -- drops alice's graphs, and the 
   moved.
 - `drop_owned(role)` drops every graph `role` owns (as `drop_graph` does,
   with their versions and everyone's vectors), deletes the vectors it wrote
-  on other graphs, and removes it from every graph's readers. It returns
-  the number of graphs dropped.
+  on other graphs, and removes it from every graph's readers and its
+  quotas. It returns the number of graphs dropped.
 - Both need the privileges of the role they move from or drop (a member
   that does not inherit them has not), as the commands do, and
   `reassign_owned` also the right to `SET ROLE` to the new owner (on
@@ -327,7 +327,7 @@ standard procedure, run without `warren.reassign_owned`, stops rather than
 leaving graphs behind (`REASSIGN OWNED` did not move them): run
 `warren.reassign_owned` or `warren.drop_owned`, then `DROP OWNED` again.
 When `alice` owns no graph, `DROP OWNED` also removes her reader entries
-and deletes the vectors she wrote, as `drop_owned` does. A role that does
+and quotas and deletes the vectors she wrote, as `drop_owned` does. A role that does
 not exist, or whose privileges the caller lacks, is left to `DROP OWNED`'s
 own error. The trigger reads who owns what without waiting for other
 transactions: a `set_owner` or `reassign_owned` to the role still
@@ -352,13 +352,15 @@ SELECT warren.drop_orphans();         -- drops orphaned graphs, prunes the rest
 ```
 
 `orphans()` lists graphs whose owner no longer exists (`kind` `graph`),
-reader entries naming dropped roles (`reader`), and vectors whose creator
-was dropped (`vector`, one row per graph and role), each with the dropped
-role's OID. A superuser and the extension's owner (the role that ran
-`CREATE EXTENSION`: the installer, in a trusted install), or a member that
-has its privileges or may `SET ROLE` to it, see every row; others see the `reader` and `vector` rows of graphs they own.
-`drop_orphans()` drops the orphaned graphs, removes the reader entries,
-deletes the vectors, and returns the number of graphs dropped. Run it
+quotas (`quota`) and reader entries (`reader`) naming dropped roles, and
+vectors whose creator was dropped (`vector`, one row per graph and role),
+each with the dropped role's OID. A superuser and the extension's owner
+(the role that ran `CREATE EXTENSION`: the installer, in a trusted
+install), or a member that has its privileges or may `SET ROLE` to it, see
+every row; others see the `quota`, `reader` and `vector` rows of graphs
+they own. `drop_orphans()` drops the orphaned graphs, removes the quotas
+and reader entries, deletes the vectors, and returns the number of graphs
+dropped. Run it
 soon: once a dropped role's OID is reused, nothing can tell its graphs
 from the new role's.
 
@@ -373,6 +375,46 @@ gives it nothing new. Every other call on an orphan fails (42704).
 **Vectors.** Readers share one name space of vectors per version. A persisted
 vector may be replaced or dropped only by the role that wrote it or by the
 graph's owner. Transient vectors are private to the role that wrote them.
+
+**Quotas on readers' vectors.** Persisted vectors are stored in the
+catalog owner's tables, so a graph's owner may bound what each other role
+persists on the graph:
+
+```sql
+SELECT warren.set_vector_quota('social', 100000000);             -- default for every role: 100 MB
+SELECT warren.set_vector_quota('social', 1000000000, 'analyst'); -- analyst's own: 1 GB
+SELECT warren.set_vector_quota('social', NULL, 'analyst');       -- analyst back to the default
+SELECT warren.set_vector_quota('social', NULL);                  -- no default
+SELECT * FROM warren.vector_usage('social');                     -- (role, vectors, bytes, quota)
+```
+
+- A role's usage is the elements' bytes (`length × width × size(dtype)`:
+  8 for `f64` and `i64`, 4 for `f32`, 1 for `bool`) of every persisted
+  vector it wrote on the graph, across all versions: what the vectors hold
+  when loaded, not their storage on disk. Transient vectors are not
+  counted (`warren.max_cache_memory` bounds them per backend).
+- Every persisted write (`persist := true`, the default, of every
+  vector-writing function, and the library's results) is refused with
+  53400 (`configuration_limit_exceeded`) if it would take the writer's
+  usage past its quota *and* above what it was. Replacing a vector with one
+  no larger always works, and a quota lowered below what is in use blocks
+  only growth. The message names the sizes and the remedies: drop vectors,
+  write with `persist := false`, or ask the owner.
+- The quota is the role's own, else the graph's default (`info`'s
+  `reader_vector_quota`); none applies to members of the owner role, which
+  pays for its own storage. A vector counts against the role that wrote it
+  (`reassign_owned` moves it to the new role). `set_vector_quota` is for
+  the owner. `vector_usage` shows the owner every role that has vectors or
+  a quota of its own, and a reader its own row.
+- One role's counted writes to one graph run one at a time: each takes a
+  lock on (graph, role) until its transaction ends, and counts what is
+  committed when it has it, whatever its isolation level, so two sessions
+  of one role cannot both fit under the quota. The lock shows in
+  `pg_locks` as `advisory`, with `objsubid` 22353 (applications' advisory
+  locks have 1 or 2), and `pg_advisory_unlock_all()` does not release it.
+- Not counted: `compact` moving vectors to its new version, drops and
+  retention. Quotas are dumped with the graph and dropped with it, and
+  `drop_owned` (and the `DROP OWNED` trigger) remove a dropped role's.
 
 **Whose SQL runs as whom, under which `search_path`.**
 
