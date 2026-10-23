@@ -374,6 +374,29 @@ impl GraphDefinition {
             })
         })
     }
+
+    /// Makes `owner` the graph's owner, and removes it from the readers,
+    /// whose order is kept (DESIGN.md §5.7). Its row must be locked
+    /// ([`lock`](Self::lock)).
+    pub(crate) fn set_owner(&mut self, owner: pg_sys::Oid) -> Result<(), CatalogError> {
+        as_catalog_owner(|| {
+            Spi::connect_mut(|client| {
+                client.update(
+                    "UPDATE warren.graphs SET owner = $2::oid::regrole, readers = ARRAY(
+                         SELECT r.reader FROM pg_catalog.unnest(readers)
+                                              WITH ORDINALITY AS r (reader, position)
+                         WHERE r.reader::oid <> $2 ORDER BY r.position)::regrole[]
+                     WHERE graph_id = $1",
+                    None,
+                    &[self.graph_id.into(), owner.into()],
+                )?;
+                Ok::<_, CatalogError>(())
+            })
+        })?;
+        self.owner = owner;
+        self.readers.retain(|&reader| reader != owner);
+        Ok(())
+    }
 }
 
 /// The node order named `name` (DESIGN.md §14 item 22), or an

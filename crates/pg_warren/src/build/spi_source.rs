@@ -10,8 +10,8 @@ use super::source::{EdgeRow, EdgeSink, SourceReader};
 use crate::access::{as_role, with_read_only, with_search_path};
 use crate::catalog::GraphDefinition;
 use crate::source::{
-    check_edge_columns, check_node_columns, for_each_row, for_each_tuple, open_read_only,
-    text_in_place, IdDatum, SourceError,
+    check_edge_columns, for_each_row, for_each_tuple, open_read_only, require_node_id_type,
+    text_in_place, IdDatum,
 };
 
 /// A graph's sources, read through SPI.
@@ -35,16 +35,7 @@ impl<E: IdDatum> SourceReader<E> for SpiSource<'_> {
                     Spi::connect(|client| {
                         let mut opened =
                             open_read_only::<BuildError>(client, "node_query", &graph.node_query)?;
-                        if check_node_columns(&opened.columns)? != graph.id_type {
-                            return Err(SourceError::ColumnType {
-                                query: "node_query",
-                                column: 1,
-                                role: "node id",
-                                expected: graph.id_type.sql_name(),
-                                found: opened.columns[0].name.clone(),
-                            }
-                            .into());
-                        }
+                        require_node_id_type(&opened.columns, graph.id_type)?;
                         let mut ids = BuildBuffer::new(memory);
                         for_each_row::<BuildError>(&mut opened.cursor, |row| {
                             if let Some(id) = row.get::<E::Sql>(1)?.map(E::from_sql) {

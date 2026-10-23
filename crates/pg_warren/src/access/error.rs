@@ -60,6 +60,18 @@ pub(crate) enum AccessError {
         /// The owner role's name.
         owner: String,
     },
+    /// The caller may not `SET ROLE` to the role it would make a graph's
+    /// owner (DESIGN.md §5.7).
+    #[error("must be able to SET ROLE \"{role}\" to make it the owner of graph \"{graph}\"")]
+    CannotBecome {
+        /// The would-be owner's name.
+        role: String,
+        /// The graph.
+        graph: String,
+    },
+    /// No role has this oid.
+    #[error("role with OID {0} does not exist")]
+    RoleNotFound(u32),
     /// The graph's owner role was dropped (DESIGN.md §7).
     #[error("the owner of graph \"{0}\" no longer exists")]
     OwnerDropped(String),
@@ -77,8 +89,9 @@ impl SqlError for AccessError {
             Self::NotOwner { .. }
             | Self::NotReader { .. }
             | Self::NotCreator { .. }
-            | Self::CreatorDropped { .. } => PgSqlErrorCode::ERRCODE_INSUFFICIENT_PRIVILEGE,
-            Self::OwnerDropped(_) | Self::ExtensionMissing => {
+            | Self::CreatorDropped { .. }
+            | Self::CannotBecome { .. } => PgSqlErrorCode::ERRCODE_INSUFFICIENT_PRIVILEGE,
+            Self::OwnerDropped(_) | Self::RoleNotFound(_) | Self::ExtensionMissing => {
                 PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT
             }
             Self::Spi(_) => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,

@@ -6,3 +6,8 @@
 -- (DESIGN.md §7): create only in schema warren, schema-qualify, and use only
 -- exact-match pg_catalog operators and functions in what runs here.
 \echo Use "ALTER EXTENSION pg_warren UPDATE TO '0.6.0'" to load this file. \quit
+
+-- warren.set_owner(name, owner) (DESIGN.md §5.7, §14 item 43): gives a graph
+-- a new owner, as ALTER MATERIALIZED VIEW ... OWNER TO does.
+CREATE FUNCTION warren."set_owner"(name text, owner regrole) RETURNS void
+STRICT VOLATILE LANGUAGE c AS 'MODULE_PATHNAME', 'set_owner_wrapper';
