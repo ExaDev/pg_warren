@@ -20,24 +20,23 @@
 //! only if stored out of line, compressed or with a short header), so the
 //! read holds no Postgres memory per row.
 
+use std::borrow::Borrow;
 use std::ffi::CStr;
 
 use pgrx::datum::UnboxDatum;
 use pgrx::prelude::*;
-use pgrx::spi::SpiTupleTable;
 use pgrx::{Array, FromDatum, IntoDatum};
 use warren_core::compute::{map, AnyVector, ComputeError, Dtype, MemoryCharge, Value, Vector};
 
 use super::constructors::{dtype as parse_dtype, literal};
-use super::settings::workers;
 use super::vectors::Vectors;
 use super::{entry, ComputeSqlError};
 use crate::access::{with_read_only, with_search_path, Caller};
-use crate::cache::resolve;
-use crate::interrupts::PostgresInterrupts;
+use crate::cache::{resolve, CachedIds};
+use crate::external_ids::DenseIds;
+use crate::interrupts::{workers, PostgresInterrupts};
 use crate::source::{
-    describe, for_each_tuple, open_read_only, type_name, with_id_type, ColumnType, IdDatum,
-    SourceError,
+    describe, for_each_tuple, open_read_only, type_name, with_id_type, ColumnType, Row, SourceError,
 };
 
 /// The SQL type a dtype's values are cast to.
@@ -88,8 +87,8 @@ fn vector_from_query(
 
 /// Checks that a query's id column casts implicitly to the graph's id
 /// type `E`, so ids are never rounded.
-pub(super) fn check_id_column<E: IdDatum>(column: &ColumnType) -> Result<(), ComputeSqlError> {
-    let id_type = E::Sql::type_oid();
+pub(super) fn check_id_column<E: CachedIds>(column: &ColumnType) -> Result<(), ComputeSqlError> {
+    let id_type = E::ID_TYPE.oid();
     // SAFETY: can_coerce_type reads one type pair from the catalogs.
     let implicit = unsafe {
         pg_sys::can_coerce_type(
@@ -109,26 +108,11 @@ pub(super) fn check_id_column<E: IdDatum>(column: &ColumnType) -> Result<(), Com
 }
 
 /// The qualified SQL name of `E`'s type.
-pub(super) fn id_type_name<E: IdDatum>() -> String {
+pub(super) fn id_type_name<E: CachedIds>() -> String {
     // SAFETY: format_type_be_qualified returns a palloc'd NUL-terminated
     // string for any type oid.
-    let name = unsafe { CStr::from_ptr(pg_sys::format_type_be_qualified(E::Sql::type_oid())) };
+    let name = unsafe { CStr::from_ptr(pg_sys::format_type_be_qualified(E::ID_TYPE.oid())) };
     name.to_string_lossy().into_owned()
-}
-
-/// The external id `id` as text, by its type's output function.
-fn id_text<E: IdDatum>(id: E) -> String {
-    let Some(datum) = id.to_sql().into_datum() else {
-        return String::new();
-    };
-    let (mut output, mut varlena) = (pg_sys::Oid::INVALID, false);
-    // SAFETY: the out-pointers point to live locals; the datum is of the
-    // type whose output function is called, which returns a palloc'd
-    // NUL-terminated string.
-    unsafe {
-        pg_sys::getTypeOutputInfo(E::Sql::type_oid(), &mut output, &mut varlena);
-        CStr::from_ptr(pg_sys::OidOutputFunctionCall(output, datum)).to_string_lossy().into_owned()
-    }
 }
 
 /// A query to read a vector from.
@@ -141,7 +125,7 @@ struct Read<'a> {
 
 impl Read<'_> {
     /// The vector of `T` the query's rows make.
-    fn vector<E: IdDatum, T>(&self, vectors: &Vectors<E>) -> Result<AnyVector, ComputeSqlError>
+    fn vector<E: CachedIds, T>(&self, vectors: &Vectors<E>) -> Result<AnyVector, ComputeSqlError>
     where
         AnyVector: From<Vector<T>>,
         for<'a> T: Value + FromDatum + IntoDatum + UnboxDatum<As<'a> = T>,
@@ -170,10 +154,12 @@ impl Read<'_> {
                     );
                     let mut opened = open_read_only::<ComputeSqlError>(client, "query", &wrapped)?;
                     let mut rows = Rows::<T>::new(vectors, self.fill_value::<E, T>(vectors)?)?;
+                    let mut ids = DenseIds::new(&vectors.loaded.id_map, &vectors.memory);
                     for_each_tuple(&mut opened.cursor, |row| match array {
-                        true => rows.matrix_row(vectors, row),
-                        false => rows.scalar_row(vectors, row),
+                        true => rows.matrix_row(vectors, &mut ids, row),
+                        false => rows.scalar_row(vectors, &mut ids, row),
                     })?;
+                    drop(ids);
                     rows.finish(vectors)
                 })
             })
@@ -181,7 +167,10 @@ impl Read<'_> {
     }
 
     /// `fill` cast to `T` as SQL casts `double precision`.
-    fn fill_value<E: IdDatum, T: Value>(&self, vectors: &Vectors<E>) -> Result<T, ComputeSqlError> {
+    fn fill_value<E: CachedIds, T: Value>(
+        &self,
+        vectors: &Vectors<E>,
+    ) -> Result<T, ComputeSqlError> {
         let one = map(
             &*workers()?,
             &vectors.memory,
@@ -208,7 +197,7 @@ where
     AnyVector: From<Vector<T>>,
     for<'a> T: Value + FromDatum + IntoDatum + UnboxDatum<As<'a> = T>,
 {
-    fn new<E: IdDatum>(vectors: &Vectors<E>, fill: T) -> Result<Self, ComputeSqlError> {
+    fn new<E: CachedIds>(vectors: &Vectors<E>, fill: T) -> Result<Self, ComputeSqlError> {
         let id_space = vectors.id_space();
         let charge = vectors.memory.charge(id_space)?;
         let mut seen = Vec::new();
@@ -220,26 +209,26 @@ where
 
     /// The dense id of the row's node, if it is a live node of the version
     /// and has had no row before.
-    fn node<E: IdDatum>(
+    fn node<E: CachedIds>(
         &mut self,
-        vectors: &Vectors<E>,
-        row: &SpiTupleTable<'_>,
+        ids: &mut DenseIds<'_, E>,
+        row: &Row<'_>,
     ) -> Result<Option<usize>, ComputeSqlError> {
-        let Some(id) = row.get::<E::Sql>(1)?.map(E::from_sql) else {
+        let Some(id) = row.id::<E>(1)? else {
             return Ok(None);
         };
-        let Some(node) = vectors.loaded.id_map.dense_id(&id) else {
+        let Some(node) = ids.dense_id(id.borrow())? else {
             return Ok(None);
         };
         let node = node as usize;
         if std::mem::replace(&mut self.seen[node], true) {
-            return Err(ComputeSqlError::DuplicateNode(id_text(id)));
+            return Err(ComputeSqlError::DuplicateNode(E::named(id.borrow())));
         }
         Ok(Some(node))
     }
 
     /// The vector, allocated at `width` on first use.
-    fn values<E: IdDatum>(
+    fn values<E: CachedIds>(
         &mut self,
         vectors: &Vectors<E>,
         width: usize,
@@ -263,12 +252,13 @@ where
         Ok(T::NULL.ok_or(ComputeError::NullResult { dtype: T::DTYPE })?)
     }
 
-    fn scalar_row<E: IdDatum>(
+    fn scalar_row<E: CachedIds>(
         &mut self,
         vectors: &Vectors<E>,
-        row: &SpiTupleTable<'_>,
+        ids: &mut DenseIds<'_, E>,
+        row: &Row<'_>,
     ) -> Result<(), ComputeSqlError> {
-        let Some(node) = self.node(vectors, row)? else {
+        let Some(node) = self.node(ids, row)? else {
             return Ok(());
         };
         let value = match row.get::<T>(2)? {
@@ -279,12 +269,13 @@ where
         Ok(())
     }
 
-    fn matrix_row<E: IdDatum>(
+    fn matrix_row<E: CachedIds>(
         &mut self,
         vectors: &Vectors<E>,
-        row: &SpiTupleTable<'_>,
+        ids: &mut DenseIds<'_, E>,
+        row: &Row<'_>,
     ) -> Result<(), ComputeSqlError> {
-        let Some(node) = self.node(vectors, row)? else {
+        let Some(node) = self.node(ids, row)? else {
             return Ok(());
         };
         let elements = match row.get_datum_by_ordinal(2)? {
@@ -319,7 +310,7 @@ where
     }
 
     /// The vector; of width 1 if the query returned no rows.
-    fn finish<E: IdDatum>(self, vectors: &Vectors<E>) -> Result<AnyVector, ComputeSqlError> {
+    fn finish<E: CachedIds>(self, vectors: &Vectors<E>) -> Result<AnyVector, ComputeSqlError> {
         Ok(match self.values {
             Some(values) => values.into(),
             None => Vector::filled(&vectors.memory, vectors.id_space(), 1, self.fill)?.into(),

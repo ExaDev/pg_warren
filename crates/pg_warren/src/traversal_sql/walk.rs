@@ -16,10 +16,10 @@ use super::stats::Recorder;
 use super::step::read_steps;
 use super::walk_rows::{max_walk_paths, DEFAULT_WALK_ROWS};
 use super::{entry, TraversalSqlError};
-use crate::cache::{cached, resolve, LoadedVersion};
+use crate::cache::{cached, resolve, CachedIds, LoadedVersion};
 use crate::external_ids::{dense_ids, elements, external, external_array};
 use crate::interrupts::PostgresInterrupts;
-use crate::source::{with_id_type, IdDatum};
+use crate::source::with_id_type;
 
 /// A row of `warren.walk`.
 type WalkRow = (Option<AnyElement>, Option<AnyArray>, Option<Vec<String>>, Option<i64>);
@@ -133,7 +133,7 @@ struct Walked<'w, E> {
     options: WalkOptions,
 }
 
-impl<E: IdDatum> Walked<'_, E> {
+impl<E: CachedIds> Walked<'_, E> {
     /// Runs the walk and returns its rows, recording its stats.
     fn rows(
         &self,

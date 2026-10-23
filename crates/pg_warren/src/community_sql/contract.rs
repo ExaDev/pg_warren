@@ -17,7 +17,8 @@ use crate::catalog::{
     level_graph_name, require_unreserved, CatalogError, GraphDefinition, GraphSource, Lineage,
     NewGraph,
 };
-use crate::compute_sql::{workers, Vectors};
+use crate::compute_sql::Vectors;
+use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
 use crate::segment::{SpiSegmentStore, CHUNK_SIZE};
 use crate::source::{with_id_type, IdType};

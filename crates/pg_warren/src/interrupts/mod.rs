@@ -1,8 +1,13 @@
 //! The Postgres adapter of `warren-core`'s `Interrupts` port: the poll
 //! traversals and compute kernels make on the main thread (DESIGN.md §6.9,
-//! §9.3), and of its `Progress` port, which writes what they report to the
-//! open operation's frame (`activity`, §5.7). Traversal and compute
-//! bindings both use it; it depends only on `activity`.
+//! §9.3), and the compute pool whose jobs it polls for (`pool`); and of
+//! its `Progress` port, which writes what they report to the open
+//! operation's frame (`activity`, §5.7). Builds, traversal and compute
+//! bindings use it; it depends only on `activity`.
+
+mod pool;
+
+pub(crate) use pool::{define_compute_settings, workers};
 
 use warren_core::interrupts::{Cancelled, Interrupts};
 use warren_core::progress::Progress;

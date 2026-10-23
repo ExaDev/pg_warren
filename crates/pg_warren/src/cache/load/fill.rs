@@ -4,20 +4,22 @@
 
 use std::mem::size_of;
 
-use warren_core::graph::{DenseId, GraphError, IdPair, SEGMENT_HEADER_LEN};
+use warren_core::graph::{
+    check_id_bytes_header, DenseId, GraphError, IdPair, SegmentKind, SEGMENT_HEADER_LEN,
+};
 
 use super::plan::{Placed, Plan};
-use super::LoadError;
+use super::{CachedIds, LoadError};
 use crate::activity;
 use crate::cache::region::{typed, typed_mut, write_pair, Array, Entry, Unpadded};
 use crate::catalog::VersionId;
 use crate::segment::{SegmentError, SegmentStore};
-use crate::source::IdDatum;
+use crate::source::InPlaceId;
 
 /// Writes the header and every array of `plan` into `region`, which holds
 /// exactly its layout's bytes, reporting the bytes copied of the region's
 /// as the open operation's `loading` phase (DESIGN.md §5.7).
-pub(in crate::cache) fn fill<E: IdDatum>(
+pub(in crate::cache) fn fill<E: CachedIds>(
     segments: &mut impl SegmentStore,
     version: VersionId,
     plan: &Plan,
@@ -34,27 +36,19 @@ pub(in crate::cache) fn fill<E: IdDatum>(
     for placed in &plan.placed {
         let Some(entry) = layout.entry(placed.array) else { continue };
         let into = &mut region[entry.range()];
-        let count = match placed.array {
-            Array::IdPairs if placed.encoded_width != size_of::<IdPair<E>>() || !NATIVE_LE => {
-                let mut pairs = PairSink::<E>::new(into, placed.encoded_width);
-                copy_payload(segments, version, placed, &mut copied, &mut |data| pairs.push(data))?
-            }
-            _ => {
-                let mut at = 0;
-                copy_payload(segments, version, placed, &mut copied, &mut |data| {
-                    into[at..at + data.len()].copy_from_slice(data);
-                    at += data.len();
-                    Ok(())
-                })?
-            }
-        };
+        let mut sink = E::sink(placed, into);
+        let count = copy_payload(segments, version, placed, plan.encoding, &mut |data| {
+            copied.add(data.len());
+            sink(data)
+        })?;
+        drop(sink);
         if placed.array == Array::Tombstones && count != plan.id_space {
             let expected = plan.id_space;
             return Err(GraphError::TombstonesLength { expected, found: count }.into());
         }
         to_native(placed, into)?;
     }
-    by_dense::<E>(region, layout.entry(Array::IdPairs), layout.entry(Array::ByDense))?;
+    E::finish(region, layout)?;
     activity::done(total);
     Ok(())
 }
@@ -70,7 +64,7 @@ impl Copied {
 }
 
 /// Whether native layout is little-endian, the segments' byte order.
-const NATIVE_LE: bool = cfg!(target_endian = "little");
+pub(super) const NATIVE_LE: bool = cfg!(target_endian = "little");
 
 /// Puts a copied array of scalars in native byte order: nothing on a
 /// little-endian target.
@@ -83,21 +77,22 @@ fn to_native(placed: &Placed, bytes: &mut [u8]) -> Result<(), LoadError> {
         return Ok(());
     }
     match (placed.array, placed.encoded_width) {
-        (Array::IdPairs, _) => Ok(()),
+        (Array::IdPairs, _) | (_, 1) => Ok(()),
         (_, 4) => swap::<u32>(bytes, u32::from_le),
         _ => swap::<u64>(bytes, u64::from_le),
     }
 }
 
 /// Streams the payload of `placed`'s segment to `into`, after checking
-/// its chunks are numbered `0..n` and its header (kind, element width, and
-/// a payload of the planned length); returns the header's count. What
-/// `into` returns stops the read.
+/// its chunks are numbered `0..n` and its header (kind, element width, a
+/// payload of the planned length, and for `id_bytes` the database
+/// encoding, `encoding`); returns the header's count. What `into` returns
+/// stops the read.
 fn copy_payload(
     segments: &mut impl SegmentStore,
     version: VersionId,
     placed: &Placed,
-    copied: &mut Copied,
+    encoding: u8,
     into: &mut dyn FnMut(&[u8]) -> Result<(), LoadError>,
 ) -> Result<u64, LoadError> {
     let segment = placed.segment.as_str();
@@ -119,8 +114,11 @@ fn copy_payload(
             header[have..have + take].copy_from_slice(&data[..take]);
             (have, data) = (have + take, &data[take..]);
             if have == SEGMENT_HEADER_LEN {
-                let width = placed.encoded_width;
-                count = Some(placed.kind.check_header(&header, width, placed.payload)?);
+                let (width, payload) = (placed.encoded_width, placed.payload);
+                count = Some(match placed.kind {
+                    SegmentKind::IdBytes => check_id_bytes_header(&header, payload, encoding)?,
+                    kind => kind.check_header(&header, width, payload)?,
+                });
             }
         }
         received += data.len() as u64;
@@ -131,7 +129,6 @@ fn copy_payload(
         if data.is_empty() {
             return Ok(());
         }
-        copied.add(data.len());
         into(data).map_err(|error| {
             failed = Some(error);
             SegmentError::Graph(GraphError::SegmentTruncated)
@@ -152,7 +149,7 @@ fn copy_payload(
 /// Re-lays out encoded id-map pairs into `IdPair<E>`s as they stream in:
 /// an `int4` pair is 12 bytes encoded and 16 in memory, and on a
 /// big-endian target every pair is reordered.
-struct PairSink<'a, E> {
+pub(super) struct PairSink<'a, E> {
     slots: &'a mut [u8],
     encoded_width: usize,
     next: usize,
@@ -160,14 +157,14 @@ struct PairSink<'a, E> {
     pair: std::marker::PhantomData<E>,
 }
 
-impl<'a, E: IdDatum> PairSink<'a, E> {
-    fn new(slots: &'a mut [u8], encoded_width: usize) -> Self {
+impl<'a, E: InPlaceId> PairSink<'a, E> {
+    pub(super) fn new(slots: &'a mut [u8], encoded_width: usize) -> Self {
         let carry = Vec::with_capacity(encoded_width);
         Self { slots, encoded_width, next: 0, carry, pair: std::marker::PhantomData }
     }
 
     /// Takes the next bytes of the payload.
-    fn push(&mut self, mut data: &[u8]) -> Result<(), LoadError> {
+    pub(super) fn push(&mut self, mut data: &[u8]) -> Result<(), LoadError> {
         let width = self.encoded_width;
         if !self.carry.is_empty() {
             let take = data.len().min(width - self.carry.len());
@@ -207,7 +204,7 @@ impl<'a, E: IdDatum> PairSink<'a, E> {
 /// Builds the id map's second direction, each dense id's external id, from
 /// its pairs: an error if a dense id is outside the id space (a repeated
 /// one leaves another unset, which `IdMap::from_segments` refuses).
-fn by_dense<E: IdDatum>(
+pub(super) fn by_dense<E: InPlaceId>(
     region: &mut [u8],
     pairs: Option<&Entry>,
     by_dense: Option<&Entry>,

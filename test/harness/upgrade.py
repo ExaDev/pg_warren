@@ -325,7 +325,29 @@ def after_update(upgraded):
     expected = "upgrade:id upgrade_local:locality upgrade_new:id upgrade_typed:locality"
     if orders != [[expected]]:
         problems.append(f"node orders after compacting and creating are {orders}")
-    return problems + contraction_problems(upgraded) + quota_problems(upgraded)
+    return (problems + contraction_problems(upgraded) + text_problems(upgraded)
+            + quota_problems(upgraded))
+
+
+def text_problems(upgraded):
+    """Builds a graph with text node ids (0.6.0, DESIGN.md §5.7), which no
+    release before it could, on the updated catalog, and refreshes it."""
+    upgraded.execute(
+        "CREATE TABLE upgrade_iris AS SELECT 'https://example.org/' || id AS id FROM upgrade_nodes;"
+        " SELECT warren.create_graph('upgrade_text', 'SELECT id FROM upgrade_iris',"
+        " $q$SELECT 'https://example.org/' || src, ('https://example.org/' || dst)::varchar"
+        " FROM upgrade_edges$q$);"
+        " SELECT warren.refresh('upgrade_text');"
+        " DELETE FROM upgrade_iris WHERE id LIKE '%/1';"
+        " SELECT warren.refresh('upgrade_text')")
+    found = upgraded.query(
+        "SELECT (SELECT id_type::text FROM warren.graphs WHERE name = 'upgrade_text') || ':'"
+        " || (SELECT string_agg(n, ',' ORDER BY n)"
+        "     FROM warren.neighbours('upgrade_text', 'https://example.org/2'::text, 'both') n)")
+    expected = "text:https://example.org/3"
+    if found != [[expected]]:
+        return [f"a text graph after the update gives {found}, not {expected}"]
+    return []
 
 
 # A quota set on a graph from before the update (0.6.0, DESIGN.md §5.7):

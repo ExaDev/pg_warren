@@ -6,8 +6,8 @@ use std::mem::size_of;
 
 use super::build_memory::growth;
 use super::{
-    BuildBuffer, BuildMemory, DenseId, GraphError, IdKeys, IdMap, Permutation, RelationIndex,
-    Target, TargetWidth,
+    BuildBuffer, BuildMemory, DenseId, EdgeBatch, GraphError, IdKeys, IdMap, IndexedKeys,
+    Permutation, RelationIndex, Target, TargetWidth,
 };
 
 /// Edges in dense ids, as parallel arrays, in the order they were pushed.
@@ -301,6 +301,18 @@ impl<'m, K: IdKeys> EdgeIntake<'m, K> {
     ) -> Result<(), GraphError> {
         let source = source.and_then(|id| self.id_map.dense_id(id));
         let target = target.and_then(|id| self.id_map.dense_id(id));
+        self.push_dense(relation, source, target, weight)
+    }
+
+    /// Takes one edge row with its endpoints already mapped to dense ids:
+    /// `None` for a NULL, unknown or tombstoned one, which drops it.
+    fn push_dense(
+        &mut self,
+        relation: RelationIndex,
+        source: Option<DenseId>,
+        target: Option<DenseId>,
+        weight: f64,
+    ) -> Result<(), GraphError> {
         let (Some(source), Some(target)) = (source, target) else {
             self.dropped_edges += 1;
             return Ok(());
@@ -317,6 +329,20 @@ impl<'m, K: IdKeys> EdgeIntake<'m, K> {
     pub fn finish(mut self) -> (EdgeList, u64) {
         self.edges.shrink_to_fit();
         (self.edges, self.dropped_edges)
+    }
+}
+
+impl<K: IndexedKeys> EdgeIntake<'_, K> {
+    /// Takes every row of `batch`, in order, as [`EdgeIntake::push`] would,
+    /// then empties it. Endpoints are as [`EdgeBatch::map`] mapped them,
+    /// or looked up here if it was not mapped since its last row.
+    pub fn take(&mut self, batch: &mut EdgeBatch<K>) -> Result<(), GraphError> {
+        for row in 0..batch.len() {
+            let (relation, source, target, weight) = batch.row(row, self.id_map);
+            self.push_dense(relation, source, target, weight)?;
+        }
+        batch.clear();
+        Ok(())
     }
 }
 

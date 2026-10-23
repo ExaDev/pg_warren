@@ -1,5 +1,5 @@
-//! The segment layout of a version (DESIGN.md §5.3): `id_map`,
-//! `tombstones`, `rel_dict`, and the `offsets`/`targets`/`weights` of each
+//! The segment layout of a version (DESIGN.md §5.3): its id map's segments
+//! (`id_map`, or a text id map's three, §5.7), `tombstones`, `rel_dict`, and the `offsets`/`targets`/`weights` of each
 //! relation's forward and (if built) reverse CSR, plus the merged CSR's
 //! unless there is exactly one relation; and a contraction's `membership`
 //! (§6.6). `cache` reads the same layout.
@@ -7,22 +7,22 @@
 //! not the segment.
 
 use warren_core::graph::{
-    AnyCsr, BuildCharge, BuildMemory, BuiltCsr, ChunkSink, CsrSink, ExternalId, FixedKeys,
-    GraphCsr, IdMap, Membership, RelationCsr, RelationDictionary,
+    AnyCsr, BuildCharge, BuildMemory, BuiltCsr, ChunkSink, CsrSink, GraphCsr, IdMap, Membership,
+    RelationCsr, RelationDictionary,
 };
 
 use super::{
-    csr_segment, write_segment, CsrPart, CsrScope, Direction, SegmentError, SegmentStore, ID_MAP,
-    MEMBERSHIP, RELATION_DICTIONARY, TOMBSTONES,
+    csr_segment, write_segment, CsrPart, CsrScope, Direction, SegmentError, SegmentStore,
+    StoredIds, MEMBERSHIP, RELATION_DICTIONARY, TOMBSTONES,
 };
 use crate::catalog::VersionId;
 
 /// Writes every segment of a version in chunks of `chunk_size` bytes, and
 /// returns their total size.
-pub(crate) fn write_version<E: ExternalId>(
+pub(crate) fn write_version<K: StoredIds>(
     segments: &mut impl SegmentStore,
     version: VersionId,
-    id_map: &IdMap<FixedKeys<E>>,
+    id_map: &IdMap<K>,
     relations: &RelationDictionary,
     graph: &GraphCsr,
     chunk_size: usize,
@@ -83,14 +83,19 @@ impl<'s, S: SegmentStore> SegmentWriter<'s, S> {
         self.bytes
     }
 
-    /// The `id_map`, `tombstones` and `rel_dict` segments.
-    pub(crate) fn write_identity<E: ExternalId>(
+    /// The database encoding of the store it writes to.
+    pub(crate) fn encoding(&self) -> u8 {
+        self.segments.encoding()
+    }
+
+    /// The id map's segments, `tombstones` and `rel_dict`.
+    pub(crate) fn write_identity<K: StoredIds>(
         &mut self,
-        id_map: &IdMap<FixedKeys<E>>,
+        id_map: &IdMap<K>,
         relations: &RelationDictionary,
     ) -> Result<(), SegmentError> {
         let (chunk_size, memory) = (self.chunk_size, self.memory.clone());
-        self.chunked(ID_MAP, |each| id_map.encode_chunked(chunk_size, &memory, each))?;
+        K::write_id_map(id_map, self)?;
         let tombstones = id_map.tombstones();
         self.chunked(TOMBSTONES, |each| tombstones.encode_chunked(chunk_size, &memory, each))?;
         let _encoded_charge = memory.charge(relations.encoded_bytes())?;
@@ -134,6 +139,21 @@ impl<'s, S: SegmentStore> SegmentWriter<'s, S> {
             })?;
         }
         Ok(())
+    }
+
+    /// [`Self::chunked`], passing `encode` the chunk size and the memory to
+    /// charge its chunk buffer to.
+    pub(crate) fn chunked_with_memory(
+        &mut self,
+        name: &str,
+        encode: impl FnOnce(
+            usize,
+            &BuildMemory,
+            &mut ChunkSink<'_, SegmentError>,
+        ) -> Result<u64, SegmentError>,
+    ) -> Result<(), SegmentError> {
+        let (chunk_size, memory) = (self.chunk_size, self.memory.clone());
+        self.chunked(name, |each| encode(chunk_size, &memory, each))
     }
 
     /// Stores the chunks `encode` produces as segment `name`, numbered from

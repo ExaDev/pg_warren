@@ -13,13 +13,13 @@ use warren_core::compute::{
 };
 use warren_core::graph::RelationSelection;
 
-use super::settings::workers;
 use super::vectors::Vectors;
 use super::{entry, ComputeSqlError};
-use crate::cache::resolve;
+use crate::cache::{resolve, CachedIds};
+use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
 use crate::selection::relations;
-use crate::source::{with_id_type, IdDatum};
+use crate::source::with_id_type;
 
 /// Which product a call computes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,12 +47,12 @@ struct Arguments<'a> {
 
 /// `vector` filled with `monoid`'s identity, at `vector`'s dtype and
 /// shape.
-fn identity<E: IdDatum>(
+fn identity<E: CachedIds>(
     vectors: &Vectors<E>,
     like: &AnyVector,
     monoid: Monoid,
 ) -> Result<AnyVector, ComputeSqlError> {
-    fn filled<T: SemiringElement, E: IdDatum>(
+    fn filled<T: SemiringElement, E: CachedIds>(
         vectors: &Vectors<E>,
         width: usize,
         monoid: Monoid,
@@ -73,7 +73,7 @@ fn identity<E: IdDatum>(
 }
 
 /// A copy of `vector`, charged to the call's budget, to write into.
-fn copy<E: IdDatum>(
+fn copy<E: CachedIds>(
     vectors: &Vectors<E>,
     vector: &AnyVector,
 ) -> Result<AnyVector, ComputeSqlError> {
@@ -89,7 +89,7 @@ fn copy<E: IdDatum>(
 
 impl Arguments<'_> {
     /// Computes the product into `y`.
-    fn run<E: IdDatum>(
+    fn run<E: CachedIds>(
         &self,
         mut vectors: Vectors<E>,
         shape: Shape,

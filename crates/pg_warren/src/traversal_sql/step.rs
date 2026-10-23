@@ -9,6 +9,8 @@
 //! its filter's external ids as `text`, in their id type's output format;
 //! `warren.walk` reads them back with the graph's id type's input function.
 
+use std::borrow::Borrow;
+
 use pgrx::heap_tuple::PgHeapTuple;
 use pgrx::prelude::*;
 use pgrx::{AllocatedByRust, AnyArray, Array};
@@ -16,10 +18,9 @@ use warren_core::traversal::{HopRange, NodeSet, Step};
 
 use super::ids::parse;
 use super::{entry, TraversalSqlError};
-use crate::cache::LoadedVersion;
+use crate::cache::{CachedIds, LoadedVersion};
 use crate::external_ids::element_type;
 use crate::selection::{direction, relations};
-use crate::source::IdDatum;
 
 pgrx::extension_sql!(
     r#"
@@ -152,7 +153,7 @@ fn texts(array: &AnyArray) -> Result<Vec<Option<String>>, TraversalSqlError> {
 }
 
 /// The steps of a walk, read into `warren-core` steps over `loaded`.
-pub(crate) fn read_steps<E: IdDatum>(
+pub(crate) fn read_steps<E: CachedIds>(
     loaded: &LoadedVersion<E>,
     steps: &Array<'_, PgHeapTuple<'_, AllocatedByRust>>,
 ) -> Result<Vec<Step>, TraversalSqlError> {
@@ -163,7 +164,7 @@ pub(crate) fn read_steps<E: IdDatum>(
         .collect()
 }
 
-fn read_step<E: IdDatum>(
+fn read_step<E: CachedIds>(
     loaded: &LoadedVersion<E>,
     step: &PgHeapTuple<'_, AllocatedByRust>,
 ) -> Result<Step, TraversalSqlError> {
@@ -198,12 +199,12 @@ fn read_step<E: IdDatum>(
 }
 
 /// The live nodes among a step filter's external ids, as text.
-fn filter_set<E: IdDatum>(
+fn filter_set<E: CachedIds>(
     loaded: &LoadedVersion<E>,
     members: &[Option<String>],
 ) -> Result<NodeSet, TraversalSqlError> {
     let ids =
-        members.iter().flatten().map(|member| parse::<E>(member)).collect::<Result<Vec<E>, _>>()?;
-    let dense = ids.iter().filter_map(|id| loaded.id_map.dense_id(id));
+        members.iter().flatten().map(|member| parse::<E>(member)).collect::<Result<Vec<_>, _>>()?;
+    let dense = ids.iter().filter_map(|id| loaded.id_map.dense_id(id.borrow()));
     Ok(NodeSet::from_dense_ids(loaded.id_map.id_space(), dense)?)
 }

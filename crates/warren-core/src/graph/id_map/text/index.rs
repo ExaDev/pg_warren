@@ -59,6 +59,18 @@ impl<'m> TextIndex<'m> {
         Ok(Self { id_map, slots, hasher, _charge: charge })
     }
 
+    /// The heap bytes the index of `id_map` holds, known before it is
+    /// built: two slots a live node (at least one), at the target width
+    /// of its id space.
+    pub fn bytes_for(id_map: &IdMap<TextKeys>) -> u64 {
+        let slots = id_map.node_count().saturating_mul(2).max(1);
+        let width = match TargetWidth::for_id_space(id_map.id_space()) {
+            TargetWidth::U32 => size_of::<u32>(),
+            TargetWidth::U64 => size_of::<u64>(),
+        };
+        slots.saturating_mul(width as u64)
+    }
+
     /// The dense id of a live node, or `None` if `id` is no live node's.
     pub fn dense_id(&self, id: &[u8]) -> Option<DenseId> {
         let hash = self.hasher.hash_one(id);

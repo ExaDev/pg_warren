@@ -5,11 +5,11 @@ use pgrx::prelude::*;
 use warren_core::compute::{norm_diff, reduce_live, Norm, Reduction};
 use warren_core::version;
 
-use super::settings::workers;
 use super::vectors::Vectors;
 use super::{entry, ComputeSqlError};
 use crate::cache::resolve;
 use crate::catalog::compaction_between;
+use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
 use crate::source::with_id_type;
 

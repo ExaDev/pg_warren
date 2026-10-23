@@ -18,8 +18,8 @@ use super::matrix::{solver_options, OperatorArguments};
 use super::SpectralSqlError;
 use crate::access::entry;
 use crate::activity::Running;
-use crate::cache::resolve;
-use crate::source::{with_id_type, IdDatum};
+use crate::cache::{resolve, CachedIds};
+use crate::source::with_id_type;
 
 /// What a `distance` call compares, checked.
 enum Method<'a> {
@@ -42,7 +42,7 @@ impl Method<'_> {
     }
 
     /// The distance between the versions of `pair`.
-    fn measure<E: IdDatum>(&self, pair: &mut Pair<E>) -> Result<Value, SpectralSqlError> {
+    fn measure<E: CachedIds>(&self, pair: &mut Pair<E>) -> Result<Value, SpectralSqlError> {
         match self {
             Self::Edit => methods::edit(pair),
             Self::Degree => methods::degree(pair),

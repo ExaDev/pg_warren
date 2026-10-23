@@ -62,7 +62,9 @@ before changing code. Commands, toolchain setup and environment gotchas are in
      `shared_memory` → `cache`; `cache` →
      `external_ids`, `selection`; and `external_ids`, `selection`,
      `interrupts` → `traversal_sql`, `compute_sql` (siblings: neither depends
-     on the other); `compute_sql` → `spectral_sql`; `build`, `compute_sql`
+     on the other); `interrupts` → `build` (the build maps edge batches on
+     the compute pool, `interrupts::pool`); `compute_sql` → `spectral_sql`;
+     `build`, `compute_sql`
      → `community_sql`;
      `parallel_worker` → `cache`, `traversal_sql`; never the reverse.
    - Each module's `mod.rs` doc comment states its responsibility. Add a

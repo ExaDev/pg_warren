@@ -14,12 +14,13 @@ use super::super::eigen::{admit, eigenpairs};
 use super::super::matrix::OperatorArguments;
 use super::super::SpectralSqlError;
 use super::pair::Pair;
-use crate::compute_sql::{workers, Vectors};
+use crate::cache::CachedIds;
+use crate::compute_sql::Vectors;
+use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
-use crate::source::IdDatum;
 
 /// `edit`: per relation (matched by name) and overall.
-pub(super) fn edit<E: IdDatum>(pair: &Pair<E>) -> Result<Value, SpectralSqlError> {
+pub(super) fn edit<E: CachedIds>(pair: &Pair<E>) -> Result<Value, SpectralSqlError> {
     let distance = pair.edit_distance()?;
     let relations: Vec<Value> = distance
         .relations
@@ -41,7 +42,7 @@ fn change_json(change: &EdgeSetChange) -> Value {
 }
 
 /// `degree`: Wasserstein-1 and KS between the out-degree distributions.
-pub(super) fn degree<E: IdDatum>(pair: &Pair<E>) -> Result<Value, SpectralSqlError> {
+pub(super) fn degree<E: CachedIds>(pair: &Pair<E>) -> Result<Value, SpectralSqlError> {
     let (before, after) = (&pair.before, &pair.after);
     let pool = workers()?;
     let mut resources =
@@ -63,7 +64,7 @@ pub(super) enum Eigenvalues<'a> {
 }
 
 /// `spectral`: the distance between the two eigenvalue sequences.
-pub(super) fn spectral<E: IdDatum>(
+pub(super) fn spectral<E: CachedIds>(
     pair: &mut Pair<E>,
     operator: &OperatorArguments,
     eigenvalues: &Eigenvalues<'_>,
@@ -87,7 +88,7 @@ pub(super) fn spectral<E: IdDatum>(
 }
 
 /// One version's eigenvalues, and for a fresh solve whether it converged.
-fn values<E: IdDatum>(
+fn values<E: CachedIds>(
     vectors: &mut Vectors<E>,
     operator: &OperatorArguments,
     eigenvalues: &Eigenvalues<'_>,
@@ -116,7 +117,7 @@ fn values<E: IdDatum>(
 
 /// `subspace`: principal angles between the spans of `<prefix>_1..k` of
 /// each version.
-pub(super) fn subspace<E: IdDatum>(
+pub(super) fn subspace<E: CachedIds>(
     pair: &mut Pair<E>,
     prefix: &str,
     k: usize,
@@ -139,7 +140,7 @@ pub(super) fn subspace<E: IdDatum>(
 
 /// `embedding`: row-wise distances between matrix `x` of the earlier
 /// version and matrix `y` of the later.
-pub(super) fn embedding<E: IdDatum>(
+pub(super) fn embedding<E: CachedIds>(
     pair: &mut Pair<E>,
     x: &str,
     y: &str,

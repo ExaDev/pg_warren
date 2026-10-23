@@ -23,7 +23,7 @@ use super::SharedVersions;
 use crate::access::as_catalog_owner;
 use crate::activity::{count_read, count_refusal, Read, Refused, Running};
 use crate::cache::installation::installation;
-use crate::cache::load::{fill, fill_vector, plan, plan_vector, LoadedVersion};
+use crate::cache::load::{fill, fill_vector, plan, plan_vector, CachedIds, LoadedVersion};
 use crate::cache::open::Resolved;
 use crate::cache::statement::{pin_shared, retire_due, shared_notice_due};
 use crate::cache::CacheError;
@@ -31,7 +31,6 @@ use crate::catalog::VersionId;
 use crate::parallel_worker::cache_notice_raised;
 use crate::read_only::{latest_readable, read_one, read_one_latest};
 use crate::segment::SpiSegmentStore;
-use crate::source::IdDatum;
 use crate::vector::{SpiVectorStore, VectorId, VectorRecord};
 use warren_core::compute::AnyVector;
 
@@ -40,7 +39,7 @@ use warren_core::compute::AnyVector;
 /// unavailable, the version was created by this transaction (publishing it
 /// would share what no other backend can see, and what a rollback
 /// removes), or admission refused it.
-pub(crate) fn shared<E: IdDatum + Send + Sync>(
+pub(crate) fn shared<E: CachedIds>(
     resolved: &Resolved,
 ) -> Result<Option<Arc<LoadedVersion<E>>>, CacheError> {
     match port_for(resolved)? {
@@ -57,7 +56,7 @@ pub(crate) fn shared<E: IdDatum + Send + Sync>(
 /// where [`shared`] would load privately, and on a miss, which it leaves
 /// unclaimed: a two-version call takes what is shared first, so that its
 /// partner's load cannot evict it.
-pub(crate) fn shared_hit<E: IdDatum + Send + Sync>(
+pub(crate) fn shared_hit<E: CachedIds>(
     resolved: &Resolved,
 ) -> Result<Option<Arc<LoadedVersion<E>>>, CacheError> {
     let Ok(mut port) = port_for(resolved)? else {
@@ -279,7 +278,7 @@ pub(super) fn evict_through(mut port: Dsm, which: &dyn Fn(&Key) -> bool) {
 
 /// The version `resolved` names through `port`, whatever transaction
 /// created it, or `None` if admission refused it.
-pub(super) fn through<E: IdDatum + Send + Sync>(
+pub(super) fn through<E: CachedIds>(
     mut port: Dsm,
     resolved: &Resolved,
 ) -> Result<Option<Arc<LoadedVersion<E>>>, CacheError> {

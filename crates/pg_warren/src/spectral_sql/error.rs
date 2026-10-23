@@ -8,7 +8,8 @@ use warren_core::version::VersionError;
 use crate::access::SqlError;
 use crate::cache::CacheError;
 use crate::catalog::{CatalogError, VersionId};
-use crate::compute_sql::{compute_sqlstate, ComputeSqlError};
+use crate::compute_sql::ComputeSqlError;
+use crate::extension::compute_sqlstate;
 
 /// Why `eigen` or `distance` could not answer.
 #[derive(Debug, Error)]

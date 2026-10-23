@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 use std::time::Instant;
 
-use warren_core::graph::ExternalId;
+use warren_core::graph::IdKeys;
 
 use super::lru::Held;
 use super::LoadedVersion;
@@ -70,10 +70,10 @@ pub(crate) struct VersionCache {
 }
 
 impl VersionCache {
-    /// Version `version`, if it is cached with external id type `E` (the
+    /// Version `version`, if it is cached with key storage `E` (the
     /// lookup marks it used) or was evicted while a call still holds it
     /// (the lookup caches it again).
-    pub(crate) fn get<E: ExternalId + Send + Sync + 'static>(
+    pub(crate) fn get<E: IdKeys + Send + Sync + 'static>(
         &mut self,
         version: VersionId,
     ) -> Option<Arc<LoadedVersion<E>>> {
@@ -100,7 +100,7 @@ impl VersionCache {
 
     /// Caches `loaded` as `version` of graph `graph_id`, replacing any
     /// entry for it, and returns it shared.
-    pub(crate) fn insert<E: ExternalId + Send + Sync + 'static>(
+    pub(crate) fn insert<E: IdKeys + Send + Sync + 'static>(
         &mut self,
         graph_id: i32,
         version: VersionId,
@@ -112,7 +112,7 @@ impl VersionCache {
     }
 
     /// Caches `loaded` as `version` of graph `graph_id`.
-    fn cache<E: ExternalId + Send + Sync + 'static>(
+    fn cache<E: IdKeys + Send + Sync + 'static>(
         &mut self,
         graph_id: i32,
         version: VersionId,
@@ -276,10 +276,10 @@ mod tests {
     fn a_loaded_version_is_cached_and_shared() {
         let mut store = store();
         let mut cache = VersionCache::default();
-        assert!(cache.get::<i64>(1).is_none());
-        let loaded = cache.insert(10, 1, load::<i64>(&mut store, 1, true).unwrap());
+        assert!(cache.get::<FixedKeys<i64>>(1).is_none());
+        let loaded = cache.insert(10, 1, load::<FixedKeys<i64>>(&mut store, 1, true).unwrap());
         assert_eq!(loaded.id_map.dense_id(&2), Some(1));
-        let cached = cache.get::<i64>(1).unwrap();
+        let cached = cache.get::<FixedKeys<i64>>(1).unwrap();
         assert!(Arc::ptr_eq(&loaded, &cached));
     }
 
@@ -287,10 +287,10 @@ mod tests {
     fn a_lookup_marks_a_version_used_and_held_reports_its_bytes() {
         let mut store = store();
         let mut cache = VersionCache::default();
-        let first = cache.insert(10, 1, load::<i64>(&mut store, 1, true).unwrap());
-        cache.insert(10, 2, load::<i64>(&mut store, 2, true).unwrap());
+        let first = cache.insert(10, 1, load::<FixedKeys<i64>>(&mut store, 1, true).unwrap());
+        cache.insert(10, 2, load::<FixedKeys<i64>>(&mut store, 2, true).unwrap());
         std::thread::sleep(std::time::Duration::from_millis(1));
-        assert!(cache.get::<i64>(1).is_some());
+        assert!(cache.get::<FixedKeys<i64>>(1).is_some());
         let held = cache.held();
         assert_eq!(held.iter().map(|entry| entry.key).collect::<Vec<_>>(), [1, 2]);
         assert_eq!(held[0].bytes, first.bytes());
@@ -307,27 +307,27 @@ mod tests {
     fn an_evicted_version_a_call_still_holds_is_cached_again_without_a_reload() {
         let mut store = store();
         let mut cache = VersionCache::default();
-        let held = cache.insert(10, 1, load::<i64>(&mut store, 1, true).unwrap());
+        let held = cache.insert(10, 1, load::<FixedKeys<i64>>(&mut store, 1, true).unwrap());
         cache.remove(1);
         assert_eq!(cache.bytes(), 0, "the cache no longer counts it");
         assert_eq!(cache.held_by_calls_bytes(), held.bytes(), "counted while held");
-        let again = cache.get::<i64>(1).expect("the held copy");
+        let again = cache.get::<FixedKeys<i64>>(1).expect("the held copy");
         assert!(Arc::ptr_eq(&held, &again));
         assert_eq!(cached(&cache), [1], "cached again");
         assert_eq!(cache.bytes(), held.bytes(), "and counted again");
         cache.remove(1);
         drop((held, again));
         assert_eq!(cache.held_by_calls_bytes(), 0);
-        assert!(cache.get::<i64>(1).is_none(), "gone once no call holds it");
+        assert!(cache.get::<FixedKeys<i64>>(1).is_none(), "gone once no call holds it");
     }
 
     #[test]
     fn evicting_a_graph_except_some_versions_keeps_those() {
         let mut store = store();
         let mut cache = VersionCache::default();
-        cache.insert(10, 1, load::<i64>(&mut store, 1, true).unwrap());
-        cache.insert(10, 2, load::<i64>(&mut store, 2, true).unwrap());
-        cache.insert(11, 3, load::<[u8; 16]>(&mut store, 3, true).unwrap());
+        cache.insert(10, 1, load::<FixedKeys<i64>>(&mut store, 1, true).unwrap());
+        cache.insert(10, 2, load::<FixedKeys<i64>>(&mut store, 2, true).unwrap());
+        cache.insert(11, 3, load::<FixedKeys<[u8; 16]>>(&mut store, 3, true).unwrap());
         cache.evict_graph_except(10, |version| version == 2);
         assert_eq!(cached(&cache), [2, 3]);
     }
@@ -339,12 +339,15 @@ mod tests {
     fn evicting_a_graph_or_pruning_keeps_what_calls_hold_counted() {
         let mut store = store();
         let mut cache = VersionCache::default();
-        let one = cache.insert(10, 1, load::<i64>(&mut store, 1, true).unwrap());
-        cache.insert(10, 2, load::<i64>(&mut store, 2, true).unwrap());
+        let one = cache.insert(10, 1, load::<FixedKeys<i64>>(&mut store, 1, true).unwrap());
+        cache.insert(10, 2, load::<FixedKeys<i64>>(&mut store, 2, true).unwrap());
         assert_eq!(cache.evict_graph(10), 2);
         assert_eq!((cache.bytes(), cache.held_by_calls_bytes()), (0, one.bytes()));
-        assert!(Arc::ptr_eq(&one, &cache.get::<i64>(1).unwrap()), "shared, not reloaded");
-        assert!(cache.get::<i64>(2).is_none(), "no call held version 2");
+        assert!(
+            Arc::ptr_eq(&one, &cache.get::<FixedKeys<i64>>(1).unwrap()),
+            "shared, not reloaded"
+        );
+        assert!(cache.get::<FixedKeys<i64>>(2).is_none(), "no call held version 2");
         cache.retain(&[]);
         assert_eq!((cache.bytes(), cache.held_by_calls_bytes()), (0, one.bytes()), "pruned, held");
         drop(one);
@@ -357,12 +360,12 @@ mod tests {
     fn a_prune_checks_held_versions_and_keeps_those_that_exist() {
         let mut store = store();
         let mut cache = VersionCache::default();
-        let held = cache.insert(10, 1, load::<i64>(&mut store, 1, true).unwrap());
+        let held = cache.insert(10, 1, load::<FixedKeys<i64>>(&mut store, 1, true).unwrap());
         cache.remove(1);
-        cache.insert(10, 2, load::<i64>(&mut store, 2, true).unwrap());
+        cache.insert(10, 2, load::<FixedKeys<i64>>(&mut store, 2, true).unwrap());
         assert_eq!(cache.known_versions(), [1, 2]);
         cache.retain(&cache.known_versions());
-        let again = cache.get::<i64>(1).expect("the held copy, after the prune");
+        let again = cache.get::<FixedKeys<i64>>(1).expect("the held copy, after the prune");
         assert!(Arc::ptr_eq(&held, &again));
         assert_eq!(cached(&cache), [1, 2], "found again, so cached again");
         cache.remove(1);
@@ -374,8 +377,8 @@ mod tests {
     fn the_listing_shows_cached_versions_and_those_calls_hold() {
         let mut store = store();
         let mut cache = VersionCache::default();
-        let held = cache.insert(10, 1, load::<i64>(&mut store, 1, true).unwrap());
-        cache.insert(10, 2, load::<i64>(&mut store, 2, true).unwrap());
+        let held = cache.insert(10, 1, load::<FixedKeys<i64>>(&mut store, 1, true).unwrap());
+        cache.insert(10, 2, load::<FixedKeys<i64>>(&mut store, 2, true).unwrap());
         let mut listing = cache.listing();
         listing.sort_by_key(|listed| listed.version);
         let shown: Vec<_> = listing.iter().map(|l| (l.version, l.in_use)).collect();
@@ -392,17 +395,17 @@ mod tests {
     #[test]
     fn a_cached_version_is_found_only_with_its_id_type() {
         let mut cache = VersionCache::default();
-        cache.insert(11, 3, load::<[u8; 16]>(&mut store(), 3, true).unwrap());
-        assert!(cache.get::<[u8; 16]>(3).is_some());
-        assert!(cache.get::<i64>(3).is_none());
+        cache.insert(11, 3, load::<FixedKeys<[u8; 16]>>(&mut store(), 3, true).unwrap());
+        assert!(cache.get::<FixedKeys<[u8; 16]>>(3).is_some());
+        assert!(cache.get::<FixedKeys<i64>>(3).is_none());
     }
 
     #[test]
     fn versions_that_no_longer_exist_are_pruned() {
         let mut store = store();
         let mut cache = VersionCache::default();
-        cache.insert(10, 1, load::<i64>(&mut store, 1, true).unwrap());
-        cache.insert(10, 2, load::<i64>(&mut store, 2, true).unwrap());
+        cache.insert(10, 1, load::<FixedKeys<i64>>(&mut store, 1, true).unwrap());
+        cache.insert(10, 2, load::<FixedKeys<i64>>(&mut store, 2, true).unwrap());
         assert_eq!(cached(&cache), [1, 2]);
         cache.retain(&[2, 5]);
         assert_eq!(cached(&cache), [2]);
@@ -412,9 +415,9 @@ mod tests {
     fn evicting_a_graph_drops_only_its_versions_and_spares_holders() {
         let mut store = store();
         let mut cache = VersionCache::default();
-        let held = cache.insert(10, 1, load::<i64>(&mut store, 1, true).unwrap());
-        cache.insert(10, 2, load::<i64>(&mut store, 2, true).unwrap());
-        cache.insert(11, 3, load::<[u8; 16]>(&mut store, 3, true).unwrap());
+        let held = cache.insert(10, 1, load::<FixedKeys<i64>>(&mut store, 1, true).unwrap());
+        cache.insert(10, 2, load::<FixedKeys<i64>>(&mut store, 2, true).unwrap());
+        cache.insert(11, 3, load::<FixedKeys<[u8; 16]>>(&mut store, 3, true).unwrap());
         assert_eq!(cache.evict_graph(10), 2);
         assert_eq!(cached(&cache), [3]);
         assert_eq!(held.id_map.node_count(), 3, "a scan holding a version keeps it");

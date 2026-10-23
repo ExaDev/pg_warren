@@ -31,10 +31,9 @@ use super::slot::{Handle, Key, Process, Slot, State, Ticket};
 use super::unavailable::Unavailable;
 use super::{setting, Claimed, Found, SharedVersions};
 use crate::activity::{count_shared_evictions, record_mapped};
-use crate::cache::load::{read, read_vector, LoadError, LoadedVersion};
+use crate::cache::load::{read, read_vector, CachedIds, LoadError, LoadedVersion};
 use crate::cache::region::Region;
 use crate::catalog::VersionId;
-use crate::source::IdDatum;
 use crate::vector::VectorRecord;
 use placement::{Located, Shared, SLOTS};
 use segment::{Segment, SegmentRegion};
@@ -433,7 +432,7 @@ impl SharedVersions for Dsm {
     /// (`dsm_backend_shutdown`), so nothing here unmaps memory a call might
     /// still hold. A FATAL can exit while compute threads still read a
     /// mapping (from the main thread's poll, without unwinding); the
-    /// compute pool's own exit callback (`compute_sql::settings`) stops
+    /// compute pool's own exit callback (`interrupts::pool`) stops
     /// them first, so none reads after that detach.
     fn exit(&mut self) {
         with_backend(|backend| {
@@ -562,7 +561,7 @@ impl Attached {
     /// `E`: built over the segment's region (and validated) the first time,
     /// then kept with the mapping, which it keeps in use while a call holds
     /// it.
-    pub(crate) fn version<E: IdDatum + Send + Sync>(
+    pub(crate) fn version<E: CachedIds>(
         &self,
         version: VersionId,
     ) -> Result<Arc<LoadedVersion<E>>, LoadError> {
@@ -619,10 +618,7 @@ impl Loading {
 
     /// Reads the filled region as version `version`, validating it once,
     /// and keeps what it read for the published mapping.
-    pub(crate) fn validate<E: IdDatum + Send + Sync>(
-        &mut self,
-        version: VersionId,
-    ) -> Result<(), LoadError> {
+    pub(crate) fn validate<E: CachedIds>(&mut self, version: VersionId) -> Result<(), LoadError> {
         let (loaded, region) = read::<E>(Box::new(self.region), version)?;
         let loaded: Arc<LoadedVersion<E>> = Arc::new(loaded);
         self.held = Held { loaded: Some(loaded), region };

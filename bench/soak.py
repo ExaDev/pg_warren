@@ -39,7 +39,10 @@ they wrote (`--skip library`, `--skip communities`). Their levels keep
 their rows until VACUUM, after the run, so a run is cancelled if it
 would take the disk below `--disk-floor`; the edge table and the first
 version are dropped first. `--node-order locality` builds the graph with
-dense ids in locality order (DESIGN.md §14 item 22)."""
+dense ids in locality order (DESIGN.md §14 item 22). `--ids text` names
+node n by the IRI `https://example.org/resource/<n>` (DESIGN.md §5.7),
+in the node query, the edge query and every call; its results are
+`<case>-text.json`."""
 
 import argparse
 import datetime
@@ -120,6 +123,7 @@ class Case:
     table: bool  # read the edges from a table (else from the generator query)
     nodes: int = 10_000_000
     edges: int = 100_000_000
+    ids: str = "bigint"  # the id type: bigint node numbers, or text IRIs (`--ids text`)
 
     def scaled(self, factor):
         return replace(self, nodes=self.nodes // factor, edges=self.edges // factor)
@@ -131,6 +135,7 @@ CASES = {
     "b-unmerged": Case("b-unmerged", weighted=True, relations=5, store_merged=False, table=False),
 }
 SEED = 0.25
+IRI = "https://example.org/resource/"  # a text case's ids: this, then the node's number (DESIGN.md §5.7)
 # The deduplicated edges of every full-scale case with SEED (the parallel
 # edges the generator draws), recorded by the committed runs on PG 16: a
 # plan that evaluates the seeding subquery differently draws other edges.
@@ -146,10 +151,21 @@ def generator_sql(case, seed):
             f"FROM (SELECT setseed({seed}) OFFSET 0) seeded CROSS JOIN generate_series(1, {case.edges})")
 
 
+def external(ids, number):
+    """The external id of the node numbered by SQL expression `number`."""
+    return f"'{IRI}' || {number}" if ids == "text" else f"{number}::bigint"
+
+
+def node(ids, number):
+    """The external id of node `number`, as a typed SQL literal."""
+    return f"'{IRI}{number}'::text" if ids == "text" else f"{number}::bigint"
+
+
 def edge_query(case, seed, table=None):
-    """The graph's edge query: endpoints as `bigint` (an `int8` id map), the
-    relation and weight of a multi-relation case derived from them."""
-    columns = "src::bigint, dst::bigint"
+    """The graph's edge query: endpoints as `bigint` (an `int8` id map) or
+    as IRIs (a text id map), the relation and weight of a multi-relation
+    case derived from their numbers."""
+    columns = f"{external(case.ids, 'src')}, {external(case.ids, 'dst')}"
     if case.relations > 1 or case.weighted:
         columns += f", 'r' || ((src # dst) % {case.relations}), (1 + (src + 3 * dst) % 9)::float8"
     if case.table if table is None else table:
@@ -160,7 +176,8 @@ def edge_query(case, seed, table=None):
 
 def create_graph_sql(case, seed, name=GRAPH, table=None, node_order="id"):
     multi = case.relations > 1
-    return (f"SELECT warren.create_graph('{name}', 'SELECT id FROM generate_series(1::bigint, {case.nodes}) id', "
+    nodes = f"SELECT {external(case.ids, 'id').removesuffix('::bigint')} FROM generate_series(1::bigint, {case.nodes}) id"
+    return (f"SELECT warren.create_graph('{name}', $n${nodes}$n$, "
             f"$q${edge_query(case, seed, table)}$q$, weighted := {str(case.weighted).lower()}, "
             f"has_relations := {str(multi).lower()}, store_merged := {str(case.store_merged).lower()}, "
             f"node_order := '{node_order}')")
@@ -183,18 +200,20 @@ def _drop(graph, *names):
     return tuple(f"SELECT warren.drop_vector('{graph}', '{name}', NULL, true)" for name in names)
 
 
-def library_calls(graph, nodes):
+def library_calls(graph, nodes, ids="bigint"):
     """The library added in 0.4.0 (DESIGN.md §6.7, groups 1 and 2) on
-    `graph`, whose external ids are 1..`nodes`: the iterative ones for 20
+    `graph`, whose nodes are numbered 1..`nodes` (`ids` names their id
+    type, as `Case.ids`): the iterative ones for 20
     iterations, as `pagerank`, the sampled centralities from 16 sources.
     Left out: `label_propagation_majority` (tier 2, its votes counted in
     the executor: minutes an iteration and gigabytes of sort at this
     scale), and `topological_order` and `dag_longest_path` (the graph has
     cycles)."""
     g, out, drop = f"'{graph}'", "'library'", _drop(graph, "library")
-    pairs = (f"SELECT (1 + (i * 7919) % {nodes})::bigint, (1 + (i * 104729) % {nodes})::bigint "
+    pairs = (f"SELECT {external(ids, f'(1 + (i * 7919) % {nodes})')}, {external(ids, f'(1 + (i * 104729) % {nodes})')} "
              f"FROM generate_series(1::bigint, {PAIRS}) i")
-    mask = f"SELECT id, 1 FROM generate_series(1::bigint, {nodes}, 100) id"
+    mask = f"SELECT {external(ids, 'id').removesuffix('::bigint')}, 1 FROM generate_series(1::bigint, {nodes}, 100) id"
+    witness = f"NULL::{ids}"
     return (
         Call("eigenvector_centrality", f"SELECT warren.eigenvector_centrality({g}, {out}, tol := 0, max_iter := 20)",
              cleanup=drop),
@@ -206,16 +225,16 @@ def library_calls(graph, nodes):
         Call("core_number", f"SELECT warren.core_number({g}, {out}, persist := false)", cleanup=drop),
         Call("strong_components_vector", f"SELECT warren.strong_components_vector({g}, {out}, persist := false)",
              cleanup=drop),
-        Call("minimum_spanning_forest", f"SELECT count(*) FROM warren.minimum_spanning_forest({g}, NULL::bigint)"),
+        Call("minimum_spanning_forest", f"SELECT count(*) FROM warren.minimum_spanning_forest({g}, {witness})"),
         Call("betweenness_centrality",
              f"SELECT warren.betweenness_centrality({g}, {out}, k := {SOURCES}, persist := false)", cleanup=drop),
         Call("closeness_centrality",
              f"SELECT warren.closeness_centrality({g}, {out}, k := {SOURCES}, persist := false)", cleanup=drop),
         Call("harmonic_centrality",
              f"SELECT warren.harmonic_centrality({g}, {out}, k := {SOURCES}, persist := false)", cleanup=drop),
-        Call("most_similar", f"SELECT count(*) FROM warren.most_similar({g}, 1::bigint)"),
-        Call("similarity", f"SELECT count(*) FROM warren.similarity({g}, $p${pairs}$p$, NULL::bigint)"),
-        Call("similar_pairs", f"SELECT count(*) FROM warren.similar_pairs({g}, NULL::bigint, nodes := 'library_mask')",
+        Call("most_similar", f"SELECT count(*) FROM warren.most_similar({g}, {node(ids, 1)})"),
+        Call("similarity", f"SELECT count(*) FROM warren.similarity({g}, $p${pairs}$p$, {witness})"),
+        Call("similar_pairs", f"SELECT count(*) FROM warren.similar_pairs({g}, {witness}, nodes := 'library_mask')",
              setup=(f"SELECT warren.vector_from_query({g}, 'library_mask', $p${mask}$p$, persist := false)",),
              cleanup=_drop(graph, "library_mask")),
     )
@@ -236,10 +255,10 @@ def community_calls(graph):
                  for name in ("louvain", "leiden"))
 
 
-def community_stats_sql(graph, name):
+def community_stats_sql(graph, name, ids="bigint"):
     """`levels|communities` of a community run's result."""
     return (f"SELECT (SELECT count(*) {_levels(graph, name)}) || '|' || "
-            f"(SELECT count(DISTINCT value) FROM warren.vector_values('{graph}', '{name}', NULL::bigint))")
+            f"(SELECT count(DISTINCT value) FROM warren.vector_values('{graph}', '{name}', NULL::{ids}))")
 
 
 # The bytes of the catalog's segment and vector chunk tables, and the WAL
@@ -272,12 +291,19 @@ def remove_sql(case):
 def segment_estimate(case):
     """The stored bytes of a version (DESIGN.md §5.3): per direction, each
     CSR's offsets and each copy of the edges' targets (u32) and weights; the
-    merged CSR is a second copy when stored with several relations."""
+    merged CSR is a second copy when stored with several relations. The id
+    map is 16 bytes a node for `bigint` ids (pairs, and the dense-id
+    direction), and for IRIs their bytes, their offsets and their order."""
     csrs = case.relations + (1 if case.relations > 1 and case.store_merged else 0)
     copies = 2 if case.relations > 1 and case.store_merged else 1
     per_edge = 4 + (8 if case.weighted else 0)
     direction = 8 * (case.nodes + 1) * csrs + per_edge * case.edges * copies
-    return 2 * direction + 16 * case.nodes + case.nodes // 8
+    if case.ids == "text":
+        digits = sum(d * (min(case.nodes, 10 ** d - 1) - 10 ** (d - 1) + 1) for d in range(1, len(str(case.nodes)) + 1))
+        id_map = len(IRI) * case.nodes + digits + 8 * (case.nodes + 1) + 4 * case.nodes
+    else:
+        id_map = 16 * case.nodes
+    return 2 * direction + id_map + case.nodes // 8
 
 
 def memory_status(text):
@@ -440,8 +466,9 @@ class GeneratorDrift(RuntimeError):
 
 def check_edges(case, stats):
     """Fails unless a full-scale case's first version has the deduplicated
-    edges every committed run had (scaled cases have no recorded value)."""
-    if case != CASES[case.name]:
+    edges every committed run had (scaled cases have no recorded value),
+    which its edges have whatever their ids."""
+    if replace(case, ids="bigint") != CASES[case.name]:
         return
     found, edges = stats["deduplicated_edges"], stats["edge_count"]
     if (found, edges) != (DEDUPLICATED_EDGES, case.edges - DEDUPLICATED_EDGES):
@@ -638,7 +665,7 @@ class Soak:
         admin = self.cluster.database()
         admin.execute("DROP DATABASE IF EXISTS soak")
         admin.execute("CREATE DATABASE soak")
-        result = {"provenance": self.provenance, "case": case.name, "nodes": case.nodes, "edges": case.edges, "weighted": case.weighted,
+        result = {"provenance": self.provenance, "case": case.name, "nodes": case.nodes, "edges": case.edges, "weighted": case.weighted, "ids": case.ids,
                   "relations": case.relations, "store_merged": case.store_merged, "threads": self.options.threads,
                   "node_order": self.options.node_order, "eigen_max_iter": self.options.eigen_max_iter,
                   "statement_timeout": self.options.statement_timeout, "skip": self.options.skip, "planned_stages": planned_stages(case, self.options),
@@ -690,9 +717,9 @@ class Soak:
                 # The first pass's prewarm is then the cold load into the shared cache.
                 s.run(f"SELECT warren.evict('{GRAPH}')")
         result["cache_memory_bytes"] = cap_bytes(self.options.cache_memory_kb)
-        self._queries(result, "default", cap=self.first_cap())
+        self._queries(result, case, "default", cap=self.first_cap())
         if needs_raised_pass(result, v1["id_space"]):
-            self._queries(result, "raised", cap=self.options.raised_cache_memory)
+            self._queries(result, case, "raised", cap=self.options.raised_cache_memory)
         if self.options.eigen and self.options.eigen_steps and case.name == "a":
             self._eigen_steps(case, result)
         if "second-version" in self.options.skip:
@@ -746,7 +773,7 @@ class Soak:
         kb = self.options.cache_memory_kb
         return None if kb is None else f"{kb}kB"
 
-    def _queries(self, result, label, cap):
+    def _queries(self, result, case, label, cap):
         """The read workloads in one backend, from a cold cache. A version
         that cannot fit the cap reloads on every statement, so latencies repeat less."""
         reloads = label == "default" and (result["cached_bytes"] or 0) > cap_bytes(self.options.cache_memory_kb)
@@ -761,13 +788,14 @@ class Soak:
             # After the SETs, and after a call loaded the library: before
             # that pg_settings does not list warren.*.
             result.setdefault("settings", {})[label] = s.run(SETTINGS_SQL)["rows"]
-            stage("bfs depth 6", f"SELECT count(*) FROM warren.bfs('{GRAPH}', ARRAY[1::bigint], 6)", 3, True)
-            stage("bfs depth 6 count", f"SELECT count(*) FROM warren.bfs('{GRAPH}', ARRAY[1::bigint], 6)")
-            stage("neighbours", f"SELECT count(*) FROM warren.neighbours('{GRAPH}', 1::bigint)", 3 if reloads else 20, True)
-            stage("reachable_set", f"SELECT count(*) FROM warren.reachable_set('{GRAPH}', ARRAY[1::bigint])")
+            first = node(case.ids, 1)
+            stage("bfs depth 6", f"SELECT count(*) FROM warren.bfs('{GRAPH}', ARRAY[{first}], 6)", 3, True)
+            stage("bfs depth 6 count", f"SELECT count(*) FROM warren.bfs('{GRAPH}', ARRAY[{first}], 6)")
+            stage("neighbours", f"SELECT count(*) FROM warren.neighbours('{GRAPH}', {first})", 3 if reloads else 20, True)
+            stage("reachable_set", f"SELECT count(*) FROM warren.reachable_set('{GRAPH}', ARRAY[{first}])")
             self.stage(result, f"{label}: reachable_set stats", {"stats": s.run("SELECT warren.last_stats()")["rows"]})
             stage("components", f"SELECT count(*) FROM (SELECT component_id FROM warren.components('{GRAPH}', "
-                                "NULL::bigint) GROUP BY 1) c")
+                                f"NULL::{case.ids}) GROUP BY 1) c")
             stage("pagerank", pagerank_sql(GRAPH))
             # From a cold cache: one statement, so it loads the version once
             # even when the version and its scratch exceed the cap (§5.5).
@@ -788,7 +816,7 @@ class Soak:
         if "library" not in self.options.skip:
             with self.session() as s:
                 self._configure(s, self.first_cap())
-                for call in library_calls(GRAPH, case.nodes):
+                for call in library_calls(GRAPH, case.nodes, case.ids):
                     self._call(s, result, "library", call)
         if "communities" in self.options.skip:
             return
@@ -799,7 +827,7 @@ class Soak:
                 stage = f"communities: {call.name}"
                 self.stage(result, stage, self._guarded(s, call.sql))
                 if "errors" not in result["stages"][stage]:
-                    self.stage(result, f"{stage} stats", {"rows": s.run(community_stats_sql(GRAPH, call.name))["rows"]})
+                    self.stage(result, f"{stage} stats", {"rows": s.run(community_stats_sql(GRAPH, call.name, case.ids))["rows"]})
                 after, free_after = s.run(DISK_SQL)["rows"][0].split("|"), self.free_disk()
                 for sql in call.cleanup:
                     s.run(sql)
@@ -1034,6 +1062,8 @@ def main(argv):
                          help="preload pg_warren and set warren.shared_cache_memory to this (e.g. 8GB); "
                               "default: the server's default, private on PG 15 and 16")
     options.add_argument("--statement-timeout", help="statement_timeout of the read workloads, e.g. 15min")
+    options.add_argument("--ids", choices=["bigint", "text"], default="bigint",
+                         help="the node ids: bigint numbers, or text IRIs (DESIGN.md §5.7)")
     options.add_argument("--node-order", choices=["id", "locality"], default="id",
                          help="create_graph's node_order: how the first build orders dense ids")
     options.add_argument("--skip", action="append", default=[], choices=["second-version", "library", "communities"],
@@ -1056,11 +1086,12 @@ def main(argv):
                  settings=cluster_settings(args.shared_cache_memory)) as cluster:
         soak = Soak(cluster, args, found)
         for name in args.cases:
-            case = CASES[name].scaled(args.scale) if args.scale > 1 else CASES[name]
+            case = replace(CASES[name], ids=args.ids)
+            case = case.scaled(args.scale) if args.scale > 1 else case
             print(f"{name}: {case.nodes} nodes, {case.edges} edges, free disk {size(free_disk(args.parent))}",
                   flush=True)
             result = soak.run(case)
-            suffix = f"-scale{args.scale}" if args.scale > 1 else ""
+            suffix = (f"-scale{args.scale}" if args.scale > 1 else "") + ("-text" if args.ids == "text" else "")
             out = args.results / f"{name}{suffix}{args.label}.json"
             out.write_text(json.dumps(result, indent=1) + "\n")
             for verdict in result["verdicts"]:

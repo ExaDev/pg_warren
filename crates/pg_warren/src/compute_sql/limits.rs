@@ -10,8 +10,8 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::compute_sql::settings::workers;
     use crate::fixture::{failure, refresh, ring};
+    use crate::interrupts::workers;
     use crate::interrupts::PostgresInterrupts;
     use warren_core::interrupts::{Cancelled, Interrupts};
 

@@ -155,7 +155,10 @@ pub enum GraphError {
     },
     /// A text id map's bytes must be in the database's encoding (DESIGN.md
     /// §5.7).
-    #[error("text ids are in encoding {found}, expected the database's {expected}")]
+    #[error(
+        "text ids are in encoding {found}, not the database's ({expected}): create the graph \
+         again to read its ids in this encoding"
+    )]
     IdEncoding {
         /// The database's encoding.
         expected: u8,

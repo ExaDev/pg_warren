@@ -5,20 +5,19 @@
 use std::mem::size_of;
 
 use warren_core::graph::{
-    DenseId, GraphError, IdPair, RelationDictionary, SegmentKind, TargetWidth, SEGMENT_HEADER_LEN,
+    GraphError, RelationDictionary, SegmentKind, TargetWidth, SEGMENT_HEADER_LEN,
 };
 
-use super::LoadError;
+use super::{CachedIds, LoadError};
 use crate::cache::region::{Array, RegionLayout};
 use crate::catalog::VersionId;
 use crate::segment::{
-    csr_segment, read_segment, CsrPart, CsrScope, Direction, SegmentError, SegmentStore, ID_MAP,
+    csr_segment, read_segment, CsrPart, CsrScope, Direction, SegmentError, SegmentStore,
     RELATION_DICTIONARY, TOMBSTONES,
 };
-use crate::source::IdDatum;
 
 /// A segment whose payload is copied into an array of the region.
-pub(super) struct Placed {
+pub(crate) struct Placed {
     /// The array it fills.
     pub(super) array: Array,
     /// The segment's name.
@@ -41,6 +40,8 @@ pub(in crate::cache) struct Plan {
     pub(super) relations: Vec<u8>,
     /// The id space.
     pub(super) id_space: u64,
+    /// The database encoding, which an `id_bytes` header must record.
+    pub(super) encoding: u8,
 }
 
 impl Plan {
@@ -50,21 +51,22 @@ impl Plan {
     }
 }
 
-/// The plan of `version`'s region: the id map's pairs and second
-/// direction, the tombstones and relation dictionary, then each
+/// The plan of `version`'s region: the id map's arrays (a fixed type's
+/// pairs and second direction, or a text id map's three), the tombstones
+/// and relation dictionary, then each
 /// relation's CSRs and the merged CSR's, if stored (it must be where the
 /// graph stores it, `store_merged`, or has no relations), each forward
 /// and, if stored, reverse.
-pub(in crate::cache) fn plan<E: IdDatum>(
+pub(in crate::cache) fn plan<E: CachedIds>(
     segments: &mut impl SegmentStore,
     version: VersionId,
     store_merged: bool,
 ) -> Result<Plan, LoadError> {
     let relations = read_segment(segments, version, RELATION_DICTIONARY)?;
     let relation_count = RelationDictionary::decode(&relations)?.len();
+    let encoding = segments.encoding();
     let mut planner = Planner { segments, version, placed: Vec::new() };
-    let pair = E::WIDTH + size_of::<DenseId>();
-    let id_space = planner.require(Array::IdPairs, ID_MAP, SegmentKind::IdMap, pair)? / pair as u64;
+    let id_space = E::place(&mut planner)?;
     planner.require(Array::Tombstones, TOMBSTONES, SegmentKind::Tombstones, size_of::<u64>())?;
     let target = match TargetWidth::for_id_space(id_space) {
         TargetWidth::U32 => size_of::<u32>(),
@@ -85,19 +87,12 @@ pub(in crate::cache) fn plan<E: IdDatum>(
     let id_space_elements = usize::try_from(id_space).map_err(|_| GraphError::IdSpaceTooLarge)?;
     let mut arrays = Vec::with_capacity(placed.len() + 2);
     for placed in &placed {
-        let width = match placed.array {
-            Array::IdPairs => size_of::<IdPair<E>>(),
-            _ => placed.encoded_width,
-        };
         let elements = elements(placed.payload, placed.encoded_width);
-        arrays.push((placed.array, width, elements));
-        if placed.array == Array::IdPairs {
-            arrays.push((Array::ByDense, size_of::<E>(), id_space_elements));
-        }
+        arrays.extend(E::arrays(placed, elements, id_space_elements));
     }
     arrays.push((Array::RelationDictionary, 1, relations.len()));
     let layout = RegionLayout::plan(version, &arrays)?;
-    Ok(Plan { layout, placed, relations, id_space })
+    Ok(Plan { layout, placed, relations, id_space, encoding })
 }
 
 /// The whole elements of `width` bytes in `payload` bytes: a payload that
@@ -107,7 +102,7 @@ fn elements(payload: u64, width: usize) -> usize {
 }
 
 /// Finds the segments of a version and their sizes.
-struct Planner<'s, S> {
+pub(crate) struct Planner<'s, S> {
     segments: &'s mut S,
     version: VersionId,
     placed: Vec<Placed>,
@@ -115,7 +110,7 @@ struct Planner<'s, S> {
 
 impl<S: SegmentStore> Planner<'_, S> {
     /// Places segment `name`, which must exist; returns its payload bytes.
-    fn require(
+    pub(super) fn require(
         &mut self,
         array: Array,
         name: &str,
