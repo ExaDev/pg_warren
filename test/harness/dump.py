@@ -317,3 +317,59 @@ def check_trusted(cluster, directory):
     if rebuilt != expected:
         failures.append(f"trusted: the rebuilt graph answers {rebuilt}, not {expected}")
     return failures
+
+
+# A text graph over ids that convert to any encoding, read back in the
+# restored database: refused there if that database's encoding is not the
+# one its segments record (DESIGN.md §5.7, §14 item 42).
+ENCODED_SEED = """
+    CREATE TABLE public.ascii_nodes AS SELECT 'node-' || n AS id FROM generate_series(1, 4) n;
+    CREATE TABLE public.ascii_edges AS SELECT 'node-1' AS src, 'node-2' AS dst;
+    SELECT warren.create_graph('ascii', 'SELECT id FROM public.ascii_nodes',
+                               'SELECT src, dst FROM public.ascii_edges');
+    SELECT warren.refresh('ascii');
+"""
+ENCODING_REFUSED = """
+    DO $$
+    DECLARE
+        message text;
+    BEGIN
+        PERFORM warren.degree('ascii', 'node-1'::text);
+        RAISE EXCEPTION 'a UTF8 text graph was read in a LATIN1 database';
+    EXCEPTION WHEN object_not_in_prerequisite_state THEN
+        GET STACKED DIAGNOSTICS message = MESSAGE_TEXT;
+        IF message NOT LIKE '%encoding%' THEN
+            RAISE EXCEPTION 'refused for another reason: %', message;
+        END IF;
+    END $$;
+"""
+
+
+def check_cross_encoding(cluster, directory):
+    """Checks that a text graph dumped from a UTF8 database and restored
+    into a LATIN1 one is refused there (55000), and still read in a UTF8
+    one; returns the failures."""
+    admin = cluster.database()
+    admin.execute("CREATE DATABASE dump_utf8 ENCODING 'UTF8' TEMPLATE template0 LOCALE 'C'")
+    source = cluster.database("dump_utf8")
+    source.execute("CREATE EXTENSION pg_warren")
+    source.execute(ENCODED_SEED)
+    path = directory / "encoded.custom"
+    error = _run(dump_command(cluster, "dump_utf8", path, "-Fc"))
+    if error:
+        return [f"cross-encoding dump: {error}"]
+    failures = []
+    for name, encoding in (("dump_latin1", "LATIN1"), ("dump_utf8_again", "UTF8")):
+        admin.execute(f"CREATE DATABASE {name} ENCODING '{encoding}' TEMPLATE template0 LOCALE 'C'")
+        error = _run(restore_command(cluster, name, path, True))
+        if error:
+            failures.append(f"{encoding} restore: {error}")
+            continue
+        restored = cluster.database(name)
+        if encoding == "LATIN1":
+            error = _run(restored.command("-c", ENCODING_REFUSED))
+            if error:
+                failures.append(f"LATIN1: {error}")
+        elif (found := restored.query("SELECT warren.degree('ascii', 'node-1'::text)")) != [["1"]]:
+            failures.append(f"UTF8: the restored text graph gives degree {found}, not 1")
+    return failures
