@@ -101,13 +101,18 @@ impl<K: IndexedKeys> EdgeBatch<K> {
         + 2 * K::Endpoints::ROW_BYTES;
 
     /// An empty batch with room for `rows` rows (but not their text ids'
-    /// bytes), charged to `memory`.
-    pub fn with_capacity(memory: &BuildMemory, rows: usize) -> Result<Self, GraphError> {
+    /// bytes), charged to `memory`. Emptied, it keeps room for up to
+    /// `id_bytes` of text ids, half for each endpoint, and frees the rest.
+    pub fn with_capacity(
+        memory: &BuildMemory,
+        rows: usize,
+        id_bytes: u64,
+    ) -> Result<Self, GraphError> {
         Ok(Self {
             relations: BuildBuffer::with_capacity(memory, rows)?,
             weights: BuildBuffer::with_capacity(memory, rows)?,
-            sources: K::Endpoints::with_capacity(memory, rows)?,
-            targets: K::Endpoints::with_capacity(memory, rows)?,
+            sources: K::Endpoints::with_capacity(memory, rows, id_bytes / 2)?,
+            targets: K::Endpoints::with_capacity(memory, rows, id_bytes / 2)?,
             mapped: BuildBuffer::with_capacity(memory, rows)?,
             is_mapped: false,
         })
@@ -139,6 +144,12 @@ impl<K: IndexedKeys> EdgeBatch<K> {
     pub fn bytes(&self) -> u64 {
         let columns = [self.relations.bytes(), self.weights.bytes(), self.mapped.bytes()];
         columns.iter().sum::<u64>() + self.sources.bytes() + self.targets.bytes()
+    }
+
+    /// The bytes of the text ids it holds, capacity excluded: 0 for a
+    /// fixed type.
+    pub fn len_bytes(&self) -> u64 {
+        self.sources.len_bytes() + self.targets.len_bytes()
     }
 
     /// Whether it holds no rows.
@@ -192,7 +203,8 @@ impl<K: IndexedKeys> EdgeBatch<K> {
         (self.relations[row], source, target, self.weights[row])
     }
 
-    /// Empties it, keeping its capacity.
+    /// Empties it, keeping its capacity, except text ids' room past what
+    /// it was made to keep.
     pub(crate) fn clear(&mut self) {
         self.relations.truncate(0);
         self.weights.truncate(0);

@@ -56,7 +56,7 @@ fn batched<K: IndexedKeys>(
     let relation = RelationDictionary::new().intern("r").unwrap();
     let index = K::index(id_map, &memory).unwrap();
     let mut intake = intake(id_map, directed);
-    let mut batch = EdgeBatch::<K>::with_capacity(&memory, size).unwrap();
+    let mut batch = EdgeBatch::<K>::with_capacity(&memory, size, u64::MAX).unwrap();
     for chunk in rows.chunks(size.max(1)) {
         for &(source, target, weight) in chunk {
             batch.push(relation, source, target, weight).unwrap();
@@ -131,7 +131,7 @@ fn a_cancelled_map_stops() {
     let memory = BuildMemory::unlimited();
     let index = TextKeys::index(&id_map, &memory).unwrap();
     let relation = RelationDictionary::new().intern("r").unwrap();
-    let mut batch = EdgeBatch::<TextKeys>::with_capacity(&memory, 0).unwrap();
+    let mut batch = EdgeBatch::<TextKeys>::with_capacity(&memory, 0, u64::MAX).unwrap();
     batch.push(relation, Some(b"a"), Some(b"b"), 1.0).unwrap();
     let cancellation = Cancellation::new();
     cancellation.cancel();
@@ -142,34 +142,54 @@ fn a_cancelled_map_stops() {
 fn a_batch_is_charged_to_its_memory() {
     let memory = BuildMemory::new(1 << 20);
     let relation = RelationDictionary::new().intern("r").unwrap();
-    let mut batch = EdgeBatch::<TextKeys>::with_capacity(&memory, 0).unwrap();
+    let mut batch = EdgeBatch::<TextKeys>::with_capacity(&memory, 0, u64::MAX).unwrap();
     batch.push(relation, Some(&[7; 1000]), None, 1.0).unwrap();
     assert!(memory.in_use() >= 1000, "{}", memory.in_use());
     assert_eq!(batch.bytes(), memory.in_use(), "it says what it holds");
     batch.clear();
     assert_eq!(batch.bytes(), memory.in_use(), "and keeps it once cleared");
-    let mut small = EdgeBatch::<TextKeys>::with_capacity(&BuildMemory::new(100), 0).unwrap();
+    let mut small = EdgeBatch::<TextKeys>::with_capacity(&BuildMemory::new(100), 0, 0).unwrap();
     assert!(small.push(relation, Some(&[7; 1000]), None, 1.0).is_err());
+}
+
+#[test]
+fn a_cleared_batch_frees_text_room_past_what_it_keeps() {
+    let memory = BuildMemory::new(1 << 24);
+    let relation = RelationDictionary::new().intern("r").unwrap();
+    let mut batch = EdgeBatch::<TextKeys>::with_capacity(&memory, 4, 2048).unwrap();
+    batch.push(relation, Some(b"abc"), None, 1.0).unwrap();
+    batch.push(relation, Some(b"de"), Some(b"f"), 1.0).unwrap();
+    assert_eq!(batch.len_bytes(), 6, "the ids' bytes, not their room");
+    let kept = batch.bytes();
+    batch.clear();
+    assert_eq!((batch.len_bytes(), batch.bytes()), (0, kept), "room within what it keeps stays");
+    batch.push(relation, Some(&[7; 5000]), None, 1.0).unwrap();
+    batch.clear();
+    assert_eq!(batch.bytes(), memory.in_use());
+    assert!(batch.bytes() < kept, "a long id's room is freed: {}", batch.bytes());
+    let mut fixed = EdgeBatch::<FixedKeys<i64>>::with_capacity(&memory, 4, 0).unwrap();
+    fixed.push(relation, Some(&1), Some(&2), 1.0).unwrap();
+    assert_eq!(fixed.len_bytes(), 0);
 }
 
 #[test]
 fn a_batch_has_room_for_its_rows_up_front() {
     let memory = BuildMemory::new(1 << 20);
     let relation = RelationDictionary::new().intern("r").unwrap();
-    let mut batch = EdgeBatch::<FixedKeys<i64>>::with_capacity(&memory, 10).unwrap();
+    let mut batch = EdgeBatch::<FixedKeys<i64>>::with_capacity(&memory, 10, 0).unwrap();
     let row = EdgeBatch::<FixedKeys<i64>>::ROW_BYTES;
     assert_eq!(memory.in_use(), 10 * row);
     for at in 0..10 {
         batch.push(relation, Some(&at), Some(&at), 1.0).unwrap();
     }
     assert_eq!(memory.in_use(), 10 * row, "its rows fit");
-    let text = EdgeBatch::<TextKeys>::with_capacity(&memory, 10).unwrap();
+    let text = EdgeBatch::<TextKeys>::with_capacity(&memory, 10, 0).unwrap();
     assert_eq!(
         text.bytes(),
         10 * EdgeBatch::<TextKeys>::ROW_BYTES,
         "a text id's bytes grow as they come"
     );
-    let too_many = EdgeBatch::<FixedKeys<i64>>::with_capacity(&BuildMemory::new(row * 9), 10);
+    let too_many = EdgeBatch::<FixedKeys<i64>>::with_capacity(&BuildMemory::new(row * 9), 10, 0);
     assert!(matches!(too_many, Err(GraphError::BuildMemoryLimit { .. })));
 }
 

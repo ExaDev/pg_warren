@@ -193,19 +193,15 @@ fn edges<E: IndexedKeys>(
     };
     let intake = intake.within(memory);
     let index = E::index(id_map, memory)?;
-    let batch_bytes = memory.limit() / BATCH_SHARE;
-    let batch_rows = usize::try_from(batch_bytes / EdgeBatch::<E>::ROW_BYTES)
-        .unwrap_or(BATCH_ROWS)
-        .clamp(1, BATCH_ROWS);
+    let size = BatchSize::within::<E>(memory.limit());
     let (workers, interrupts) = pool;
     let mut collector = EdgeCollector {
         graph,
         implicit,
         relations,
         intake,
-        batch: EdgeBatch::with_capacity(memory, batch_rows)?,
-        batch_rows,
-        batch_bytes,
+        batch: EdgeBatch::with_capacity(memory, size.rows, size.id_bytes)?,
+        size,
         index: &index,
         workers,
         interrupts,
@@ -246,6 +242,35 @@ impl Relations {
     }
 }
 
+/// How far a build's batch of edge rows grows before it is mapped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BatchSize {
+    /// The rows the batch has room for.
+    rows: usize,
+    /// The bytes of text ids past which the batch is mapped before its
+    /// rows are full, and the room for them it keeps once mapped.
+    id_bytes: u64,
+}
+
+impl BatchSize {
+    /// A batch's share of a budget of `limit` bytes: half of it for the
+    /// rows' fixed columns (at most [`BATCH_ROWS`] rows), the rest for
+    /// their text ids.
+    fn within<E: IndexedKeys>(limit: u64) -> Self {
+        let share = limit / BATCH_SHARE;
+        let row = EdgeBatch::<E>::ROW_BYTES;
+        let rows = usize::try_from(share / 2 / row).unwrap_or(BATCH_ROWS).clamp(1, BATCH_ROWS);
+        let id_bytes = share.saturating_sub(rows as u64 * row);
+        Self { rows, id_bytes }
+    }
+
+    /// Whether `batch` is to be mapped now: its rows are full, or its text
+    /// ids are past their share.
+    fn is_full<E: IndexedKeys>(&self, batch: &EdgeBatch<E>) -> bool {
+        batch.len() >= self.rows || batch.len_bytes() > self.id_bytes
+    }
+}
+
 /// The edge sink of a build: collects rows into a batch, maps each full
 /// batch (of [`BATCH_ROWS`] rows, or a share of the budget) on the compute
 /// pool, and takes it into the edge intake.
@@ -256,11 +281,7 @@ struct EdgeCollector<'b, 'm, E: IndexedKeys, I> {
     relations: &'b mut Relations,
     intake: EdgeIntake<'m, E>,
     batch: EdgeBatch<E>,
-    /// The rows the batch has room for.
-    batch_rows: usize,
-    /// The bytes past which the batch is mapped before it is full, for
-    /// long text ids.
-    batch_bytes: u64,
+    size: BatchSize,
     index: &'b E::Index<'m>,
     workers: &'b Workers,
     interrupts: &'b mut I,
@@ -300,7 +321,7 @@ impl<E: IndexedKeys, I: Interrupts> EdgeSink<E::Key> for EdgeCollector<'_, '_, E
             return Ok(());
         };
         self.batch.push(relation, row.source, row.target, weight)?;
-        if self.batch.len() >= self.batch_rows || self.batch.bytes() >= self.batch_bytes {
+        if self.size.is_full(&self.batch) {
             self.flush()?;
         }
         Ok(())
@@ -339,8 +360,8 @@ mod tests {
     use crate::segment::{read_segment, MemorySegmentStore};
     use pgrx::pg_sys;
     use warren_core::graph::{
-        AnyCsr, EdgeIntake, FixedKeys, GraphCsr, GraphError, IdMap, RelationDictionary, TextKeys,
-        Tombstones,
+        AnyCsr, EdgeIntake, FixedKeys, GraphCsr, GraphError, IdMap, RelationDictionary, TextIds,
+        TextKeys, Tombstones,
     };
     use warren_core::interrupts::Uninterrupted;
 
@@ -1019,6 +1040,67 @@ mod tests {
         }
         let forward = world.csr(version, "", "0");
         assert_eq!(text_neighbours(&forward, &id_map, "d"), ["b"]);
+    }
+
+    /// How many times a batch sized for a budget of `limit` is mapped
+    /// while `rows` rows from `source` to `target` are pushed into it after
+    /// one row whose endpoints are `first`, the last partial batch
+    /// included; and the most bytes the batch held after a mapping.
+    fn flushes<E: IndexedKeys>(
+        limit: u64,
+        id_map: &IdMap<E>,
+        first: &E::Key,
+        endpoint: &E::Key,
+        rows: usize,
+    ) -> (usize, u64) {
+        let memory = BuildMemory::new(limit);
+        let size = BatchSize::within::<E>(limit);
+        let relation = RelationDictionary::new().intern("r").unwrap();
+        let mut intake = EdgeIntake::directed(id_map, false).within(&memory);
+        let mut batch = EdgeBatch::<E>::with_capacity(&memory, size.rows, size.id_bytes).unwrap();
+        let (mut flushes, mut held) = (0, 0);
+        for row in 0..=rows {
+            let key = if row == 0 { first } else { endpoint };
+            batch.push(relation, Some(key), Some(key), 1.0).unwrap();
+            if size.is_full(&batch) {
+                flushes += 1;
+                intake.take(&mut batch).unwrap();
+                held = held.max(batch.bytes());
+            }
+        }
+        (flushes + usize::from(!batch.is_empty()), held)
+    }
+
+    /// A batch is mapped when its rows are full or its text ids pass their
+    /// share of the budget, never on every row: not for text ids at a
+    /// small budget, nor for a fixed type at a budget its rows fill
+    /// exactly, nor after one long text id outgrew the share.
+    #[test]
+    fn a_budget_limited_batch_is_mapped_once_it_is_full() {
+        const MB: u64 = 1 << 20;
+        let rows = 100_000;
+        let fixed = IdMap::<FixedKeys<i64>>::new().rebuild(vec![7]).unwrap();
+        for limit in [19 * MB, 38 * MB, 76 * MB, 64 * MB] {
+            let size = BatchSize::within::<FixedKeys<i64>>(limit);
+            let (flushes, _) = flushes(limit, &fixed, &7, &7, rows);
+            assert_eq!(flushes, (rows + 1).div_ceil(size.rows), "int8 at {limit}");
+        }
+        let iri = b"https://example.org/resource/1234567".as_slice();
+        let long = vec![b'x'; 3 * MB as usize];
+        let memory = BuildMemory::unlimited();
+        let mut ids = TextIds::new(&memory);
+        for id in [iri, long.as_slice()] {
+            ids.push(id).unwrap();
+        }
+        let text = IdMap::<TextKeys>::new().rebuild_within(ids).unwrap().0;
+        for limit in [64 * MB, 4096 * MB] {
+            let size = BatchSize::within::<TextKeys>(limit);
+            let (flushes, _) = flushes(limit, &text, iri, iri, rows);
+            assert!(flushes <= (rows + 1).div_ceil(size.rows) + 8, "text at {limit}: {flushes}");
+        }
+        let (flushes, held) = flushes(64 * MB, &text, &long, iri, rows);
+        assert!(flushes <= 12, "text after a long id: {flushes}");
+        assert!(held <= 64 * MB / BATCH_SHARE, "the long id's room is freed: {held}");
     }
 
     /// Rows are mapped on the pool a batch at a time: a build of more rows

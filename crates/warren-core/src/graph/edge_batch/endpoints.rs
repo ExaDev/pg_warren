@@ -15,8 +15,9 @@ pub trait Endpoints: Sync + Send {
     const ROW_BYTES: u64;
 
     /// An empty column with room for `rows` rows (but not their text ids'
-    /// bytes), charged to `memory`.
-    fn with_capacity(memory: &BuildMemory, rows: usize) -> Result<Self, GraphError>
+    /// bytes), charged to `memory`, which keeps room for up to `id_bytes`
+    /// of text ids when it is cleared.
+    fn with_capacity(memory: &BuildMemory, rows: usize, id_bytes: u64) -> Result<Self, GraphError>
     where
         Self: Sized;
 
@@ -26,11 +27,16 @@ pub trait Endpoints: Sync + Send {
     /// Row `row`'s endpoint, if it is not NULL.
     fn get(&self, row: usize) -> Option<&Self::Key>;
 
-    /// Empties it, keeping its capacity.
+    /// Empties it, keeping its capacity, except text ids' room past the
+    /// bytes it was made to keep.
     fn clear(&mut self);
 
     /// The bytes it holds, capacity included.
     fn bytes(&self) -> u64;
+
+    /// The bytes of the text ids it holds, capacity excluded: 0 for a
+    /// fixed type.
+    fn len_bytes(&self) -> u64;
 }
 
 /// The endpoints of a fixed-width id type.
@@ -41,7 +47,7 @@ impl<E: ExternalId + Send + Sync> Endpoints for FixedEndpoints<E> {
     type Key = E;
     const ROW_BYTES: u64 = size_of::<Option<E>>() as u64;
 
-    fn with_capacity(memory: &BuildMemory, rows: usize) -> Result<Self, GraphError> {
+    fn with_capacity(memory: &BuildMemory, rows: usize, _: u64) -> Result<Self, GraphError> {
         Ok(Self(BuildBuffer::with_capacity(memory, rows)?))
     }
 
@@ -60,6 +66,10 @@ impl<E: ExternalId + Send + Sync> Endpoints for FixedEndpoints<E> {
     fn bytes(&self) -> u64 {
         self.0.bytes()
     }
+
+    fn len_bytes(&self) -> u64 {
+        0
+    }
 }
 
 /// The endpoints of text ids: their bytes, where each row's ends, and
@@ -70,17 +80,20 @@ pub struct TextEndpoints {
     /// Where each row's bytes end; each starts where the previous ends.
     ends: BuildBuffer<usize>,
     nulls: BuildBuffer<bool>,
+    /// The room for text ids' bytes kept when it is cleared.
+    kept: u64,
 }
 
 impl Endpoints for TextEndpoints {
     type Key = [u8];
     const ROW_BYTES: u64 = (size_of::<usize>() + size_of::<bool>()) as u64;
 
-    fn with_capacity(memory: &BuildMemory, rows: usize) -> Result<Self, GraphError> {
+    fn with_capacity(memory: &BuildMemory, rows: usize, id_bytes: u64) -> Result<Self, GraphError> {
         Ok(Self {
             bytes: BuildBuffer::new(memory),
             ends: BuildBuffer::with_capacity(memory, rows)?,
             nulls: BuildBuffer::with_capacity(memory, rows)?,
+            kept: id_bytes,
         })
     }
 
@@ -107,12 +120,19 @@ impl Endpoints for TextEndpoints {
     }
 
     fn clear(&mut self) {
-        self.bytes.truncate(0);
+        match self.bytes.bytes() > self.kept {
+            true => self.bytes.release(),
+            false => self.bytes.truncate(0),
+        }
         self.ends.truncate(0);
         self.nulls.truncate(0);
     }
 
     fn bytes(&self) -> u64 {
         self.bytes.bytes() + self.ends.bytes() + self.nulls.bytes()
+    }
+
+    fn len_bytes(&self) -> u64 {
+        self.bytes.len() as u64
     }
 }
