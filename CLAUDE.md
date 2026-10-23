@@ -41,6 +41,7 @@ before changing code. Commands, toolchain setup and environment gotchas are in
      `segment/` (chunked persistence), `cache/` (loader; `shared`, the shared cache across backends, and `shared::introspection`, `warren.shared_cache()`), `build/`,
      `version_sql/` (compact, diff), `interrupts` (the main-thread poll),
      `read_only` (single-row SPI reads that assign no transaction id),
+     `parallel_worker` (what a parallel worker records and raises),
      `external_ids/` (id arguments ↔ dense ids), `selection/` (direction and
      relations), `traversal_sql/`, `vector/` (persistence and cache of named
      vectors), `compute_sql/`, `spectral_sql/` (eigen, distance),
@@ -51,7 +52,8 @@ before changing code. Commands, toolchain setup and environment gotchas are in
      `external_ids`, `selection`; and `external_ids`, `selection`,
      `interrupts` → `traversal_sql`, `compute_sql` (siblings: neither depends
      on the other); `compute_sql` → `spectral_sql`; `build`, `compute_sql`
-     → `community_sql`; never the reverse.
+     → `community_sql`;
+     `parallel_worker` → `cache`, `traversal_sql`; never the reverse.
    - Each module's `mod.rs` doc comment states its responsibility. Add a
      submodule when the code exists, not before.
 4. **Ubiquitous language (from DESIGN.md).** Use these terms exactly, in code,
