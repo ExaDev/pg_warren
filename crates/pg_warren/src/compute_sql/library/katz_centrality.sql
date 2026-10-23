@@ -63,6 +63,7 @@ BEGIN
     PERFORM warren.vector_const(graph, '_warren_katz_centrality_x', 0, persist := false, version := v);
     WHILE i < max_iter LOOP
       i := i + 1;
+      PERFORM warren.report_progress('katz_centrality', graph, 'iterating', i - 1, max_iter);
       PERFORM warren.spmv(graph, '_warren_katz_centrality_x', '_warren_katz_centrality_y',
                           transpose := true, rels := rels, weighted := weighted, persist := false, version := v);
       PERFORM warren.vector_map(graph, '_warren_katz_centrality_next',

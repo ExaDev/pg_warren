@@ -8,19 +8,24 @@ use warren_core::graph::{DenseId, GraphError, IdPair, SEGMENT_HEADER_LEN};
 
 use super::plan::{Placed, Plan};
 use super::LoadError;
+use crate::activity;
 use crate::cache::region::{typed, typed_mut, write_pair, Array, Entry, Unpadded};
 use crate::catalog::VersionId;
 use crate::segment::{SegmentError, SegmentStore};
 use crate::source::IdDatum;
 
 /// Writes the header and every array of `plan` into `region`, which holds
-/// exactly its layout's bytes.
+/// exactly its layout's bytes, reporting the bytes copied of the region's
+/// as the open operation's `loading` phase (DESIGN.md §5.7).
 pub(in crate::cache) fn fill<E: IdDatum>(
     segments: &mut impl SegmentStore,
     version: VersionId,
     plan: &Plan,
     region: &mut [u8],
 ) -> Result<(), LoadError> {
+    let total = region.len() as u64;
+    activity::phase("loading", Some(total));
+    let mut copied = Copied(0);
     let layout = &plan.layout;
     layout.write_header(region);
     if let Some(entry) = layout.entry(Array::RelationDictionary) {
@@ -32,11 +37,11 @@ pub(in crate::cache) fn fill<E: IdDatum>(
         let count = match placed.array {
             Array::IdPairs if placed.encoded_width != size_of::<IdPair<E>>() || !NATIVE_LE => {
                 let mut pairs = PairSink::<E>::new(into, placed.encoded_width);
-                copy_payload(segments, version, placed, &mut |data| pairs.push(data))?
+                copy_payload(segments, version, placed, &mut copied, &mut |data| pairs.push(data))?
             }
             _ => {
                 let mut at = 0;
-                copy_payload(segments, version, placed, &mut |data| {
+                copy_payload(segments, version, placed, &mut copied, &mut |data| {
                     into[at..at + data.len()].copy_from_slice(data);
                     at += data.len();
                     Ok(())
@@ -49,7 +54,19 @@ pub(in crate::cache) fn fill<E: IdDatum>(
         }
         to_native(placed, into)?;
     }
-    by_dense::<E>(region, layout.entry(Array::IdPairs), layout.entry(Array::ByDense))
+    by_dense::<E>(region, layout.entry(Array::IdPairs), layout.entry(Array::ByDense))?;
+    activity::done(total);
+    Ok(())
+}
+
+/// The payload bytes copied so far, reported as they grow.
+struct Copied(u64);
+
+impl Copied {
+    fn add(&mut self, bytes: usize) {
+        self.0 += bytes as u64;
+        activity::done(self.0);
+    }
 }
 
 /// Whether native layout is little-endian, the segments' byte order.
@@ -80,6 +97,7 @@ fn copy_payload(
     segments: &mut impl SegmentStore,
     version: VersionId,
     placed: &Placed,
+    copied: &mut Copied,
     into: &mut dyn FnMut(&[u8]) -> Result<(), LoadError>,
 ) -> Result<u64, LoadError> {
     let segment = placed.segment.as_str();
@@ -113,6 +131,7 @@ fn copy_payload(
         if data.is_empty() {
             return Ok(());
         }
+        copied.add(data.len());
         into(data).map_err(|error| {
             failed = Some(error);
             SegmentError::Graph(GraphError::SegmentTruncated)

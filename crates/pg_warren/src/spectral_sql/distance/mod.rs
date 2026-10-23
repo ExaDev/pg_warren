@@ -17,6 +17,7 @@ use self::pair::Pair;
 use super::matrix::{solver_options, OperatorArguments};
 use super::SpectralSqlError;
 use crate::access::entry;
+use crate::activity::Running;
 use crate::cache::resolve;
 use crate::source::{with_id_type, IdDatum};
 
@@ -172,6 +173,7 @@ fn distance(
         };
         let before = resolve(graph, Some(v1), "read")?;
         let after = resolve(graph2.unwrap_or(graph), Some(v2), "read")?;
+        let _running = Running::start("distance", Some(before.graph.graph_id), Some(v1));
         let mut result = with_id_type!(before.graph.id_type, E => {
             method.measure(&mut Pair::<E>::open(before, after)?)?
         });

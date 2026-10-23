@@ -28,7 +28,7 @@ pub(super) struct Table<'t, L> {
 }
 
 /// What a reader copies of the table.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Copied {
     /// The counters of backends that have exited.
     pub(crate) exited: Counters,

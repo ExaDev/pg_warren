@@ -34,6 +34,7 @@ BEGIN
     END IF;
     WHILE i < max_iter LOOP
       i := i + 1;
+      PERFORM warren.report_progress('label_propagation', graph, 'iterating', i - 1, max_iter);
       -- Unselected nodes send NULL (NaN), which min never picks over a label.
       PERFORM warren.vector_map(graph, '_warren_label_propagation_msg',
         CASE WHEN selected IS NULL THEN '_warren_label_propagation_x'

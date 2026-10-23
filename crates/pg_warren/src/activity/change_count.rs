@@ -7,8 +7,10 @@
 
 use std::sync::atomic::{fence, AtomicU64, Ordering};
 
-/// `N` words and their change count, as they lie in shared memory.
-#[repr(C)]
+/// `N` words and their change count, as they lie in shared memory, on
+/// cache lines of their own: a write stores every word, and a line shared
+/// with a neighbour written by another backend would bounce between cores.
+#[repr(C, align(64))]
 pub(super) struct Counted<const N: usize> {
     changes: AtomicU64,
     words: [AtomicU64; N],

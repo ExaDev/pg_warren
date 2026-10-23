@@ -10,6 +10,7 @@ use super::modularity::require_resolution;
 use super::partition::{integers, undirected};
 use super::CommunitySqlError;
 use crate::access::entry;
+use crate::activity::Running;
 use crate::cache::resolve;
 use crate::compute_sql::{workers, Vectors};
 use crate::interrupts::PostgresInterrupts;
@@ -62,6 +63,8 @@ fn local_moving(
         }
         let options = LocalMoving { resolution, seed: seed as u64, max_sweeps, tolerance };
         let resolved = resolve(graph, version, "write vectors of")?;
+        let _running =
+            Running::start("local_moving", Some(resolved.graph.graph_id), Some(resolved.version));
         with_id_type!(resolved.graph.id_type, E => {
             let mut vectors = Vectors::<E>::open(resolved)?;
             vectors.check_writable(out, persist)?;
@@ -122,6 +125,8 @@ fn leiden_refine(
         }
         let options = Refinement { resolution, seed: seed as u64, randomness };
         let resolved = resolve(graph, version, "write vectors of")?;
+        let _running =
+            Running::start("leiden_refine", Some(resolved.graph.graph_id), Some(resolved.version));
         with_id_type!(resolved.graph.id_type, E => {
             let mut vectors = Vectors::<E>::open(resolved)?;
             vectors.check_writable(out, persist)?;

@@ -10,6 +10,7 @@ use super::caveats::caveats;
 use super::matrix::{solver_options, OperatorArguments};
 use super::SpectralSqlError;
 use crate::access::entry;
+use crate::activity::Running;
 use crate::cache::resolve;
 use crate::compute_sql::{drop_named, vector_bytes, workers, Vectors};
 use crate::interrupts::PostgresInterrupts;
@@ -122,6 +123,8 @@ fn eigen(
         let persist = persist.ok_or(SpectralSqlError::NullArgument("persist"))?;
         let action = if vectors_prefix.is_some() { "write vectors of" } else { "read" };
         let resolved = resolve(graph, version, action)?;
+        let _running =
+            Running::start("eigen", Some(resolved.graph.graph_id), Some(resolved.version));
         let rows = with_id_type!(resolved.graph.id_type, E => {
             solve(Vectors::<E>::open(resolved)?, &operator, &options, vectors_prefix, persist)?
         });

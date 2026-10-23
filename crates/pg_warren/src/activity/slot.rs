@@ -1,11 +1,14 @@
 //! What a backend's slot of the activity table holds (DESIGN.md §5.7):
 //! who the backend is, what its private cache holds and the shared bytes it
-//! maps, and its cache counters, as plain values (the backend's own copy)
+//! maps, its cache counters and its progress (`frame`), as plain values (the backend's own copy)
 //! and as the words its slot stores them in.
 
 use pgrx::pg_sys::Oid;
 
 use super::change_count::Counted;
+#[cfg(test)]
+use super::frame::Name;
+use super::frame::{Frame, Operation, FRAME_WORDS, OPERATION_WORDS};
 
 /// Why the shared cache did not hold a version or vector that was read,
 /// which was then read privately (DESIGN.md §5.6, Fallback): a counter
@@ -177,17 +180,26 @@ impl Holder {
 }
 
 /// Everything a slot holds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Values {
     pub(crate) holder: Holder,
     pub(crate) memory: Memory,
     pub(crate) counters: Counters,
+    /// The statement's command, from `warren.report_progress`.
+    pub(crate) command: Frame,
+    /// The native call running now.
+    pub(crate) operation: Operation,
 }
 
 impl Values {
     /// A free slot's values.
-    pub(crate) const FREE: Self =
-        Self { holder: Holder::NONE, memory: Memory::ZERO, counters: Counters::ZERO };
+    pub(crate) const FREE: Self = Self {
+        holder: Holder::NONE,
+        memory: Memory::ZERO,
+        counters: Counters::ZERO,
+        command: Frame::NONE,
+        operation: Operation::NONE,
+    };
 
     pub(super) fn encode(&self) -> [u64; SLOT_WORDS] {
         let Holder { pid, database, role, started } = self.holder;
@@ -205,14 +217,16 @@ impl Values {
             mapped,
         ];
         words[..HEAD_WORDS].copy_from_slice(&head);
-        words[HEAD_WORDS..].copy_from_slice(&self.counters.encode());
+        words[HEAD_WORDS..COMMAND_AT].copy_from_slice(&self.counters.encode());
+        self.command.encode(&mut words[COMMAND_AT..OPERATION_AT]);
+        self.operation.encode(&mut words[OPERATION_AT..]);
         words
     }
 
     pub(super) fn decode(words: &[u64; SLOT_WORDS]) -> Self {
         let oid = |word: u64| Oid::from(word as u32);
         let mut counters = [0; COUNTER_WORDS];
-        counters.copy_from_slice(&words[HEAD_WORDS..]);
+        counters.copy_from_slice(&words[HEAD_WORDS..COMMAND_AT]);
         Self {
             holder: Holder {
                 pid: words[0] as u32 as i32,
@@ -228,6 +242,8 @@ impl Values {
                 mapped: words[8],
             },
             counters: Counters::decode(&counters),
+            command: Frame::decode(&words[COMMAND_AT..OPERATION_AT]),
+            operation: Operation::decode(&words[OPERATION_AT..]),
         }
     }
 }
@@ -255,8 +271,12 @@ impl Counters {
 /// The words of the holder and the memory.
 const HEAD_WORDS: usize = 9;
 
+/// Where the frames start.
+const COMMAND_AT: usize = HEAD_WORDS + COUNTER_WORDS;
+const OPERATION_AT: usize = COMMAND_AT + FRAME_WORDS;
+
 /// The words a slot stores.
-pub(super) const SLOT_WORDS: usize = HEAD_WORDS + COUNTER_WORDS;
+pub(super) const SLOT_WORDS: usize = OPERATION_AT + OPERATION_WORDS;
 
 /// A backend's slot in shared memory.
 pub(super) type Slot = Counted<SLOT_WORDS>;
@@ -270,10 +290,17 @@ mod tests {
             Counters { lookups: 9, waits: 2, load_microseconds: 77, ..Counters::ZERO };
         counters.refuse(Refused::Unavailable);
         counters.refuse(Refused::TooLarge);
+        let command = Frame { name: Name::new("louvain"), start: 9, ..Frame::NONE };
+        let mut operation = Operation { frame: command, ..Operation::NONE };
+        operation.frame.name = Name::new("local_moving");
+        operation.enter("moving", Some(100));
+        operation.set_detail("moved", 17.0);
         Values {
             holder: Holder { pid: 4321, database: Oid::from(5), role: Oid::from(10), started: -3 },
             memory: Memory { versions: 1, vectors: 2, transients: 3, entries: 4, mapped: 5 },
             counters,
+            command,
+            operation,
         }
     }
 
@@ -317,5 +344,13 @@ mod tests {
     #[test]
     fn a_slot_is_about_half_a_kilobyte() {
         assert!(std::mem::size_of::<Slot>() <= 512, "{}", std::mem::size_of::<Slot>());
+    }
+
+    #[test]
+    fn slots_share_no_cache_line() {
+        // Every write stores all of a slot's words: a line shared with the
+        // next slot would bounce between two backends' cores.
+        assert_eq!(std::mem::align_of::<Slot>() % 64, 0);
+        assert_eq!(std::mem::size_of::<Slot>() % 64, 0);
     }
 }

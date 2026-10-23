@@ -55,6 +55,7 @@ BEGIN
     PERFORM warren.vector_const(graph, '_warren_hits_x', 1.0 / nodes, persist := false, version := v);
     WHILE i < max_iter LOOP
       i := i + 1;
+      PERFORM warren.report_progress('hits', graph, 'iterating', i - 1, max_iter);
       PERFORM warren.spmv(graph, '_warren_hits_x', '_warren_hits_a', transpose := true, rels := rels,
                           weighted := weighted, persist := false, version := v);
       PERFORM warren.spmv(graph, '_warren_hits_a', '_warren_hits_next', rels := rels, weighted := weighted,

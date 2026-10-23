@@ -18,7 +18,7 @@ use super::statement::{notice_due, pin_vector, pin_version, vector_pinned, versi
 use super::versions::{VersionCache, CACHE};
 use super::{installation, load, trim, CacheError, LoadedVersion};
 use crate::access::{as_catalog_owner, require_reader};
-use crate::activity::{self, count_read, Read};
+use crate::activity::{self, count_read, Read, Running};
 use crate::catalog::{require_version, GraphDefinition, VersionId};
 use crate::parallel_worker::cache_notice_raised;
 use crate::read_only::{read_one, read_two};
@@ -109,7 +109,9 @@ fn load_private<E: IdDatum + Send + Sync>(
     // Load outside any borrow of the cache: loading runs SPI, which may
     // raise an ERROR that unwinds through this frame.
     let started = Instant::now();
+    let running = Running::start("load", Some(graph_id), Some(version));
     let loaded = load::<E>(&mut SpiSegmentStore, version, resolved.graph.store_merged)?;
+    drop(running);
     count_read(Read::PrivateLoad, loaded.bytes(), started.elapsed());
     let current = resolved.graph.current_version == Some(version);
     pin_version(version);

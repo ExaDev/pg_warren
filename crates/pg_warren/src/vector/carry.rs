@@ -6,6 +6,7 @@ use warren_core::compute::{AnyVector, ComputeError, ComputeMemory, Value, Vector
 use warren_core::graph::DenseId;
 
 use super::{forget, read_vector, write_vector, Binding, VectorError, VectorStore};
+use crate::activity;
 use crate::catalog::VersionId;
 
 /// `vector`'s rows `rows` (old dense ids), in order, as a new vector
@@ -54,7 +55,8 @@ pub(crate) fn move_vectors(
 ) -> Result<Vec<String>, VectorError> {
     let memory = ComputeMemory::new(u64::MAX);
     let records = store.bound(from)?;
-    for record in &records {
+    activity::phase("moving vectors", Some(records.len() as u64));
+    for (count, record) in (1..).zip(&records) {
         let vector = read_vector(store, &memory, record)?;
         let moved = gather(&memory, &vector, rows)?;
         drop(vector);
@@ -69,6 +71,7 @@ pub(crate) fn move_vectors(
             });
         }
         forget(record.vector);
+        activity::done(count);
     }
     Ok(records.into_iter().map(|record| record.name).collect())
 }
@@ -111,6 +114,22 @@ mod tests {
         let short: AnyVector = Vector::from_values(&memory(), 1, 1, vec![7i64]).unwrap().into();
         let padded: AnyVector = Vector::from_values(&memory(), 2, 1, vec![7i64, 0]).unwrap().into();
         assert_eq!(gather(&memory(), &short, &[0, 5]).unwrap(), padded);
+    }
+
+    #[test]
+    fn moving_reports_the_vectors_moved_of_their_number() {
+        let mut store = MemoryVectorStore::default();
+        let ids: AnyVector = Vector::from_values(&memory(), 2, 1, vec![1i64, 2]).unwrap().into();
+        for name in ["a", "b"] {
+            let binding = Binding::new(1, 7, name, pg_sys::Oid::from(42));
+            write_vector(&mut store, &binding, &ids, 64).unwrap();
+        }
+        let running = crate::activity::Running::opened("compact");
+        move_vectors(&mut store, 1, 7, 9, &[1, 0], 64).unwrap();
+        let frame = crate::activity::own().operation.frame;
+        assert_eq!(frame.phase.as_str(), "moving vectors");
+        assert_eq!((frame.done, frame.total), (Some(2), Some(2)));
+        drop(running);
     }
 
     #[test]

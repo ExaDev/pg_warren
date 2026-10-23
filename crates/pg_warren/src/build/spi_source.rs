@@ -8,6 +8,7 @@ use warren_core::graph::{BuildBuffer, BuildMemory};
 use super::error::BuildError;
 use super::source::{EdgeRow, EdgeSink, SourceReader};
 use crate::access::{as_role, with_read_only, with_search_path};
+use crate::activity::{self, Units};
 use crate::catalog::GraphDefinition;
 use crate::source::{
     check_edge_columns, for_each_row, for_each_tuple, open_read_only, require_node_id_type,
@@ -36,13 +37,17 @@ impl<E: IdDatum> SourceReader<E> for SpiSource<'_> {
                         let mut opened =
                             open_read_only::<BuildError>(client, "node_query", &graph.node_query)?;
                         require_node_id_type(&opened.columns, graph.id_type)?;
+                        activity::phase("reading nodes", None);
+                        let mut rows = Units::new();
                         let mut ids = BuildBuffer::new(memory);
                         for_each_row::<BuildError>(&mut opened.cursor, |row| {
+                            rows.one();
                             if let Some(id) = row.get::<E::Sql>(1)?.map(E::from_sql) {
                                 ids.push(id)?;
                             }
                             Ok(())
                         })?;
+                        rows.finish();
                         Ok(ids)
                     })
                 })
@@ -66,7 +71,10 @@ impl<E: IdDatum> SourceReader<E> for SpiSource<'_> {
                             graph.weighted,
                         )?;
                         sink.expect_rows(opened.estimated_rows);
+                        activity::phase("reading edges", Some(opened.estimated_rows));
+                        let mut rows = Units::new();
                         for_each_tuple(&mut opened.cursor, |row| {
+                            rows.one();
                             sink.row(EdgeRow {
                                 source: row.get::<E::Sql>(1)?.map(E::from_sql),
                                 target: row.get::<E::Sql>(2)?.map(E::from_sql),
@@ -79,7 +87,9 @@ impl<E: IdDatum> SourceReader<E> for SpiSource<'_> {
                                     false => None,
                                 },
                             })
-                        })
+                        })?;
+                        rows.finish();
+                        Ok(())
                     })
                 })
             })

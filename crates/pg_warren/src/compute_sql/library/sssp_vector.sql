@@ -30,6 +30,7 @@ BEGIN
     limit_ := coalesce(max_iter, (warren.vector_stats(graph, '_warren_sssp_vector_x', v) ->> 'count')::int);
     WHILE i < limit_ LOOP
       i := i + 1;
+      PERFORM warren.report_progress('sssp_vector', graph, 'iterating', i - 1, limit_);
       PERFORM warren.vector_map(graph, '_warren_sssp_vector_next', '_warren_sssp_vector_x', false, v);
       PERFORM warren.spmv(graph, '_warren_sssp_vector_x', '_warren_sssp_vector_next', 'min_plus',
                           transpose := true, rels := rels, weighted := weighted, accumulate := 'min',

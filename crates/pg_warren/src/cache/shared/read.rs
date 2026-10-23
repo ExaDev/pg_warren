@@ -21,7 +21,7 @@ use super::setting;
 use super::slot::{Key, Kind};
 use super::SharedVersions;
 use crate::access::as_catalog_owner;
-use crate::activity::{count_read, count_refusal, Read, Refused};
+use crate::activity::{count_read, count_refusal, Read, Refused, Running};
 use crate::cache::installation::installation;
 use crate::cache::load::{fill, fill_vector, plan, plan_vector, LoadedVersion};
 use crate::cache::open::Resolved;
@@ -306,6 +306,7 @@ pub(super) fn through<E: IdDatum + Send + Sync>(
         },
         |plan, region| {
             loaded.timed(region.bytes_mut().len(), || {
+                let _running = Running::start("load", Some(resolved.graph.graph_id), Some(version));
                 fill::<E>(&mut SpiSegmentStore, version, plan, region.bytes_mut())?;
                 Ok::<_, CacheError>(region.validate::<E>(version)?)
             })

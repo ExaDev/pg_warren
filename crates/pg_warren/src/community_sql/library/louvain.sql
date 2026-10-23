@@ -57,6 +57,7 @@ BEGIN
     q := warren.modularity(graph, '_warren_louvain_single', resolution, weighted, v);
     LOOP
       level := level + 1;
+      PERFORM warren.report_progress('louvain', graph, format('level %s', level), level - 1, max_levels);
       nodes := (SELECT (e ->> 'node_count')::bigint FROM jsonb_array_elements(warren.info(g) -> 'versions') e
                 WHERE (e ->> 'version')::bigint = gv);
       IF level > 1 THEN

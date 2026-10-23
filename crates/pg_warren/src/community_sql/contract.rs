@@ -10,6 +10,7 @@ use warren_core::community::Contraction;
 use super::contraction::{contract_version, ContractRequest};
 use super::CommunitySqlError;
 use crate::access::{current_user, entry, require_owner, Caller};
+use crate::activity::Running;
 use crate::build::{max_build_memory, RefreshRequest, SpiCatalog};
 use crate::cache::resolve;
 use crate::catalog::{
@@ -75,6 +76,7 @@ fn contract(
                 quotient_graph(out_graph.unwrap_or(&level), out_graph.is_none(), &vectors.graph, caller)?;
             quotient.lock("contract into")?;
             quotient.require_sound_current_version()?;
+            let _running = Running::start("contract", Some(quotient.graph_id), None);
             let request = ContractRequest {
                 write: RefreshRequest {
                     promote,

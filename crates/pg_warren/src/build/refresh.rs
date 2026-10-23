@@ -10,6 +10,7 @@ use super::pipeline::{build, RefreshRequest};
 use super::spi_catalog::SpiCatalog;
 use super::spi_source::SpiSource;
 use crate::access::{entry, require_owner};
+use crate::activity::Running;
 use crate::catalog::{require_current_id_space, GraphDefinition, VersionId};
 use crate::segment::{SpiSegmentStore, CHUNK_SIZE};
 use crate::source::{with_id_type, with_pinned_snapshot};
@@ -35,6 +36,7 @@ fn refresh_graph(name: &str, promote: bool, label: Option<&str>) -> Result<Versi
     if let Some(base) = graph.current_version {
         require_current_id_space(&graph, base)?;
     }
+    let _running = Running::start("refresh", Some(graph.graph_id), None);
     let built = with_pinned_snapshot(|| {
         let request = RefreshRequest {
             promote,

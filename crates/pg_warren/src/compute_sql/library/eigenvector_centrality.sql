@@ -47,6 +47,7 @@ BEGIN
                                 version := v);
     WHILE i < max_iter LOOP
       i := i + 1;
+      PERFORM warren.report_progress('eigenvector_centrality', graph, 'iterating', i - 1, max_iter);
       PERFORM warren.spmv(graph, '_warren_eigenvector_centrality_x', '_warren_eigenvector_centrality_y',
                           transpose := true, rels := rels, weighted := weighted, persist := false, version := v);
       PERFORM warren.vector_map(graph, '_warren_eigenvector_centrality_next',

@@ -14,16 +14,23 @@
 mod backend;
 mod backends;
 mod change_count;
+mod command;
 mod counters;
+mod frame;
+mod operation;
 mod placement;
+mod progress;
 mod slot;
 mod table;
 mod visibility;
 
 pub(crate) use backend::claim;
+#[cfg(test)]
+pub(crate) use backend::own;
 pub(crate) use counters::{
     count_private_evictions, count_read, count_refusal, count_shared_evictions, count_wait,
     record_mapped, record_private, Read,
 };
+pub(crate) use operation::{detail, done, phase, version, Running, Units};
 pub(crate) use placement::request_preload;
 pub(crate) use slot::{Memory, Refused};

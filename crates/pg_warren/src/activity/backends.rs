@@ -212,7 +212,7 @@ mod listing {
         let holder = Holder { pid, database: Oid::from(5), role, started: 100 + i64::from(pid) };
         let counters = Counters { lookups, ..Counters::default() };
         let memory = Memory { versions, ..Memory::default() };
-        (pid as usize, Values { holder, memory, counters })
+        (pid as usize, Values { holder, memory, counters, ..Values::FREE })
     }
 
     #[test]

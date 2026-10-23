@@ -83,6 +83,8 @@ BEGIN
       refined := NULL;
       LOOP
         level := level + 1;
+        PERFORM warren.report_progress('leiden', graph, format('iteration %s, level %s', iteration, level),
+                                       level - 1, max_levels);
         nodes := (SELECT (e ->> 'node_count')::bigint FROM jsonb_array_elements(warren.info(g) -> 'versions') e
                   WHERE (e ->> 'version')::bigint = gv);
         IF level > 1 THEN

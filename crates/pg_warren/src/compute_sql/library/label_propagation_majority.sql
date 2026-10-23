@@ -53,6 +53,7 @@ BEGIN
     nodes := (warren.vector_stats(graph, '_warren_label_propagation_majority_x', v) ->> 'count')::bigint;
     WHILE i < max_iter AND nodes > 0 LOOP
       i := i + 1;
+      PERFORM warren.report_progress('label_propagation_majority', graph, 'iterating', i - 1, max_iter);
       PERFORM warren.vector_from_query(graph, '_warren_label_propagation_majority_next', votes, 'f64',
                                        persist := false, version := v);
       delta := warren.vector_norm_diff(graph, '_warren_label_propagation_majority_next',

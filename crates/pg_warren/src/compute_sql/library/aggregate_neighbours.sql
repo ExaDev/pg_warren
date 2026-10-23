@@ -36,6 +36,7 @@ BEGIN
       PERFORM warren.vector_degree(graph, '_warren_aggregate_neighbours_degree', direction, rels, dtype, false, v);
     END IF;
     FOR hop IN 1..hops LOOP
+      PERFORM warren.report_progress('aggregate_neighbours', graph, 'hop', hop - 1, hops);
       PERFORM warren.spmm(graph, '_warren_aggregate_neighbours_x', '_warren_aggregate_neighbours_x', semiring,
                           transpose := direction = 'in', rels := rels, weighted := false, persist := false,
                           version := v);
