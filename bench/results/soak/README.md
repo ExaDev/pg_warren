@@ -351,3 +351,26 @@ backend touched (about 1.1 GB) as well as the shared version.
 An earlier attempt at case a was discarded: a second copy of the harness
 had been started by mistake on the same machine, and one of the two was
 killed for memory during `louvain`.
+
+## Text node ids (M10 step 4, §5.7)
+
+`a-scale2-text-m10.json` and `a-scale2-m10.json` (private), then
+`a-scale2-text-m10-shared.json` and `a-scale2-m10-shared.json` (shared
+cache): case a at half scale (5M nodes, 50M edges) with IRIs and with
+`bigint` ids, PostgreSQL 16.15 from a private tree, a release build of
+5f905b4 (`pg_warren.so` sha256 92c54dcb…), on the same 4-vCPU Xeon,
+harness 5f905b4, one after the other on 2026-10-23, under a load average
+of 2.0–4.4 from other agents' builds on the machine:
+
+    bench/soak.py a --ids text --label=-m10 --scale 2 --no-cte --no-eigen-steps \
+        --eigen-max-iter 200 --skip communities --disk-floor 3221225472 \
+        --pg-config /var/tmp/m10-pgtree/usr/lib/postgresql/16/bin/pg_config --parent /var/tmp/m10-soak \
+        --extension-revision 5f905b4 --extension-profile release --threads 4 --statement-timeout 20min
+    bench/soak.py a --ids bigint --label=-m10 …   # otherwise as above
+    bench/soak.py a --ids text --label=-m10-shared --shared-cache-memory 4GB \
+        --skip library --skip second-version …    # and --ids bigint
+
+Half scale, without the recursive CTE baseline, because the machine had
+about 8 GB of disk free, shared with other work; the full-scale text run
+needs about 16 GB (DESIGN.md §12). Both private runs skipped their second
+version for the disk floor, so `diff` and `distance` were not run.
