@@ -14,11 +14,38 @@ mod orphans;
 use pgrx::prelude::*;
 use pgrx::spi::SpiClient;
 
+use crate::access::{may_drop_orphans, AccessError};
+
+/// Who is cleaning up after a role, for which of its quotas go.
+#[derive(Debug, Clone, Copy)]
+struct Cleaner {
+    /// The calling role.
+    caller: pg_sys::Oid,
+    /// Whether it may drop orphans (DESIGN.md §14 item 45).
+    may_drop_orphans: bool,
+}
+
+impl Cleaner {
+    /// The calling role; before any identity switch.
+    fn current() -> Result<Self, AccessError> {
+        // SAFETY: reads the backend's current user id: the caller.
+        let caller = unsafe { pg_sys::GetUserId() };
+        Ok(Self { caller, may_drop_orphans: may_drop_orphans()? })
+    }
+}
+
 /// Removes what `DROP OWNED` removes of `role` besides what it owns: the
 /// vectors it wrote on other roles' graphs (those on its own graphs go
 /// with them), its entries in every graph's readers and its quotas on
-/// readers' vectors. `client` must run as the catalog owner.
-fn clean_up_after(client: &mut SpiClient<'_>, role: pg_sys::Oid) -> Result<(), pgrx::spi::Error> {
+/// readers' vectors where `by` may set them (a member of the graph's
+/// owner) or may drop orphans: a role cannot shed a quota another owner
+/// set on it, which then waits for `warren.drop_orphans` once the role is
+/// dropped (DESIGN.md §5.7). `client` must run as the catalog owner.
+fn clean_up_after(
+    client: &mut SpiClient<'_>,
+    role: pg_sys::Oid,
+    by: Cleaner,
+) -> Result<(), pgrx::spi::Error> {
     client.update("DELETE FROM warren.vectors WHERE created_by::oid = $1", None, &[role.into()])?;
     client.update(
         "UPDATE warren.graphs SET readers = ARRAY(
@@ -28,6 +55,12 @@ fn clean_up_after(client: &mut SpiClient<'_>, role: pg_sys::Oid) -> Result<(), p
         None,
         &[role.into()],
     )?;
-    client.update("DELETE FROM warren.vector_quotas WHERE role::oid = $1", None, &[role.into()])?;
+    client.update(
+        "DELETE FROM warren.vector_quotas q USING warren.graphs g
+         WHERE q.role::oid = $1 AND g.graph_id = q.graph_id
+           AND ($3 OR pg_catalog.pg_has_role($2::oid, g.owner::oid, 'MEMBER'))",
+        None,
+        &[role.into(), by.caller.into(), by.may_drop_orphans.into()],
+    )?;
     Ok(())
 }

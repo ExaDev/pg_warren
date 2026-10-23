@@ -4,42 +4,19 @@
 
 use pgrx::prelude::*;
 
-use super::{admits, QuotaError, Usage};
-use crate::access::{as_catalog_owner, is_owner, role_name};
+use super::QuotaError;
+use crate::access::{is_owner, role_name};
+use crate::catalog::quota::{admits, lock, quota_of, stored, Usage};
 use crate::catalog::GraphDefinition;
-use crate::read_only::read_one_latest;
 use crate::vector::VectorId;
-
-/// pg_warren's `objsubid` (`locktag_field4`) on its advisory-type locks.
-/// Applications' advisory locks have 1 (one `bigint` key) or 2 (two `int`
-/// keys), so the quota's lock never collides with theirs; `pg_locks` shows
-/// it as `advisory` with this `objsubid`.
-pub(crate) const QUOTA_LOCK_OBJSUBID: u16 = 0x5751;
-
-/// The quota of role `$2` on graph `$1`: its own row, else the graph's
-/// default (NULL for none).
-const QUOTA: &str = "SELECT coalesce(
-         (SELECT q.bytes FROM warren.vector_quotas q WHERE q.graph_id = $1 AND q.role::oid = $2),
-         (SELECT g.reader_vector_quota FROM warren.graphs g WHERE g.graph_id = $1))";
-
-/// The bytes of the persisted vectors role `$2` wrote on graph `$1`, and of
-/// those among them that are vector `$3` (the one replaced, if any), as an
-/// array of two: one scan of `vectors (graph_id, created_by)`.
-const STORED: &str = concat!(
-    "SELECT ARRAY[coalesce(sum(",
-    vector_bytes!(),
-    "), 0), coalesce(sum(",
-    vector_bytes!(),
-    ") FILTER (WHERE v.vector_id = $3), 0)]::int8[]
-     FROM warren.vectors v WHERE v.graph_id = $1 AND v.created_by::oid = $2"
-);
 
 /// Admits, or refuses with [`QuotaError::Exceeded`], the current role's
 /// persisted write of vector `name` (`written` bytes) to `graph`,
 /// replacing vector `replacing` (as the writer checked it), before
-/// anything is written. Members of the owner role are exempt; where a
-/// quota applies, the (graph, role) lock is held until the transaction
-/// ends, so one role's writes to one graph are counted one at a time.
+/// anything is written. Members of the owner role are exempt; for every
+/// other writer, quota or none, the (graph, role) lock is taken before the
+/// quota and usage are read and held until the transaction ends, so one
+/// role's writes to one graph are counted one at a time.
 pub(crate) fn admit(
     graph: &GraphDefinition,
     name: &str,
@@ -52,10 +29,12 @@ pub(crate) fn admit(
     }
     // SAFETY: reads the backend's current user id: the writing role.
     let role = unsafe { pg_sys::GetUserId() };
+    // The lock first, quota or none: a quota set while this write is
+    // uncommitted then holds the next writer to both.
+    lock(graph.graph_id, role);
     let Some(quota) = quota_of(graph.graph_id, role)? else {
         return Ok(());
     };
-    lock(graph.graph_id, role);
     let (stored, replaced) = stored(graph.graph_id, role, replacing)?;
     let usage = Usage::of(stored, replaced, written);
     if admits(exempt, Some(quota), usage) {
@@ -72,68 +51,6 @@ pub(crate) fn admit(
     })
 }
 
-/// The quota of `role` on graph `graph_id`, as committed now.
-fn quota_of(graph_id: i32, role: pg_sys::Oid) -> Result<Option<u64>, QuotaError> {
-    let quota = as_catalog_owner(|| {
-        Ok::<_, QuotaError>(read_one_latest::<i64>(QUOTA, &[graph_id.into(), role.into()])?)
-    })?;
-    Ok(quota.map(|bytes| u64::try_from(bytes).unwrap_or_default()))
-}
-
-/// What `role` stores on graph `graph_id`, and what of it is vector
-/// `replacing`, in bytes: under the latest snapshot, which sees what is
-/// committed now (whatever the isolation level) and this transaction's own
-/// earlier writes.
-fn stored(
-    graph_id: i32,
-    role: pg_sys::Oid,
-    replacing: Option<VectorId>,
-) -> Result<(u64, u64), QuotaError> {
-    let sums = as_catalog_owner(|| {
-        Ok::<_, QuotaError>(read_one_latest::<Vec<i64>>(
-            STORED,
-            &[graph_id.into(), role.into(), replacing.into()],
-        )?)
-    })?
-    .unwrap_or_default();
-    let bytes = |at: usize| sums.get(at).map_or(0, |&sum| u64::try_from(sum).unwrap_or_default());
-    Ok((bytes(0), bytes(1)))
-}
-
-/// Takes the transaction-scoped lock on (graph `graph_id`, `role`),
-/// waiting for a transaction that holds it to end. Only on the leader:
-/// persisting writers are `PARALLEL UNSAFE`, and a lock a parallel worker
-/// took would be released when the worker exits (DESIGN.md §5.7, Spike
-/// results).
-fn lock(graph_id: i32, role: pg_sys::Oid) {
-    // SAFETY: reads the backend's database id, on the main thread.
-    let database = unsafe { pg_sys::MyDatabaseId };
-    let tag = pg_sys::LOCKTAG {
-        locktag_field1: database.to_u32(),
-        locktag_field2: graph_id.cast_unsigned(),
-        locktag_field3: role.to_u32(),
-        locktag_field4: QUOTA_LOCK_OBJSUBID,
-        locktag_type: LOCKTAG_ADVISORY,
-        locktag_lockmethodid: USER_LOCKMETHOD,
-    };
-    // SAFETY: a heavyweight lock request on the main thread, held until
-    // the transaction ends (not a session lock); waiting, it raises an
-    // ERROR on deadlock, `lock_timeout` or cancel, which pgrx's guarded
-    // FFI unwinds. With `dontWait` false it always returns having the lock.
-    unsafe {
-        pg_sys::LockAcquire(&tag, EXCLUSIVE_LOCK, false, false);
-    }
-}
-
-/// `LOCKTAG_ADVISORY`, as `LOCKTAG.locktag_type` holds it.
-const LOCKTAG_ADVISORY: u8 = pg_sys::LockTagType::LOCKTAG_ADVISORY as u8;
-
-/// `USER_LOCKMETHOD`, the lock method of advisory locks.
-const USER_LOCKMETHOD: u8 = pg_sys::USER_LOCKMETHOD as u8;
-
-/// `ExclusiveLock`, the mode `pg_advisory_xact_lock` takes.
-const EXCLUSIVE_LOCK: pg_sys::LOCKMODE = pg_sys::ExclusiveLock as pg_sys::LOCKMODE;
-
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 #[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
@@ -141,7 +58,7 @@ pub(super) mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use super::QUOTA_LOCK_OBJSUBID;
+    use crate::catalog::quota::QUOTA_LOCK_OBJSUBID;
     use crate::fixture::{failure_as, refresh, ring, rows};
 
     /// Graph `vq`, a ring of 100 nodes (so an `f64` vector is 800 bytes, an

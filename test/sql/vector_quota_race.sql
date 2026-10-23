@@ -4,7 +4,8 @@
 -- then counts what it committed: refused if both do not fit, admitted if
 -- they do. And usage is read under the latest committed state, so a
 -- REPEATABLE READ writer whose snapshot predates another session's write
--- still counts it.
+-- still counts it. A writer under no quota takes the lock too, and so does
+-- reassign_owned for the role it moves vectors to (PR #59 review).
 -- fixture: random --nodes 50 --edges 100 --seed 1
 CREATE EXTENSION dblink;
 \ir include/blocked_by_me.sql
@@ -85,4 +86,60 @@ SELECT assert.that(:'b_error' LIKE '%vector "f" (% bytes) would take the persist
 SELECT dblink_exec('b', 'ROLLBACK');
 SELECT assert.equal((SELECT string_agg(name, ',' ORDER BY name) FROM warren.vectors
                      WHERE created_by = 'q_late'::regrole), 'e', 'only e is q_late''s');
+
+-- 4. A writer under no quota still takes the lock: a quota committed while
+-- it is uncommitted holds the next writer to what both write. (The quota
+-- is written directly: set_vector_quota would wait for the first writer,
+-- whose vector's foreign key holds the graph's row.)
+SELECT warren.set_vector_quota('g', NULL);
+SELECT dblink_exec('b', 'RESET ROLE');
+SELECT dblink_exec('b', 'SET ROLE q_reader');
+BEGIN;
+SET ROLE q_reader;
+SELECT warren.vector_const('g', 'h', 1) IS NOT NULL AS written;
+RESET ROLE;
+SELECT dblink_connect('c', :'conninfo');
+SELECT dblink_exec('c', format(
+    'INSERT INTO warren.vector_quotas SELECT graph_id, %L, %s FROM warren.graphs WHERE name = %L',
+    'q_reader', :f64 * 4, 'g'));
+SELECT dblink_send_query('b', $$SELECT warren.vector_const('g', 'i', 1)$$);
+SELECT assert_blocked_by_me(:b_pid, 'a writer of q_reader behind one under no quota');
+COMMIT;
+SELECT count(*) FROM dblink_get_result('b', false) AS t(x bigint);
+SELECT dblink_error_message('b') AS b_error \gset
+SELECT count(*) FROM dblink_get_result('b', false) AS t(x bigint);  -- the end of its results
+SELECT assert.that(:'b_error' LIKE '%vector "i" (% bytes) would take the persisted vectors of role "q_reader" on graph "g" to % bytes, past its quota of % bytes%',
+                   'the writer counts the uncommitted one and the new quota: ' || :'b_error');
+SELECT assert.equal((SELECT bytes FROM warren.vector_usage('g') WHERE role = 'q_reader'::regrole),
+                    :f64 * 4, 'q_reader is at its new quota');
+
+-- 5. reassign_owned waits on the lock of the role it moves vectors to, then
+-- counts that role's committed writes with the move.
+CREATE ROLE q_mallory;
+CREATE ROLE q_group;
+GRANT q_group TO q_mallory;
+SELECT warren.grant('g', 'q_mallory');
+SELECT warren.grant('g', 'q_group');
+SELECT warren.set_vector_quota('g', :f64 * 2, 'q_group');
+SET ROLE q_mallory;
+SELECT warren.vector_const('g', 'm', 1) IS NOT NULL AS written;
+RESET ROLE;
+SELECT dblink_exec('b', 'RESET ROLE');
+SELECT dblink_exec('b', 'SET ROLE q_mallory');
+BEGIN;
+SET ROLE q_group;
+SELECT warren.vector_const('g', 'g1', 1) IS NOT NULL AS written;
+SELECT warren.vector_const('g', 'g2', 1) IS NOT NULL AS written;
+RESET ROLE;
+SELECT dblink_send_query('b', $$SELECT warren.reassign_owned('q_mallory', 'q_group')$$);
+SELECT assert_blocked_by_me(:b_pid, 'reassign_owned to q_group');
+COMMIT;
+SELECT count(*) FROM dblink_get_result('b', false) AS t(x bigint);
+SELECT dblink_error_message('b') AS b_error \gset
+SELECT count(*) FROM dblink_get_result('b', false) AS t(x bigint);  -- the end of its results
+SELECT assert.that(:'b_error' LIKE '%reassigning the persisted vectors of role "q_mallory" on graph "g" (% bytes) would take those of role "q_group" to % bytes, past its quota%',
+                   'the move is refused: ' || :'b_error');
+SELECT assert.equal((SELECT created_by::text FROM warren.vectors WHERE name = 'm'), 'q_mallory',
+                    'm stays q_mallory''s');
+SELECT dblink_disconnect('c');
 SELECT dblink_disconnect('b');

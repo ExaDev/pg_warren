@@ -292,13 +292,19 @@ SELECT warren.drop_owned('alice');             -- drops alice's graphs, and the 
 - `reassign_owned(old, new)` gives every graph `old` owns to `new` with
   `set_owner`'s rules, except that, like `REASSIGN OWNED`, it opens no source
   query (the writable-schema `NOTICE` is still raised), and makes `new` the
-  creator of every vector `old` wrote. `old`'s reader entries stay, as its
-  privileges do under `REASSIGN OWNED`. It returns the number of graphs
-  moved.
+  creator of every vector `old` wrote. The vectors moved count against
+  `new`'s quotas on readers' vectors as `new`'s own writes would: a move
+  that would take `new` past its quota on a graph is refused (53400), and
+  nothing moves. `old`'s reader entries stay, as its privileges do under
+  `REASSIGN OWNED`. It returns the number of graphs moved.
 - `drop_owned(role)` drops every graph `role` owns (as `drop_graph` does,
   with their versions and everyone's vectors), deletes the vectors it wrote
   on other graphs, and removes it from every graph's readers and its
-  quotas. It returns the number of graphs dropped.
+  quotas on graphs whose owner the caller is a member of. So a role
+  cannot shed a quota another owner set on it by dropping what it owns;
+  the graph's owner, a superuser or the extension's owner can, and once the
+  role is dropped, `orphans()` lists the quota. It returns the number of
+  graphs dropped.
 - Both need the privileges of the role they move from or drop (a member
   that does not inherit them has not), as the commands do, and
   `reassign_owned` also the right to `SET ROLE` to the new owner (on
@@ -327,7 +333,7 @@ standard procedure, run without `warren.reassign_owned`, stops rather than
 leaving graphs behind (`REASSIGN OWNED` did not move them): run
 `warren.reassign_owned` or `warren.drop_owned`, then `DROP OWNED` again.
 When `alice` owns no graph, `DROP OWNED` also removes her reader entries
-and quotas and deletes the vectors she wrote, as `drop_owned` does. A role that does
+and quotas (those `drop_owned` would remove) and deletes the vectors she wrote, as `drop_owned` does. A role that does
 not exist, or whose privileges the caller lacks, is left to `DROP OWNED`'s
 own error. The trigger reads who owns what without waiting for other
 transactions: a `set_owner` or `reassign_owned` to the role still
@@ -402,19 +408,26 @@ SELECT * FROM warren.vector_usage('social');                     -- (role, vecto
   write with `persist := false`, or ask the owner.
 - The quota is the role's own, else the graph's default (`info`'s
   `reader_vector_quota`); none applies to members of the owner role, which
-  pays for its own storage. A vector counts against the role that wrote it
-  (`reassign_owned` moves it to the new role). `set_vector_quota` is for
+  pays for its own storage. A vector counts against the role that wrote it,
+  and `reassign_owned` moves it to the new role, within that role's quota. `set_vector_quota` is for
   the owner. `vector_usage` shows the owner every role that has vectors or
   a quota of its own, and a reader its own row.
-- One role's counted writes to one graph run one at a time: each takes a
-  lock on (graph, role) until its transaction ends, and counts what is
+- One role's writes to one graph run one at a time, under a quota or not:
+  each takes a lock on (graph, role) until its transaction ends (and
+  `reassign_owned` takes the new role's), and counts what is
   committed when it has it, whatever its isolation level, so two sessions
   of one role cannot both fit under the quota. The lock shows in
   `pg_locks` as `advisory`, with `objsubid` 22353 (applications' advisory
   locks have 1 or 2), and `pg_advisory_unlock_all()` does not release it.
 - Not counted: `compact` moving vectors to its new version, drops and
   retention. Quotas are dumped with the graph and dropped with it, and
-  `drop_owned` (and the `DROP OWNED` trigger) remove a dropped role's.
+  `drop_owned` (and the `DROP OWNED` trigger) remove a role's where the
+  caller may (above).
+- A quota bounds what a role stores on *another owner's* graph, and only
+  that. It is not a bound on the catalog's total storage: any role that
+  may create a graph stores what it likes on its own graphs, including the
+  quotient `contract` makes for it, which it owns. A quotient does not
+  inherit its parent's quotas; its owner sets its own.
 
 **Whose SQL runs as whom, under which `search_path`.**
 

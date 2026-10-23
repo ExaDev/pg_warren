@@ -53,10 +53,13 @@
   the writer past its quota, and above what it stored, is refused with
   53400; replacing a vector with one no larger always works. Members of
   the owner role are exempt, and transient vectors are not counted. One
-  role's counted writes to one graph take a transaction-scoped lock on
-  (graph, role), shown in `pg_locks` as `advisory` with `objsubid` 22353.
-  `drop_owned`, the `DROP OWNED` trigger, `orphans()` and `drop_orphans()`
-  handle quotas of dropped roles. `ALTER EXTENSION pg_warren UPDATE` adds
+  role's writes to one graph take a transaction-scoped lock on (graph,
+  role), shown in `pg_locks` as `advisory` with `objsubid` 22353.
+  `reassign_owned` counts the vectors it moves against the new role's
+  quotas. `drop_owned` and the `DROP OWNED` trigger remove a role's quotas
+  only on graphs whose owner the caller is a member of; `orphans()` and
+  `drop_orphans()` handle those of dropped roles. A quota bounds a role's
+  vectors on other owners' graphs, not the catalog's total storage. `ALTER EXTENSION pg_warren UPDATE` adds
   the column, the table `warren.vector_quotas` (dumped with the
   extension), an index on `warren.vectors (graph_id, created_by)` and the
   two functions; existing graphs have no quota.

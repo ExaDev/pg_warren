@@ -36,6 +36,9 @@ pub(crate) enum QuotaError {
     /// A quota is a number of bytes, not negative.
     #[error("a vector quota cannot be negative: {0} bytes")]
     Negative(i64),
+    /// `InvalidOid` (`'-'::regrole`) as the role: NULL means the default.
+    #[error("a vector quota is set for a role, not for InvalidOid ('-'); pass NULL for the graph's default")]
+    InvalidRole,
     /// A NULL where a value is required.
     #[error("{0} must not be NULL")]
     NullArgument(&'static str),
@@ -54,7 +57,9 @@ impl SqlError for QuotaError {
     fn sqlstate(&self) -> PgSqlErrorCode {
         match self {
             Self::Exceeded { .. } => PgSqlErrorCode::ERRCODE_CONFIGURATION_LIMIT_EXCEEDED,
-            Self::Negative(_) => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+            Self::Negative(_) | Self::InvalidRole => {
+                PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE
+            }
             Self::NullArgument(_) => PgSqlErrorCode::ERRCODE_NULL_VALUE_NOT_ALLOWED,
             Self::Catalog(error) => error.sqlstate(),
             Self::Access(error) => error.sqlstate(),

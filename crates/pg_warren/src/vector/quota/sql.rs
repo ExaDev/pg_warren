@@ -4,7 +4,10 @@
 use pgrx::prelude::*;
 
 use super::QuotaError;
-use crate::access::{as_catalog_owner, entry, is_owner, require_owner, require_reader};
+use crate::access::{
+    as_catalog_owner, entry, is_owner, require_owner, require_reader, role_name, AccessError,
+};
+use crate::catalog::quota::vector_bytes;
 use crate::catalog::GraphDefinition;
 
 /// What `set_vector_quota` does, for its errors.
@@ -14,7 +17,8 @@ const ACTION: &str = "set a vector quota on";
 /// quota on readers' persisted vectors to `bytes`: for `role`, or with
 /// `role` NULL the default for every role. NULL `bytes` removes it: the
 /// graph's default, or the role's own quota, after which the default
-/// applies to the role. For members of the owner role.
+/// applies to the role. For members of the owner role. `role` must name
+/// a role to set its quota (`'-'`, `InvalidOid`, is never one).
 #[pg_extern(
     schema = "warren",
     sql = r#"
@@ -29,6 +33,14 @@ fn set_vector_quota(name: Option<&str>, bytes: Option<i64>, role: Option<pg_sys:
 fn set_quota(name: &str, bytes: Option<i64>, role: Option<pg_sys::Oid>) -> Result<(), QuotaError> {
     if let Some(negative) = bytes.filter(|&bytes| bytes < 0) {
         return Err(QuotaError::Negative(negative));
+    }
+    match role {
+        Some(pg_sys::Oid::INVALID) => return Err(QuotaError::InvalidRole),
+        // Removing a dropped role's quota is allowed; setting one is not.
+        Some(role) if bytes.is_some() && role_name(role).is_none() => {
+            return Err(AccessError::RoleNotFound(role.to_u32()).into());
+        }
+        _ => {}
     }
     let mut graph = GraphDefinition::find(name)?;
     require_owner(graph.owner, &graph.name, ACTION)?;
@@ -188,6 +200,18 @@ mod tests {
         assert_eq!(
             failure_as("vq_owner", "warren.set_vector_quota('nothing', 1)")?.as_deref(),
             Some("42704: graph \"nothing\" does not exist")
+        );
+        assert_eq!(
+            failure_as("vq_owner", "warren.set_vector_quota('vq', 1, '-')")?.as_deref(),
+            Some(
+                "22023: a vector quota is set for a role, not for InvalidOid ('-'); pass NULL \
+                 for the graph's default"
+            )
+        );
+        assert_eq!(
+            failure_as("vq_owner", "warren.set_vector_quota('vq', 1, 4000000000::oid::regrole)")?
+                .as_deref(),
+            Some("42704: role with OID 4000000000 does not exist")
         );
         assert_eq!(failure_as("vq_owner", "warren.set_vector_quota('vq', 1, 'vq_reader')")?, None);
         assert_eq!(failure_as("vq_owner", "warren.set_vector_quota('vq', 2, 'vq_reader')")?, None);
