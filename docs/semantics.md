@@ -270,8 +270,8 @@ SELECT warren.set_owner('social', 'analytics');   -- owner, and may SET ROLE ana
   needs to be one. The old owner keeps no access unless it is granted.
   Vectors keep the role that wrote them; the new owner may replace or drop
   any of them.
-- It waits for a running `refresh`, `compact`, `promote` or `drop_version` of
-  the graph, and they wait for it. Each checks ownership again once it has
+- It waits for a running `refresh`, `compact`, `promote`, `drop_version`,
+  `grant`, `revoke` or `drop_graph` of the graph, and they wait for it. Each checks ownership again once it has
   the graph's row, so a call queued behind a transfer by a role that no
   longer owns the graph is refused (42501).
 

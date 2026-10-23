@@ -17,9 +17,10 @@
 
 ### Fixed
 
-- `refresh`, `compact`, `promote`, `drop_version` and `contract` into an
-  existing quotient check ownership again once they hold the graph's row
-  lock. They checked only before it, so a call queued behind an ownership
+- `refresh`, `compact`, `promote`, `drop_version`, `grant`, `revoke`,
+  `drop_graph` and `contract` into an existing quotient check ownership
+  again once they hold the graph's row lock (`grant`, `revoke` and
+  `drop_graph` now take it). They checked only before it, so a call queued behind an ownership
   transfer ran with an ownership its caller no longer had (harness test
   `set_owner_race`).
 

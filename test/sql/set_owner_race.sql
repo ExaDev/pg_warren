@@ -6,8 +6,10 @@
 -- is read to its end (dblink_get_result until the empty result) before the
 -- next one.
 CREATE EXTENSION dblink;
+\ir include/blocked_by_me.sql
 CREATE ROLE alice;
 CREATE ROLE bob;
+CREATE ROLE eve;
 CREATE TABLE nodes AS SELECT generate_series(1, 4)::bigint AS id;
 CREATE TABLE edges AS SELECT id AS src, id % 4 + 1 AS dst FROM nodes;
 GRANT SELECT ON nodes, edges TO alice, bob;
@@ -22,6 +24,7 @@ SELECT format('dbname=%s user=%s host=%s port=%s', current_database(), session_u
               split_part(current_setting('unix_socket_directories'), ',', 1),
               current_setting('port')) AS conninfo \gset
 SELECT dblink_connect('b', :'conninfo');
+SELECT pid AS b_pid FROM dblink('b', 'SELECT pg_backend_pid()') AS t(pid int) \gset
 SELECT dblink_exec('b', 'SET ROLE alice');
 
 -- Each case: this session gives :graph to bob while b's :call, as alice,
@@ -49,5 +52,23 @@ SELECT 'q' AS graph, $$SELECT warren.contract('g', 'c', 'q')$$ AS call,
 SELECT assert.equal(
     (SELECT count(*) FROM warren.versions JOIN warren.graphs USING (graph_id) WHERE name = 'q'),
     1::bigint, 'the refused contraction added no version');
+
+-- grant and revoke change only readers, and drop_graph deletes the graph:
+-- each would otherwise be applied to bob's graph once the row is free.
+SELECT 'g' AS graph, $$SELECT warren.grant('g', 'eve')$$ AS call, 'grant' AS action \gset
+\ir include/set_owner_race.sql
+SELECT assert.equal((SELECT readers::text FROM warren.graphs WHERE name = 'g'), '{}',
+                    'the refused grant added no reader');
+
+SELECT warren.grant('g', 'eve');
+SELECT 'g' AS graph, $$SELECT warren.revoke('g', 'eve')$$ AS call, 'revoke' AS action \gset
+\ir include/set_owner_race.sql
+SELECT assert.equal((SELECT readers::text FROM warren.graphs WHERE name = 'g'), '{eve}',
+                    'the refused revoke removed no reader');
+
+SELECT 'g' AS graph, $$SELECT warren.drop_graph('g')$$ AS call, 'drop' AS action \gset
+\ir include/set_owner_race.sql
+SELECT assert.that(EXISTS (SELECT FROM warren.graphs WHERE name = 'g'),
+                   'the refused drop_graph kept the graph');
 
 SELECT dblink_disconnect('b');
