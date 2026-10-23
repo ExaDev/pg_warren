@@ -329,7 +329,11 @@ leaving graphs behind (`REASSIGN OWNED` did not move them): run
 When `alice` owns no graph, `DROP OWNED` also removes her reader entries
 and deletes the vectors she wrote, as `drop_owned` does. A role that does
 not exist, or whose privileges the caller lacks, is left to `DROP OWNED`'s
-own error. The extension never creates the trigger, and nothing needs it:
+own error. The trigger reads who owns what without waiting for other
+transactions: a `set_owner` or `reassign_owned` to the role still
+uncommitted when `DROP OWNED` runs is not seen, so its graph is orphaned at
+`DROP ROLE`, and `orphans()` lists it (run the sweep after such overlaps).
+The extension never creates the trigger, and nothing needs it:
 only a superuser can create an event trigger, and a trusted install works
 without it. While it exists, `DROP EXTENSION pg_warren` needs `CASCADE`,
 which drops the trigger too. `pg_dump` dumps it, so restoring such a dump
@@ -350,16 +354,16 @@ SELECT warren.drop_orphans();         -- drops orphaned graphs, prunes the rest
 `orphans()` lists graphs whose owner no longer exists (`kind` `graph`),
 reader entries naming dropped roles (`reader`), and vectors whose creator
 was dropped (`vector`, one row per graph and role), each with the dropped
-role's OID. A superuser and members of the extension's owner (the role
-that ran `CREATE EXTENSION`: the installer, in a trusted install) see
-every row; others see the `reader` and `vector` rows of graphs they own.
+role's OID. A superuser and the extension's owner (the role that ran
+`CREATE EXTENSION`: the installer, in a trusted install), or a member that
+has its privileges or may `SET ROLE` to it, see every row; others see the `reader` and `vector` rows of graphs they own.
 `drop_orphans()` drops the orphaned graphs, removes the reader entries,
 deletes the vectors, and returns the number of graphs dropped. Run it
 soon: once a dropped role's OID is reused, nothing can tell its graphs
 from the new role's.
 
 Who may act on a graph whose owner was dropped (an *orphan*): a superuser
-or a member of the extension's owner may drop it (`drop_graph`,
+or the extension's owner (as above) may drop it (`drop_graph`,
 `drop_orphans`); only a superuser may give it a new owner with
 `set_owner` (adopt it), since its versions were built with what the
 dropped owner could see (42501 for anyone else). The extension's owner

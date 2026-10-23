@@ -32,10 +32,14 @@
   - `warren.orphans()` and `warren.drop_orphans()` list and remove graphs,
     reader entries and vectors that name roles dropped without any of the
     above.
-  - A graph whose owner was dropped may now be dropped by members of the
-    extension's owner as well as by a superuser (`drop_graph`,
-    `drop_orphans`), and adopted by a superuser with `warren.set_owner`,
+  - A graph whose owner was dropped may now be dropped by the extension's
+    owner (or a member with its privileges or the right to `SET ROLE` to
+    it) as well as by a superuser (`drop_graph`, `drop_orphans`), and adopted by a superuser with `warren.set_owner`,
     which refused it before ("the owner no longer exists").
+
+  - A `drop_vector`, a replacement or `compact`'s move that checked a
+    vector's creator, and then waited behind a `reassign_owned` that changed
+    it, fails with 40001 instead of deleting the new creator's vector.
 
   `ALTER EXTENSION pg_warren UPDATE` creates the five functions.
 
