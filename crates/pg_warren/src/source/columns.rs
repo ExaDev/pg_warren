@@ -217,7 +217,7 @@ pub(crate) fn check_edge_columns(
     for (number, (column, (role, (oid, name)))) in (1..).zip(columns.iter().zip(expected)) {
         let at = Column { query: "edge_query", number, role };
         let endpoint = number <= 2;
-        if endpoint {
+        if endpoint && id_type == IdType::Text {
             refuse_text_like(at, column)?;
         }
         let fits = match endpoint {
@@ -315,6 +315,23 @@ mod tests {
         let error = check_edge_columns(&[text(), bpchar], IdType::Text, false, false).unwrap_err();
         assert!(matches!(error, SourceError::IdTypeRefused { column: 2, .. }), "{error:?}");
         assert_eq!(error.sqlstate(), PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH);
+    }
+
+    /// A text-like endpoint of a graph whose ids are not text is of the
+    /// wrong type, with no hint to cast it to text.
+    #[test]
+    fn a_text_like_endpoint_of_a_bigint_graph_is_mistyped() {
+        let bpchar = column(pg_sys::BPCHAROID, "character(5)");
+        assert_eq!(
+            check_edge_columns(&[int8(), bpchar], IdType::Int8, false, false),
+            Err(SourceError::ColumnType {
+                query: "edge_query",
+                column: 2,
+                role: "target id",
+                expected: "bigint",
+                found: "character(5)".to_owned(),
+            })
+        );
     }
 
     #[test]
