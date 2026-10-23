@@ -305,7 +305,7 @@ def test_the_settings_are_recorded_after_each_pass_sets_them_and_loads_the_libra
     runner = soak.Soak(None, options, provenance={})
     runner.session = lambda: FakeSession(log)
     result = {"stages": {}, "cached_bytes": GIB}
-    runner._queries(result, "raised", cap="8GB")
+    runner._queries(result, soak.CASES["a"], "raised", cap="8GB")
     snapshot = next(i for i, sql in enumerate(log) if "pg_settings" in sql)
     assert snapshot > max(i for i, sql in enumerate(log) if sql.startswith("SET "))
     # pg_settings lists warren.* only once a call has loaded the library.
@@ -330,7 +330,7 @@ def test_the_first_pass_runs_at_the_given_cap_and_counts_pagerank_against_it():
     options.eigen = False
     runner = soak.Soak(None, options, provenance={})
     runner.session = lambda: FakeSession(log)
-    runner._queries({"stages": {}, "cached_bytes": GIB}, "default", cap=runner.first_cap())
+    runner._queries({"stages": {}, "cached_bytes": GIB}, soak.CASES["a"], "default", cap=runner.first_cap())
     assert "SET warren.max_cache_memory = '418945kB'" in log
     assert any("warren.pagerank" in sql and "pg_stat_get_xact" in sql for sql in log)
     # Then once more from a cold cache, which must load the version once.
@@ -579,3 +579,9 @@ def test_a_text_case_passes_text_ids_to_the_calls():
     assert f"'{TEXT}' || (1 + (i * 7919) % 10)" in calls["similarity"].sql
     assert f"SELECT '{TEXT}' || id, 1 FROM generate_series(1::bigint, 10, 100) id" in calls["similar_pairs"].setup[0]
     assert "NULL::text" in soak.community_stats_sql("soak", "louvain", ids="text")
+
+
+def test_a_full_text_case_checks_its_edges_as_its_bigint_case_does():
+    case = soak.replace(soak.CASES["a"], ids="text")
+    with pytest.raises(soak.GeneratorDrift):
+        soak.check_edges(case, {"deduplicated_edges": 0, "edge_count": case.edges})

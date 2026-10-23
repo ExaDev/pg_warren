@@ -39,7 +39,10 @@ they wrote (`--skip library`, `--skip communities`). Their levels keep
 their rows until VACUUM, after the run, so a run is cancelled if it
 would take the disk below `--disk-floor`; the edge table and the first
 version are dropped first. `--node-order locality` builds the graph with
-dense ids in locality order (DESIGN.md §14 item 22)."""
+dense ids in locality order (DESIGN.md §14 item 22). `--ids text` names
+node n by the IRI `https://example.org/resource/<n>` (DESIGN.md §5.7),
+in the node query, the edge query and every call; its results are
+`<case>-text.json`."""
 
 import argparse
 import datetime
@@ -463,8 +466,9 @@ class GeneratorDrift(RuntimeError):
 
 def check_edges(case, stats):
     """Fails unless a full-scale case's first version has the deduplicated
-    edges every committed run had (scaled cases have no recorded value)."""
-    if case != CASES[case.name]:
+    edges every committed run had (scaled cases have no recorded value),
+    which its edges have whatever their ids."""
+    if replace(case, ids="bigint") != CASES[case.name]:
         return
     found, edges = stats["deduplicated_edges"], stats["edge_count"]
     if (found, edges) != (DEDUPLICATED_EDGES, case.edges - DEDUPLICATED_EDGES):
@@ -661,7 +665,7 @@ class Soak:
         admin = self.cluster.database()
         admin.execute("DROP DATABASE IF EXISTS soak")
         admin.execute("CREATE DATABASE soak")
-        result = {"provenance": self.provenance, "case": case.name, "nodes": case.nodes, "edges": case.edges, "weighted": case.weighted,
+        result = {"provenance": self.provenance, "case": case.name, "nodes": case.nodes, "edges": case.edges, "weighted": case.weighted, "ids": case.ids,
                   "relations": case.relations, "store_merged": case.store_merged, "threads": self.options.threads,
                   "node_order": self.options.node_order, "eigen_max_iter": self.options.eigen_max_iter,
                   "statement_timeout": self.options.statement_timeout, "skip": self.options.skip, "planned_stages": planned_stages(case, self.options),
@@ -713,9 +717,9 @@ class Soak:
                 # The first pass's prewarm is then the cold load into the shared cache.
                 s.run(f"SELECT warren.evict('{GRAPH}')")
         result["cache_memory_bytes"] = cap_bytes(self.options.cache_memory_kb)
-        self._queries(result, "default", cap=self.first_cap())
+        self._queries(result, case, "default", cap=self.first_cap())
         if needs_raised_pass(result, v1["id_space"]):
-            self._queries(result, "raised", cap=self.options.raised_cache_memory)
+            self._queries(result, case, "raised", cap=self.options.raised_cache_memory)
         if self.options.eigen and self.options.eigen_steps and case.name == "a":
             self._eigen_steps(case, result)
         if "second-version" in self.options.skip:
@@ -769,7 +773,7 @@ class Soak:
         kb = self.options.cache_memory_kb
         return None if kb is None else f"{kb}kB"
 
-    def _queries(self, result, label, cap):
+    def _queries(self, result, case, label, cap):
         """The read workloads in one backend, from a cold cache. A version
         that cannot fit the cap reloads on every statement, so latencies repeat less."""
         reloads = label == "default" and (result["cached_bytes"] or 0) > cap_bytes(self.options.cache_memory_kb)
@@ -784,13 +788,14 @@ class Soak:
             # After the SETs, and after a call loaded the library: before
             # that pg_settings does not list warren.*.
             result.setdefault("settings", {})[label] = s.run(SETTINGS_SQL)["rows"]
-            stage("bfs depth 6", f"SELECT count(*) FROM warren.bfs('{GRAPH}', ARRAY[1::bigint], 6)", 3, True)
-            stage("bfs depth 6 count", f"SELECT count(*) FROM warren.bfs('{GRAPH}', ARRAY[1::bigint], 6)")
-            stage("neighbours", f"SELECT count(*) FROM warren.neighbours('{GRAPH}', 1::bigint)", 3 if reloads else 20, True)
-            stage("reachable_set", f"SELECT count(*) FROM warren.reachable_set('{GRAPH}', ARRAY[1::bigint])")
+            first = node(case.ids, 1)
+            stage("bfs depth 6", f"SELECT count(*) FROM warren.bfs('{GRAPH}', ARRAY[{first}], 6)", 3, True)
+            stage("bfs depth 6 count", f"SELECT count(*) FROM warren.bfs('{GRAPH}', ARRAY[{first}], 6)")
+            stage("neighbours", f"SELECT count(*) FROM warren.neighbours('{GRAPH}', {first})", 3 if reloads else 20, True)
+            stage("reachable_set", f"SELECT count(*) FROM warren.reachable_set('{GRAPH}', ARRAY[{first}])")
             self.stage(result, f"{label}: reachable_set stats", {"stats": s.run("SELECT warren.last_stats()")["rows"]})
             stage("components", f"SELECT count(*) FROM (SELECT component_id FROM warren.components('{GRAPH}', "
-                                "NULL::bigint) GROUP BY 1) c")
+                                f"NULL::{case.ids}) GROUP BY 1) c")
             stage("pagerank", pagerank_sql(GRAPH))
             # From a cold cache: one statement, so it loads the version once
             # even when the version and its scratch exceed the cap (§5.5).
@@ -811,7 +816,7 @@ class Soak:
         if "library" not in self.options.skip:
             with self.session() as s:
                 self._configure(s, self.first_cap())
-                for call in library_calls(GRAPH, case.nodes):
+                for call in library_calls(GRAPH, case.nodes, case.ids):
                     self._call(s, result, "library", call)
         if "communities" in self.options.skip:
             return
@@ -822,7 +827,7 @@ class Soak:
                 stage = f"communities: {call.name}"
                 self.stage(result, stage, self._guarded(s, call.sql))
                 if "errors" not in result["stages"][stage]:
-                    self.stage(result, f"{stage} stats", {"rows": s.run(community_stats_sql(GRAPH, call.name))["rows"]})
+                    self.stage(result, f"{stage} stats", {"rows": s.run(community_stats_sql(GRAPH, call.name, case.ids))["rows"]})
                 after, free_after = s.run(DISK_SQL)["rows"][0].split("|"), self.free_disk()
                 for sql in call.cleanup:
                     s.run(sql)
@@ -1057,6 +1062,8 @@ def main(argv):
                          help="preload pg_warren and set warren.shared_cache_memory to this (e.g. 8GB); "
                               "default: the server's default, private on PG 15 and 16")
     options.add_argument("--statement-timeout", help="statement_timeout of the read workloads, e.g. 15min")
+    options.add_argument("--ids", choices=["bigint", "text"], default="bigint",
+                         help="the node ids: bigint numbers, or text IRIs (DESIGN.md §5.7)")
     options.add_argument("--node-order", choices=["id", "locality"], default="id",
                          help="create_graph's node_order: how the first build orders dense ids")
     options.add_argument("--skip", action="append", default=[], choices=["second-version", "library", "communities"],
@@ -1079,11 +1086,12 @@ def main(argv):
                  settings=cluster_settings(args.shared_cache_memory)) as cluster:
         soak = Soak(cluster, args, found)
         for name in args.cases:
-            case = CASES[name].scaled(args.scale) if args.scale > 1 else CASES[name]
+            case = replace(CASES[name], ids=args.ids)
+            case = case.scaled(args.scale) if args.scale > 1 else case
             print(f"{name}: {case.nodes} nodes, {case.edges} edges, free disk {size(free_disk(args.parent))}",
                   flush=True)
             result = soak.run(case)
-            suffix = f"-scale{args.scale}" if args.scale > 1 else ""
+            suffix = (f"-scale{args.scale}" if args.scale > 1 else "") + ("-text" if args.ids == "text" else "")
             out = args.results / f"{name}{suffix}{args.label}.json"
             out.write_text(json.dumps(result, indent=1) + "\n")
             for verdict in result["verdicts"]:
