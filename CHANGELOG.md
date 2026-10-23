@@ -1,13 +1,31 @@
 # Changelog
 
-## 0.5.0 — in development
+## 0.5.0 — the shared cache (2026-10-23)
+
+Milestone M9 of DESIGN.md §13, the first on the road to 1.0. A loaded
+graph version, and a persisted vector, is kept once per cluster in dynamic
+shared memory and mapped by every backend that reads it, instead of once
+per backend: behind PgBouncer, 50 pooled connections reading a 112 MB
+version hold 338 MB instead of 6.63 GB, and a pool's cold start is one
+load (DESIGN.md §12, `bench/results/pooler/`). It is on by default, with
+nothing to configure on PostgreSQL 17 and 18 and
+`shared_preload_libraries` on 15 and 16. With it the graph reads that use
+no vector are `PARALLEL SAFE`, so a scan that calls one per row runs in
+parallel workers. The 100M-edge soak, re-run with the shared cache, reads
+the shared version in every query stage, with each backend's private
+memory lower by the version's size; where 0.4.0 reloaded a version larger
+than `warren.max_cache_memory` on every statement, it now reads it in
+place (under Performance).
 
 ### Upgrading
 
 - **Run `ALTER EXTENSION pg_warren UPDATE;` in every database that has the
   extension**, after installing the new build and before using the new
   version: the update creates `warren.shared_cache()`, replaces
-  `warren.gather` and marks the graph reads `PARALLEL SAFE` (below).
+  `warren.gather` and `warren.label_propagation_majority`, and marks the
+  graph reads `PARALLEL SAFE` (below). The new library is loaded at once,
+  but the catalog changes only with the update, so calls in between can
+  fail.
 - The update drops and recreates `warren.gather` (it gains
   `include_self`; grants on it are kept). A view or a `BEGIN ATOMIC` SQL
   function that calls `warren.gather` depends on it and makes `ALTER
@@ -17,7 +35,6 @@
 - Until the update, `warren.gather` keeps its 0.4.0 definition, which
   calls the new library without `include_self`; such a call behaves as
   `include_self := false`, as in 0.4.0.
-
 - **The shared cache is on by default.** A loaded graph version is kept
   once per cluster in dynamic shared memory, up to
   `warren.shared_cache_memory` (default `4GB`, a server setting: set it in
@@ -33,7 +50,41 @@
   `--shm-size` (docs/limits.md, "The shared cache"). An idle cluster keeps
   up to the cap of shared versions until they are evicted or it restarts.
 
-### Added
+### Behaviour changes
+
+- **Graph reads can run in parallel workers** (DESIGN.md §14 item 33):
+  `neighbours`, `degree`, `has_edge`, `id_map`, `info` and the traversals
+  `reachable`, `shortest_path`, `dijkstra`, `bfs`, `reachable_set`,
+  `components` and `walk` are `PARALLEL SAFE` (they were `PARALLEL
+  RESTRICTED`), so a scan that calls one per row can run in parallel: at
+  1M rows, `has_edge` per row takes 3.7 s with 2 workers and 2.9 s with 4
+  with the shared cache, against 9.8–10.3 s in the leader alone. A worker
+  maps the shared version; wherever a version is read privately, **each
+  worker loads its own copy**: on PostgreSQL 15 and 16 without
+  `shared_preload_libraries = 'pg_warren'` or with the shared cache off,
+  and also for a version larger than `warren.shared_cache_memory`, one the
+  shared cache has no room for (Docker's 64 MB `/dev/shm`, for one), and
+  one the current transaction created. Each copy is within the worker's
+  `warren.max_cache_memory` and `warren.max_compute_memory` and held until
+  the query ends, so a plan can hold one per worker plus the leader's, and
+  a short query forced parallel can be slower (1.8–3× over 10k rows
+  without the preload). `last_stats()` reports only calls the leader ran:
+  a traversal in a worker records nothing; and the cache's `NOTICE`s are
+  raised by the leader only. To avoid parallel plans, any role can `SET
+  max_parallel_workers_per_gather = 0` (per session, transaction or role);
+  a superuser can keep 0.4.0's behaviour for a function with `ALTER
+  FUNCTION … PARALLEL RESTRICTED` (docs/semantics.md, "Parallel query
+  labels"). Vector reads, `explain_map`, `diff`, `distance`, `prewarm`,
+  `evict` and `last_stats` stay `PARALLEL RESTRICTED`. `ALTER EXTENSION
+  pg_warren UPDATE` changes the labels.
+- A level graph (`contract(graph, labels, NULL)`, the graphs `louvain` and
+  `leiden` contract each level into) stores each relation's forward CSR
+  only, without a reverse or merged CSR whatever the input's layout. The
+  partitions are the same; on a directed graph each level writes about
+  half the segments and WAL (at 1M nodes and 10M random edges, `louvain`'s
+  levels 293 MB instead of 536 MB, `leiden`'s 945 MB instead of 1.76 GB).
+
+### New
 
 - The shared cache (DESIGN.md §5.6): `warren.shared_cache_memory`. A
   version, or a persisted vector, is loaded once per cluster by the first
@@ -63,82 +114,7 @@
   messages, ahead of its senders'. `ALTER EXTENSION pg_warren UPDATE`
   replaces `gather`.
 
-### Changed
-
-- **Graph reads can run in parallel workers** (DESIGN.md §14 item 33):
-  `neighbours`, `degree`, `has_edge`, `id_map`, `info` and the traversals
-  `reachable`, `shortest_path`, `dijkstra`, `bfs`, `reachable_set`,
-  `components` and `walk` are `PARALLEL SAFE` (they were `PARALLEL
-  RESTRICTED`), so a scan that calls one per row can run in parallel: at
-  1M rows, `has_edge` per row takes 3.7 s with 2 workers and 2.9 s with 4
-  with the shared cache, against 9.8–10.3 s in the leader alone. A worker
-  maps the shared version; wherever a version is read privately, **each
-  worker loads its own copy**: on PostgreSQL 15 and 16 without
-  `shared_preload_libraries = 'pg_warren'` or with the shared cache off,
-  and also for a version larger than `warren.shared_cache_memory`, one the
-  shared cache has no room for (Docker's 64 MB `/dev/shm`, for one), and
-  one the current transaction created. Each copy is within the worker's
-  `warren.max_cache_memory` and `warren.max_compute_memory` and held until
-  the query ends, so a plan can hold one per worker plus the leader's, and
-  a short query forced parallel can be slower (1.8–3× over 10k rows
-  without the preload). `last_stats()` reports only calls the leader ran:
-  a traversal in a worker records nothing; and the cache's `NOTICE`s are
-  raised by the leader only. To avoid parallel plans, any role can `SET
-  max_parallel_workers_per_gather = 0` (per session, transaction or role);
-  a superuser can keep 0.4.0's behaviour for a function with `ALTER
-  FUNCTION … PARALLEL RESTRICTED` (docs/semantics.md, "Parallel query
-  labels"). Vector reads, `explain_map`, `diff`, `distance`, `prewarm`,
-  `evict` and `last_stats` stay `PARALLEL RESTRICTED`. `ALTER EXTENSION
-  pg_warren UPDATE` changes the labels.
-- `label_propagation_majority` counts its votes in-engine, with one
-  `gather` (`mode`, `include_self`) per iteration instead of counting
-  every received label in the executor: at 1M nodes and 20M stored edges
-  an iteration takes ~3 s, against ~37 s before on the same machine. Its
-  results are unchanged.
-
-- A level graph (`contract(graph, labels, NULL)`, the graphs `louvain` and
-  `leiden` contract each level into) stores each relation's forward CSR
-  only, without a reverse or merged CSR whatever the input's layout. The
-  partitions are the same; on a directed graph each level writes about
-  half the segments and WAL (at 1M nodes and 10M random edges, `louvain`'s
-  levels 293 MB instead of 536 MB, `leiden`'s 945 MB instead of 1.76 GB).
-
-### Performance
-
-- Every graph read checked the caller's access with a catalog query planned
-  on each call; it now reads the role caches. A point lookup such as
-  `warren.degree` takes about a seventh of the time (200,000 calls in one
-  statement: 2.1 s, from 14.5 s), and `pgbench` of one `degree` per
-  transaction with 4 clients runs at about 140,000 tps, from 35,000.
-
-- **`vector_map`'s no-NULL path** (`warren-core`'s `compute::map`;
-  DESIGN.md §6.3). An expression built only from vectors, non-NULL
-  literals, casts, arithmetic, comparisons, `NOT` and `CASE … ELSE` is
-  never NULL. It is now evaluated without NULL flags, with each operator
-  chosen once per chunk rather than per element. Results are
-  bit-identical, and any error is still reported by the general path.
-- Measured in `warren-core` at 4M nodes and 40M edges
-  (`benches/spmv_out_of_cache.rs`), on a shared 4-vCPU machine, so the
-  spread is wide:
-  - `pagerank`'s four maps: 2.1–2.7× faster on one thread (340–390 ms
-    before, 145–165 ms after);
-  - a whole iteration: 1.2–1.4× faster on one thread (790–840 →
-    580–665 ms), 1.3–2.2× on four (480–550 → 250–375 ms).
-
-  Not re-measured through SQL at 10M nodes.
-
-- **Multi-source BFS for unweighted closeness and harmonic centrality**
-  (`warren-core`'s `compute::centrality`; DESIGN.md §6.7). Sources are
-  searched 64 at a time, one bit per source, each step in parallel over
-  the frontier, with 40 B of scratch per node.
-  - Measured at 1M nodes / 10M edges on 4 threads
-    (`benches/centrality.rs`): 64 sources of closeness or harmonic in
-    0.65–1.23 s instead of 10.1–20.7 s (9–32× faster).
-  - Closeness is bit-identical to before. Harmonic sums in a new,
-    deterministic order, within 1e-12 relative of the old result.
-  - Weighted graphs (Dijkstra) and betweenness are unchanged.
-
-### Fixed
+### Fixes
 
 - `leiden_refine` (and so `leiden`) charged 88 bytes a node to
   `warren.max_compute_memory` up front, every community's state at once,
@@ -152,6 +128,59 @@
   installation's cached versions and vectors for the new installation's
   (version, graph and vector ids restart). A backend now drops what it
   cached when pg_warren is installed again.
+
+### Performance
+
+- **The 100M-edge soak with the shared cache** (DESIGN.md §12,
+  `bench/results/soak/*-m9-shared.json`; PG 16 preloaded, 4 vCPUs). Every
+  query stage reads the shared version, and a backend's private memory
+  falls by the version (case a's stages peak at 0.01–3.11 GB private, from
+  1.22–4.31 GB in 0.4.0). On the 6.0 GB five-relation graph with its
+  merged CSR, at an 8GB `warren.shared_cache_memory` and the default
+  `warren.max_cache_memory`, which no longer counts the version, `bfs`
+  takes 0.89 s (25.1 s in 0.4.0, which reloaded it each statement),
+  `components` 7.6 s (28.6 s) and `pagerank` 16.5 s (38.4 s), and `eigen`,
+  refused there before (53400), runs. On the one-relation graph `louvain`
+  completes (627.5 s, five levels) where 0.4.0's soak stopped it for disk
+  at 383 s. Other stages are within the
+  machine's run-to-run spread; a build is private, so `refresh` is
+  unchanged. The soak ran before the two fixes to level graphs and
+  Leiden's refinement (under Behaviour changes and Fixes), so its
+  `leiden` refusal (53400) at 10M nodes is 0.4.0's; neither fix is re-run
+  at that scale yet (docs/limits.md).
+- Every graph read checked the caller's access with a catalog query planned
+  on each call; it now reads the role caches. A point lookup such as
+  `warren.degree` takes about a seventh of the time (200,000 calls in one
+  statement: 2.1 s, from 14.5 s), and `pgbench` of one `degree` per
+  transaction with 4 clients runs at about 140,000 tps, from 35,000.
+- **`vector_map`'s no-NULL path** (`warren-core`'s `compute::map`;
+  DESIGN.md §6.3). An expression built only from vectors, non-NULL
+  literals, casts, arithmetic, comparisons, `NOT` and `CASE … ELSE` is
+  never NULL. It is now evaluated without NULL flags, with each operator
+  chosen once per chunk rather than per element. Results are
+  bit-identical, and any error is still reported by the general path.
+  Measured in `warren-core` at 4M nodes and 40M edges
+  (`benches/spmv_out_of_cache.rs`), on a shared 4-vCPU machine, so the
+  spread is wide, and not re-measured through SQL at 10M nodes:
+  - `pagerank`'s four maps: 2.1–2.7× faster on one thread (340–390 ms
+    before, 145–165 ms after);
+  - a whole iteration: 1.2–1.4× faster on one thread (790–840 →
+    580–665 ms), 1.3–2.2× on four (480–550 → 250–375 ms).
+- **Multi-source BFS for unweighted closeness and harmonic centrality**
+  (`warren-core`'s `compute::centrality`; DESIGN.md §6.7). Sources are
+  searched 64 at a time, one bit per source, each step in parallel over
+  the frontier, with 40 B of scratch per node.
+  - Measured at 1M nodes / 10M edges on 4 threads
+    (`benches/centrality.rs`): 64 sources of closeness or harmonic in
+    0.65–1.23 s instead of 10.1–20.7 s (9–32× faster).
+  - Closeness is bit-identical to before. Harmonic sums in a new,
+    deterministic order, within 1e-12 relative of the old result.
+  - Weighted graphs (Dijkstra) and betweenness are unchanged.
+- `label_propagation_majority` counts its votes in-engine, with one
+  `gather` (`mode`, `include_self`) per iteration instead of counting
+  every received label in the executor: at 1M nodes and 20M stored edges
+  an iteration takes ~3 s, against ~37 s before on the same machine. Its
+  results are unchanged.
 
 ## 0.4.0 — locality, the library, and communities (2026-10-22)
 

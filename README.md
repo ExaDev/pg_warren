@@ -43,7 +43,7 @@ the server headers (`postgresql-server-dev-NN`), `clang`/`libclang-dev`, and
 cargo-pgrx at exactly the version the extension uses:
 
 ```sh
-git checkout v0.4.0   # the latest release; main is the version in development
+git checkout v0.5.0   # the latest release; main is the version in development
 cargo install cargo-pgrx --version 0.19.3 --locked
 cargo pgrx init --pg16 "$(command -v pg_config)"
 cd crates/pg_warren
@@ -261,15 +261,33 @@ Every SQL example in the README and `docs/` runs in CI, in
   the cache, compute and build limits together
   ([docs/limits.md](docs/limits.md)).
 
-- **0.5.0** (in development, M9): the shared cache, one copy of a loaded
-  version per cluster in dynamic shared memory (DESIGN.md §5.6).
+- **0.5.0**: the shared cache, milestone M9. A loaded version, and a
+  persisted vector, is kept once per cluster in dynamic shared memory and
+  mapped by every backend that reads it (`warren.shared_cache_memory`,
+  default `4GB`; `warren.shared_cache()` shows what it holds; DESIGN.md
+  §5.6). It needs no configuration on PostgreSQL 17 and 18, and
+  `shared_preload_libraries = 'pg_warren'` on 15 and 16, which otherwise
+  keep 0.4.0's copy per backend. The graph reads that use no vector are
+  `PARALLEL SAFE`. `gather` gains the `mode` combiner and `include_self`.
+  Upgrading needs `ALTER EXTENSION pg_warren UPDATE` (see the changelog).
+
+  Behind PgBouncer, 50 pooled connections on one graph hold 338 MB instead
+  of 6.63 GB, and a pool's cold start is one load; a per-row read over 1M
+  rows runs 2.6–3.6× faster with 2–4 parallel workers. In the 100M-edge
+  soak a version larger than `warren.max_cache_memory` is no longer
+  reloaded by every statement. The caveats: shared versions live in
+  `/dev/shm`, so a Docker container needs `--shm-size` (else versions are
+  loaded privately); wherever a version is read privately, each parallel
+  worker loads its own copy, and a short query forced parallel can be
+  slower; and Louvain and Leiden at 10M nodes still write several GB of
+  level graphs ([docs/limits.md](docs/limits.md)).
 
 See [CHANGELOG.md](CHANGELOG.md). This is pre-1.0 software: the SQL surface
 may still change between minor versions, with an upgrade script each time.
 
-Not there yet: the road to 1.0 (DESIGN.md §13) is a shared cache, one
-copy of a version per cluster (M9, 0.5.0); text ids, ownership transfer,
-cleanup when an owner role is dropped, quotas and observability (M10);
+Not there yet: the rest of the road to 1.0 (DESIGN.md §13) is text ids,
+ownership transfer, cleanup when an owner role is dropped, quotas and
+observability (M10);
 benchmarks and robustness on real graphs and deployments, and packages
 (M11); and a reviewed, frozen SQL surface (M12, 1.0.0). Incremental
 maintenance, general sparse matrix algebra (contraction's `PᵀAP` is the
