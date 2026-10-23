@@ -135,6 +135,13 @@ SELECT warren.vector_const('social', 'mine', 1);                     -- readers 
 SELECT warren.drop_vector('social', 'mine');
 RESET ROLE;
 SELECT warren.revoke('social', 'analyst');
+CREATE ROLE analytics;
+GRANT SELECT ON people, follows TO analytics;                        -- the new owner reads the sources
+SELECT warren.set_owner('social', 'analytics');
+SELECT assert.equal(warren.info('social') ->> 'owner', 'analytics', 'set_owner gives the graph a new owner');
+SELECT warren.set_owner('social', session_user::text::regrole);      -- test plumbing: give it back
+REVOKE SELECT ON people, follows FROM analytics;
+DROP ROLE analytics;
 REVOKE USAGE ON SCHEMA assert FROM analyst, stranger;
 DROP ROLE analyst;
 DROP ROLE stranger;

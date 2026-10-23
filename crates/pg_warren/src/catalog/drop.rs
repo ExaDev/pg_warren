@@ -18,7 +18,7 @@ fn drop_version(name: &str, version: i64) {
 fn drop_version_by_name(name: &str, version: VersionId) -> Result<(), CatalogError> {
     let mut graph = GraphDefinition::find(name)?;
     require_owner(graph.owner, &graph.name, "drop versions of")?;
-    graph.lock()?;
+    graph.lock("drop versions of")?;
     delete_version(&graph, version)
 }
 
@@ -31,10 +31,16 @@ fn drop_graph(name: &str) {
 }
 
 fn drop_graph_by_name(name: &str) -> Result<(), CatalogError> {
-    let graph = GraphDefinition::find(name)?;
+    let mut graph = GraphDefinition::find(name)?;
     match require_owner(graph.owner, &graph.name, "drop") {
         Err(AccessError::OwnerDropped(_)) if is_superuser()? => {}
         checked => checked?,
+    }
+    // Checks ownership again once it holds the row: a set_owner may have
+    // held it (DESIGN.md §5.7). The lock is held whatever the check says.
+    match graph.lock("drop") {
+        Err(CatalogError::Access(AccessError::OwnerDropped(_))) if is_superuser()? => {}
+        locked => locked?,
     }
     graph.drop_graph()
 }

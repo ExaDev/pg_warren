@@ -39,8 +39,11 @@ fn set_reader(
     add: bool,
     action: &'static str,
 ) -> Result<(), CatalogError> {
-    let graph = GraphDefinition::find(name)?;
+    let mut graph = GraphDefinition::find(name)?;
     require_owner(graph.owner, &graph.name, action)?;
+    // Checks ownership again once it holds the row: a set_owner may have
+    // held it (DESIGN.md §5.7).
+    graph.lock(action)?;
     graph.set_reader(role, add)
 }
 

@@ -9,7 +9,8 @@ use crate::read_only::read_one;
 use crate::source::{check_edge_columns, check_node_columns, source_columns};
 
 /// Of the schemas in `$1`, those, in order and quoted, in which PUBLIC or
-/// a role other than the caller that is not a superuser and not predefined
+/// a role other than `$2`, the graph's owner, that is not a superuser and
+/// not predefined
 /// (`pg_*`; `pg_database_owner` counts through the database's owner) may
 /// create objects. (Membership is not excluded: a superuser is a member of
 /// every role, and a group role's other members could create there too.)
@@ -24,7 +25,7 @@ const WRITABLE_SCHEMAS: &str = "SELECT pg_catalog.string_agg(pg_catalog.quote_id
        AND (pg_catalog.has_schema_privilege('public', n.oid, 'CREATE')
             OR EXISTS (SELECT FROM pg_catalog.pg_roles r
                        WHERE NOT r.rolsuper AND NOT pg_catalog.starts_with(r.rolname, 'pg_')
-                         AND r.rolname <> pg_catalog.current_user()
+                         AND r.oid <> $2
                          AND pg_catalog.has_schema_privilege(r.oid, n.oid, 'CREATE')))";
 
 /// `warren.create_graph`: records graph `name` over `node_query` and
@@ -86,27 +87,30 @@ fn record(graph: &NewGraph<'_>) -> Result<(), CatalogError> {
     let id_type = check_node_columns(&node_columns)?;
     check_edge_columns(&edge_columns, id_type, graph.has_relations, graph.weighted)?;
     NewGraph { id_type: id_type.oid(), ..*graph }.create()?;
-    if let Some(schemas) = writable_schemas(graph.search_path)? {
+    if let Some(schemas) = writable_schemas(graph.search_path, graph.owner)? {
         notice!("{}", writable_notice(graph.name, graph.search_path, &schemas));
     }
     Ok(())
 }
 
-/// The schemas of `search_path` that roles other than the caller can create
+/// The schemas of `search_path` that roles other than `owner` can create
 /// objects in (`WRITABLE_SCHEMAS`), comma-separated, or `None`. A function
 /// or operator planted there can capture an unqualified name in the source
 /// queries, which every refresh runs as the graph owner (DESIGN.md §7).
-fn writable_schemas(search_path: &str) -> Result<Option<String>, CatalogError> {
+pub(super) fn writable_schemas(
+    search_path: &str,
+    owner: pg_sys::Oid,
+) -> Result<Option<String>, CatalogError> {
     // Only the effective schemas are read under that search_path; the
     // check runs under the pinned one.
     let schemas = with_search_path(search_path, || {
         read_one::<Vec<String>>("SELECT pg_catalog.current_schemas(false)::pg_catalog.text[]", &[])
     })?
     .unwrap_or_default();
-    Ok(read_one::<String>(WRITABLE_SCHEMAS, &[schemas.into()])?)
+    Ok(read_one::<String>(WRITABLE_SCHEMAS, &[schemas.into(), owner.into()])?)
 }
 
-fn writable_notice(graph: &str, search_path: &str, schemas: &str) -> String {
+pub(super) fn writable_notice(graph: &str, search_path: &str, schemas: &str) -> String {
     format!(
         "graph \"{graph}\" runs its source queries under search_path \"{search_path}\", in which \
          other roles can create objects (in {schemas}): a function or operator created there \
@@ -140,7 +144,10 @@ mod tests {
              CREATE SCHEMA cg_shared; GRANT CREATE ON SCHEMA cg_shared TO cg_other;
              CREATE SCHEMA cg_private; GRANT USAGE ON SCHEMA cg_private TO cg_other",
         )?;
-        let found = |path: &str| super::writable_schemas(path).map_err(|_| Error::InvalidPosition);
+        let found = |path: &str| {
+            super::writable_schemas(path, crate::access::current_user())
+                .map_err(|_| Error::InvalidPosition)
+        };
         assert_eq!(found("cg_private, cg_shared, public")?.as_deref(), Some("cg_shared"));
         assert_eq!(found("cg_private")?, None, "only the owner (a superuser) can create there");
         assert_eq!(found("public")?, None, "PG 15+: only the database owner, here a superuser");
@@ -151,7 +158,8 @@ mod tests {
     #[pg_test]
     fn a_schema_public_can_create_in_is_found_without_other_roles() -> Result<(), Error> {
         Spi::run("CREATE SCHEMA cg_open; GRANT CREATE ON SCHEMA cg_open TO PUBLIC")?;
-        let found = super::writable_schemas("cg_open").map_err(|_| Error::InvalidPosition)?;
+        let found = super::writable_schemas("cg_open", crate::access::current_user())
+            .map_err(|_| Error::InvalidPosition)?;
         assert_eq!(found.as_deref(), Some("cg_open"));
         Ok(())
     }
@@ -161,7 +169,8 @@ mod tests {
     #[pg_test]
     fn the_sessions_temporary_schema_is_not_found() -> Result<(), Error> {
         Spi::run("CREATE ROLE cg_temp_other; CREATE TEMP TABLE cg_temp (x int)")?;
-        let found = super::writable_schemas("pg_temp").map_err(|_| Error::InvalidPosition)?;
+        let found = super::writable_schemas("pg_temp", crate::access::current_user())
+            .map_err(|_| Error::InvalidPosition)?;
         assert_eq!(found, None);
         Ok(())
     }
@@ -171,7 +180,8 @@ mod tests {
         Spi::run(
             r#"CREATE ROLE cg_quoted; CREATE SCHEMA "cg Odd"; GRANT CREATE ON SCHEMA "cg Odd" TO cg_quoted"#,
         )?;
-        let found = super::writable_schemas(r#""cg Odd""#).map_err(|_| Error::InvalidPosition)?;
+        let found = super::writable_schemas(r#""cg Odd""#, crate::access::current_user())
+            .map_err(|_| Error::InvalidPosition)?;
         assert_eq!(found.as_deref(), Some(r#""cg Odd""#));
         Ok(())
     }

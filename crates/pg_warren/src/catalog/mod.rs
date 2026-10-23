@@ -12,6 +12,7 @@ mod drop;
 mod error;
 mod graph;
 mod info;
+mod owner;
 mod promote;
 mod readers;
 mod retention;

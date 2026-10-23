@@ -7,6 +7,7 @@
 -- read to its end (dblink_get_result until the empty result) before the
 -- next one.
 CREATE EXTENSION dblink;
+\ir include/blocked_by_me.sql
 CREATE TABLE nodes AS SELECT generate_series(1, 4)::bigint AS id;
 CREATE TABLE edges AS SELECT id AS src, id % 4 + 1 AS dst FROM nodes;
 SELECT warren.create_graph('g', 'SELECT id FROM nodes', 'SELECT src, dst FROM edges', retain_versions := 10);
@@ -17,13 +18,13 @@ SELECT format('dbname=%s user=%s host=%s port=%s', current_database(), session_u
               split_part(current_setting('unix_socket_directories'), ',', 1),
               current_setting('port')) AS conninfo \gset
 SELECT dblink_connect('b', :'conninfo');
+SELECT pid AS b_pid FROM dblink('b', 'SELECT pg_backend_pid()') AS t(pid int) \gset
 
 -- 1. b's refresh waits on this session's promote.
 BEGIN;
 SELECT warren.promote('g', :staged);
 SELECT dblink_send_query('b', $$SELECT warren.refresh('g')$$);
-SELECT pg_sleep(0.5);
-SELECT assert.equal(dblink_is_busy('b'), 1, 'the refresh waits on the graph''s row');
+SELECT assert_blocked_by_me(:b_pid, 'the refresh waits on the graph''s row');
 COMMIT;
 SELECT count(*) FROM dblink_get_result('b', false) AS t(x text);
 SELECT assert.equal(dblink_error_message('b'), 'OK', 'a refresh after a promote succeeds');
@@ -33,8 +34,7 @@ SELECT count(*) FROM dblink_get_result('b', false) AS t(x text);  -- the empty r
 BEGIN;
 SELECT warren.refresh('g');
 SELECT dblink_send_query('b', $$SELECT warren.compact('g')$$);
-SELECT pg_sleep(0.5);
-SELECT assert.equal(dblink_is_busy('b'), 1, 'the compact waits on the graph''s row');
+SELECT assert_blocked_by_me(:b_pid, 'the compact waits on the graph''s row');
 COMMIT;
 SELECT count(*) FROM dblink_get_result('b', false) AS t(x text);
 SELECT assert.equal(dblink_error_message('b'), 'OK', 'a compact after a refresh succeeds');
@@ -46,8 +46,7 @@ SELECT warren.refresh('g', promote := false) AS staged \gset
 BEGIN;
 SELECT warren.promote('g', :staged);
 SELECT dblink_send_query('b', format($$SELECT warren.drop_version('g', %s)$$, :staged));
-SELECT pg_sleep(0.5);
-SELECT assert.equal(dblink_is_busy('b'), 1, 'the drop waits on the graph''s row');
+SELECT assert_blocked_by_me(:b_pid, 'the drop waits on the graph''s row');
 COMMIT;
 SELECT count(*) FROM dblink_get_result('b', false) AS t(x text);
 SELECT dblink_error_message('b') AS b_error \gset
@@ -63,8 +62,7 @@ SELECT count(*) FROM dblink_get_result('b', false) AS t(x text);  -- the empty r
 BEGIN;
 SELECT warren.compact('g', 'locality') AS local \gset
 SELECT dblink_send_query('b', $$SELECT warren.compact('g')$$);
-SELECT pg_sleep(0.5);
-SELECT assert.equal(dblink_is_busy('b'), 1, 'the compact waits on the graph''s row');
+SELECT assert_blocked_by_me(:b_pid, 'the compact waits on the graph''s row');
 COMMIT;
 SELECT count(*) FROM dblink_get_result('b', false) AS t(x text);
 SELECT assert.equal(dblink_error_message('b'), 'OK', 'a compact after a compact succeeds');

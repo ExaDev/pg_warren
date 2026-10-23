@@ -73,7 +73,7 @@ fn contract(
             let level = format!("_warren_level_pending_{}", std::process::id());
             let mut quotient =
                 quotient_graph(out_graph.unwrap_or(&level), out_graph.is_none(), &vectors.graph, caller)?;
-            quotient.lock()?;
+            quotient.lock("contract into")?;
             quotient.require_sound_current_version()?;
             let request = ContractRequest {
                 write: RefreshRequest {
