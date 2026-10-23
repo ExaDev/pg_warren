@@ -136,6 +136,35 @@ pub enum GraphError {
     /// The id map's dense ids must be exactly `0..id_space`.
     #[error("id map dense ids are not a permutation of the id space")]
     IdMapNotPermutation,
+    /// A text id map's offsets must start at 0.
+    #[error("text id offsets do not start at 0")]
+    IdOffsetsStart,
+    /// A text id map's offsets must never decrease.
+    #[error("text id offsets of dense id {dense} end before they start")]
+    IdOffsetsNotMonotone {
+        /// The dense id whose end offset is below its start offset.
+        dense: DenseId,
+    },
+    /// A text id map's last offset must equal the length of its bytes.
+    #[error("text id final offset is {found}, expected {expected}")]
+    IdOffsetsEnd {
+        /// The length of `id_bytes`.
+        expected: u64,
+        /// The last offset.
+        found: u64,
+    },
+    /// A text id map's bytes must be in the database's encoding (DESIGN.md
+    /// §5.7).
+    #[error("text ids are in encoding {found}, expected the database's {expected}")]
+    IdEncoding {
+        /// The database's encoding.
+        expected: u8,
+        /// The encoding in the `id_bytes` header.
+        found: u8,
+    },
+    /// An `id_bytes` header is checked with its encoding.
+    #[error("an id_bytes header must be checked with its encoding")]
+    IdBytesEncodingUnchecked,
     /// A relation name must be valid UTF-8.
     #[error("relation name is not valid UTF-8")]
     RelationNameNotUtf8,

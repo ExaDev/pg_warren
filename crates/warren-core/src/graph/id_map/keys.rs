@@ -30,16 +30,31 @@ pub trait IdKeys: Default {
     fn in_order(&self) -> impl Iterator<Item = (&Self::Key, DenseId)>;
 
     /// Moves every key to its dense id under `permutation`, which permutes
-    /// this id space; on an error, nothing has changed.
-    fn renumber(&mut self, permutation: &Permutation) -> Result<(), GraphError>;
+    /// this id space, charging what it builds beside the keys it replaces
+    /// to `memory`; on an error, nothing has changed.
+    fn renumber(
+        &mut self,
+        permutation: &Permutation,
+        memory: &BuildMemory,
+    ) -> Result<(), GraphError>;
 
     /// The keys at `old_dense_ids`, which are in key order, given dense ids
     /// `0..old_dense_ids.len()` in that order.
     fn compacted(&self, old_dense_ids: &[DenseId]) -> Result<Self, GraphError>;
 
-    /// Starts the keys of a rebuild that adds `fresh` keys to these,
+    /// Starts the keys of a rebuild that adds the `fresh` keys to these,
     /// reserving exactly what they will hold, charged to `memory`.
-    fn rebuild(&self, fresh: usize, memory: &BuildMemory) -> Result<Self::Rebuild, GraphError>;
+    fn rebuild(&self, fresh: FreshKeys, memory: &BuildMemory) -> Result<Self::Rebuild, GraphError>;
+}
+
+/// The keys a rebuild adds: how many, and the bytes they span
+/// (`size_of_val` of each key).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FreshKeys {
+    /// The number of fresh keys.
+    pub count: usize,
+    /// Their bytes, summed.
+    pub bytes: u64,
 }
 
 /// The node ids a rebuild takes: external ids in any order, duplicates
@@ -70,4 +85,14 @@ pub trait KeysRebuild<K: IdKeys> {
     /// The rebuilt keys, from the base keys `base` and the keys taken, and
     /// the charge for what they hold.
     fn finish(self, base: &K) -> Result<(K, BuildCharge), GraphError>;
+
+    /// [`Self::finish`] from base keys it may consume: a key storage that
+    /// can extend the base's buffers in place does so, and charges only
+    /// what it adds to them and builds anew; else as [`Self::finish`].
+    fn finish_into(self, base: K) -> Result<(K, BuildCharge), GraphError>
+    where
+        Self: Sized,
+    {
+        self.finish(&base)
+    }
 }

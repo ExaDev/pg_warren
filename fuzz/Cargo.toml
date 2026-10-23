@@ -32,6 +32,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "decode_text_id_map"
+path = "fuzz_targets/decode_text_id_map.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "decode_tombstones"
 path = "fuzz_targets/decode_tombstones.rs"
 test = false

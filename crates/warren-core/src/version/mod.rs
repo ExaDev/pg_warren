@@ -14,6 +14,8 @@ mod diff;
 mod error;
 #[cfg(test)]
 pub(crate) mod history;
+#[cfg(test)]
+mod text_model;
 
 pub use compaction::{compact, Compaction, Renumbering};
 pub use dense_ids::shared_dense_ids;
