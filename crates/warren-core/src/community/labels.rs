@@ -5,8 +5,8 @@
 use crate::compute::{AnyVector, Element};
 use crate::graph::build_memory::bytes_of;
 use crate::graph::{
-    memory, BuildBuffer, BuildCharge, BuildMemory, DenseId, IdMap, Membership, Tombstones,
-    NO_COMMUNITY,
+    memory, BuildBuffer, BuildCharge, BuildMemory, DenseId, FixedKeys, IdMap, Membership,
+    Tombstones, NO_COMMUNITY,
 };
 
 use super::CommunityError;
@@ -65,7 +65,7 @@ impl Labels {
     /// its charge to `memory`.
     pub fn membership(
         &self,
-        quotient: &IdMap<i64>,
+        quotient: &IdMap<FixedKeys<i64>>,
         memory: &BuildMemory,
     ) -> Result<(Membership, BuildCharge), CommunityError> {
         let nodes = self.labels.len();

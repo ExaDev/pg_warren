@@ -1,7 +1,7 @@
 //! The node delta of a diff: live nodes added and removed, from the two
 //! versions' tombstones and id spaces.
 
-use crate::graph::{DenseId, ExternalId, IdMap};
+use crate::graph::{DenseId, IdKeys, IdMap};
 
 /// Live nodes before and after, and how many were added and removed. A node
 /// whose tombstone was cleared counts as added.
@@ -18,13 +18,13 @@ pub struct NodeDelta {
 }
 
 /// Whether `dense` is a live node of `id_map`.
-pub(super) fn is_live<E: ExternalId>(id_map: &IdMap<E>, dense: DenseId) -> bool {
+pub(super) fn is_live<K: IdKeys>(id_map: &IdMap<K>, dense: DenseId) -> bool {
     dense < id_map.id_space() && !id_map.tombstones().contains(dense)
 }
 
 /// The node delta between two id maps of the same id space, `after`'s
 /// covering `before`'s. O(id space).
-pub(super) fn node_delta<E: ExternalId>(before: &IdMap<E>, after: &IdMap<E>) -> NodeDelta {
+pub(super) fn node_delta<K: IdKeys>(before: &IdMap<K>, after: &IdMap<K>) -> NodeDelta {
     let mut delta = NodeDelta {
         before: before.node_count(),
         after: after.node_count(),

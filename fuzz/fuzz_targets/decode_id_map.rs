@@ -6,12 +6,12 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use warren_core::graph::{ExternalId, IdMap, Tombstones};
+use warren_core::graph::{ExternalId, FixedKeys, IdMap, Tombstones};
 
 fn check<E: ExternalId>(id_map: &[u8], tombstones: &Tombstones) {
-    if let Ok(decoded) = IdMap::<E>::decode(id_map, tombstones.clone()) {
+    if let Ok(decoded) = IdMap::<FixedKeys<E>>::decode(id_map, tombstones.clone()) {
         let bytes = decoded.encode().expect("a decoded id map re-encodes");
-        assert_eq!(IdMap::<E>::decode(&bytes, tombstones.clone()), Ok(decoded));
+        assert_eq!(IdMap::<FixedKeys<E>>::decode(&bytes, tombstones.clone()), Ok(decoded));
     }
 }
 

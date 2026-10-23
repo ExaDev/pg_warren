@@ -23,22 +23,32 @@ pub use diff::{
 };
 pub use error::VersionError;
 
-use crate::graph::{ExternalId, GraphCsr, IdMap, RelationDictionary};
+use crate::graph::{GraphCsr, IdKeys, IdMap, RelationDictionary};
 
 /// A borrowed view of one graph version: its id map, relation dictionary and
 /// CSRs, checked to agree with each other.
-#[derive(Debug, Clone, Copy)]
-pub struct GraphVersion<'v, E> {
-    id_map: &'v IdMap<E>,
+#[derive(Debug)]
+pub struct GraphVersion<'v, K> {
+    id_map: &'v IdMap<K>,
     relations: &'v RelationDictionary,
     graph: &'v GraphCsr,
 }
 
-impl<'v, E: ExternalId> GraphVersion<'v, E> {
+// Not derived: a derive would require `K: Clone`, which the view does not
+// need.
+impl<K> Clone for GraphVersion<'_, K> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<K> Copy for GraphVersion<'_, K> {}
+
+impl<'v, K: IdKeys> GraphVersion<'v, K> {
     /// A view of one version, after checking that the CSRs cover the id
     /// map's id space and hold one relation per dictionary entry.
     pub fn new(
-        id_map: &'v IdMap<E>,
+        id_map: &'v IdMap<K>,
         relations: &'v RelationDictionary,
         graph: &'v GraphCsr,
     ) -> Result<Self, VersionError> {
@@ -56,7 +66,7 @@ impl<'v, E: ExternalId> GraphVersion<'v, E> {
     }
 
     /// The id map of the version.
-    pub fn id_map(&self) -> &'v IdMap<E> {
+    pub fn id_map(&self) -> &'v IdMap<K> {
         self.id_map
     }
 

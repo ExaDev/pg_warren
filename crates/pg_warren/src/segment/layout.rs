@@ -7,8 +7,8 @@
 //! not the segment.
 
 use warren_core::graph::{
-    AnyCsr, BuildCharge, BuildMemory, BuiltCsr, ChunkSink, CsrSink, ExternalId, GraphCsr, IdMap,
-    Membership, RelationCsr, RelationDictionary,
+    AnyCsr, BuildCharge, BuildMemory, BuiltCsr, ChunkSink, CsrSink, ExternalId, FixedKeys,
+    GraphCsr, IdMap, Membership, RelationCsr, RelationDictionary,
 };
 
 use super::{
@@ -22,7 +22,7 @@ use crate::catalog::VersionId;
 pub(crate) fn write_version<E: ExternalId>(
     segments: &mut impl SegmentStore,
     version: VersionId,
-    id_map: &IdMap<E>,
+    id_map: &IdMap<FixedKeys<E>>,
     relations: &RelationDictionary,
     graph: &GraphCsr,
     chunk_size: usize,
@@ -86,7 +86,7 @@ impl<'s, S: SegmentStore> SegmentWriter<'s, S> {
     /// The `id_map`, `tombstones` and `rel_dict` segments.
     pub(crate) fn write_identity<E: ExternalId>(
         &mut self,
-        id_map: &IdMap<E>,
+        id_map: &IdMap<FixedKeys<E>>,
         relations: &RelationDictionary,
     ) -> Result<(), SegmentError> {
         let (chunk_size, memory) = (self.chunk_size, self.memory.clone());

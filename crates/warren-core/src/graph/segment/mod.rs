@@ -246,7 +246,9 @@ pub(crate) fn decode<E: Element>(kind: SegmentKind, bytes: &[u8]) -> Result<Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{AnyCsr, Csr, EdgeList, GraphCsr, IdMap, RelationDictionary, Tombstones};
+    use crate::graph::{
+        AnyCsr, Csr, EdgeList, FixedKeys, GraphCsr, IdMap, RelationDictionary, Tombstones,
+    };
     use proptest::prelude::*;
 
     fn csr_example() -> AnyCsr {
@@ -384,9 +386,12 @@ mod tests {
         let id_map = IdMap::new().rebuild(vec![1i64, 2]).unwrap().rebuild(vec![2]).unwrap();
         let bytes = id_map.encode().unwrap();
         let tombstones = id_map.tombstones().clone();
-        assert_eq!(IdMap::<i64>::decode(&bytes, tombstones.clone()).as_ref(), Ok(&id_map));
         assert_eq!(
-            IdMap::<i64>::decode(&bytes, Tombstones::new(3).unwrap()),
+            IdMap::<FixedKeys<i64>>::decode(&bytes, tombstones.clone()).as_ref(),
+            Ok(&id_map)
+        );
+        assert_eq!(
+            IdMap::<FixedKeys<i64>>::decode(&bytes, Tombstones::new(3).unwrap()),
             Err(GraphError::TombstonesLength { expected: 2, found: 3 })
         );
         let pair =
@@ -398,15 +403,15 @@ mod tests {
             bytes
         };
         assert_eq!(
-            IdMap::<i64>::decode(&encode(&[pair(2, 0), pair(1, 1)]), tombstones.clone()),
+            IdMap::<FixedKeys<i64>>::decode(&encode(&[pair(2, 0), pair(1, 1)]), tombstones.clone()),
             Err(GraphError::IdMapNotSorted)
         );
         assert_eq!(
-            IdMap::<i64>::decode(&encode(&[pair(1, 1), pair(2, 1)]), tombstones),
+            IdMap::<FixedKeys<i64>>::decode(&encode(&[pair(1, 1), pair(2, 1)]), tombstones),
             Err(GraphError::IdMapNotPermutation)
         );
         assert!(matches!(
-            IdMap::<i32>::decode(&bytes, Tombstones::new(2).unwrap()),
+            IdMap::<FixedKeys<i32>>::decode(&bytes, Tombstones::new(2).unwrap()),
             Err(GraphError::SegmentWidth { expected: 12, found: 16 })
         ));
     }
@@ -484,7 +489,7 @@ mod tests {
                 id_map = id_map.rebuild(externals).unwrap();
             }
             let tombstones = Tombstones::decode(&id_map.tombstones().encode().unwrap()).unwrap();
-            let decoded = IdMap::<[u8; 16]>::decode(&id_map.encode().unwrap(), tombstones);
+            let decoded = IdMap::<FixedKeys<[u8; 16]>>::decode(&id_map.encode().unwrap(), tombstones);
             prop_assert_eq!(decoded.as_ref(), Ok(&id_map));
         }
 
@@ -506,9 +511,9 @@ mod tests {
                 let _ = AnyCsr::decode(id_space, input, input, Some(input));
                 let _ = AnyCsr::decode(id_space, csr_example().encode().unwrap().offsets(), input, None);
                 let tombstones = Tombstones::decode(input);
-                let _ = IdMap::<i32>::decode(input, tombstones.clone().unwrap_or_default());
-                let _ = IdMap::<i64>::decode(input, tombstones.clone().unwrap_or_default());
-                let _ = IdMap::<[u8; 16]>::decode(input, tombstones.unwrap_or_default());
+                let _ = IdMap::<FixedKeys<i32>>::decode(input, tombstones.clone().unwrap_or_default());
+                let _ = IdMap::<FixedKeys<i64>>::decode(input, tombstones.clone().unwrap_or_default());
+                let _ = IdMap::<FixedKeys<[u8; 16]>>::decode(input, tombstones.unwrap_or_default());
                 let _ = RelationDictionary::decode(input);
             }
         }

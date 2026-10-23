@@ -25,7 +25,7 @@ use std::time::Instant;
 
 use warren_core::compute::{spmv, AnyVector, ComputeMemory, Product, Semiring, Vector, Workers};
 use warren_core::graph::{
-    BuildBuffer, BuildMemory, DenseId, Direction, EdgeIntake, EdgeList, GraphCsr, IdMap,
+    BuildBuffer, BuildMemory, DenseId, Direction, EdgeIntake, EdgeList, FixedKeys, GraphCsr, IdMap,
     Permutation, RelationDictionary, RelationSelection,
 };
 use warren_core::interrupts::Uninterrupted;
@@ -133,7 +133,7 @@ fn first_build_peaks(edges: &EdgeList, nodes: u64) -> Result<(u64, u64), Box<dyn
     for id in 0..nodes as i64 {
         ids.push(id)?;
     }
-    let (mut id_map, _id_map_charge) = IdMap::new().rebuild_within(ids)?;
+    let (mut id_map, _id_map_charge) = IdMap::<FixedKeys<i64>>::new().rebuild_within(ids)?;
     let relation = RelationDictionary::new().intern("edge")?;
     let mut intake = EdgeIntake::directed(&id_map, false).within(&memory);
     intake.reserve(edges.len())?;

@@ -3,9 +3,11 @@
 use std::mem::size_of;
 
 use super::{decode, encode, encode_chunked, ChunkSink, Element, SegmentKind, SEGMENT_HEADER_LEN};
-use crate::graph::{BuildCharge, BuildMemory, ExternalId, GraphError, IdMap, IdPair, Tombstones};
+use crate::graph::{
+    BuildCharge, BuildMemory, ExternalId, FixedKeys, GraphError, IdMap, IdPair, Tombstones,
+};
 
-impl<E: ExternalId> IdMap<E> {
+impl<E: ExternalId> IdMap<FixedKeys<E>> {
     /// Encodes the (external id, dense id) pairs as the `id_map` segment.
     /// The tombstones are a segment of their own.
     pub fn encode(&self) -> Result<Vec<u8>, GraphError> {

@@ -9,7 +9,7 @@
 use super::super::{Resources, SpectralError};
 use crate::compute::{ComputeError, MemoryCharge};
 use crate::graph::{
-    CsrLayout, DenseId, EdgeList, ExternalId, GraphCsr, IdPair, RelationDictionary, RelationIndex,
+    CsrLayout, DenseId, EdgeList, GraphCsr, IdKeys, RelationDictionary, RelationIndex,
 };
 use crate::interrupts::Interrupts;
 use crate::version::GraphVersion;
@@ -41,18 +41,18 @@ pub struct AlignedGraph {
 }
 
 /// How `other` maps into `this`'s id space by external id.
-pub fn align_ids<E: ExternalId, I: Interrupts>(
+pub fn align_ids<K: IdKeys, I: Interrupts>(
     resources: &mut Resources<'_, I>,
-    this: &GraphVersion<'_, E>,
-    other: &GraphVersion<'_, E>,
+    this: &GraphVersion<'_, K>,
+    other: &GraphVersion<'_, K>,
 ) -> Result<IdAlignment, SpectralError> {
     let (mut dense_ids, charge) = resources.memory.filled(other.id_map().id_space() as usize, 0)?;
     let mut id_space = this.id_map().id_space();
-    for (row, IdPair { external, dense }) in other.id_map().pairs().iter().enumerate() {
+    for (row, (external, dense)) in other.id_map().keys().in_order().enumerate() {
         if (row as u64).is_multiple_of(ROWS_PER_POLL) {
             resources.interrupts.check().map_err(ComputeError::from)?;
         }
-        dense_ids[*dense as usize] = this.id_map().dense_id(external).unwrap_or_else(|| {
+        dense_ids[dense as usize] = this.id_map().dense_id(external).unwrap_or_else(|| {
             id_space += 1;
             id_space - 1
         });
@@ -71,9 +71,9 @@ pub fn align_ids<E: ExternalId, I: Interrupts>(
 /// for `other`), charged to the budget (the edge list it is rebuilt from,
 /// the new CSRs and the build's temporaries) and polling the interrupts
 /// every 64K rows.
-pub fn align_graph<E: ExternalId, I: Interrupts>(
+pub fn align_graph<K: IdKeys, I: Interrupts>(
     resources: &mut Resources<'_, I>,
-    other: &GraphVersion<'_, E>,
+    other: &GraphVersion<'_, K>,
     alignment: &IdAlignment,
 ) -> Result<AlignedGraph, SpectralError> {
     if alignment.dense_ids.len() as u64 != other.id_map().id_space() {

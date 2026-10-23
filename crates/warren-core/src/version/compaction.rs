@@ -3,8 +3,8 @@
 
 use super::{GraphVersion, VersionError};
 use crate::graph::{
-    memory, BuildMemory, DenseId, EdgeList, ExternalId, GraphCsr, GraphError, IdMap, IdPair,
-    NodeOrder, Permutation, Tombstones,
+    memory, BuildMemory, DenseId, EdgeList, GraphCsr, GraphError, IdKeys, IdMap, NodeOrder,
+    Permutation,
 };
 
 /// The old → new dense-id mapping of a compaction.
@@ -57,10 +57,10 @@ impl Renumbering {
 
 /// A compacted version: a new id space with no tombstones.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Compaction<E> {
+pub struct Compaction<K> {
     /// Dense ids `0..node_count` in the compaction's node order, no
     /// tombstones.
-    pub id_map: IdMap<E>,
+    pub id_map: IdMap<K>,
     /// The version's CSRs in the new dense ids. Its relation dictionary is
     /// unchanged.
     pub graph: GraphCsr,
@@ -78,11 +78,11 @@ pub struct Compaction<E> {
 /// old version, its edge list in new ids and the new version, plus, for
 /// [`NodeOrder::Locality`], the order's scratch and permutation, which are
 /// charged to `memory`.
-pub fn compact<E: ExternalId>(
-    version: &GraphVersion<'_, E>,
+pub fn compact<K: IdKeys>(
+    version: &GraphVersion<'_, K>,
     order: NodeOrder,
     memory: &BuildMemory,
-) -> Result<Compaction<E>, VersionError> {
+) -> Result<Compaction<K>, VersionError> {
     let (mut id_map, mut renumbering) = renumbered(version.id_map())?;
     let mut edges = edge_list(version, &renumbering)?;
     if order == NodeOrder::Locality {
@@ -100,27 +100,24 @@ pub fn compact<E: ExternalId>(
 
 /// The compacted id map and the renumbering, from one walk over the id map
 /// in external-id order.
-fn renumbered<E: ExternalId>(id_map: &IdMap<E>) -> Result<(IdMap<E>, Renumbering), GraphError> {
+fn renumbered<K: IdKeys>(id_map: &IdMap<K>) -> Result<(IdMap<K>, Renumbering), GraphError> {
     let live = (id_map.node_count()) as usize;
     let mut new_by_old = memory::filled(id_map.id_space() as usize, None)?;
     let mut old_by_new = memory::with_capacity(live)?;
-    let mut pairs = memory::with_capacity(live)?;
-    for &IdPair { external, dense: old } in id_map.pairs() {
+    for (_, old) in id_map.keys().in_order() {
         if id_map.tombstones().contains(old) {
             continue;
         }
-        let new = old_by_new.len() as DenseId;
-        new_by_old[old as usize] = Some(new);
+        new_by_old[old as usize] = Some(old_by_new.len() as DenseId);
         old_by_new.push(old);
-        pairs.push(IdPair { external, dense: new });
     }
-    let id_map = IdMap::from_parts(pairs, Tombstones::new(live as u64)?)?;
+    let id_map = id_map.compacted(&old_by_new)?;
     Ok((id_map, Renumbering { new_by_old, old_by_new }))
 }
 
 /// The version's per-relation forward edges in new ids.
-fn edge_list<E: ExternalId>(
-    version: &GraphVersion<'_, E>,
+fn edge_list<K: IdKeys>(
+    version: &GraphVersion<'_, K>,
     renumbering: &Renumbering,
 ) -> Result<EdgeList, VersionError> {
     let graph = version.graph();
@@ -304,6 +301,7 @@ mod tests {
             let live: Vec<i64> = (0..old.id_space())
                 .filter(|&dense| !old.tombstones().contains(dense))
                 .filter_map(|dense| old.external_id(dense))
+                .copied()
                 .collect();
             let mut sorted = live.clone();
             sorted.sort_unstable();
@@ -321,8 +319,8 @@ mod tests {
             assigned.sort_unstable();
             prop_assert_eq!(assigned, (0..old.node_count()).collect::<Vec<_>>());
 
-            let old_external = |dense| old.external_id(dense).unwrap();
-            let new_external = |dense| new.external_id(dense).unwrap();
+            let old_external = |dense| *old.external_id(dense).unwrap();
+            let new_external = |dense| *new.external_id(dense).unwrap();
             let pairs = build.graph.relations().iter().zip(compacted.graph.relations())
                 .chain(build.graph.merged().zip(compacted.graph.merged()));
             prop_assert_eq!(compacted.graph.relations().len(), build.graph.relations().len());
