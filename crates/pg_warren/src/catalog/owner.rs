@@ -5,7 +5,9 @@ use pgrx::prelude::*;
 
 use super::create_graph::{writable_notice, writable_schemas};
 use super::{CatalogError, GraphDefinition, GraphSource};
-use crate::access::{as_role, entry, require_can_become, require_owner, with_search_path};
+use crate::access::{
+    as_role, entry, require_can_become, require_owner, with_read_only, with_search_path,
+};
 use crate::source::{check_edge_columns, require_node_id_type, source_columns};
 
 /// What `set_owner` does, for its errors.
@@ -47,16 +49,18 @@ fn transfer(name: &str, owner: pg_sys::Oid) -> Result<(), CatalogError> {
 }
 
 /// Opens (without running) the graph's source queries as `owner`, under
-/// the graph's `search_path`, as `refresh` will run them, and checks their
-/// columns: a role that cannot read them is refused with 42501, columns
-/// that no longer match with 42804.
+/// the graph's `search_path` and in the read-only state, as `refresh` will
+/// run them, and checks their columns: a role that cannot read them is
+/// refused with 42501, columns that no longer match with 42804.
 fn open_sources_as(graph: &GraphDefinition, owner: pg_sys::Oid) -> Result<(), CatalogError> {
     let (nodes, edges) = as_role(owner, || {
         with_search_path(&graph.search_path, || {
-            Ok::<_, CatalogError>((
-                source_columns::<CatalogError>("node_query", &graph.node_query)?,
-                source_columns::<CatalogError>("edge_query", &graph.edge_query)?,
-            ))
+            with_read_only(|| {
+                Ok::<_, CatalogError>((
+                    source_columns::<CatalogError>("node_query", &graph.node_query)?,
+                    source_columns::<CatalogError>("edge_query", &graph.edge_query)?,
+                ))
+            })
         })
     })?;
     require_node_id_type(&nodes, graph.id_type)?;
@@ -108,6 +112,18 @@ mod tests {
         assert_eq!(
             as_role("so_owner", "warren.refresh('so')")?.as_deref(),
             Some("42501: must be a member of role \"so_new\" to refresh graph \"so\"")
+        );
+        Ok(())
+    }
+
+    #[pg_test]
+    fn the_old_owner_may_no_longer_read_the_graph() -> Result<(), Error> {
+        graph()?;
+        assert_eq!(as_role("so_owner", "warren.degree('so', 1::bigint)")?, None);
+        Spi::run("SELECT warren.set_owner('so', 'so_new')")?;
+        assert_eq!(
+            as_role("so_owner", "warren.degree('so', 1::bigint)")?.as_deref(),
+            Some("42501: must be a member of role \"so_new\" or of a reader role to read graph \"so\"")
         );
         Ok(())
     }
@@ -227,10 +243,10 @@ mod tests {
     #[pg_test]
     fn writable_schemas_are_judged_for_the_new_owner() -> Result<(), Error> {
         graph()?;
-        Spi::run(
-            "CREATE SCHEMA so_mine; GRANT CREATE ON SCHEMA so_mine TO so_new;
-             UPDATE warren.graphs SET search_path = 'so_mine, public' WHERE name = 'so'",
-        )?;
+        // The judgement alone: `set_owner`'s NOTICE itself goes to the
+        // client, which a pg_test cannot read (test/sql/search_path_notice.sql
+        // reads it from the server log).
+        Spi::run("CREATE SCHEMA so_mine; GRANT CREATE ON SCHEMA so_mine TO so_new")?;
         let new = Spi::get_one::<pg_sys::Oid>("SELECT 'so_new'::regrole::oid")?
             .unwrap_or(pg_sys::Oid::INVALID);
         let old = Spi::get_one::<pg_sys::Oid>("SELECT 'so_owner'::regrole::oid")?
