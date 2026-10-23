@@ -282,6 +282,10 @@ Every SQL example in the README and `docs/` runs in CI, in
   slower; and Louvain and Leiden at 10M nodes still write several GB of
   level graphs ([docs/limits.md](docs/limits.md)).
 
+- **0.6.0** (in development, M10): identity, lifecycle and visibility:
+  `text` node ids, ownership transfer, cleanup when an owner role is
+  dropped, quotas on readers' vectors, and observability (DESIGN.md §13).
+
 See [CHANGELOG.md](CHANGELOG.md). This is pre-1.0 software: the SQL surface
 may still change between minor versions, with an upgrade script each time.
 

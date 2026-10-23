@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.6.0 — in development
+
 ## 0.5.0 — the shared cache (2026-10-23)
 
 Milestone M9 of DESIGN.md §13, the first on the road to 1.0. A loaded
