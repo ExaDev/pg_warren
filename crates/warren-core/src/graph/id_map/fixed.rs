@@ -4,7 +4,7 @@
 
 use std::fmt::Debug;
 
-use super::{check_tombstones, IdKeys, IdMap, KeysRebuild, NodeIds};
+use super::{check_tombstones, FreshKeys, IdKeys, IdMap, KeysRebuild, NodeIds};
 use crate::graph::{
     memory, BuildBuffer, BuildCharge, BuildMemory, DenseId, GraphError, Permutation, SegmentBuffer,
     Tombstones,
@@ -114,8 +114,9 @@ impl<E: ExternalId> IdKeys for FixedKeys<E> {
         self.by_external.iter().map(|pair| (&pair.external, pair.dense))
     }
 
-    fn renumber(&mut self, permutation: &Permutation) -> Result<(), GraphError> {
-        // A shared id map is copied before anything changes.
+    fn renumber(&mut self, permutation: &Permutation, _: &BuildMemory) -> Result<(), GraphError> {
+        // Renumbered in place; a shared id map is copied first, uncharged
+        // (see `IdMap::renumber`).
         let by_external = self.by_external.make_mut()?;
         let by_dense = self.by_dense.make_mut()?;
         for pair in by_external {
@@ -134,10 +135,14 @@ impl<E: ExternalId> IdKeys for FixedKeys<E> {
         Self::from_pairs(pairs)
     }
 
-    fn rebuild(&self, fresh: usize, memory: &BuildMemory) -> Result<FixedRebuild<E>, GraphError> {
+    fn rebuild(
+        &self,
+        fresh: FreshKeys,
+        memory: &BuildMemory,
+    ) -> Result<FixedRebuild<E>, GraphError> {
         Ok(FixedRebuild {
-            by_external: BuildBuffer::with_capacity(memory, self.by_external.len() + fresh)?,
-            fresh: BuildBuffer::with_capacity(memory, fresh)?,
+            by_external: BuildBuffer::with_capacity(memory, self.by_external.len() + fresh.count)?,
+            fresh: BuildBuffer::with_capacity(memory, fresh.count)?,
         })
     }
 }

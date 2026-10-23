@@ -40,6 +40,14 @@ impl<T> SegmentBuffer<T> {
         }
     }
 
+    /// The owned buffer, or this shared view back.
+    pub(crate) fn into_owned(self) -> Result<Vec<T>, Self> {
+        match self.shared {
+            None => Ok(self.owned),
+            Some(_) => Err(self),
+        }
+    }
+
     /// Whether it is a shared view rather than an owned buffer.
     pub(crate) fn is_shared(&self) -> bool {
         self.shared.is_some()

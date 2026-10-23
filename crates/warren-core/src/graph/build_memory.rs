@@ -48,6 +48,11 @@ impl BuildMemory {
         self.0.peak.load(Ordering::Relaxed)
     }
 
+    /// Whether `other` is this budget (a clone of it), not another.
+    pub(crate) fn is(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+
     /// The bytes that may still be charged.
     pub fn remaining(&self) -> u64 {
         self.limit().saturating_sub(self.in_use())
@@ -150,7 +155,7 @@ impl BuildCharge {
     /// Takes over `other`'s bytes, so they are released with this charge.
     pub fn absorb(&mut self, mut other: Self) {
         let bytes = std::mem::take(&mut other.bytes);
-        match Arc::ptr_eq(&self.memory.0, &other.memory.0) {
+        match self.memory.is(&other.memory) {
             true => self.bytes += bytes,
             false => other.memory.release(bytes),
         }
@@ -286,6 +291,14 @@ impl<T: PartialEq> BuildBuffer<T> {
     /// Removes consecutive repeated values.
     pub fn dedup(&mut self) {
         self.values.dedup();
+    }
+}
+
+impl<T> BuildBuffer<T> {
+    /// Removes consecutive values that `same` says are equal, keeping the
+    /// first of each run.
+    pub fn dedup_by(&mut self, same: impl FnMut(&mut T, &mut T) -> bool) {
+        self.values.dedup_by(same);
     }
 }
 

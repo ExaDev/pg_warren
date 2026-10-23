@@ -14,6 +14,7 @@ impl Tombstones {
             u64::WIDTH,
             self.id_space(),
             words.len() * u64::WIDTH,
+            0,
         )?;
         words.iter().for_each(|word| word.write(&mut bytes));
         Ok(bytes)
@@ -35,7 +36,7 @@ impl Tombstones {
     pub fn decode(bytes: &[u8]) -> Result<Self, GraphError> {
         let (header, payload) = read_header(bytes, SegmentKind::Tombstones)?;
         let id_space = header.count;
-        let words = Header { width: header.width, count: id_space.div_ceil(64) };
+        let words = Header { count: id_space.div_ceil(64), ..header };
         Self::from_words(id_space, elements(&words, payload)?)
     }
 }

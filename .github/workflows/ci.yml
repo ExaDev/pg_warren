@@ -93,7 +93,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [decode_csr, decode_id_map, decode_tombstones, decode_relation_dictionary, decode_membership]
+        target: [decode_csr, decode_id_map, decode_text_id_map, decode_tombstones, decode_relation_dictionary, decode_membership]
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install "$MIRI_NIGHTLY" --profile minimal

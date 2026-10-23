@@ -49,6 +49,22 @@ fn a_rebuild_charges_no_more_than_its_externals_and_its_result() {
     }
 }
 
+/// Consuming the base gives the rebuild's id map, and the base's charge
+/// becomes exactly the new id map's.
+#[test]
+fn a_rebuild_into_the_base_takes_over_its_charge() {
+    let base = first_build(vec![10, 20, 30]);
+    let memory = BuildMemory::unlimited();
+    let ids = |ids: Vec<i64>| BuildBuffer::from_vec(&memory, ids);
+    let (expected, _) = base.rebuild_within(ids(vec![40, 30, 10])).unwrap();
+    let base_charge = memory.charge(base.bytes()).unwrap();
+    let (rebuilt, charge) = base.rebuild_into(base_charge, ids(vec![40, 30, 10])).unwrap();
+    assert_eq!(rebuilt, expected);
+    assert_eq!(charge.bytes(), rebuilt.bytes());
+    drop(charge);
+    assert_eq!(memory.in_use(), 0);
+}
+
 /// The locality order of the path 0 - 2 - 1 (`new = [2, 0, 1]`), over
 /// an id space of 3.
 fn path_permutation() -> Permutation {
