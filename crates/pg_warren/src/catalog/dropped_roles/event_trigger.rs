@@ -7,7 +7,7 @@ use pgrx::prelude::*;
 use pgrx::PgList;
 
 use super::super::CatalogError;
-use super::clean_up_after;
+use super::{clean_up_after, Cleaner};
 use crate::access::{as_catalog_owner, entry, has_privileges_of, role_name};
 use crate::read_only::read_one;
 
@@ -77,10 +77,11 @@ fn refuse_or_clean_up(roles: &[pg_sys::Oid]) -> Result<(), CatalogError> {
     if let Some(message) = refusal(&owned) {
         return Err(CatalogError::OwnsGraphs(message));
     }
+    let by = Cleaner::current()?;
     as_catalog_owner(|| {
         Spi::connect_mut(|client| {
             for &role in roles {
-                clean_up_after(client, role)?;
+                clean_up_after(client, role, by)?;
             }
             Ok::<_, CatalogError>(())
         })
@@ -131,7 +132,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{failure, neighbouring_graphs, ownership, statement_failure_as};
+    use crate::fixture::{failure, neighbouring_graphs, ownership, quotas, statement_failure_as};
 
     /// The trigger as `docs/semantics.md` tells a superuser to create it.
     fn install() -> Result<(), Error> {
@@ -187,7 +188,8 @@ mod tests {
     }
 
     #[pg_test]
-    fn after_reassign_owned_drop_owned_removes_the_roles_reader_entries() -> Result<(), Error> {
+    fn after_reassign_owned_drop_owned_removes_the_roles_reader_entries_and_quotas(
+    ) -> Result<(), Error> {
         neighbouring_graphs()?;
         install()?;
         Spi::run(
@@ -199,6 +201,7 @@ mod tests {
             ownership()?.as_deref(),
             Some("dk:dk_owner:{} dr:dr_heir:{} / dk.mine:dr_heir dk.theirs:dk_owner")
         );
+        assert_eq!(quotas()?.as_deref(), Some(""));
         Ok(())
     }
 
@@ -212,6 +215,25 @@ mod tests {
              SET ROLE dk_reader; SELECT warren.vector_const('dk', 'its', 3); RESET ROLE;
              DROP OWNED BY dk_reader",
         )?;
+        assert_eq!(
+            ownership()?.as_deref(),
+            Some("dk:dk_owner:{dr_owner} dr:dr_owner:{} / dk.mine:dr_owner dk.theirs:dk_owner")
+        );
+        Ok(())
+    }
+
+    /// The security review of PR #59: a role's own `DROP OWNED` leaves the
+    /// quota a graph's owner set on it.
+    #[pg_test]
+    fn a_roles_own_drop_owned_keeps_its_quotas() -> Result<(), Error> {
+        neighbouring_graphs()?;
+        install()?;
+        Spi::run(
+            "CREATE ROLE dk_reader; SELECT warren.grant('dk', 'dk_reader');
+             SELECT warren.set_vector_quota('dk', 0, 'dk_reader')",
+        )?;
+        assert_eq!(statement_failure_as("dk_reader", "DROP OWNED BY dk_reader")?, None);
+        assert_eq!(quotas()?.as_deref(), Some("dk:dk_reader:0 dk:dr_owner:4096"));
         assert_eq!(
             ownership()?.as_deref(),
             Some("dk:dk_owner:{dr_owner} dr:dr_owner:{} / dk.mine:dr_owner dk.theirs:dk_owner")

@@ -11,9 +11,9 @@
 //! parallel plan runs. It promises nothing about snapshots: as for any SPI
 //! read, once the transaction has written, pgrx runs the select
 //! non-read-only (a command counter increment and a fresh snapshot).
-//! [`read_one_latest`] reads the latest committed state instead of the
-//! statement's snapshot, for what must not depend on how old the caller's
-//! snapshot is. Depends on no other feature.
+//! [`read_one_latest`] reads the latest committed state (and the
+//! transaction's own earlier writes) instead of the statement's snapshot,
+//! for what must not depend on how old the caller's snapshot is. Depends on no other feature.
 
 use std::ffi::{c_char, CString};
 use std::ptr;
@@ -48,9 +48,10 @@ pub(crate) fn latest_readable() -> bool {
 
 /// The first column of the first row `query` returns, read-only, under the
 /// latest snapshot (what is committed now, not what the statement's
-/// snapshot sees, nor this transaction's uncommitted writes), whatever the
-/// isolation level and whether or not the transaction has written. Only
-/// where [`latest_readable`].
+/// snapshot sees), whatever the isolation level and whether or not the
+/// transaction has written. Like any snapshot, it also sees what this
+/// transaction itself wrote in earlier commands, which a quota counts
+/// (DESIGN.md §5.7). Only where [`latest_readable`].
 pub(crate) fn read_one_latest<A: FromDatum + IntoDatum>(
     query: &str,
     args: &[DatumWithOid<'_>],

@@ -37,14 +37,16 @@ before changing code. Commands, toolchain setup and environment gotchas are in
      `version/` (diff, compaction across versions).
    - `pg_warren/src/`: `extension` (schema + `warren.version()`, SQL
      errors), `access/` (identity switches, privilege checks), `source/`
-     (node/edge query columns and read-only cursors), `catalog/`,
+     (node/edge query columns and read-only cursors), `catalog/` (and
+     `quota`, the lock and decision shared by vector writes and ownership
+     moves),
      `segment/` (chunked persistence), `cache/` (loader; `shared`, the shared cache across backends, and `shared::introspection`, `warren.shared_cache()`), `build/`,
      `version_sql/` (compact, diff), `interrupts` (the main-thread poll),
      `read_only` (single-row SPI reads that assign no transaction id),
      `parallel_worker` (what a parallel worker records and raises),
      `external_ids/` (id arguments ↔ dense ids), `selection/` (direction and
      relations), `traversal_sql/`, `vector/` (persistence and cache of named
-     vectors), `compute_sql/`, `spectral_sql/` (eigen, distance),
+     vectors; `quota`, the bound on readers' vectors), `compute_sql/`, `spectral_sql/` (eigen, distance),
      `community_sql/` (contract, project, lift, modularity, local moving,
      and the Louvain/Leiden library).
      Feature dependencies form a DAG: `access`, `source` → `catalog` →
@@ -132,8 +134,10 @@ before changing code. Commands, toolchain setup and environment gotchas are in
   with `Spi::connect_mut` + `update`. Clippy's `disallowed-methods`
   (`clippy.toml`) enforces this; test modules allow it on the `mod` item.
 - **Parallel labels** (DESIGN.md §9.3): writers and anything that may persist
-  are `PARALLEL UNSAFE`; anything that reads a graph or vector is `PARALLEL
-  RESTRICTED`; only functions that read no graph are `PARALLEL SAFE`.
+  are `PARALLEL UNSAFE`; anything that reads a vector, or a graph in a way
+  §9.3 does not list as safe, is `PARALLEL RESTRICTED`; graph reads that use
+  no vector, catalog-only reads and functions that read no graph are
+  `PARALLEL SAFE`.
   `parallel_labels`'s test declares every function's label; add each new
   function there (and its read to `READS` if it is not unsafe).
 - **Every SQL entry point uses the guard.** The body of every
