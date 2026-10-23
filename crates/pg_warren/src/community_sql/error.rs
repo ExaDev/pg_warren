@@ -10,7 +10,8 @@ use crate::access::{AccessError, SqlError};
 use crate::build::BuildError;
 use crate::cache::{CacheError, LoadError};
 use crate::catalog::{CatalogError, VersionId};
-use crate::compute_sql::{compute_sqlstate, ComputeSqlError};
+use crate::compute_sql::ComputeSqlError;
+use crate::extension::compute_sqlstate;
 use crate::extension::graph_sqlstate;
 use crate::segment::SegmentError;
 

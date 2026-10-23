@@ -4,6 +4,12 @@ pub(crate) use warren_core::graph::{CsrDirection as Direction, CsrPart, CsrScope
 
 /// The `id_map` segment.
 pub(crate) const ID_MAP: &str = "id_map";
+/// The `id_bytes` segment of a text id map (DESIGN.md §5.7).
+pub(crate) const ID_BYTES: &str = "id_bytes";
+/// The `id_offsets` segment of a text id map.
+pub(crate) const ID_OFFSETS: &str = "id_offsets";
+/// The `id_order` segment of a text id map.
+pub(crate) const ID_ORDER: &str = "id_order";
 /// The `tombstones` segment.
 pub(crate) const TOMBSTONES: &str = "tombstones";
 /// The `rel_dict` segment.

@@ -3,6 +3,8 @@
 //! target that is not a node of the version reaches nothing, not even
 //! itself; a NULL one gives a NULL answer (no row for `dijkstra`).
 
+use std::borrow::Borrow;
+
 use pgrx::prelude::*;
 use pgrx::{AnyArray, AnyElement};
 use warren_core::graph::{DenseId, Direction};
@@ -14,11 +16,11 @@ use warren_core::traversal::{
 use super::args::bound;
 use super::stats::Recorder;
 use super::{entry, TraversalSqlError};
-use crate::cache::{cached, resolve, LoadedVersion, Resolved};
+use crate::cache::{cached, resolve, CachedIds, LoadedVersion, Resolved};
 use crate::external_ids::{element, element_widened, external_array};
 use crate::interrupts::PostgresInterrupts;
 use crate::selection::{adjacency, direction};
-use crate::source::{with_id_type, IdDatum, IdType};
+use crate::source::{with_id_type, IdType};
 
 /// `warren.reachable`: whether `target` is within `max_depth` edges of
 /// `start` (unbounded if NULL) in `direction` along `rels`.
@@ -196,7 +198,7 @@ impl Opened<'_> {
     /// Records stats under the function's name and runs `search` on the
     /// selected adjacency from start to target. `None` if an endpoint is
     /// NULL; `Some(None)` if one is not a node of the version.
-    fn run<E: IdDatum, T>(
+    fn run<E: CachedIds, T>(
         &self,
         search: impl FnOnce(&LoadedVersion<E>, &Adjacency<'_>, DenseId, DenseId) -> Searched<T>,
     ) -> Result<Option<Option<T>>, TraversalSqlError> {
@@ -212,7 +214,7 @@ impl Opened<'_> {
         let target = read(self.graph, "target", target)?;
         let loaded = cached::<E>(&self.resolved)?;
         let (Some(start), Some(target)) =
-            (loaded.id_map.dense_id(&start), loaded.id_map.dense_id(&target))
+            (loaded.id_map.dense_id(start.borrow()), loaded.id_map.dense_id(target.borrow()))
         else {
             return Ok(Some(None));
         };

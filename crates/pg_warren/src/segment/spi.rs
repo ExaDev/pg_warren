@@ -66,6 +66,12 @@ impl SegmentStore for SpiSegmentStore {
             )
         })
     }
+
+    fn encoding(&self) -> u8 {
+        // SAFETY: reads the backend's database encoding, set at connection.
+        let encoding = unsafe { pg_sys::GetDatabaseEncoding() };
+        u8::try_from(encoding).unwrap_or(u8::MAX)
+    }
 }
 
 /// Runs `query` (rows of chunk number and bytes, in chunk order) through a

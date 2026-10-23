@@ -43,6 +43,14 @@ pub(crate) enum Array {
     ByDense,
     /// The tombstones' words.
     Tombstones,
+    /// A text id map's ids, concatenated in dense-id order (DESIGN.md
+    /// §5.7).
+    IdBytes,
+    /// Where each dense id's id starts in `IdBytes`, and where the last
+    /// ends.
+    IdOffsets,
+    /// The dense ids sorted by text id.
+    IdOrder,
     /// The relation dictionary, as its encoded segment.
     RelationDictionary,
     /// One part of one CSR.
@@ -244,6 +252,9 @@ fn encode_array(array: Array) -> ArrayKey {
             (5, direction, part, scope)
         }
         Array::Values => (6, 0, 0, 0),
+        Array::IdBytes => (7, 0, 0, 0),
+        Array::IdOffsets => (8, 0, 0, 0),
+        Array::IdOrder => (9, 0, 0, 0),
     }
 }
 
@@ -255,6 +266,9 @@ fn decode_array(kind: u8, direction: u8, part: u8, scope: u64) -> Option<Array> 
         (3, 0, 0, 0) => Some(Array::Tombstones),
         (4, 0, 0, 0) => Some(Array::RelationDictionary),
         (6, 0, 0, 0) => Some(Array::Values),
+        (7, 0, 0, 0) => Some(Array::IdBytes),
+        (8, 0, 0, 0) => Some(Array::IdOffsets),
+        (9, 0, 0, 0) => Some(Array::IdOrder),
         (5, ..) => {
             let direction = match direction {
                 0 => Direction::Forward,

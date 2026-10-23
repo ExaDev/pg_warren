@@ -18,13 +18,13 @@ use pgrx::JsonB;
 use serde_json::json;
 use warren_core::compute::{map, AnyVector};
 
-use super::settings::workers;
 use super::vectors::{bound_names, BoundName, Vectors};
 use super::{entry, ComputeSqlError};
 use crate::access::{with_read_only, with_search_path, Caller};
-use crate::cache::resolve;
+use crate::cache::{resolve, CachedIds};
+use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
-use crate::source::{with_id_type, IdDatum};
+use crate::source::with_id_type;
 use parse::{analyse, Analysed, Column};
 use translate::{translate, Compiled};
 
@@ -108,7 +108,7 @@ fn vector_map(
     })
 }
 
-fn mapped<E: IdDatum>(
+fn mapped<E: CachedIds>(
     caller: &Caller,
     mut vectors: Vectors<E>,
     y: &str,

@@ -9,7 +9,7 @@
 use warren_core::community::{contract, Contraction, Labels};
 use warren_core::compute::{AnyVector, Workers};
 use warren_core::graph::{
-    AnyCsr, BuildCharge, BuildMemory, CsrLayout, ExternalId, GraphCsr, IdMap, RelationDictionary,
+    AnyCsr, BuildCharge, BuildMemory, CsrLayout, GraphCsr, IdKeys, IdMap, RelationDictionary,
     RelationIndex,
 };
 use warren_core::interrupts::Interrupts;
@@ -32,7 +32,7 @@ pub(crate) struct ContractRequest<'a> {
 
 /// Contracts `parent` by `labels` into a new version of `quotient` (a
 /// graph derived by contraction, its row locked), and returns its id.
-pub(crate) fn contract_version<E: ExternalId>(
+pub(crate) fn contract_version<E: IdKeys>(
     quotient: &GraphDefinition,
     parent: &LoadedVersion<E>,
     labels: &AnyVector,
@@ -121,7 +121,7 @@ mod tests {
 
     /// Nodes 10, 20, 30, 40 (30 tombstoned); edges 10 → 20 (`a`, 1.0),
     /// 20 → 40 (`b`, 2.0) and 40 → 10 (`b`, 4.0).
-    fn parent() -> LoadedVersion<i64> {
+    fn parent() -> LoadedVersion<FixedKeys<i64>> {
         let id_map = IdMap::new()
             .rebuild(vec![10, 20, 30, 40])
             .and_then(|m| m.rebuild(vec![10, 20, 40]))
@@ -191,7 +191,7 @@ mod tests {
                 .unwrap()
         }
 
-        fn loaded(&mut self, version: VersionId) -> LoadedVersion<i64> {
+        fn loaded(&mut self, version: VersionId) -> LoadedVersion<FixedKeys<i64>> {
             crate::cache::load(&mut self.store, version, true).unwrap()
         }
     }

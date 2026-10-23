@@ -273,6 +273,40 @@ mod tests {
         Ok(())
     }
 
+    /// DESIGN.md §5.7: `varchar` ids are `text` ids.
+    #[pg_test]
+    fn text_and_varchar_node_ids_are_text() -> Result<(), Error> {
+        Spi::run(
+            "CREATE TABLE cg_t (id text, v varchar(20));
+             SELECT warren.create_graph('cgt', 'SELECT v FROM cg_t', 'SELECT id, v FROM cg_t')",
+        )?;
+        let id_type =
+            Spi::get_one::<String>("SELECT id_type::text FROM warren.graphs WHERE name = 'cgt'")?;
+        assert_eq!(id_type.as_deref(), Some("text"));
+        Ok(())
+    }
+
+    #[pg_test(error = "node_query column 1 (node id) is of type character, which node ids cannot \
+                       have: its equality ignores trailing spaces; cast it to text (id::text)")]
+    fn bpchar_node_ids_are_refused() -> Result<(), Error> {
+        Spi::run(
+            "SELECT warren.create_graph('cg', 'SELECT ''a''::char(3)', 'SELECT NULL::text, NULL::text')",
+        )
+    }
+
+    #[pg_test(error = "edge_query column 2 (target id) has the nondeterministic collation \
+                       \"cg_ci\", whose equality node ids cannot follow (they compare as bytes): \
+                       write the column COLLATE \"C\" for exact ids, or normalise them in the \
+                       query (for example lower(id))")]
+    fn a_nondeterministic_collation_is_refused() -> Result<(), Error> {
+        Spi::run(
+            "CREATE COLLATION cg_ci (provider = icu, locale = 'und-u-ks-level2',
+                                     deterministic = false);
+             SELECT warren.create_graph('cg', 'SELECT ''a''::text',
+                                        'SELECT ''a''::text, ''a''::text COLLATE cg_ci')",
+        )
+    }
+
     #[pg_test(error = "edge_query column 1 (source id) must be of type uuid, not bigint")]
     fn edge_endpoints_must_have_the_node_id_type() -> Result<(), Error> {
         tables()?;

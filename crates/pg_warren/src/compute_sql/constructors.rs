@@ -5,13 +5,13 @@ use pgrx::prelude::*;
 use warren_core::compute::{self, map, AnyExpr, AnyVector, Dtype, Expr, Vector};
 use warren_core::graph::RelationSelection;
 
-use super::settings::workers;
 use super::vectors::Vectors;
 use super::{entry, ComputeSqlError};
-use crate::cache::resolve;
+use crate::cache::{resolve, CachedIds};
+use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
 use crate::selection::{adjacency, direction, relations};
-use crate::source::{with_id_type, IdDatum};
+use crate::source::with_id_type;
 
 /// `value` as an expression of `dtype`: a `double precision` literal, cast
 /// as SQL casts it.
@@ -55,7 +55,7 @@ fn vector_const(
     })
 }
 
-fn constant<E: IdDatum>(
+fn constant<E: CachedIds>(
     mut vectors: Vectors<E>,
     name: &str,
     expr: &AnyExpr,
@@ -70,7 +70,7 @@ fn constant<E: IdDatum>(
 const POLL_NODES: u64 = 1 << 16;
 
 /// `vector`, an `i64` vector, cast to `dtype` as SQL casts `bigint`.
-fn cast<E: IdDatum>(
+fn cast<E: CachedIds>(
     vectors: &Vectors<E>,
     vector: AnyVector,
     dtype: Dtype,

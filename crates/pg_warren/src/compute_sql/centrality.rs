@@ -12,10 +12,10 @@ use warren_core::compute::{
 
 use pgrx::prelude::*;
 
-use super::settings::workers;
 use super::vectors::Vectors;
 use super::{entry, selection, ComputeSqlError};
 use crate::cache::resolve;
+use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
 use crate::selection::relations;
 use crate::source::with_id_type;

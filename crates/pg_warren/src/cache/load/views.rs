@@ -3,24 +3,19 @@
 
 use std::sync::Arc;
 
-use warren_core::graph::{
-    AnyCsr, Csr, GraphCsr, IdMap, IdPair, RelationCsr, RelationDictionary, Tombstones,
-};
+use warren_core::graph::{AnyCsr, Csr, GraphCsr, RelationCsr, RelationDictionary};
 
-use super::{LoadError, LoadedVersion};
+use super::{CachedIds, LoadError, LoadedVersion};
 use crate::cache::region::{Array, Region, RegionError};
 use crate::segment::{CsrPart, CsrScope, Direction};
-use crate::source::IdDatum;
 
 /// The version `region` holds, checked as `load` checks a version: each
 /// array's invariants, then that they agree.
-pub(super) fn loaded<E: IdDatum>(region: &Arc<Region>) -> Result<LoadedVersion<E>, LoadError> {
+pub(super) fn loaded<E: CachedIds>(region: &Arc<Region>) -> Result<LoadedVersion<E>, LoadError> {
     let missing = RegionError::MissingArray;
-    let pairs = region.view::<IdPair<E>>(Array::IdPairs)?.ok_or(missing("id map"))?;
-    let by_dense = region.view::<E>(Array::ByDense)?.ok_or(missing("id map by dense id"))?;
     let words = region.view::<u64>(Array::Tombstones)?.ok_or(missing("tombstones"))?;
-    let id_space = pairs.len() as u64;
-    let id_map = IdMap::from_segments(pairs, by_dense, Tombstones::from_segment(id_space, words)?)?;
+    let id_map = E::view(region, words)?;
+    let id_space = id_map.id_space();
     let encoded = region.array_bytes(Array::RelationDictionary);
     let relations = RelationDictionary::decode(encoded.ok_or(missing("relation dictionary"))?)?;
     let mut csrs = Vec::with_capacity(relations.len());

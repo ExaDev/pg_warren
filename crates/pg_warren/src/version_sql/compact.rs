@@ -8,12 +8,12 @@ use warren_core::version::compact as renumber;
 use super::error::VersionOperationError;
 use crate::access::{entry, require_owner};
 use crate::build::{max_build_memory, Catalog, SpiCatalog};
-use crate::cache::load;
+use crate::cache::{load, CachedIds};
 use crate::catalog::{
     parse_node_order, version_record, GraphDefinition, NewVersion, VersionId, VersionStats,
 };
 use crate::segment::{write_version, SegmentStore, SpiSegmentStore, CHUNK_SIZE};
-use crate::source::{with_id_type, IdDatum};
+use crate::source::with_id_type;
 use crate::vector::{move_vectors, moved_notice, SpiVectorStore, VectorStore};
 
 /// `warren.compact`: renumbers graph `name`'s current version to remove its
@@ -84,7 +84,7 @@ pub(crate) struct CompactionOrder<'a> {
 /// holds the same edges. The source's persisted vectors move to it, with
 /// their rows in the new dense ids. Returns the version and the vectors
 /// moved.
-pub(crate) fn compact_version<E: IdDatum>(
+pub(crate) fn compact_version<E: CachedIds>(
     graph: &GraphDefinition,
     source: VersionId,
     carried: &VersionStats,
@@ -183,10 +183,16 @@ mod unit {
         let mut stores =
             Stores { segments: &mut store, vectors: &mut vectors, catalog: &mut catalog };
         let ordering = CompactionOrder { order: NodeOrder::Id, memory: &BuildMemory::unlimited() };
-        let compacted =
-            compact_version::<i64>(&graph(), source, &carried, &ordering, 16, &mut stores)
-                .unwrap()
-                .0;
+        let compacted = compact_version::<FixedKeys<i64>>(
+            &graph(),
+            source,
+            &carried,
+            &ordering,
+            16,
+            &mut stores,
+        )
+        .unwrap()
+        .0;
 
         let row = catalog.version(compacted).clone();
         assert_eq!(row.compacted_from, Some(source));
@@ -203,7 +209,7 @@ mod unit {
         );
         assert!(!row.staged);
         assert_eq!(catalog.current_version, Some(compacted));
-        let loaded = load::<i64>(&mut store, compacted, true).unwrap();
+        let loaded = load::<FixedKeys<i64>>(&mut store, compacted, true).unwrap();
         assert_eq!(loaded.id_map.dense_id(&40), Some(2));
         assert_eq!(loaded.id_map.tombstones().count(), 0);
         assert_eq!(loaded.graph.relations()[0].forward().neighbour_weights(2), Some(&[3.0][..]));

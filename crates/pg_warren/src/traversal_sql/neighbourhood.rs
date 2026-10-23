@@ -5,6 +5,8 @@
 //! shared version, or loading its own copy where the shared cache is
 //! unavailable.
 
+use std::borrow::Borrow;
+
 use pgrx::prelude::*;
 use pgrx::AnyElement;
 use warren_core::graph::DenseId;
@@ -12,10 +14,10 @@ use warren_core::graph::Direction;
 use warren_core::traversal::Adjacency;
 
 use super::{entry, TraversalSqlError};
-use crate::cache::{cached, resolve, LoadedVersion, Resolved};
+use crate::cache::{cached, resolve, CachedIds, LoadedVersion, Resolved};
 use crate::external_ids::{element, element_widened, external};
 use crate::selection::{adjacency, direction};
-use crate::source::{with_id_type, IdDatum};
+use crate::source::with_id_type;
 
 /// `warren.neighbours`: the distinct nodes one edge from `node` in
 /// `direction` along `rels` (all if NULL), ascending by dense id. None if
@@ -156,7 +158,7 @@ impl<'a> NodeQuery<'a> {
     /// Runs `f` on the loaded version, the adjacency the query selects and
     /// the node's dense id; `None` if the node is NULL or not a node of the
     /// version.
-    fn adjacent<E: IdDatum, T>(
+    fn adjacent<E: CachedIds, T>(
         &self,
         f: impl FnOnce(&LoadedVersion<E>, &Adjacency<'_>, DenseId) -> T,
     ) -> Result<Option<T>, TraversalSqlError> {
@@ -170,7 +172,7 @@ impl<'a> NodeQuery<'a> {
         let loaded = cached::<E>(&self.resolved)?;
         let adjacency =
             adjacency(&loaded.graph, &loaded.relations, self.direction, self.rels.as_deref())?;
-        Ok(loaded.id_map.dense_id(&node).map(|node| f(&loaded, &adjacency, node)))
+        Ok(loaded.id_map.dense_id(node.borrow()).map(|node| f(&loaded, &adjacency, node)))
     }
 }
 

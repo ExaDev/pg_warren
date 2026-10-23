@@ -11,6 +11,7 @@ use super::spi_catalog::SpiCatalog;
 use super::spi_source::SpiSource;
 use crate::access::{entry, require_owner};
 use crate::catalog::{require_current_id_space, GraphDefinition, VersionId};
+use crate::interrupts::{workers, PostgresInterrupts};
 use crate::segment::{SpiSegmentStore, CHUNK_SIZE};
 use crate::source::{with_id_type, with_pinned_snapshot};
 
@@ -46,6 +47,7 @@ fn refresh_graph(name: &str, promote: bool, label: Option<&str>) -> Result<Versi
             &graph,
             &request,
             &mut SpiSource::new(&graph),
+            (&*workers()?, &mut PostgresInterrupts),
             &mut SpiSegmentStore,
             &mut SpiCatalog::at_current_wal_lsn()?,
         ))
@@ -61,11 +63,12 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
     use warren_core::graph::{
-        AnyCsr, EdgeIntake, FixedKeys, GraphCsr, IdMap, RelationDictionary, Tombstones,
+        AnyCsr, BuildMemory, EdgeIntake, FixedKeys, GraphCsr, IdMap, RelationDictionary, TextKeys,
+        Tombstones,
     };
 
     use crate::fixture;
-    use crate::segment::{read_segment, SpiSegmentStore};
+    use crate::segment::{read_segment, SpiSegmentStore, StoredIds};
 
     /// A ring of 200 nodes, 1 → 2 → … → 200 → 1, as graph `ring`.
     fn ring() -> Result<(), Error> {
@@ -257,6 +260,45 @@ mod tests {
         Spi::run("INSERT INTO small_nodes VALUES (0)")?;
         let next = refresh("SELECT warren.refresh('small')")?;
         assert_eq!(version_row(next)?.as_deref(), Some("2|f|4|4|2|1|0|4|t|"));
+        Ok(())
+    }
+
+    /// DESIGN.md §5.7: a text graph's ids are its id map's three
+    /// segments, in bytewise order, and keep their dense ids across
+    /// refreshes; an id is any bytes, the empty one included.
+    #[pg_test]
+    fn text_graphs_build_with_stable_ids() -> Result<(), Error> {
+        Spi::run(
+            "CREATE TABLE t_nodes (id text);
+             CREATE TABLE t_edges (src varchar, dst text);
+             INSERT INTO t_nodes VALUES ('b'), (''), ('é'), ('B');
+             INSERT INTO t_edges VALUES ('', 'b'), ('b', 'é'), ('é', 'unknown'), (NULL, 'b');
+             SELECT warren.create_graph('t', 'SELECT id FROM t_nodes',
+                                        'SELECT src, dst FROM t_edges')",
+        )?;
+        let first = refresh("SELECT warren.refresh('t')")?;
+        assert_eq!(version_row(first)?.as_deref(), Some("1|f|4|4|2|2|0|4|t|"));
+        let segments = Spi::get_one_with_args::<String>(
+            "SELECT string_agg(DISTINCT segment, ' ' ORDER BY segment) FROM warren.segments
+             WHERE version_id = $1 AND segment LIKE 'id%'",
+            &[first.into()],
+        )?;
+        assert_eq!(segments.as_deref(), Some("id_bytes id_offsets id_order"));
+        let id_map = |version| {
+            let store = &mut SpiSegmentStore;
+            let tombstones = read_segment(store, version, "tombstones").unwrap_or_default();
+            let memory = BuildMemory::unlimited();
+            TextKeys::read_id_map(store, version, &tombstones, &memory).map(|(id_map, _)| id_map)
+        };
+        let ids = id_map(first).map_err(|_| Error::InvalidPosition)?;
+        let order: Vec<_> = (0..4).filter_map(|dense| ids.external_id(dense)).collect();
+        assert_eq!(order, [&b""[..], b"B", b"b", "é".as_bytes()]);
+        Spi::run("DELETE FROM t_nodes WHERE id = 'B'; INSERT INTO t_nodes VALUES ('a')")?;
+        let next = refresh("SELECT warren.refresh('t')")?;
+        let ids = id_map(next).map_err(|_| Error::InvalidPosition)?;
+        assert_eq!(ids.dense_id(b"b"), Some(2), "a kept id keeps its dense id");
+        assert_eq!(ids.dense_id(b"a"), Some(4), "a new id is appended");
+        assert_eq!(ids.dense_id(b"B"), None, "a dropped id is tombstoned");
         Ok(())
     }
 

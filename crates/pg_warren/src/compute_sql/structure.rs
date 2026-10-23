@@ -11,14 +11,14 @@ use pgrx::prelude::*;
 use pgrx::AnyElement;
 use warren_core::compute;
 
-use super::settings::workers;
 use super::vectors::Vectors;
 use super::{entry, selection, ComputeSqlError};
-use crate::cache::{cached, compute_memory, resolve, Resolved};
+use crate::cache::{cached, compute_memory, resolve, CachedIds, Resolved};
 use crate::external_ids::{check_type, external};
+use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
 use crate::selection::relations;
-use crate::source::{with_id_type, IdDatum};
+use crate::source::with_id_type;
 
 /// `warren.core_number` (§6.7): vector `out` (`i64`) holding each node's
 /// core number in the undirected simple graph under the relations `rels`
@@ -209,7 +209,7 @@ fn minimum_spanning_forest(
 }
 
 /// The forest's edges as rows of external ids.
-fn forest_rows<E: IdDatum>(
+fn forest_rows<E: CachedIds>(
     resolved: &Resolved,
     rels: Option<&[Option<String>]>,
     weighted: Option<bool>,

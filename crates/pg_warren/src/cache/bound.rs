@@ -347,6 +347,7 @@ pub(crate) fn admit_transient(replaced: u64, added: u64) -> Result<(), CacheErro
 mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
+    use warren_core::graph::FixedKeys;
 
     use crate::cache::end_statement;
     use crate::fixture::{failure, refresh, ring, segment_reads};
@@ -557,8 +558,8 @@ mod tests {
         statements(&["SELECT warren.prewarm('a')", "SELECT warren.prewarm('b')"])?;
         let c = Spi::get_one::<i64>("SELECT current_version FROM warren.graphs WHERE name = 'c'")?
             .ok_or(Error::InvalidPosition)?;
-        let expected =
-            super::super::open::expected_bytes::<i64>(c).map_err(|_| Error::InvalidPosition)?;
+        let expected = super::super::open::expected_bytes::<FixedKeys<i64>>(c)
+            .map_err(|_| Error::InvalidPosition)?;
         assert!(expected > 90_000, "{expected}");
         // a, the least recently used, makes room for c.
         super::make_room(expected);
@@ -694,7 +695,8 @@ mod tests {
         assert_eq!((evict("a")?, evict("b")?), (Some(2), Some(0)), "a cold cache");
         let resolved =
             super::super::resolve("a", None, "read").map_err(|_| Error::InvalidPosition)?;
-        let a = super::super::cached::<i64>(&resolved).map_err(|_| Error::InvalidPosition)?;
+        let a = super::super::cached::<FixedKeys<i64>>(&resolved)
+            .map_err(|_| Error::InvalidPosition)?;
         let sum = "SELECT warren.vector_reduce('a', 'x', 'sum')";
         Spi::run(sum)?;
         // a in use and its vector idle: ~94 kB + 16 kB, ~45 kB past the cap.
@@ -777,7 +779,8 @@ mod tests {
         rings(&["a", "b"])?;
         let resolved =
             super::super::resolve("a", None, "read").map_err(|_| Error::InvalidPosition)?;
-        let held = super::super::cached::<i64>(&resolved).map_err(|_| Error::InvalidPosition)?;
+        let held = super::super::cached::<FixedKeys<i64>>(&resolved)
+            .map_err(|_| Error::InvalidPosition)?;
         assert_eq!(evict("a")?, Some(1));
         Spi::run(
             "SET LOCAL warren.max_cache_memory = '64kB';

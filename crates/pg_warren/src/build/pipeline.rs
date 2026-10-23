@@ -1,5 +1,6 @@
 //! The build pipeline (DESIGN.md §5.4 steps 2–6), over the build's ports:
-//! stable-id merge against the base version's id map, edge intake, the
+//! stable-id merge against the base version's id map, edge intake (each
+//! batch of rows mapped to dense ids on the compute pool, §5.7), the
 //! locality order of a first build (§14 item 22), CSR build, chunked
 //! segment write, version row and optional promotion. Graph logic is
 //! `warren_core::graph`'s; this module only sequences it, with
@@ -7,18 +8,27 @@
 //! budget: a build that would exceed it is refused with 53400 before its
 //! CSRs are built where the plan shows it, else where it reserves.
 
+use warren_core::compute::Workers;
 use warren_core::graph::{
-    BuildCharge, BuildMemory, BuildPlan, CsrLayout, EdgeIntake, EdgeList, ExternalId, FixedKeys,
-    GraphCsr, GraphError, IdMap, Membership, NodeOrder, Permutation, RelationDictionary,
+    BuildCharge, BuildMemory, BuildPlan, CsrLayout, EdgeBatch, EdgeIntake, EdgeList, GraphCsr,
+    GraphError, IdMap, IndexedKeys, Membership, NodeOrder, Permutation, RelationDictionary,
     RelationIndex,
 };
+use warren_core::interrupts::Interrupts;
 
 use super::error::BuildError;
 use super::source::{EdgeRow, EdgeSink, SourceReader};
 use super::version::Catalog;
 use crate::cache::{load_identity, Identity};
 use crate::catalog::{GraphDefinition, Lineage, NewVersion, VersionId, VersionStats};
-use crate::segment::{writer_memory, SegmentStore, SegmentWriter};
+use crate::segment::{writer_memory, SegmentStore, SegmentWriter, StoredIds};
+
+/// Edge rows mapped to dense ids together, on the compute pool.
+const BATCH_ROWS: usize = 65_536;
+
+/// The share of the build's budget a batch may hold before it is mapped
+/// (1/32), so that a small budget is left to the edge list.
+const BATCH_SHARE: u64 = 32;
 
 /// The name of the one relation of a graph without relations.
 const IMPLICIT_RELATION: &str = "";
@@ -45,12 +55,14 @@ pub(crate) struct Built {
     pub(crate) memory_peak: u64,
 }
 
-/// Builds a new version of `graph` from its sources. Dense ids continue
-/// from the graph's current version, if it has one.
-pub(crate) fn build<E: ExternalId>(
+/// Builds a new version of `graph` from its sources, mapping edge
+/// endpoints on `pool`. Dense ids continue from the graph's current
+/// version, if it has one.
+pub(crate) fn build<E: StoredIds + IndexedKeys>(
     graph: &GraphDefinition,
     request: &RefreshRequest<'_>,
     source: &mut impl SourceReader<E>,
+    pool: (&Workers, &mut impl Interrupts),
     segments: &mut impl SegmentStore,
     catalog: &mut impl Catalog,
 ) -> Result<Built, BuildError> {
@@ -65,8 +77,9 @@ pub(crate) fn build<E: ExternalId>(
         },
     };
     let Identity { id_map: base, id_map_charge: base_charge, relations, relations_charge } = base;
-    let (mut id_map, _id_map_charge) = base.rebuild_within(source.node_ids(&memory)?)?;
-    drop((base, base_charge));
+    // The base is consumed: a text id map's bytes and offsets are extended
+    // in place (DESIGN.md §5.7).
+    let (mut id_map, _id_map_charge) = base.rebuild_into(base_charge, source.node_ids(&memory)?)?;
     let layout = CsrLayout { build_reverse: graph.build_reverse, store_merged: graph.store_merged };
     let mut relations = Relations {
         dictionary: relations,
@@ -81,7 +94,7 @@ pub(crate) fn build<E: ExternalId>(
     };
     relations.check_offsets()?;
     let (mut edges, dropped_edges) =
-        edges(graph, &id_map, implicit, &mut relations, source, &memory)?;
+        edges(graph, &id_map, implicit, &mut relations, source, pool, &memory)?;
     if graph.node_order == NodeOrder::Locality && graph.current_version.is_none() {
         // A first build: its ids are provisional until ordered (§14 item 22).
         let permutation = Permutation::locality(&edges, id_map.id_space(), &memory)?;
@@ -98,7 +111,7 @@ pub(crate) fn build<E: ExternalId>(
 /// contraction made them.
 pub(crate) struct Contents<E> {
     /// The id map, tombstones included.
-    pub(crate) id_map: IdMap<FixedKeys<E>>,
+    pub(crate) id_map: IdMap<E>,
     /// The relation dictionary.
     pub(crate) relations: RelationDictionary,
     /// The edges, in dense ids.
@@ -121,7 +134,7 @@ pub(crate) struct Derivation<'m> {
 /// its CSRs, then its identity segments and, for a contraction, its
 /// `membership`, into `segments`; records its statistics and bytes; and
 /// promotes it if asked.
-pub(crate) fn write_contents<E: ExternalId>(
+pub(crate) fn write_contents<E: StoredIds>(
     graph: &GraphDefinition,
     request: &RefreshRequest<'_>,
     contents: Contents<E>,
@@ -160,15 +173,18 @@ pub(crate) fn write_contents<E: ExternalId>(
 }
 
 /// Reads the edge rows into an edge list charged to `memory`, interning new
-/// relations. Returns it, without spare capacity, and the number of
-/// dropped edges: rows with a NULL relation or weight the graph needs, or a
-/// NULL, unknown or tombstoned endpoint.
-fn edges<E: ExternalId>(
+/// relations, and mapping each batch of rows' endpoints on `pool` through
+/// an index of `id_map` (a text id map's hash index, charged to `memory`
+/// and freed with the intake). Returns the edges, without spare capacity,
+/// and the number of dropped edges: rows with a NULL relation or weight
+/// the graph needs, or a NULL, unknown or tombstoned endpoint.
+fn edges<E: IndexedKeys>(
     graph: &GraphDefinition,
-    id_map: &IdMap<FixedKeys<E>>,
+    id_map: &IdMap<E>,
     implicit: Option<RelationIndex>,
     relations: &mut Relations,
     source: &mut impl SourceReader<E>,
+    pool: (&Workers, &mut impl Interrupts),
     memory: &BuildMemory,
 ) -> Result<(EdgeList, u64), BuildError> {
     let intake = match graph.directed {
@@ -176,8 +192,27 @@ fn edges<E: ExternalId>(
         false => EdgeIntake::undirected(id_map, graph.weighted),
     };
     let intake = intake.within(memory);
-    let mut collector = EdgeCollector { graph, implicit, relations, intake, incomplete_rows: 0 };
+    let index = E::index(id_map, memory)?;
+    let batch_bytes = memory.limit() / BATCH_SHARE;
+    let batch_rows = usize::try_from(batch_bytes / EdgeBatch::<E>::ROW_BYTES)
+        .unwrap_or(BATCH_ROWS)
+        .clamp(1, BATCH_ROWS);
+    let (workers, interrupts) = pool;
+    let mut collector = EdgeCollector {
+        graph,
+        implicit,
+        relations,
+        intake,
+        batch: EdgeBatch::with_capacity(memory, batch_rows)?,
+        batch_rows,
+        batch_bytes,
+        index: &index,
+        workers,
+        interrupts,
+        incomplete_rows: 0,
+    };
     source.edges(&mut collector)?;
+    collector.flush()?;
     let EdgeCollector { intake, incomplete_rows, .. } = collector;
     let (edges, dropped_endpoints) = intake.finish();
     Ok((edges, dropped_endpoints + incomplete_rows))
@@ -211,18 +246,42 @@ impl Relations {
     }
 }
 
-/// The edge sink of a build: remaps rows through the edge intake.
-struct EdgeCollector<'b, 'm, E> {
+/// The edge sink of a build: collects rows into a batch, maps each full
+/// batch (of [`BATCH_ROWS`] rows, or a share of the budget) on the compute
+/// pool, and takes it into the edge intake.
+struct EdgeCollector<'b, 'm, E: IndexedKeys, I> {
     graph: &'b GraphDefinition,
     /// The one relation of a graph without relations.
     implicit: Option<RelationIndex>,
     relations: &'b mut Relations,
-    intake: EdgeIntake<'m, FixedKeys<E>>,
+    intake: EdgeIntake<'m, E>,
+    batch: EdgeBatch<E>,
+    /// The rows the batch has room for.
+    batch_rows: usize,
+    /// The bytes past which the batch is mapped before it is full, for
+    /// long text ids.
+    batch_bytes: u64,
+    index: &'b E::Index<'m>,
+    workers: &'b Workers,
+    interrupts: &'b mut I,
     /// Rows dropped for a NULL relation or weight.
     incomplete_rows: u64,
 }
 
-impl<E: ExternalId> EdgeSink<E> for EdgeCollector<'_, '_, E> {
+impl<E: IndexedKeys, I: Interrupts> EdgeCollector<'_, '_, E, I> {
+    /// Maps the batch's endpoints on the pool (the main thread polls for
+    /// interrupts meanwhile) and takes its rows into the intake.
+    fn flush(&mut self) -> Result<(), BuildError> {
+        if self.batch.is_empty() {
+            return Ok(());
+        }
+        let (batch, index) = (&mut self.batch, self.index);
+        self.workers.run(self.interrupts, |cancellation| Ok(batch.map(index, cancellation)?))?;
+        Ok(self.intake.take(&mut self.batch)?)
+    }
+}
+
+impl<E: IndexedKeys, I: Interrupts> EdgeSink<E::Key> for EdgeCollector<'_, '_, E, I> {
     /// Reserves the edge list for `rows` up front, so that it is not grown
     /// geometrically past its final size. A reservation that fails (an
     /// overestimate, or one past the build's budget) is ignored: the list
@@ -233,24 +292,28 @@ impl<E: ExternalId> EdgeSink<E> for EdgeCollector<'_, '_, E> {
         }
     }
 
-    fn row(&mut self, row: EdgeRow<'_, E>) -> Result<(), BuildError> {
+    fn row(&mut self, row: EdgeRow<'_, E::Key>) -> Result<(), BuildError> {
         let Some((relation, weight)) =
             relation_and_weight(self.graph, self.implicit, self.relations, &row)?
         else {
             self.incomplete_rows += 1;
             return Ok(());
         };
-        Ok(self.intake.push(relation, row.source.as_ref(), row.target.as_ref(), weight)?)
+        self.batch.push(relation, row.source, row.target, weight)?;
+        if self.batch.len() >= self.batch_rows || self.batch.bytes() >= self.batch_bytes {
+            self.flush()?;
+        }
+        Ok(())
     }
 }
 
 /// The relation and weight of an edge row, or `None` if a field the graph
 /// needs is NULL.
-fn relation_and_weight<E>(
+fn relation_and_weight<K: ?Sized>(
     graph: &GraphDefinition,
     implicit: Option<RelationIndex>,
     relations: &mut Relations,
-    row: &EdgeRow<'_, E>,
+    row: &EdgeRow<'_, K>,
 ) -> Result<Option<(RelationIndex, f64)>, BuildError> {
     let relation = match (implicit, row.relation) {
         (Some(relation), _) => relation,
@@ -276,8 +339,12 @@ mod tests {
     use crate::segment::{read_segment, MemorySegmentStore};
     use pgrx::pg_sys;
     use warren_core::graph::{
-        AnyCsr, EdgeIntake, FixedKeys, GraphCsr, GraphError, IdMap, RelationDictionary, Tombstones,
+        AnyCsr, EdgeIntake, FixedKeys, GraphCsr, GraphError, IdMap, RelationDictionary, TextKeys,
+        Tombstones,
     };
+    use warren_core::interrupts::Uninterrupted;
+
+    use crate::cache::load_identity;
 
     fn graph() -> GraphDefinition {
         GraphDefinition {
@@ -333,17 +400,44 @@ mod tests {
             };
             let graph =
                 GraphDefinition { current_version: self.catalog.current_version, ..graph.clone() };
-            self.try_refresh(&graph, &request, source).unwrap()
+            self.try_refresh::<FixedKeys<i64>, _>(&graph, &request, source).unwrap()
         }
 
-        fn try_refresh(
+        fn try_refresh<K: StoredIds + IndexedKeys, T: Clone>(
             &mut self,
             graph: &GraphDefinition,
             request: &RefreshRequest<'_>,
-            source: &MemorySource,
-        ) -> Result<VersionId, BuildError> {
-            build(graph, request, &mut source.clone(), &mut self.store, &mut self.catalog)
+            source: &MemorySource<T>,
+        ) -> Result<VersionId, BuildError>
+        where
+            MemorySource<T>: SourceReader<K>,
+        {
+            let workers = Workers::new(3).unwrap();
+            let pool = (&workers, &mut Uninterrupted);
+            build(graph, request, &mut source.clone(), pool, &mut self.store, &mut self.catalog)
                 .map(|built| built.version)
+        }
+
+        /// [`World::refresh`] of a text graph.
+        fn refresh_text(
+            &mut self,
+            graph: &GraphDefinition,
+            source: &MemorySource<Vec<u8>>,
+        ) -> VersionId {
+            let request = RefreshRequest {
+                promote: true,
+                label: None,
+                chunk_size: 16,
+                memory_budget: u64::MAX,
+            };
+            let graph =
+                GraphDefinition { current_version: self.catalog.current_version, ..graph.clone() };
+            self.try_refresh::<TextKeys, _>(&graph, &request, source).unwrap()
+        }
+
+        fn text_id_map(&mut self, version: VersionId) -> IdMap<TextKeys> {
+            let memory = BuildMemory::unlimited();
+            load_identity::<TextKeys>(&mut self.store, version, &memory).unwrap().id_map
         }
 
         fn segment(&mut self, version: VersionId, name: &str) -> Vec<u8> {
@@ -684,7 +778,7 @@ mod tests {
         let source = MemorySource { nodes: (0..10).collect(), ..MemorySource::default() };
         let request =
             RefreshRequest { promote: true, label: None, chunk_size: 16, memory_budget: 64 };
-        let refused = world.try_refresh(&graph(), &request, &source);
+        let refused = world.try_refresh::<FixedKeys<i64>, _>(&graph(), &request, &source);
         assert!(matches!(
             refused,
             Err(BuildError::Graph(GraphError::BuildMemoryLimit { limit: 64, .. }))
@@ -705,7 +799,7 @@ mod tests {
         };
         let request =
             RefreshRequest { promote: true, label: None, chunk_size: 16, memory_budget: 10_000 };
-        let refused = world.try_refresh(&graph, &request, &source);
+        let refused = world.try_refresh::<FixedKeys<i64>, _>(&graph, &request, &source);
         // Refused at the 56th relation, while reading: 57 CSRs (with the
         // merged one) × 2 directions × 11 offsets × 8 bytes, not after all 100.
         assert!(
@@ -747,7 +841,7 @@ mod tests {
                     chunk_size: 16,
                     memory_budget: budget,
                 };
-                match world.try_refresh(&graph, &request, &source) {
+                match world.try_refresh::<FixedKeys<i64>, _>(&graph, &request, &source) {
                     Ok(version) => {
                         built = Some((budget, world.catalog.version(version).stats));
                         break;
@@ -786,7 +880,7 @@ mod tests {
         let source = one_relation_per_row(10, 30_000, "relation");
         let request =
             RefreshRequest { promote: true, label: None, chunk_size: 16, memory_budget: 1 << 20 };
-        let refused = world.try_refresh(&graph, &request, &source);
+        let refused = world.try_refresh::<FixedKeys<i64>, _>(&graph, &request, &source);
         assert!(
             matches!(refused, Err(BuildError::Graph(GraphError::OffsetsOverBudget { .. }))),
             "{refused:?}"
@@ -806,7 +900,7 @@ mod tests {
         let source = one_relation_per_row(1, 30_000, name);
         let request =
             RefreshRequest { promote: true, label: None, chunk_size: 16, memory_budget: 1 << 20 };
-        let refused = world.try_refresh(&graph, &request, &source);
+        let refused = world.try_refresh::<FixedKeys<i64>, _>(&graph, &request, &source);
         assert!(
             matches!(
                 refused,
@@ -831,5 +925,129 @@ mod tests {
             let version = world.refresh(&graph(), &source, true);
             assert_eq!(world.catalog.version(version).stats.edge_count, 1);
         }
+    }
+
+    fn text(id: &str) -> Vec<u8> {
+        id.as_bytes().to_vec()
+    }
+
+    fn text_edge(source: &str, target: &str) -> OwnedEdgeRow<Vec<u8>> {
+        (Some(text(source)), Some(text(target)), None, None)
+    }
+
+    fn text_graph() -> GraphDefinition {
+        GraphDefinition { id_type: crate::source::IdType::Text, ..graph() }
+    }
+
+    fn text_neighbours(csr: &AnyCsr, id_map: &IdMap<TextKeys>, external: &str) -> Vec<String> {
+        let dense = id_map.dense_id(external.as_bytes()).unwrap();
+        let ids = csr.neighbours(dense).map(|d| id_map.external_id(d).unwrap().to_vec());
+        ids.map(|id| String::from_utf8(id).unwrap()).collect()
+    }
+
+    #[test]
+    fn a_text_graph_builds_its_three_id_segments_in_byte_order() {
+        let mut world = World::default();
+        let source = MemorySource {
+            nodes: ["b", "a", "", "ab", "a"].map(text).to_vec(),
+            edges: vec![
+                text_edge("a", "b"),
+                text_edge("", "ab"),
+                text_edge("ab", "missing"),
+                (None, Some(text("a")), None, None),
+            ],
+            ..MemorySource::default()
+        };
+        let version = world.refresh_text(&text_graph(), &source);
+        for name in ["id_bytes", "id_offsets", "id_order"] {
+            assert!(world.has_segment(version, name), "{name}");
+        }
+        assert!(!world.has_segment(version, "id_map"));
+        let id_map = world.text_id_map(version);
+        for (dense, id) in ["", "a", "ab", "b"].into_iter().enumerate() {
+            assert_eq!(id_map.dense_id(id.as_bytes()), Some(dense as u64), "{id:?}");
+        }
+        let stats = world.catalog.version(version).stats;
+        assert_eq!((stats.node_count, stats.edge_count, stats.dropped_edges), (4, 2, 2));
+        assert_eq!(world.catalog.version(version).bytes, world.stored_bytes(version));
+        let forward = world.csr(version, "", "0");
+        assert_eq!(text_neighbours(&forward, &id_map, "a"), ["b"]);
+        assert_eq!(text_neighbours(&forward, &id_map, ""), ["ab"]);
+    }
+
+    #[test]
+    fn text_dense_ids_are_stable_across_builds() {
+        let mut world = World::default();
+        let first = MemorySource {
+            nodes: ["x", "y", "z"].map(text).to_vec(),
+            edges: vec![text_edge("x", "y")],
+            ..MemorySource::default()
+        };
+        let v1 = world.refresh_text(&text_graph(), &first);
+        let second = MemorySource {
+            nodes: ["w", "x", "z", "zz"].map(text).to_vec(),
+            edges: vec![text_edge("x", "y"), text_edge("zz", "w")],
+            ..MemorySource::default()
+        };
+        let v2 = world.refresh_text(&text_graph(), &second);
+        let (before, after) = (world.text_id_map(v1), world.text_id_map(v2));
+        for survivor in ["x", "z"] {
+            assert_eq!(after.dense_id(survivor.as_bytes()), before.dense_id(survivor.as_bytes()));
+        }
+        assert_eq!(after.dense_id(b"y"), None);
+        assert_eq!(after.external_id(1), Some(b"y".as_slice()), "a tombstone keeps its id");
+        assert_eq!((after.dense_id(b"w"), after.dense_id(b"zz")), (Some(3), Some(4)));
+        let stats = world.catalog.version(v2).stats;
+        assert_eq!((stats.id_space, stats.edge_count, stats.dropped_edges), (5, 1, 1));
+    }
+
+    #[test]
+    fn a_text_graph_in_locality_order_renumbers_its_first_build() {
+        let mut world = World::default();
+        let graph = GraphDefinition { node_order: NodeOrder::Locality, ..text_graph() };
+        let path = [("a", "d"), ("d", "b"), ("b", "e"), ("e", "c")];
+        let source = MemorySource {
+            nodes: ["a", "b", "c", "d", "e"].map(text).to_vec(),
+            edges: path.iter().map(|&(s, t)| text_edge(s, t)).collect(),
+            ..MemorySource::default()
+        };
+        let version = world.refresh_text(&graph, &source);
+        let id_map = world.text_id_map(version);
+        let dense = |id: &str| id_map.dense_id(id.as_bytes()).unwrap() as i64;
+        for (source, target) in path {
+            assert_eq!((dense(source) - dense(target)).abs(), 1, "{source} - {target}");
+        }
+        let forward = world.csr(version, "", "0");
+        assert_eq!(text_neighbours(&forward, &id_map, "d"), ["b"]);
+    }
+
+    /// Rows are mapped on the pool a batch at a time: a build of more rows
+    /// than a batch takes every one, in order, for either kind of id.
+    #[test]
+    fn edge_rows_past_a_batch_are_all_taken() {
+        let rows = BATCH_ROWS as i64 + 100;
+        let mut world = World::default();
+        let source = MemorySource {
+            nodes: (0..1000).collect(),
+            edges: (0..rows).map(|r| edge(r % 1000, (r * 3 + 1) % 1001)).collect(),
+            ..MemorySource::default()
+        };
+        let version = world.refresh(&graph(), &source, true);
+        let stats = world.catalog.version(version).stats;
+        assert_eq!(stats.edge_count + stats.deduplicated_edges + stats.dropped_edges, rows as u64);
+        assert!(stats.dropped_edges > 0, "edges to 1000 are dropped");
+
+        let as_text = MemorySource {
+            nodes: source.nodes.iter().map(|n| text(&n.to_string())).collect(),
+            edges: source
+                .edges
+                .iter()
+                .map(|(s, t, _, _)| text_edge(&s.unwrap().to_string(), &t.unwrap().to_string()))
+                .collect(),
+            ..MemorySource::default()
+        };
+        let mut text_world = World::default();
+        let text_version = text_world.refresh_text(&text_graph(), &as_text);
+        assert_eq!(text_world.catalog.version(text_version).stats, stats);
     }
 }

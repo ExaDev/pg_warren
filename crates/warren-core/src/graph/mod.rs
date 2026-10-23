@@ -13,6 +13,7 @@
 pub(crate) mod build_memory;
 mod csr;
 mod direction;
+mod edge_batch;
 pub(crate) mod edge_list;
 mod error;
 mod id_map;
@@ -31,6 +32,7 @@ pub use csr::{
 };
 pub(crate) use csr::{AnyCsrSlices, CsrSlices};
 pub use direction::Direction;
+pub use edge_batch::{EdgeBatch, Endpoints, FixedEndpoints, IndexedKeys, TextEndpoints};
 pub use edge_list::{EdgeIntake, EdgeList};
 pub use error::GraphError;
 pub use id_map::{

@@ -7,10 +7,10 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 
 use pgrx::prelude::*;
-use pgrx::spi::{SpiClient, SpiCursor, SpiHeapTupleData, SpiTupleTable};
+use pgrx::spi::{SpiClient, SpiCursor, SpiTupleTable};
 use pgrx::{PgList, PgMemoryContexts, PgTupleDesc};
 
-use super::{ColumnType, SourceError};
+use super::{ColumnType, IdDatum, SourceError};
 
 /// Rows fetched from a cursor at a time.
 const BATCH_ROWS: std::ffi::c_long = 10_000;
@@ -156,8 +156,30 @@ unsafe fn column_types(descriptor: pg_sys::TupleDesc) -> Vec<ColumnType> {
         .map(|attribute| ColumnType {
             oid: attribute.atttypid,
             name: type_name(attribute.atttypid),
+            nondeterministic: nondeterministic(attribute.attcollation),
         })
         .collect()
+}
+
+/// The name of `collation` if it is a nondeterministic collation.
+fn nondeterministic(collation: pg_sys::Oid) -> Option<String> {
+    if collation == pg_sys::Oid::INVALID {
+        return None;
+    }
+    // SAFETY: a valid collation oid, from a tuple descriptor; both calls
+    // read the syscache and raise an ERROR for an unknown oid rather than
+    // return a bad value. get_collation_name returns NULL or a palloc'd
+    // NUL-terminated string.
+    unsafe {
+        if pg_sys::get_collation_isdeterministic(collation) {
+            return None;
+        }
+        let name = pg_sys::get_collation_name(collation);
+        Some(match name.is_null() {
+            true => collation.to_u32().to_string(),
+            false => CStr::from_ptr(name).to_string_lossy().into_owned(),
+        })
+    }
 }
 
 /// A type's SQL name, as `format_type` prints it.
@@ -168,32 +190,13 @@ pub(crate) fn type_name(oid: pg_sys::Oid) -> String {
 }
 
 /// Passes every remaining row of `cursor` to `each`, a batch at a time,
-/// checking for interrupts between batches and freeing each batch after it.
-pub(crate) fn for_each_row<E: From<pgrx::spi::Error>>(
-    cursor: &mut SpiCursor<'_>,
-    mut each: impl FnMut(&SpiHeapTupleData<'_>) -> Result<(), E>,
-) -> Result<(), E> {
-    loop {
-        check_for_interrupts!();
-        let batch = cursor.fetch(BATCH_ROWS)?;
-        if batch.is_empty() {
-            return Ok(());
-        }
-        for row in batch {
-            each(&row)?;
-        }
-        // SAFETY: SPI_tuptable is the batch just consumed, which nothing
-        // refers to any more.
-        unsafe { pg_sys::SPI_freetuptable(pg_sys::SPI_tuptable) };
-    }
-}
-
-/// [`for_each_row`], passing each row as its batch's tuple table positioned
-/// at it, so that [`text_in_place`] can read a text column without the copy
-/// pgrx's typed getters make into a memory context that lives until SPI
-/// finishes (one allocation per row, held for the whole read). Each batch
-/// runs in a memory context reset after it, which holds whatever reading a
-/// row detoasts.
+/// checking for interrupts between batches and freeing each batch after
+/// it. Each row is passed as its batch's tuple table positioned at it, so
+/// that [`text_in_place`] can read a text column without the copy pgrx's
+/// typed getters make into a memory context that lives until SPI finishes
+/// (one allocation per row, held for the whole read). Each batch runs in a
+/// memory context reset after it, which holds whatever reading a row
+/// detoasts.
 pub(crate) fn for_each_tuple<E: From<pgrx::spi::Error>>(
     cursor: &mut SpiCursor<'_>,
     mut each: impl FnMut(&SpiTupleTable<'_>) -> Result<(), E>,
@@ -223,6 +226,21 @@ pub(crate) fn for_each_tuple<E: From<pgrx::spi::Error>>(
         // refers to any more.
         unsafe { pg_sys::SPI_freetuptable(pg_sys::SPI_tuptable) };
     }
+}
+
+/// The external id in column `ordinal` (of a type `E` reads) of the row
+/// `table` is at, read in place as [`text_in_place`] reads a `text`.
+pub(crate) fn id_in_place<'t, E: IdDatum>(
+    table: &'t SpiTupleTable<'_>,
+    ordinal: usize,
+) -> Result<Option<E::InPlace<'t>>, pgrx::spi::Error> {
+    let Some(datum) = table.get_datum_by_ordinal(ordinal)? else {
+        return Ok(None);
+    };
+    // SAFETY: `datum` is the non-NULL id (the caller checked the column's
+    // type) of the tuple `table` is at, which lives until the tuple table
+    // is freed, so for as long as `table` is borrowed.
+    Ok(unsafe { E::in_place(datum, false) })
 }
 
 /// The `text` in column `ordinal` of the row `table` is at, read in place

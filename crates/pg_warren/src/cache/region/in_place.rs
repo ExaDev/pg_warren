@@ -5,7 +5,7 @@ use std::mem::{align_of, offset_of, size_of};
 use warren_core::graph::IdPair;
 
 use super::RegionError;
-use crate::source::IdDatum;
+use crate::source::InPlaceId;
 
 /// An element a region holds in place.
 ///
@@ -23,26 +23,30 @@ pub(crate) unsafe trait InPlace: Copy + Send + Sync + 'static {}
 pub(crate) unsafe trait Unpadded: InPlace {}
 
 // SAFETY: plain integers and floats: any bits are a value; alignment ≤ 8.
+unsafe impl InPlace for u8 {}
+// SAFETY: as for `u8`.
 unsafe impl InPlace for u32 {}
-// SAFETY: as for `u32`.
+// SAFETY: as for `u8`.
 unsafe impl InPlace for u64 {}
-// SAFETY: as for `u32`.
+// SAFETY: as for `u8`.
 unsafe impl InPlace for f32 {}
-// SAFETY: as for `u32`.
+// SAFETY: as for `u8`.
 unsafe impl InPlace for f64 {}
-// SAFETY: `IdDatum`'s contract: any bits are an external id, aligned ≤ 8.
-unsafe impl<E: IdDatum> InPlace for E {}
+// SAFETY: `InPlaceId`'s contract: any bits are an external id, aligned ≤ 8.
+unsafe impl<E: InPlaceId> InPlace for E {}
 // SAFETY: a `#[repr(C)]` pair of an external id and a `u64`, both
 // `InPlace`; its padding, if any, is not part of its value.
-unsafe impl<E: IdDatum> InPlace for IdPair<E> {}
+unsafe impl<E: InPlaceId> InPlace for IdPair<E> {}
 // SAFETY: integers and floats have no padding.
+unsafe impl Unpadded for u8 {}
+// SAFETY: as for `u8`.
 unsafe impl Unpadded for u32 {}
 // SAFETY: as for `u32`.
 unsafe impl Unpadded for u64 {}
 // SAFETY: as for `u32`.
 unsafe impl Unpadded for f64 {}
-// SAFETY: `IdDatum`'s contract: an external id has no padding.
-unsafe impl<E: IdDatum> Unpadded for E {}
+// SAFETY: `InPlaceId`'s contract: an external id has no padding.
+unsafe impl<E: InPlaceId> Unpadded for E {}
 
 /// `bytes` as elements of `T`, which must be aligned for `T` and a whole
 /// number of them.
@@ -66,7 +70,10 @@ pub(crate) fn typed_mut<T: Unpadded>(bytes: &mut [u8]) -> Result<&mut [T], Regio
 
 /// Writes `pair` into `slot`, the bytes of one `IdPair<E>`, field by
 /// field, so its padding stays initialized.
-pub(crate) fn write_pair<E: IdDatum>(slot: &mut [u8], pair: IdPair<E>) -> Result<(), RegionError> {
+pub(crate) fn write_pair<E: InPlaceId>(
+    slot: &mut [u8],
+    pair: IdPair<E>,
+) -> Result<(), RegionError> {
     let (start, dense) = (offset_of!(IdPair<E>, external), offset_of!(IdPair<E>, dense));
     let end = slot.len();
     if end != size_of::<IdPair<E>>() {

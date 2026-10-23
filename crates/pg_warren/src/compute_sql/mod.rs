@@ -39,7 +39,6 @@ mod ownership;
 mod product;
 mod read;
 mod reduce;
-mod settings;
 mod similarity;
 mod structure;
 mod summary;
@@ -49,8 +48,7 @@ mod transient;
 mod vectors;
 
 pub(crate) use drop::drop_named;
-pub(crate) use error::{compute_sqlstate, entry, ComputeSqlError};
-pub(crate) use settings::{define_compute_settings, workers};
+pub(crate) use error::{entry, ComputeSqlError};
 pub(crate) use vectors::{vector_bytes, Vectors};
 
 use warren_core::graph::{RelationIndex, RelationSelection};

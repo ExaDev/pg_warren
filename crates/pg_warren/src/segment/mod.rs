@@ -8,6 +8,7 @@
 
 mod chunk;
 mod error;
+mod id_map;
 mod layout;
 mod name;
 mod spi;
@@ -16,9 +17,11 @@ pub(crate) use chunk::{
     read_segment, read_segment_within, write_segment, EachChunk, SegmentStore, CHUNK_SIZE,
 };
 pub(crate) use error::SegmentError;
+pub(crate) use id_map::StoredIds;
 pub(crate) use layout::{write_version, writer_memory, SegmentWriter};
 pub(crate) use name::{
-    csr_segment, CsrPart, CsrScope, Direction, ID_MAP, MEMBERSHIP, RELATION_DICTIONARY, TOMBSTONES,
+    csr_segment, CsrPart, CsrScope, Direction, ID_BYTES, ID_MAP, ID_OFFSETS, ID_ORDER, MEMBERSHIP,
+    RELATION_DICTIONARY, TOMBSTONES,
 };
 pub(crate) use spi::{each_chunk, SpiSegmentStore};
 

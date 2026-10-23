@@ -9,6 +9,8 @@
 //! copy, a send function's state) is freed with its batch rather than
 //! held until the read ends.
 
+use std::borrow::Borrow;
+
 use pgrx::prelude::*;
 use pgrx::spi::SpiTupleTable;
 use pgrx::{AnyElement, FromDatum, IntoDatum};
@@ -18,10 +20,12 @@ use warren_core::graph::DenseId;
 use super::super::vectors::Vectors;
 use super::super::ComputeSqlError;
 use crate::access::{with_read_only, with_search_path, Caller};
-use crate::source::{for_each_tuple, open_read_only, IdDatum};
+use crate::cache::CachedIds;
+use crate::external_ids::DenseIds;
+use crate::source::{for_each_tuple, id_in_place, open_read_only};
 
 /// Every live node's value of `vector` (width 1), as a message.
-pub(super) fn from_vector<E: IdDatum, T: Element>(
+pub(super) fn from_vector<E: CachedIds, T: Element>(
     vectors: &Vectors<E>,
     values: &[T],
     messages: &mut Messages<T>,
@@ -39,8 +43,9 @@ pub(super) fn from_vector<E: IdDatum, T: Element>(
 }
 
 /// Passes each row of `query` (columns `id`, `value`) whose id is a live
-/// node of the version to `each`, with its dense id.
-pub(super) fn from_query<E: IdDatum>(
+/// node of the version to `each`, with its dense id; ids are mapped
+/// through [`DenseIds`], which indexes a text id map for a long query.
+pub(super) fn from_query<E: CachedIds>(
     vectors: &Vectors<E>,
     caller: &Caller,
     query: &str,
@@ -50,11 +55,12 @@ pub(super) fn from_query<E: IdDatum>(
         with_read_only(|| {
             Spi::connect(|client| {
                 let mut opened = open_read_only::<ComputeSqlError>(client, "messages", query)?;
+                let mut ids = DenseIds::new(&vectors.loaded.id_map, &vectors.memory);
                 for_each_tuple(&mut opened.cursor, |row| {
-                    let Some(id) = row.get::<E::Sql>(1)?.map(E::from_sql) else {
+                    let Some(id) = id_in_place::<E>(row, 1)? else {
                         return Ok(());
                     };
-                    match vectors.loaded.id_map.dense_id(&id) {
+                    match ids.dense_id(id.borrow())? {
                         Some(node) => each(node, row),
                         None => Ok(()),
                     }

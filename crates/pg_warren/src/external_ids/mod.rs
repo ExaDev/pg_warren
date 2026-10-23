@@ -4,17 +4,24 @@
 //! (DESIGN.md §5.2, §9.3, §14 item 1). Used by every feature that takes or
 //! returns node ids (`traversal_sql`, `compute_sql`).
 //!
+//! Calls that map many ids map them through `lookup::DenseIds`, which
+//! indexes a text id map once a call has mapped enough of them.
+//!
 //! An external id the version does not know, or knows only as tombstoned,
 //! is not a node of that version: it is skipped as a start or filter
 //! member, and a lookup of it finds nothing. NULL ids are skipped too.
 
 mod error;
+mod lookup;
 
 pub(crate) use error::ExternalIdError;
+pub(crate) use lookup::DenseIds;
+
+use std::borrow::Borrow;
 
 use pgrx::prelude::*;
-use pgrx::{AnyArray, AnyElement, FromDatum, IntoDatum};
-use warren_core::graph::{DenseId, FixedKeys, IdMap};
+use pgrx::{AnyArray, AnyElement, FromDatum};
+use warren_core::graph::{DenseId, IdMap};
 
 use crate::source::{type_name, IdDatum};
 
@@ -23,29 +30,37 @@ pub(crate) fn element<E: IdDatum>(
     graph: &str,
     argument: &'static str,
     value: AnyElement,
-) -> Result<E, ExternalIdError> {
+) -> Result<E::Owned, ExternalIdError> {
     check_type::<E>(graph, argument, value.oid(), false)?;
-    // SAFETY: the datum's type was checked above to be E's SQL type.
-    let sql = unsafe { E::Sql::from_polymorphic_datum(value.datum(), false, value.oid()) };
-    sql.map(E::from_sql).ok_or(ExternalIdError::Null(argument))
+    owned::<E>(value).ok_or(ExternalIdError::Null(argument))
 }
 
-/// [`element`], but an `int2` or `int4` value is also accepted for a
-/// wider integer id type: for lookups whose result type does not depend
-/// on the argument's, so `warren.degree('g', 42)` works on a `bigint`
-/// graph.
+/// The id `value` holds, which is of a type `E` reads.
+fn owned<E: IdDatum>(value: AnyElement) -> Option<E::Owned> {
+    // SAFETY: the caller checked that the datum's type is one E reads; it
+    // lives for the call.
+    unsafe { E::in_place(value.datum(), false) }.map(|id| E::owned(id.borrow()))
+}
+
+/// [`element`], but for lookups whose result type does not depend on the
+/// argument's, a narrower type is also accepted: an `int2` or `int4` value
+/// for a wider integer id type, so `warren.degree('g', 42)` works on a
+/// `bigint` graph, and a `varchar` for `text`.
 pub(crate) fn element_widened<E: IdDatum>(
     graph: &str,
     argument: &'static str,
     value: AnyElement,
-) -> Result<E, ExternalIdError> {
+) -> Result<E::Owned, ExternalIdError> {
+    if value.oid() != E::ID_TYPE.oid() && E::ID_TYPE.reads(value.oid()) {
+        return owned::<E>(value).ok_or(ExternalIdError::Null(argument));
+    }
     // SAFETY: each read below is of the datum's own type, `value.oid()`.
     let narrow = unsafe {
         match value.oid() {
             pg_sys::INT2OID => {
                 i16::from_polymorphic_datum(value.datum(), false, value.oid()).map(i64::from)
             }
-            pg_sys::INT4OID if value.oid() != E::Sql::type_oid() => {
+            pg_sys::INT4OID if value.oid() != E::ID_TYPE.oid() => {
                 i32::from_polymorphic_datum(value.datum(), false, value.oid()).map(i64::from)
             }
             _ => None,
@@ -53,7 +68,7 @@ pub(crate) fn element_widened<E: IdDatum>(
     };
     match narrow.and_then(E::from_integer) {
         Some(id) => Ok(id),
-        None => element(graph, argument, value),
+        None => element::<E>(graph, argument, value),
     }
 }
 
@@ -63,52 +78,58 @@ pub(crate) fn elements<E: IdDatum>(
     graph: &str,
     argument: &'static str,
     array: AnyArray,
-) -> Result<Vec<E>, ExternalIdError> {
+) -> Result<Vec<E::Owned>, ExternalIdError> {
     check_type::<E>(graph, argument, array.oid(), true)?;
-    Ok((&array)
-        .into_iter()
-        .flatten()
-        // SAFETY: the element type was checked above to be E's SQL type.
-        .filter_map(|value| unsafe {
-            E::Sql::from_polymorphic_datum(value.datum(), false, value.oid())
-        })
-        .map(E::from_sql)
-        .collect())
+    Ok((&array).into_iter().flatten().filter_map(owned::<E>).collect())
 }
 
 /// The dense ids of the live nodes among `ids`, in order.
-pub(crate) fn dense_ids<E: IdDatum>(id_map: &IdMap<FixedKeys<E>>, ids: &[E]) -> Vec<DenseId> {
-    ids.iter().filter_map(|id| id_map.dense_id(id)).collect()
+pub(crate) fn dense_ids<E: IdDatum>(id_map: &IdMap<E>, ids: &[E::Owned]) -> Vec<DenseId> {
+    ids.iter().filter_map(|id| id_map.dense_id(id.borrow())).collect()
 }
 
 /// The external id of `dense` as a SQL value of the graph's id type.
-pub(crate) fn external<E: IdDatum>(
-    id_map: &IdMap<FixedKeys<E>>,
-    dense: DenseId,
-) -> Option<AnyElement> {
-    let id = id_map.external_id(dense)?;
-    let datum = id.to_sql().into_datum()?;
-    // SAFETY: the datum was just made from E's SQL type, whose oid is
-    // E::Sql::type_oid().
-    unsafe { AnyElement::from_polymorphic_datum(datum, false, E::Sql::type_oid()) }
+pub(crate) fn external<E: IdDatum>(id_map: &IdMap<E>, dense: DenseId) -> Option<AnyElement> {
+    let datum = E::datum(id_map.external_id(dense)?)?;
+    // SAFETY: the datum was just made of E's id type.
+    unsafe { AnyElement::from_polymorphic_datum(datum, false, E::ID_TYPE.oid()) }
 }
 
 /// The external ids of `path` as a SQL array of the graph's id type.
-pub(crate) fn external_array<E: IdDatum>(
-    id_map: &IdMap<FixedKeys<E>>,
-    path: &[DenseId],
-) -> Option<AnyArray> {
-    let ids: Vec<E::Sql> = path
-        .iter()
-        .filter_map(|&dense| id_map.external_id(dense))
-        .copied()
-        .map(E::to_sql)
-        .collect();
-    let datum = ids.into_datum()?;
-    // SAFETY: get_array_type only reads the type cache.
-    let array_type = unsafe { pg_sys::get_array_type(E::Sql::type_oid()) };
-    // SAFETY: the datum was just made as an array of E's SQL type.
-    unsafe { AnyArray::from_polymorphic_datum(datum, false, array_type) }
+pub(crate) fn external_array<E: IdDatum>(id_map: &IdMap<E>, path: &[DenseId]) -> Option<AnyArray> {
+    let mut ids: Vec<pg_sys::Datum> =
+        path.iter().filter_map(|&dense| id_map.external_id(dense)).filter_map(E::datum).collect();
+    let oid = E::ID_TYPE.oid();
+    let (mut len, mut by_value, mut align) = (0, false, 0);
+    let count = i32::try_from(ids.len()).ok()?;
+    // SAFETY: get_typlenbyvalalign and get_array_type only read the type
+    // cache; construct_array copies `count` datums of type `oid`, laid out
+    // as it says, into a new array, raising an ERROR rather than return
+    // NULL.
+    let (array, array_type) = unsafe {
+        pg_sys::get_typlenbyvalalign(oid, &mut len, &mut by_value, &mut align);
+        let array =
+            pg_sys::construct_array(ids.as_mut_ptr(), count, oid, len.into(), by_value, align);
+        (array, pg_sys::get_array_type(oid))
+    };
+    // SAFETY: the datum was just made as an array of E's id type.
+    unsafe { AnyArray::from_polymorphic_datum(pg_sys::Datum::from(array), false, array_type) }
+}
+
+/// The external id `key` as text, by its type's output function.
+pub(crate) fn id_text<E: IdDatum>(key: &E::Key) -> String {
+    let Some(datum) = E::datum(key) else {
+        return String::new();
+    };
+    let (mut output, mut varlena) = (pg_sys::Oid::INVALID, false);
+    // SAFETY: the out-pointers point to live locals; the datum is of the
+    // type whose output function is called, which returns a palloc'd
+    // NUL-terminated string.
+    unsafe {
+        pg_sys::getTypeOutputInfo(E::ID_TYPE.oid(), &mut output, &mut varlena);
+        let text = pg_sys::OidOutputFunctionCall(output, datum);
+        std::ffi::CStr::from_ptr(text).to_string_lossy().into_owned()
+    }
 }
 
 /// The element type of array type `oid`; an error naming `argument` if
@@ -137,7 +158,7 @@ pub(crate) fn check_type<E: IdDatum>(
     oid: pg_sys::Oid,
     array: bool,
 ) -> Result<(), ExternalIdError> {
-    let expected = E::Sql::type_oid();
+    let expected = E::ID_TYPE.oid();
     let found = match array {
         true => element_type(argument, oid, &type_name(expected))?,
         false => oid,
