@@ -11,3 +11,29 @@
 -- a new owner, as ALTER MATERIALIZED VIEW ... OWNER TO does.
 CREATE FUNCTION warren."set_owner"(name text, owner regrole) RETURNS void
 STRICT VOLATILE LANGUAGE c AS 'MODULE_PATHNAME', 'set_owner_wrapper';
+
+-- Cleanup after a dropped role (DESIGN.md §5.7, §14 items 44 and 45). The
+-- event trigger on DROP OWNED that calls warren.on_drop_owned() is a
+-- superuser's opt-in: no extension script creates it.
+CREATE FUNCTION warren."reassign_owned"("old" regrole, "new" regrole) RETURNS bigint
+STRICT VOLATILE LANGUAGE c AS 'MODULE_PATHNAME', 'reassign_owned_wrapper';
+
+CREATE FUNCTION warren."drop_owned"(role regrole) RETURNS bigint
+STRICT VOLATILE LANGUAGE c AS 'MODULE_PATHNAME', 'drop_owned_wrapper';
+
+CREATE FUNCTION warren."on_drop_owned"() RETURNS event_trigger
+VOLATILE LANGUAGE c AS 'MODULE_PATHNAME', 'on_drop_owned_wrapper';
+
+CREATE FUNCTION warren."orphans"() RETURNS TABLE (
+	"kind" TEXT,
+	"graph" TEXT,
+	"role" oid
+)
+STRICT VOLATILE PARALLEL SAFE
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'orphans_wrapper';
+
+CREATE FUNCTION warren."drop_orphans"() RETURNS bigint
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'drop_orphans_wrapper';

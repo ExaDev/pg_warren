@@ -281,3 +281,58 @@ pub(crate) fn warnings(sql: &str) -> Result<Vec<String>, Error> {
     Spi::run(&format!("SET LOCAL log_min_messages = warning; {sql}"))?;
     Ok(WARNINGS.with(|kept| kept.take()))
 }
+
+/// [`failure`] of `expression` run as `role`.
+pub(crate) fn failure_as(role: &str, expression: &str) -> Result<Option<String>, Error> {
+    statement_failure_as(role, &format!("SELECT {expression}"))
+}
+
+/// Runs SQL `statement` (any statement, not only an expression) as `role`
+/// (`none` for the session user) and returns the SQLSTATE and message it
+/// failed with, as [`failure`] does, or `None` if it succeeded.
+pub(crate) fn statement_failure_as(role: &str, statement: &str) -> Result<Option<String>, Error> {
+    // `failure`'s temporary table, usable by every role.
+    Spi::run(
+        "CREATE TEMP TABLE IF NOT EXISTS failure (what text);
+         GRANT ALL ON failure TO PUBLIC; TRUNCATE failure",
+    )?;
+    Spi::run(&format!("SET ROLE {role}"))?;
+    let ran = Spi::run(&format!(
+        "DO $do$ BEGIN EXECUTE $statement${statement}$statement$;
+         EXCEPTION WHEN OTHERS THEN
+             INSERT INTO failure VALUES (SQLSTATE || ': ' || SQLERRM);
+         END $do$"
+    ));
+    Spi::run("RESET ROLE")?;
+    ran?;
+    Spi::get_one::<String>("SELECT max(what) FROM failure")
+}
+
+/// Graphs `dr`, owned by `dr_owner`, and `dk`, owned by `dk_owner` (rings
+/// of 4, refreshed), where `dr_owner` is a reader of `dk` and wrote its
+/// vector `mine`, and `dk_owner` wrote `theirs`: what a dropped role's
+/// cleanup must tell apart (DESIGN.md §5.7).
+pub(crate) fn neighbouring_graphs() -> Result<(), Error> {
+    ring("dr", 4, 2)?;
+    ring("dk", 4, 2)?;
+    refresh("dr", true)?;
+    refresh("dk", true)?;
+    Spi::run(
+        "SELECT warren.grant('dk', 'dr_owner');
+         SET ROLE dr_owner; SELECT warren.vector_const('dk', 'mine', 1); RESET ROLE;
+         SET ROLE dk_owner; SELECT warren.vector_const('dk', 'theirs', 2); RESET ROLE",
+    )
+}
+
+/// Every graph as `name:owner:readers`, then every persisted vector as
+/// `graph.name:created_by`.
+pub(crate) fn ownership() -> Result<Option<String>, Error> {
+    Spi::get_one::<String>(
+        "SELECT coalesce((SELECT string_agg(name || ':' || owner::text || ':' || readers::text,
+                                            ' ' ORDER BY name) FROM warren.graphs), '')
+                || ' / ' ||
+                coalesce((SELECT string_agg(g.name || '.' || v.name || ':' || v.created_by::text,
+                                            ' ' ORDER BY g.name, v.name)
+                          FROM warren.vectors v JOIN warren.graphs g USING (graph_id)), '')",
+    )
+}

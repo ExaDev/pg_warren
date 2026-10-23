@@ -69,6 +69,38 @@ pub(crate) enum AccessError {
         /// The graph.
         graph: String,
     },
+    /// The caller lacks the privileges of a role whose graphs and vectors
+    /// it would reassign or drop, as `REASSIGN OWNED` and `DROP OWNED`
+    /// require them (DESIGN.md §5.7).
+    #[error("must have the privileges of role \"{role}\" to {action}")]
+    NoPrivilegesOf {
+        /// The role's name.
+        role: String,
+        /// What the caller tried to do.
+        action: &'static str,
+    },
+    /// The caller may not `SET ROLE` to the role it would give another
+    /// role's graphs and vectors (DESIGN.md §5.7).
+    #[error(
+        "must be able to SET ROLE \"{role}\" to give it the graphs and vectors of role \"{from}\""
+    )]
+    CannotReceive {
+        /// The would-be owner's name.
+        role: String,
+        /// The role whose graphs and vectors it would receive.
+        from: String,
+    },
+    /// Only a superuser or a member of the extension's owner may drop a
+    /// graph whose owner was dropped (DESIGN.md §14 item 45).
+    #[error(
+        "must be a member of role \"{0}\", the owner of extension pg_warren, to drop graphs whose \
+         owner no longer exists"
+    )]
+    NotOrphanDropper(String),
+    /// Only a superuser may give a graph whose owner was dropped a new
+    /// owner (DESIGN.md §14 item 45).
+    #[error("only a superuser may give graph \"{0}\", whose owner no longer exists, a new owner")]
+    AdoptOrphan(String),
     /// No role has this oid.
     #[error("role with OID {0} does not exist")]
     RoleNotFound(u32),
@@ -90,7 +122,11 @@ impl SqlError for AccessError {
             | Self::NotReader { .. }
             | Self::NotCreator { .. }
             | Self::CreatorDropped { .. }
-            | Self::CannotBecome { .. } => PgSqlErrorCode::ERRCODE_INSUFFICIENT_PRIVILEGE,
+            | Self::CannotBecome { .. }
+            | Self::NoPrivilegesOf { .. }
+            | Self::CannotReceive { .. }
+            | Self::NotOrphanDropper(_)
+            | Self::AdoptOrphan(_) => PgSqlErrorCode::ERRCODE_INSUFFICIENT_PRIVILEGE,
             Self::OwnerDropped(_) | Self::RoleNotFound(_) | Self::ExtensionMissing => {
                 PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT
             }

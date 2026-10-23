@@ -1,12 +1,17 @@
-//! `warren.set_owner`: gives a graph a new owner, as `ALTER MATERIALIZED
-//! VIEW … OWNER TO` does a materialised view (DESIGN.md §5.7, §14 item 43).
+//! Ownership transfer: `warren.set_owner` gives a graph a new owner, as
+//! `ALTER MATERIALIZED VIEW … OWNER TO` does a materialised view (DESIGN.md
+//! §5.7, §14 item 43), and `warren.reassign_owned` (`reassign`) every
+//! graph and vector of one role to another, as `REASSIGN OWNED` does.
+
+mod reassign;
 
 use pgrx::prelude::*;
 
 use super::create_graph::{writable_notice, writable_schemas};
 use super::{CatalogError, GraphDefinition, GraphSource};
 use crate::access::{
-    as_role, entry, require_can_become, require_owner, with_read_only, with_search_path,
+    as_role, entry, require_adopter, require_can_become, require_owner, with_read_only,
+    with_search_path, AccessError,
 };
 use crate::source::{check_edge_columns, require_node_id_type, source_columns};
 
@@ -15,9 +20,10 @@ const ACTION: &str = "change the owner of";
 
 /// `warren.set_owner(name text, owner regrole)`: makes `owner` the owner
 /// of graph `name`. The caller must be a member of the current owner and
-/// able to `SET ROLE` to the new one (on PG 15, a member of it). Versions,
-/// vectors and readers (but the new owner) stay; the old owner keeps no
-/// access unless it is granted.
+/// able to `SET ROLE` to the new one (on PG 15, a member of it); only a
+/// superuser may adopt a graph whose owner was dropped. Versions, vectors
+/// and readers (but the new owner) stay; the old owner keeps no access
+/// unless it is granted.
 #[pg_extern(
     schema = "warren",
     sql = r#"
@@ -31,9 +37,17 @@ fn set_owner(name: &str, owner: pg_sys::Oid) {
 
 fn transfer(name: &str, owner: pg_sys::Oid) -> Result<(), CatalogError> {
     let mut graph = GraphDefinition::find(name)?;
-    require_owner(graph.owner, &graph.name, ACTION)?;
+    // A graph whose owner was dropped may be adopted by a superuser alone
+    // (DESIGN.md §14 item 45).
+    let orphan = match require_owner(graph.owner, &graph.name, ACTION) {
+        Err(AccessError::OwnerDropped(_)) => require_adopter(&graph.name).map(|()| true)?,
+        checked => checked.map(|()| false)?,
+    };
     require_can_become(owner, &graph.name)?;
-    graph.lock(ACTION)?;
+    match graph.lock(ACTION) {
+        Err(CatalogError::Access(AccessError::OwnerDropped(_))) if orphan => {}
+        locked => locked?,
+    }
     let built_from_queries = graph.source == GraphSource::Query;
     if built_from_queries {
         open_sources_as(&graph, owner)?;
@@ -75,7 +89,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{failure, refresh, ring, versions};
+    use crate::fixture::{failure, failure_as as as_role, refresh, ring, versions};
 
     /// Graph `so`, owned by `so_owner`, refreshed once, and role `so_new`,
     /// which may read its sources.
@@ -87,19 +101,6 @@ mod tests {
 
     fn owner() -> Result<Option<String>, Error> {
         Spi::get_one::<String>("SELECT owner::text FROM warren.graphs WHERE name = 'so'")
-    }
-
-    /// The error of `call` as `role`.
-    fn as_role(role: &str, call: &str) -> Result<Option<String>, Error> {
-        // `failure`'s temporary table, usable by every role.
-        Spi::run(
-            "CREATE TEMP TABLE IF NOT EXISTS failure (what text);
-             GRANT ALL ON failure TO PUBLIC",
-        )?;
-        Spi::run(&format!("SET ROLE {role}"))?;
-        let failed = failure(call);
-        Spi::run("RESET ROLE")?;
-        failed
     }
 
     #[pg_test]
@@ -257,6 +258,42 @@ mod tests {
         };
         assert_eq!(found(old)?.as_deref(), Some("so_mine"));
         assert_eq!(found(new)?, None);
+        Ok(())
+    }
+
+    /// `so`, its owner dropped without `DROP OWNED` (DESIGN.md §5.7).
+    fn orphan() -> Result<(), Error> {
+        graph()?;
+        Spi::run("REVOKE ALL ON so_nodes, so_edges FROM so_owner; DROP ROLE so_owner")
+    }
+
+    /// DESIGN.md §14 item 45: a superuser may adopt an orphan.
+    #[pg_test]
+    fn a_superuser_may_adopt_a_graph_whose_owner_was_dropped() -> Result<(), Error> {
+        orphan()?;
+        Spi::run("SELECT warren.set_owner('so', 'so_new')")?;
+        assert_eq!(owner()?.as_deref(), Some("so_new"));
+        assert_eq!(as_role("so_new", "warren.refresh('so')")?, None);
+        Ok(())
+    }
+
+    /// DESIGN.md §14 item 45: the extension's owner may drop an orphan but
+    /// not adopt it, which would hand it what the dropped owner could see.
+    #[pg_test]
+    fn only_a_superuser_may_adopt_a_graph_whose_owner_was_dropped() -> Result<(), Error> {
+        orphan()?;
+        Spi::run(
+            "CREATE ROLE so_installer; GRANT so_new TO so_installer;
+             UPDATE pg_catalog.pg_extension SET extowner = 'so_installer'::regrole
+             WHERE extname = 'pg_warren'",
+        )?;
+        assert_eq!(
+            as_role("so_installer", "warren.set_owner('so', 'so_new')")?.as_deref(),
+            Some(
+                "42501: only a superuser may give graph \"so\", whose owner no longer exists, \
+                 a new owner"
+            )
+        );
         Ok(())
     }
 }

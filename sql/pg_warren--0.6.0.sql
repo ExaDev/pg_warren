@@ -1925,11 +1925,57 @@ STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'matrix_rows_wrapper
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/catalog/owner.rs:19
+-- crates/pg_warren/src/catalog/owner/mod.rs:25
 -- pg_warren::catalog::owner::set_owner
 
 CREATE FUNCTION warren."set_owner"(name text, owner regrole) RETURNS void
 STRICT VOLATILE LANGUAGE c AS 'MODULE_PATHNAME', 'set_owner_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/catalog/dropped_roles/orphans.rs:33
+-- pg_warren::catalog::dropped_roles::orphans::orphans
+CREATE  FUNCTION warren."orphans"() RETURNS TABLE (
+	"kind" TEXT,  /* String */
+	"graph" TEXT,  /* String */
+	"role" oid  /* pg_sys :: Oid */
+)
+STRICT VOLATILE PARALLEL SAFE 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'orphans_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/catalog/dropped_roles/event_trigger.rs:21
+-- pg_warren::catalog::dropped_roles::event_trigger::on_drop_owned
+
+CREATE FUNCTION warren."on_drop_owned"() RETURNS event_trigger
+VOLATILE LANGUAGE c AS 'MODULE_PATHNAME', 'on_drop_owned_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/catalog/dropped_roles/drop_owned.rs:15
+-- pg_warren::catalog::dropped_roles::drop_owned::drop_owned
+
+CREATE FUNCTION warren."drop_owned"(role regrole) RETURNS bigint
+STRICT VOLATILE LANGUAGE c AS 'MODULE_PATHNAME', 'drop_owned_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/catalog/owner/reassign.rs:19
+-- pg_warren::catalog::owner::reassign::reassign_owned
+
+CREATE FUNCTION warren."reassign_owned"("old" regrole, "new" regrole) RETURNS bigint
+STRICT VOLATILE LANGUAGE c AS 'MODULE_PATHNAME', 'reassign_owned_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/catalog/dropped_roles/orphans.rs:69
+-- pg_warren::catalog::dropped_roles::orphans::drop_orphans
+CREATE  FUNCTION warren."drop_orphans"() RETURNS bigint /* i64 */
+STRICT 
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'drop_orphans_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */

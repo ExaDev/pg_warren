@@ -5,7 +5,7 @@ use pgrx::prelude::*;
 
 use super::version::drop_version as delete_version;
 use super::{CatalogError, GraphDefinition, VersionId};
-use crate::access::{entry, is_superuser, require_owner, AccessError};
+use crate::access::{entry, may_drop_orphans, require_owner, AccessError};
 
 /// `warren.drop_version`: deletes a version of graph `name` that is not
 /// its current version, even one with bound vectors. The caller must be a
@@ -24,7 +24,8 @@ fn drop_version_by_name(name: &str, version: VersionId) -> Result<(), CatalogErr
 
 /// `warren.drop_graph`: deletes graph `name` and everything built from it.
 /// The caller must be a member of the owner role; if the owner role was
-/// dropped, a superuser may still drop the graph.
+/// dropped, a superuser or a member of the extension's owner may still
+/// drop the graph (DESIGN.md §14 item 45).
 #[pg_extern(schema = "warren")]
 fn drop_graph(name: &str) {
     entry(|_| drop_graph_by_name(name));
@@ -33,13 +34,13 @@ fn drop_graph(name: &str) {
 fn drop_graph_by_name(name: &str) -> Result<(), CatalogError> {
     let mut graph = GraphDefinition::find(name)?;
     match require_owner(graph.owner, &graph.name, "drop") {
-        Err(AccessError::OwnerDropped(_)) if is_superuser()? => {}
+        Err(AccessError::OwnerDropped(_)) if may_drop_orphans()? => {}
         checked => checked?,
     }
     // Checks ownership again once it holds the row: a set_owner may have
     // held it (DESIGN.md §5.7). The lock is held whatever the check says.
     match graph.lock("drop") {
-        Err(CatalogError::Access(AccessError::OwnerDropped(_))) if is_superuser()? => {}
+        Err(CatalogError::Access(AccessError::OwnerDropped(_))) if may_drop_orphans()? => {}
         locked => locked?,
     }
     graph.drop_graph()
@@ -52,7 +53,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{failure, refresh, ring, versions};
+    use crate::fixture::{failure, failure_as, refresh, ring, versions};
 
     fn rows(version: i64) -> Result<Option<i64>, Error> {
         Spi::get_one::<i64>(&format!(
@@ -133,6 +134,42 @@ mod tests {
              SELECT warren.drop_graph('doomed')",
         )?;
         assert_eq!(Spi::get_one::<i64>("SELECT count(*) FROM warren.graphs")?, Some(0));
+        Ok(())
+    }
+
+    /// Graph `d`, its owner dropped without `DROP OWNED`, and role
+    /// `d_installer`, made the extension's owner as a trusted install makes
+    /// its installer.
+    fn orphan_and_installer() -> Result<(), Error> {
+        ring("d", 5, 2)?;
+        Spi::run(
+            "REVOKE ALL ON d_nodes, d_edges FROM d_owner; DROP ROLE d_owner;
+             CREATE ROLE d_installer;
+             UPDATE pg_catalog.pg_extension SET extowner = 'd_installer'::regrole
+             WHERE extname = 'pg_warren'",
+        )
+    }
+
+    /// DESIGN.md §14 item 45: the extension's owner, which could drop every
+    /// graph with `DROP EXTENSION`, may drop one whose owner was dropped.
+    #[pg_test]
+    fn a_member_of_the_extension_owner_may_drop_a_graph_whose_owner_was_dropped(
+    ) -> Result<(), Error> {
+        orphan_and_installer()?;
+        Spi::run("CREATE ROLE d_member; GRANT d_installer TO d_member")?;
+        assert_eq!(failure_as("d_member", "warren.drop_graph('d')")?, None);
+        assert_eq!(Spi::get_one::<i64>("SELECT count(*) FROM warren.graphs")?, Some(0));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn others_may_not_drop_a_graph_whose_owner_was_dropped() -> Result<(), Error> {
+        orphan_and_installer()?;
+        Spi::run("CREATE ROLE d_stranger")?;
+        assert_eq!(
+            failure_as("d_stranger", "warren.drop_graph('d')")?.as_deref(),
+            Some("42704: the owner of graph \"d\" no longer exists")
+        );
         Ok(())
     }
 }

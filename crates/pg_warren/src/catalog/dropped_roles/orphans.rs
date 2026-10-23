@@ -1,0 +1,192 @@
+//! `warren.orphans()` and `warren.drop_orphans()`: the sweep for what
+//! neither `drop_owned` nor the event trigger saw, a `DROP ROLE` without
+//! `DROP OWNED` (DESIGN.md §5.7, §14 item 45).
+
+use pgrx::prelude::*;
+
+use super::super::CatalogError;
+use crate::access::{as_catalog_owner, entry, is_owner, may_drop_orphans, require_orphan_dropper};
+
+/// Every reference to a dropped role, as `(kind, graph, role, owner)`:
+/// graphs whose owner was dropped, reader entries, and (once per graph and
+/// role) vectors whose creator was. Quotas (work breakdown step 7) add
+/// their rows of `warren.vector_quotas` here (DESIGN.md §5.7).
+const ORPHANS: &str = "
+    SELECT 'graph', g.name, g.owner::oid, g.owner::oid FROM warren.graphs g
+    WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles r WHERE r.oid = g.owner::oid)
+    UNION ALL
+    SELECT DISTINCT 'reader', g.name, x.reader::oid, g.owner::oid
+    FROM warren.graphs g, pg_catalog.unnest(g.readers) AS x (reader)
+    WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles r WHERE r.oid = x.reader::oid)
+    UNION ALL
+    SELECT DISTINCT 'vector', g.name, v.created_by::oid, g.owner::oid
+    FROM warren.vectors v JOIN warren.graphs g USING (graph_id)
+    WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles r WHERE r.oid = v.created_by::oid)
+    ORDER BY 1, 2, 3";
+
+/// `warren.orphans()`: what names a dropped role (`kind` `graph`, `reader`
+/// or `vector`), with the graph and the dropped role's oid. A superuser
+/// and members of the extension's owner see every row; others see those
+/// of graphs they own. `PARALLEL SAFE`: it reads no graph.
+#[pg_extern(schema = "warren", volatile, parallel_safe)]
+fn orphans(
+) -> TableIterator<'static, (name!(kind, String), name!(graph, String), name!(role, pg_sys::Oid))> {
+    entry(|_| Ok::<_, CatalogError>(TableIterator::new(visible_orphans()?)))
+}
+
+/// The rows of [`ORPHANS`] the caller may see.
+fn visible_orphans() -> Result<Vec<(String, String, pg_sys::Oid)>, CatalogError> {
+    let everything = may_drop_orphans()?;
+    let found = as_catalog_owner(|| {
+        Ok::<_, CatalogError>(Spi::connect(|client| {
+            client
+                .select(ORPHANS, None, &[])?
+                .map(|row| {
+                    Ok((
+                        row.get::<String>(1)?.unwrap_or_default(),
+                        row.get::<String>(2)?.unwrap_or_default(),
+                        row.get::<pg_sys::Oid>(3)?.unwrap_or(pg_sys::Oid::INVALID),
+                        row.get::<pg_sys::Oid>(4)?.unwrap_or(pg_sys::Oid::INVALID),
+                    ))
+                })
+                .collect::<Result<Vec<_>, pgrx::spi::Error>>()
+        })?)
+    })?;
+    Ok(found
+        .into_iter()
+        .filter(|(_, _, _, owner)| everything || is_owner(*owner))
+        .map(|(kind, graph, role, _)| (kind, graph, role))
+        .collect())
+}
+
+/// `warren.drop_orphans()`: drops every graph whose owner was dropped (as
+/// `drop_graph` does), removes reader entries that name dropped roles and
+/// deletes the vectors whose creator was dropped. For a superuser or a
+/// member of the extension's owner (DESIGN.md §14 item 45). Returns the
+/// number of graphs dropped.
+#[pg_extern(schema = "warren")]
+fn drop_orphans() -> i64 {
+    entry(|_| sweep())
+}
+
+fn sweep() -> Result<i64, CatalogError> {
+    require_orphan_dropper()?;
+    let dropped = as_catalog_owner(|| {
+        Spi::connect_mut(|client| {
+            let dropped = client
+                .update(
+                    "DELETE FROM warren.graphs g
+                     WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles r WHERE r.oid = g.owner::oid)
+                     RETURNING graph_id",
+                    None,
+                    &[],
+                )?
+                .len();
+            client.update(
+                "UPDATE warren.graphs SET readers = ARRAY(
+                     SELECT x.reader
+                     FROM pg_catalog.unnest(readers) WITH ORDINALITY AS x (reader, position)
+                     WHERE EXISTS (SELECT FROM pg_catalog.pg_roles r WHERE r.oid = x.reader::oid)
+                     ORDER BY x.position)::regrole[]
+                 WHERE EXISTS (
+                     SELECT FROM pg_catalog.unnest(readers) AS x (reader)
+                     WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles r
+                                       WHERE r.oid = x.reader::oid))",
+                None,
+                &[],
+            )?;
+            client.update(
+                "DELETE FROM warren.vectors v
+                 WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles r WHERE r.oid = v.created_by::oid)",
+                None,
+                &[],
+            )?;
+            // Quotas (work breakdown step 7) delete the rows of
+            // `warren.vector_quotas` that name dropped roles here.
+            Ok::<_, CatalogError>(dropped)
+        })
+    })?;
+    i64::try_from(dropped).map_err(|_| CatalogError::TooLarge("graphs dropped"))
+}
+
+#[cfg(any(test, feature = "pg_test"))]
+#[pgrx::pg_schema]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
+mod tests {
+    use pgrx::prelude::*;
+    use pgrx::spi::Error;
+
+    use crate::fixture::{failure_as, neighbouring_graphs, ownership, rows};
+
+    /// [`neighbouring_graphs`], then a bare `DROP ROLE dr_owner`; returns
+    /// its OID.
+    fn orphaned() -> Result<u32, Error> {
+        neighbouring_graphs()?;
+        let gone = Spi::get_one::<pg_sys::Oid>("SELECT 'dr_owner'::regrole::oid")?
+            .unwrap_or(pg_sys::Oid::INVALID);
+        Spi::run("REVOKE ALL ON dr_nodes, dr_edges FROM dr_owner; DROP ROLE dr_owner")?;
+        Ok(gone.to_u32())
+    }
+
+    const LISTED: &str = "SELECT kind || ':' || graph || ':' || role::text FROM warren.orphans()";
+
+    #[pg_test]
+    fn orphans_lists_graphs_reader_entries_and_vectors_of_dropped_roles() -> Result<(), Error> {
+        let gone = orphaned()?;
+        assert_eq!(
+            rows(LISTED)?,
+            Some(format!("graph:dr:{gone} reader:dk:{gone} vector:dk:{gone}"))
+        );
+        Ok(())
+    }
+
+    /// Others see only what dangles from graphs they own; an orphaned
+    /// graph is the extension owner's (and a superuser's) to see.
+    #[pg_test]
+    fn orphans_shows_others_only_what_their_own_graphs_hold() -> Result<(), Error> {
+        let gone = orphaned()?;
+        Spi::run("CREATE ROLE dk_stranger")?;
+        Spi::run("SET ROLE dk_owner")?;
+        let owners = rows(LISTED)?;
+        Spi::run("SET ROLE dk_stranger")?;
+        let strangers = rows(LISTED)?;
+        Spi::run("RESET ROLE")?;
+        assert_eq!(owners, Some(format!("reader:dk:{gone} vector:dk:{gone}")));
+        assert_eq!(strangers.as_deref(), Some(""));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn drop_orphans_drops_orphaned_graphs_and_prunes_the_rest() -> Result<(), Error> {
+        orphaned()?;
+        assert_eq!(Spi::get_one::<i64>("SELECT warren.drop_orphans()")?, Some(1));
+        assert_eq!(ownership()?.as_deref(), Some("dk:dk_owner:{} / dk.theirs:dk_owner"));
+        assert_eq!(rows(LISTED)?.as_deref(), Some(""));
+        Ok(())
+    }
+
+    /// DESIGN.md §14 item 45b, as in a trusted install.
+    #[pg_test]
+    fn members_of_the_extension_owner_may_drop_orphans_and_others_may_not() -> Result<(), Error> {
+        let gone = orphaned()?;
+        Spi::run(
+            "CREATE ROLE dr_installer; CREATE ROLE dr_member; GRANT dr_installer TO dr_member;
+             UPDATE pg_catalog.pg_extension SET extowner = 'dr_installer'::regrole
+             WHERE extname = 'pg_warren'",
+        )?;
+        assert_eq!(
+            failure_as("dk_owner", "warren.drop_orphans()")?.as_deref(),
+            Some(
+                "42501: must be a member of role \"dr_installer\", the owner of extension \
+                 pg_warren, to drop graphs whose owner no longer exists"
+            )
+        );
+        Spi::run("SET ROLE dr_member")?;
+        let listed = rows(LISTED)?;
+        Spi::run("RESET ROLE")?;
+        assert_eq!(listed, Some(format!("graph:dr:{gone} reader:dk:{gone} vector:dk:{gone}")));
+        assert_eq!(failure_as("dr_member", "warren.drop_orphans()")?, None);
+        assert_eq!(ownership()?.as_deref(), Some("dk:dk_owner:{} / dk.theirs:dk_owner"));
+        Ok(())
+    }
+}
