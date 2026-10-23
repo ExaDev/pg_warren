@@ -49,8 +49,8 @@ pub(crate) fn read_vector(
 #[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod tests {
     use super::*;
-    use crate::vector::Binding;
     use crate::vector::MemoryVectorStore;
+    use crate::vector::{Binding, Checked};
     use pgrx::pg_sys;
     use warren_core::compute::{ComputeError, Dtype, Vector};
 
@@ -93,7 +93,7 @@ mod tests {
         let ones = Vector::filled(&memory(), 20, 1, 1i64).unwrap().into();
         let binding = Binding::new(1, 7, "x", pg_sys::Oid::INVALID);
         let second =
-            write_vector(&mut store, &binding.replacing(Some(first.vector)), &ones, 64).unwrap();
+            write_vector(&mut store, &binding.replacing(Some(first.checked())), &ones, 64).unwrap();
         assert_ne!(first.vector, second.vector);
         assert_eq!(store.existing(&[first.vector, second.vector]).unwrap(), [second.vector]);
         assert_eq!(read_vector(&mut store, &memory(), &second).unwrap(), ones);
@@ -105,7 +105,11 @@ mod tests {
         let binding = Binding::new(1, 7, "x", pg_sys::Oid::INVALID);
         let first = write_vector(&mut store, &binding, &sample(), 64).unwrap();
         // The writer found no "x", or an older one: someone wrote it since.
-        for checked in [None, Some(first.vector + 100)] {
+        // Or it found "x" written by another role than the one there now
+        // (a `reassign_owned` since).
+        let other = Checked { vector: first.vector + 100, ..first.checked() };
+        let reassigned = Checked { created_by: pg_sys::Oid::from(42), ..first.checked() };
+        for checked in [None, Some(other), Some(reassigned)] {
             let error = write_vector(&mut store, &binding.replacing(checked), &sample(), 64);
             assert!(matches!(error, Err(VectorError::WrittenConcurrently { .. })), "{error:?}");
             assert_eq!(store.existing(&[first.vector]).unwrap(), [first.vector]);

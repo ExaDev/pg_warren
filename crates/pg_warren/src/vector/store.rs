@@ -27,6 +27,26 @@ pub(crate) struct VectorRecord {
     pub(crate) created_by: pg_sys::Oid,
 }
 
+impl VectorRecord {
+    /// The vector as its reader checked it, for a delete.
+    pub(crate) fn checked(&self) -> Checked {
+        Checked { vector: self.vector, created_by: self.created_by }
+    }
+}
+
+/// A persisted vector as a writer checked it before replacing, dropping or
+/// moving it: its id, and the role that wrote it. A delete removes it only
+/// while both still hold, so neither a row of that name written since nor
+/// one whose creator `reassign_owned` changed since is deleted unchecked
+/// (DESIGN.md §7, §5.7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Checked {
+    /// Its id.
+    pub(crate) vector: VectorId,
+    /// The role that wrote it, as checked.
+    pub(crate) created_by: pg_sys::Oid,
+}
+
 /// Where a vector is written: its graph, version and name, and the role
 /// writing it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,7 +62,7 @@ pub(crate) struct Binding<'a> {
     /// The vector of that name it replaces, as the writer checked it
     /// (`None`: the writer found none). Any other row of that name is a
     /// concurrent write ([`VectorError::WrittenConcurrently`]).
-    pub(crate) replacing: Option<VectorId>,
+    pub(crate) replacing: Option<Checked>,
 }
 
 impl<'a> Binding<'a> {
@@ -58,7 +78,7 @@ impl<'a> Binding<'a> {
     }
 
     /// The same binding, replacing vector `replacing` (as checked).
-    pub(crate) fn replacing(self, replacing: Option<VectorId>) -> Self {
+    pub(crate) fn replacing(self, replacing: Option<Checked>) -> Self {
         Self { replacing, ..self }
     }
 }
@@ -103,9 +123,9 @@ pub(crate) trait VectorStore {
         each: &mut EachChunk<'_, VectorError>,
     ) -> Result<(), VectorError>;
 
-    /// Deletes vector `vector` (its chunks with it); returns whether it
-    /// still existed.
-    fn delete(&mut self, vector: VectorId) -> Result<bool, VectorError>;
+    /// Deletes vector `vector` (its chunks with it) if it still exists as
+    /// checked, written by the role checked; returns whether it did.
+    fn delete(&mut self, vector: Checked) -> Result<bool, VectorError>;
 
     /// Which of `vectors` still exist.
     fn existing(&mut self, vectors: &[VectorId]) -> Result<Vec<VectorId>, VectorError>;
@@ -150,14 +170,18 @@ pub(crate) mod tests {
                 .filter(|(_, (v, record))| *v == binding.version && record.name == binding.name)
                 .map(|(id, _)| *id)
                 .collect();
-            if existing != binding.replacing.into_iter().collect::<Vec<_>>() {
+            if let Some(checked) = binding.replacing {
+                if existing != [checked.vector] || !self.delete(checked)? {
+                    return Err(VectorError::WrittenConcurrently {
+                        name: binding.name.to_owned(),
+                        version: binding.version,
+                    });
+                }
+            } else if !existing.is_empty() {
                 return Err(VectorError::WrittenConcurrently {
                     name: binding.name.to_owned(),
                     version: binding.version,
                 });
-            }
-            for id in existing {
-                self.delete(id)?;
             }
             // (The SPI adapter deletes the checked id, then lets the insert
             // conflict with any other row of that name: the same outcome.)
@@ -201,9 +225,13 @@ pub(crate) mod tests {
             Ok(())
         }
 
-        fn delete(&mut self, vector: VectorId) -> Result<bool, VectorError> {
-            self.chunks.retain(|(id, _), _| *id != vector);
-            Ok(self.rows.remove(&vector).is_some())
+        fn delete(&mut self, checked: Checked) -> Result<bool, VectorError> {
+            let found = self.rows.get(&checked.vector);
+            if found.is_none_or(|(_, record)| record.created_by != checked.created_by) {
+                return Ok(false);
+            }
+            self.chunks.retain(|(id, _), _| *id != checked.vector);
+            Ok(self.rows.remove(&checked.vector).is_some())
         }
 
         fn existing(&mut self, vectors: &[VectorId]) -> Result<Vec<VectorId>, VectorError> {

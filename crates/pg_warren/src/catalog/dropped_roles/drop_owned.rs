@@ -5,7 +5,7 @@ use pgrx::prelude::*;
 
 use super::super::CatalogError;
 use super::clean_up_after;
-use crate::access::{as_catalog_owner, entry, require_privileges_of};
+use crate::access::{as_catalog_owner, entry, refuse_bootstrap_superuser, require_privileges_of};
 
 /// `warren.drop_owned(role regrole)`: drops every graph `role` owns (with
 /// its versions and everyone's vectors, as `drop_graph` does), deletes the
@@ -25,6 +25,7 @@ fn drop_owned(role: pg_sys::Oid) -> i64 {
 
 fn drop_everything_of(role: pg_sys::Oid) -> Result<i64, CatalogError> {
     require_privileges_of(role, "drop its graphs and vectors")?;
+    refuse_bootstrap_superuser(role, "drop")?;
     let dropped = as_catalog_owner(|| {
         Spi::connect_mut(|client| {
             // Deleting a graph's row takes its lock, waiting for a running
@@ -97,6 +98,21 @@ mod tests {
         assert_eq!(
             failure(&format!("warren.drop_owned({}::oid::regrole)", gone.to_u32()))?,
             Some(format!("42704: role with OID {} does not exist", gone.to_u32()))
+        );
+        Ok(())
+    }
+
+    /// As `DROP OWNED BY` the bootstrap superuser.
+    #[pg_test]
+    fn drop_owned_refuses_the_bootstrap_superuser() -> Result<(), Error> {
+        let name = Spi::get_one::<String>("SELECT rolname::text FROM pg_roles WHERE oid = 10")?
+            .unwrap_or_default();
+        assert_eq!(
+            failure("warren.drop_owned(10::oid::regrole)")?,
+            Some(format!(
+                "2BP01: cannot drop objects owned by role \"{name}\" because they are required by \
+                 the database system"
+            ))
         );
         Ok(())
     }

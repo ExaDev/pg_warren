@@ -101,6 +101,18 @@ pub(crate) enum AccessError {
     /// owner (DESIGN.md §14 item 45).
     #[error("only a superuser may give graph \"{0}\", whose owner no longer exists, a new owner")]
     AdoptOrphan(String),
+    /// What the bootstrap superuser owns is required by the database
+    /// system, so `DROP OWNED` and `REASSIGN OWNED` refuse it.
+    #[error(
+        "cannot {action} objects owned by role \"{role}\" because they are required by the \
+         database system"
+    )]
+    RequiredBySystem {
+        /// The bootstrap superuser's name.
+        role: String,
+        /// What the caller tried to do.
+        action: &'static str,
+    },
     /// No role has this oid.
     #[error("role with OID {0} does not exist")]
     RoleNotFound(u32),
@@ -130,6 +142,7 @@ impl SqlError for AccessError {
             Self::OwnerDropped(_) | Self::RoleNotFound(_) | Self::ExtensionMissing => {
                 PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT
             }
+            Self::RequiredBySystem { .. } => PgSqlErrorCode::ERRCODE_DEPENDENT_OBJECTS_STILL_EXIST,
             Self::Spi(_) => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
         }
     }

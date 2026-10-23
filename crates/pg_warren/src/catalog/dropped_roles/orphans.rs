@@ -69,41 +69,83 @@ fn drop_orphans() -> i64 {
     entry(|_| sweep())
 }
 
-fn sweep() -> Result<i64, CatalogError> {
-    require_orphan_dropper()?;
-    let dropped = as_catalog_owner(|| {
-        Spi::connect_mut(|client| {
-            let dropped = client
-                .update(
-                    "DELETE FROM warren.graphs g
-                     WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles r WHERE r.oid = g.owner::oid)
-                     RETURNING graph_id",
-                    None,
-                    &[],
-                )?
-                .len();
-            client.update(
-                "UPDATE warren.graphs SET readers = ARRAY(
+/// The condition that no role has the oid in `$column`.
+macro_rules! dropped {
+    ($column:literal) => {
+        concat!("NOT EXISTS (SELECT FROM pg_catalog.pg_roles r WHERE r.oid = ", $column, "::oid)")
+    };
+}
+
+/// Each pass of the sweep: a query that locks the rows naming a dropped
+/// role and returns their keys, then the statement that changes those rows
+/// (`$1`, their keys), checking each again.
+const PASSES: [(&str, &str); 3] = [
+    (
+        concat!(
+            "SELECT graph_id::int8 FROM warren.graphs g WHERE ",
+            dropped!("g.owner"),
+            " FOR UPDATE"
+        ),
+        concat!(
+            "DELETE FROM warren.graphs g WHERE graph_id = ANY ($1) AND ",
+            dropped!("g.owner"),
+            " RETURNING graph_id"
+        ),
+    ),
+    (
+        concat!(
+            "SELECT graph_id::int8 FROM warren.graphs g WHERE EXISTS (
+                     SELECT FROM pg_catalog.unnest(g.readers) AS x (reader)
+                     WHERE ",
+            dropped!("x.reader"),
+            ") FOR UPDATE"
+        ),
+        concat!(
+            "UPDATE warren.graphs SET readers = ARRAY(
                      SELECT x.reader
                      FROM pg_catalog.unnest(readers) WITH ORDINALITY AS x (reader, position)
-                     WHERE EXISTS (SELECT FROM pg_catalog.pg_roles r WHERE r.oid = x.reader::oid)
-                     ORDER BY x.position)::regrole[]
-                 WHERE EXISTS (
-                     SELECT FROM pg_catalog.unnest(readers) AS x (reader)
-                     WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles r
-                                       WHERE r.oid = x.reader::oid))",
-                None,
-                &[],
-            )?;
-            client.update(
-                "DELETE FROM warren.vectors v
-                 WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles r WHERE r.oid = v.created_by::oid)",
-                None,
-                &[],
-            )?;
-            // Quotas (work breakdown step 7) delete the rows of
-            // `warren.vector_quotas` that name dropped roles here.
-            Ok::<_, CatalogError>(dropped)
+                     WHERE NOT ",
+            dropped!("x.reader"),
+            " ORDER BY x.position)::regrole[]
+                 WHERE graph_id = ANY ($1)"
+        ),
+    ),
+    (
+        concat!(
+            "SELECT vector_id FROM warren.vectors v WHERE ",
+            dropped!("v.created_by"),
+            " FOR UPDATE"
+        ),
+        concat!(
+            "DELETE FROM warren.vectors v WHERE vector_id = ANY ($1) AND ",
+            dropped!("v.created_by")
+        ),
+    ),
+];
+
+fn sweep() -> Result<i64, CatalogError> {
+    require_orphan_dropper()?;
+    // Each pass locks its rows, then changes them in a statement of its
+    // own, whose snapshot follows the lock: a statement that waited on a
+    // row would re-check it (EvalPlanQual) under its first snapshot, which
+    // misses a role created by the transaction it waited for, and so would
+    // drop a graph adopted for that role, or prune a reader just granted.
+    // Quotas (work breakdown step 7) add a pass for the rows of
+    // `warren.vector_quotas` that name dropped roles.
+    let dropped = as_catalog_owner(|| {
+        Spi::connect_mut(|client| {
+            let mut changed = Vec::with_capacity(PASSES.len());
+            for (lock, change) in PASSES {
+                let keys = client
+                    .update(lock, None, &[])?
+                    .map(|row| Ok(row.get::<i64>(1)?.unwrap_or_default()))
+                    .collect::<Result<Vec<i64>, pgrx::spi::Error>>()?;
+                changed.push(match keys.is_empty() {
+                    true => 0,
+                    false => client.update(change, None, &[keys.into()])?.len(),
+                });
+            }
+            Ok::<_, CatalogError>(changed[0])
         })
     })?;
     i64::try_from(dropped).map_err(|_| CatalogError::TooLarge("graphs dropped"))
@@ -187,6 +229,42 @@ mod tests {
         assert_eq!(listed, Some(format!("graph:dr:{gone} reader:dk:{gone} vector:dk:{gone}")));
         assert_eq!(failure_as("dr_member", "warren.drop_orphans()")?, None);
         assert_eq!(ownership()?.as_deref(), Some("dk:dk_owner:{} / dk.theirs:dk_owner"));
+        Ok(())
+    }
+
+    /// PG 16+: a member that neither inherits the extension owner's
+    /// privileges nor may `SET ROLE` to it could not `DROP EXTENSION`, so it
+    /// may not drop orphans or see them all either (DESIGN.md §14 item 45).
+    #[cfg(not(feature = "pg15"))]
+    #[pg_test]
+    fn a_member_without_inherit_or_set_may_not_drop_orphans() -> Result<(), Error> {
+        let gone = orphaned()?;
+        Spi::run(
+            "CREATE ROLE dr_installer; CREATE ROLE dr_weak; CREATE ROLE dr_setter;
+             GRANT dr_installer TO dr_weak WITH INHERIT FALSE, SET FALSE;
+             GRANT dr_installer TO dr_setter WITH INHERIT FALSE, SET TRUE;
+             UPDATE pg_catalog.pg_extension SET extowner = 'dr_installer'::regrole
+             WHERE extname = 'pg_warren'",
+        )?;
+        assert_eq!(
+            failure_as("dr_weak", "warren.drop_orphans()")?.as_deref(),
+            Some(
+                "42501: must be a member of role \"dr_installer\", the owner of extension \
+                 pg_warren, to drop graphs whose owner no longer exists"
+            )
+        );
+        assert_eq!(
+            failure_as("dr_weak", "warren.drop_graph('dr')")?.as_deref(),
+            Some("42704: the owner of graph \"dr\" no longer exists")
+        );
+        Spi::run("SET ROLE dr_weak")?;
+        let weak = rows(LISTED)?;
+        Spi::run("SET ROLE dr_setter")?;
+        let setter = rows(LISTED)?;
+        Spi::run("RESET ROLE")?;
+        assert_eq!(weak.as_deref(), Some(""));
+        assert_eq!(setter, Some(format!("graph:dr:{gone} reader:dk:{gone} vector:dk:{gone}")));
+        assert_eq!(failure_as("dr_setter", "warren.drop_orphans()")?, None);
         Ok(())
     }
 }

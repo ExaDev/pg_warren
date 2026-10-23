@@ -122,19 +122,18 @@ pub(crate) fn require_can_receive(role: pg_sys::Oid, from: &str) -> Result<(), A
     }
 }
 
-/// Whether the caller may drop graphs whose owner was dropped: as a member
-/// of the extension's owner, the role that ran `CREATE EXTENSION` (the
-/// installer, in a trusted install), which could drop every graph with
-/// `DROP EXTENSION` anyway; a superuser is a member of every role
-/// (DESIGN.md §14 item 45).
+/// Whether the caller may drop graphs whose owner was dropped: as the
+/// extension's owner, the role that ran `CREATE EXTENSION` (the installer,
+/// in a trusted install), which could drop every graph with `DROP
+/// EXTENSION` anyway (DESIGN.md §14 item 45). A superuser may.
 pub(crate) fn may_drop_orphans() -> Result<bool, AccessError> {
-    Ok(is_member(extension_owner()?))
+    Ok(acts_as(extension_owner()?))
 }
 
 /// Checks [`may_drop_orphans`].
 pub(crate) fn require_orphan_dropper() -> Result<(), AccessError> {
     let owner = extension_owner()?;
-    match is_member(owner) {
+    match acts_as(owner) {
         true => Ok(()),
         false => Err(AccessError::NotOrphanDropper(role_name(owner).unwrap_or_default())),
     }
@@ -157,6 +156,36 @@ fn extension_owner() -> Result<pg_sys::Oid, AccessError> {
         &[],
     )?
     .ok_or(AccessError::ExtensionMissing)
+}
+
+/// Whether the caller could do what role `role` may, as `DROP EXTENSION`
+/// requires of the extension's owner: on PG 16+, it has the role's
+/// privileges or may `SET ROLE` to it, so a membership granted `WITH
+/// INHERIT FALSE, SET FALSE` is not enough; on PG 15, a member of it.
+#[cfg(not(feature = "pg15"))]
+fn acts_as(role: pg_sys::Oid) -> bool {
+    has_privileges_of(role) || can_set_role(role)
+}
+
+/// Whether the caller could do what role `role` may: on PG 15, a member of
+/// it (a membership there always allows `SET ROLE`).
+#[cfg(feature = "pg15")]
+fn acts_as(role: pg_sys::Oid) -> bool {
+    is_member(role)
+}
+
+/// Refuses `action` on what the bootstrap superuser owns, as `DROP OWNED`
+/// and `REASSIGN OWNED` do: it is required by the database system.
+pub(crate) fn refuse_bootstrap_superuser(
+    role: pg_sys::Oid,
+    action: &'static str,
+) -> Result<(), AccessError> {
+    match role == pg_sys::Oid::from(pg_sys::BOOTSTRAP_SUPERUSERID) {
+        true => {
+            Err(AccessError::RequiredBySystem { role: role_name(role).unwrap_or_default(), action })
+        }
+        false => Ok(()),
+    }
 }
 
 /// Whether the current user may `SET ROLE` to `role`.

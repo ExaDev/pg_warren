@@ -7,7 +7,9 @@ use pgrx::prelude::*;
 use super::super::create_graph::{writable_notice, writable_schemas};
 use super::super::graph::NEW_OWNER;
 use super::super::CatalogError;
-use crate::access::{as_catalog_owner, entry, require_can_receive, require_privileges_of};
+use crate::access::{
+    as_catalog_owner, entry, refuse_bootstrap_superuser, require_can_receive, require_privileges_of,
+};
 
 /// `warren.reassign_owned(old regrole, new regrole)`: gives every graph
 /// `old` owns to `new`, with `set_owner`'s rules except its source check
@@ -31,6 +33,7 @@ type Moved = (String, bool, String);
 
 fn reassign(old: pg_sys::Oid, new: pg_sys::Oid) -> Result<i64, CatalogError> {
     let from = require_privileges_of(old, "reassign its graphs and vectors")?;
+    refuse_bootstrap_superuser(old, "reassign ownership of")?;
     require_can_receive(new, &from)?;
     // One UPDATE takes each row's lock, waiting for a running refresh or
     // set_owner, and re-checks `owner` once it holds it (EvalPlanQual), as
@@ -144,6 +147,22 @@ mod tests {
         assert_eq!(
             failure(&format!("warren.reassign_owned({}::oid::regrole, 'dr_heir')", gone.to_u32()))?,
             Some(format!("42704: role with OID {} does not exist", gone.to_u32()))
+        );
+        Ok(())
+    }
+
+    /// As `REASSIGN OWNED BY` the bootstrap superuser.
+    #[pg_test]
+    fn reassign_owned_refuses_the_bootstrap_superuser() -> Result<(), Error> {
+        let name = Spi::get_one::<String>("SELECT rolname::text FROM pg_roles WHERE oid = 10")?
+            .unwrap_or_default();
+        Spi::run("CREATE ROLE dr_heir")?;
+        assert_eq!(
+            failure("warren.reassign_owned(10::oid::regrole, 'dr_heir')")?,
+            Some(format!(
+                "2BP01: cannot reassign ownership of objects owned by role \"{name}\" because \
+                 they are required by the database system"
+            ))
         );
         Ok(())
     }

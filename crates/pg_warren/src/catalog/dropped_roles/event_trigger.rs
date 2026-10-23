@@ -32,7 +32,8 @@ fn on_drop_owned(fcinfo: pg_sys::FunctionCallInfo) {
 /// The roles named by the `DROP OWNED` that fired the trigger, without
 /// those that do not exist or whose privileges the caller lacks: `DROP
 /// OWNED` checks both only after `ddl_command_start`, and raises its own
-/// errors for them. None for any other command.
+/// errors for them. Each role once, in the statement's order; none for any
+/// other command.
 fn named_roles(fcinfo: pg_sys::FunctionCallInfo) -> Result<Vec<pg_sys::Oid>, CatalogError> {
     // SAFETY: Postgres passes this call's own call info, valid for the call.
     let context = unsafe { fcinfo.as_ref() }.map_or(ptr::null_mut(), |info| info.context);
@@ -53,13 +54,17 @@ fn named_roles(fcinfo: pg_sys::FunctionCallInfo) -> Result<Vec<pg_sys::Oid>, Cat
     let specs = unsafe {
         PgList::<pg_sys::RoleSpec>::from_pg((*tree.cast::<pg_sys::DropOwnedStmt>()).roles)
     };
-    Ok(specs
-        .iter_ptr()
-        // SAFETY: each a `RoleSpec` of the statement; with `missing_ok`, a
-        // role that does not exist is `InvalidOid`.
-        .map(|spec| unsafe { pg_sys::get_rolespec_oid(spec, true) })
-        .filter(|&role| role != pg_sys::Oid::INVALID && has_privileges_of(role))
-        .collect())
+    let mut roles = Vec::new();
+    for spec in specs.iter_ptr() {
+        // SAFETY: a `RoleSpec` of the statement. With `missing_ok`, a role
+        // that does not exist is `InvalidOid`; `PUBLIC`, which `DROP OWNED`
+        // rejects in its grammar, would still raise (an ERROR, unwound).
+        let role = unsafe { pg_sys::get_rolespec_oid(spec, true) };
+        if role != pg_sys::Oid::INVALID && has_privileges_of(role) && !roles.contains(&role) {
+            roles.push(role);
+        }
+    }
+    Ok(roles)
 }
 
 /// Refuses while one of `roles` owns graphs (DESIGN.md §14 item 44a), and
@@ -162,6 +167,22 @@ mod tests {
             )
         );
         assert_eq!(ownership()?, before);
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_role_named_twice_is_named_once() -> Result<(), Error> {
+        neighbouring_graphs()?;
+        install()?;
+        assert_eq!(
+            statement_failure_as("none", "DROP OWNED BY dr_owner, CURRENT_USER, dr_owner")?
+                .as_deref(),
+            Some(
+                "2BP01: cannot drop objects owned by role \"dr_owner\" while it owns graph \"dr\"; \
+                 give it a new owner with warren.reassign_owned(old, new) or drop it with \
+                 warren.drop_owned(role) first"
+            )
+        );
         Ok(())
     }
 
