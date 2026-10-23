@@ -135,7 +135,7 @@ def differences(expected, found):
 # graph 'upgrade_typed', weighted, of three relations (some edges in two),
 # built once, whose bfs, components and (where the release has vectors)
 # spmv results are recorded in upgrade_expected. Roles are cluster-wide, so
-# check creates upgrade_owner once.
+# check creates upgrade_owner (and upgrade_reader) once.
 SEED_GRAPH = """
     CREATE TABLE upgrade_nodes AS SELECT generate_series(1, 4)::bigint AS id;
     CREATE TABLE upgrade_edges AS SELECT id AS src, id % 4 + 1 AS dst FROM upgrade_nodes;
@@ -325,7 +325,8 @@ def after_update(upgraded):
     expected = "upgrade:id upgrade_local:locality upgrade_new:id upgrade_typed:locality"
     if orders != [[expected]]:
         problems.append(f"node orders after compacting and creating are {orders}")
-    return problems + contraction_problems(upgraded) + text_problems(upgraded)
+    return (problems + contraction_problems(upgraded) + text_problems(upgraded)
+            + quota_problems(upgraded))
 
 
 def text_problems(upgraded):
@@ -347,6 +348,37 @@ def text_problems(upgraded):
     if found != [[expected]]:
         return [f"a text graph after the update gives {found}, not {expected}"]
     return []
+
+
+# A quota set on a graph from before the update (0.6.0, DESIGN.md §5.7):
+# a reader's persisted write past it is refused (53400), as that reader.
+QUOTA = """
+    SELECT warren.grant('upgrade', 'upgrade_reader');
+    SELECT warren.set_vector_quota('upgrade', 0);
+    CREATE TABLE upgrade_quota_refused (state text);
+    DO $$ BEGIN
+        SET LOCAL ROLE upgrade_reader;
+        PERFORM warren.vector_const('upgrade', 'over', 1);
+    EXCEPTION WHEN OTHERS THEN
+        INSERT INTO upgrade_quota_refused VALUES (SQLSTATE);
+    END $$;
+"""
+
+
+def quota_problems(upgraded):
+    """Checks that the update left every graph without a quota, then that a
+    quota set on an upgraded graph refuses a reader's write."""
+    problems = []
+    quotas = upgraded.query(
+        "SELECT (SELECT count(*) FROM warren.graphs WHERE reader_vector_quota IS NOT NULL)"
+        " || ':' || (SELECT count(*) FROM warren.vector_quotas)")
+    if quotas != [["0:0"]]:
+        problems.append(f"after the update, graphs with a default quota and quota rows are {quotas}")
+    upgraded.execute(QUOTA)
+    refused = upgraded.query("SELECT coalesce(string_agg(state, ' '), '') FROM upgrade_quota_refused")
+    if refused != [["53400"]]:
+        problems.append(f"a reader's write past a quota on an upgraded graph gave {refused}, not 53400")
+    return problems
 
 
 # The quotient's version, its parent and its label vector.
@@ -494,7 +526,7 @@ def check(cluster, current, installer, releases, installed):
     backends."""
     installer.prepare(cluster)
     fresh = cluster.database("postgres")
-    fresh.execute("CREATE ROLE upgrade_owner")
+    fresh.execute("CREATE ROLE upgrade_owner; CREATE ROLE upgrade_reader")
     fresh.execute(installer.create_database_sql("upgrade_fresh"))
     expected_db = cluster.database("upgrade_fresh")
     expected_db.execute(installer.as_installer("CREATE EXTENSION pg_warren"))

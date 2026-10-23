@@ -1,6 +1,6 @@
 """The dump/restore check (DESIGN.md §5.1, §12): a database with graphs
 (several promoted versions, a compaction, a staged version, persisted
-vectors of two roles) is dumped with pg_dump in plain and custom formats,
+vectors of two roles, a default and a per-role quota on readers' vectors) is dumped with pg_dump in plain and custom formats,
 each dump is restored into a fresh database (psql, and pg_restore without
 --single-transaction), and the restored pg_warren must answer as the
 original did, then accept a new build.
@@ -58,6 +58,8 @@ SEED = """
     SELECT warren.refresh('iri');
     SELECT warren.vector_from_query('iri', 'len', 'SELECT id, length(id) FROM public.iri_nodes');
     SELECT warren.grant('g', 'dump_reader');
+    SELECT warren.set_vector_quota('g', 1000000);
+    SELECT warren.set_vector_quota('g', 2000000, 'dump_reader');
     RESET ROLE;
     DELETE FROM public.nodes WHERE id = 8;
     SELECT warren.refresh('g');
@@ -109,6 +111,9 @@ STATE = {
              warren.id_map(g.name, NULL::text, v.version_id) m
         WHERE g.name = 'iri' AND m.live ORDER BY 1, 3""",
     "lifted": "SELECT * FROM public.lifted() ORDER BY 1",
+    "quotas": """
+        SELECT g.name, u.role::text, u.vectors, u.bytes, coalesce(u.quota::text, '')
+        FROM warren.graphs g, warren.vector_usage(g.name) u ORDER BY 1, 2""",
     "event_triggers": """
         SELECT evtname, evtevent, evtfoid::regprocedure::text, array_to_string(evttags, ','), evtenabled
         FROM pg_event_trigger ORDER BY 1""",
@@ -124,6 +129,9 @@ STATE = {
 AFTER_RESTORE = """
     SELECT warren.refresh('g');
     SELECT warren.vector_const('g', 'after', 2);
+    SET ROLE dump_reader;
+    SELECT warren.vector_const('g', 'after_reader', 3);
+    RESET ROLE;
 """
 
 

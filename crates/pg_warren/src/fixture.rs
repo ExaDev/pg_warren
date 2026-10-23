@@ -309,9 +309,9 @@ pub(crate) fn statement_failure_as(role: &str, statement: &str) -> Result<Option
 }
 
 /// Graphs `dr`, owned by `dr_owner`, and `dk`, owned by `dk_owner` (rings
-/// of 4, refreshed), where `dr_owner` is a reader of `dk` and wrote its
-/// vector `mine`, and `dk_owner` wrote `theirs`: what a dropped role's
-/// cleanup must tell apart (DESIGN.md §5.7).
+/// of 4, refreshed), where `dr_owner` is a reader of `dk`, wrote its
+/// vector `mine` and has a quota on it, and `dk_owner` wrote `theirs`:
+/// what a dropped role's cleanup must tell apart (DESIGN.md §5.7).
 pub(crate) fn neighbouring_graphs() -> Result<(), Error> {
     ring("dr", 4, 2)?;
     ring("dk", 4, 2)?;
@@ -320,7 +320,17 @@ pub(crate) fn neighbouring_graphs() -> Result<(), Error> {
     Spi::run(
         "SELECT warren.grant('dk', 'dr_owner');
          SET ROLE dr_owner; SELECT warren.vector_const('dk', 'mine', 1); RESET ROLE;
-         SET ROLE dk_owner; SELECT warren.vector_const('dk', 'theirs', 2); RESET ROLE",
+         SET ROLE dk_owner; SELECT warren.vector_const('dk', 'theirs', 2);
+         SELECT warren.set_vector_quota('dk', 4096, 'dr_owner'); RESET ROLE",
+    )
+}
+
+/// Every row of `warren.vector_quotas`, as `graph:role:bytes`.
+pub(crate) fn quotas() -> Result<Option<String>, Error> {
+    Spi::get_one::<String>(
+        "SELECT coalesce(string_agg(g.name || ':' || q.role::text || ':' || q.bytes, ' '
+                                    ORDER BY g.name, q.role::text), '')
+         FROM warren.vector_quotas q JOIN warren.graphs g USING (graph_id)",
     )
 }
 

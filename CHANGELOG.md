@@ -42,6 +42,27 @@
     it, fails with 40001 instead of deleting the new creator's vector.
 
   `ALTER EXTENSION pg_warren UPDATE` creates the five functions.
+- **Quotas on readers' vectors** (DESIGN.md §5.7, §14 items 46 and 47;
+  docs/semantics.md, "Quotas on readers' vectors"). A graph's owner may
+  bound the persisted vectors each other role stores on the graph, counted
+  as their elements' bytes across all versions:
+  `warren.set_vector_quota(name, bytes, role DEFAULT NULL)` sets the
+  graph's default (`info`'s new `reader_vector_quota`) or a role's own
+  quota, and `warren.vector_usage(name)` shows each role's vectors, bytes
+  and quota (a reader sees its own row). A persisted write that would take
+  the writer past its quota, and above what it stored, is refused with
+  53400; replacing a vector with one no larger always works. Members of
+  the owner role are exempt, and transient vectors are not counted. One
+  role's writes to one graph take a transaction-scoped lock on (graph,
+  role), shown in `pg_locks` as `advisory` with `objsubid` 22353.
+  `reassign_owned` counts the vectors it moves against the new role's
+  quotas. `drop_owned` and the `DROP OWNED` trigger remove a role's quotas
+  only on graphs whose owner the caller is a member of; `orphans()` and
+  `drop_orphans()` handle those of dropped roles. A quota bounds a role's
+  vectors on other owners' graphs, not the catalog's total storage. `ALTER EXTENSION pg_warren UPDATE` adds
+  the column, the table `warren.vector_quotas` (dumped with the
+  extension), an index on `warren.vectors (graph_id, created_by)` and the
+  two functions; existing graphs have no quota.
 
 ### Fixed
 

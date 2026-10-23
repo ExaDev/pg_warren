@@ -300,6 +300,7 @@ mod tests {
         ("revoke", "warren.revoke('victim', 'eve')"),
         ("s", "warren.s(NULL)"),
         ("set_owner", "warren.set_owner('victim', 'eve')"),
+        ("set_vector_quota", "warren.set_vector_quota('victim', 1000000, 'eve')"),
         ("shared_cache", "warren.shared_cache()"),
         ("shortest_path", "warren.shortest_path('victim', 1::bigint, 2::bigint)"),
         ("similar_pairs", "warren.similar_pairs('victim', NULL::bigint)"),
@@ -320,6 +321,7 @@ mod tests {
         ("vector_reduce", "warren.vector_reduce('victim', 'c', 'sum')"),
         ("vector_stats", "warren.vector_stats('victim', 'c')"),
         ("vector_topk", "warren.vector_topk('victim', 'c', 3, NULL::bigint)"),
+        ("vector_usage", "warren.vector_usage('victim')"),
         ("vector_values", "warren.vector_values('victim', 'c', NULL::bigint)"),
         ("version", "warren.version()"),
         ("walk", "warren.walk('victim', ARRAY[1::bigint], ARRAY[warren.s(NULL)])"),
@@ -369,10 +371,12 @@ mod tests {
         // Label vector `c` and quotient `victim_q`, which eve reads, so
         // that contract, project and lift run all the way as eve; and
         // `eve_minion`, whose privileges eve has, so that drop_owned and
-        // reassign_owned run all the way too (it owns nothing).
+        // reassign_owned run all the way too (it owns nothing); and a
+        // quota on readers' vectors, so that eve's writes are counted.
         Spi::run(
             "CREATE ROLE eve_minion; GRANT eve_minion TO eve;
              SELECT warren.grant('victim', 'eve');
+             SELECT warren.set_vector_quota('victim', 1000000);
              SELECT warren.vector_const('victim', 'c', 1);
              SELECT warren.contract('victim', 'c', 'victim_q');
              SELECT warren.vector_const('victim_q', 'c', 1);
