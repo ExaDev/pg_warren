@@ -52,14 +52,15 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{failure, failure_as, neighbouring_graphs, ownership};
+    use crate::fixture::{failure, failure_as, neighbouring_graphs, ownership, quotas};
 
     #[pg_test]
-    fn drop_owned_drops_the_roles_graphs_its_vectors_and_its_reader_entries() -> Result<(), Error> {
+    fn drop_owned_drops_the_roles_graphs_vectors_reader_entries_and_quotas() -> Result<(), Error> {
         neighbouring_graphs()?;
         let dropped = Spi::get_one::<i64>("SELECT warren.drop_owned('dr_owner')")?;
         assert_eq!(dropped, Some(1));
         assert_eq!(ownership()?.as_deref(), Some("dk:dk_owner:{} / dk.theirs:dk_owner"));
+        assert_eq!(quotas()?.as_deref(), Some(""));
         Ok(())
     }
 

@@ -16,8 +16,8 @@ use pgrx::spi::SpiClient;
 
 /// Removes what `DROP OWNED` removes of `role` besides what it owns: the
 /// vectors it wrote on other roles' graphs (those on its own graphs go
-/// with them) and its entries in every graph's readers. `client` must run
-/// as the catalog owner.
+/// with them), its entries in every graph's readers and its quotas on
+/// readers' vectors. `client` must run as the catalog owner.
 fn clean_up_after(client: &mut SpiClient<'_>, role: pg_sys::Oid) -> Result<(), pgrx::spi::Error> {
     client.update("DELETE FROM warren.vectors WHERE created_by::oid = $1", None, &[role.into()])?;
     client.update(
@@ -28,7 +28,6 @@ fn clean_up_after(client: &mut SpiClient<'_>, role: pg_sys::Oid) -> Result<(), p
         None,
         &[role.into()],
     )?;
-    // Quotas (work breakdown step 7) add the role's rows of
-    // `warren.vector_quotas` here (DESIGN.md §5.7, `drop_owned`).
+    client.update("DELETE FROM warren.vector_quotas WHERE role::oid = $1", None, &[role.into()])?;
     Ok(())
 }

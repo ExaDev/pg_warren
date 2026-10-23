@@ -131,7 +131,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{failure, neighbouring_graphs, ownership, statement_failure_as};
+    use crate::fixture::{failure, neighbouring_graphs, ownership, quotas, statement_failure_as};
 
     /// The trigger as `docs/semantics.md` tells a superuser to create it.
     fn install() -> Result<(), Error> {
@@ -187,7 +187,8 @@ mod tests {
     }
 
     #[pg_test]
-    fn after_reassign_owned_drop_owned_removes_the_roles_reader_entries() -> Result<(), Error> {
+    fn after_reassign_owned_drop_owned_removes_the_roles_reader_entries_and_quotas(
+    ) -> Result<(), Error> {
         neighbouring_graphs()?;
         install()?;
         Spi::run(
@@ -199,6 +200,7 @@ mod tests {
             ownership()?.as_deref(),
             Some("dk:dk_owner:{} dr:dr_heir:{} / dk.mine:dr_heir dk.theirs:dk_owner")
         );
+        assert_eq!(quotas()?.as_deref(), Some(""));
         Ok(())
     }
 

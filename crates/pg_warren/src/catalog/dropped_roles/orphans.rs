@@ -8,12 +8,15 @@ use super::super::CatalogError;
 use crate::access::{as_catalog_owner, entry, is_owner, may_drop_orphans, require_orphan_dropper};
 
 /// Every reference to a dropped role, as `(kind, graph, role, owner)`:
-/// graphs whose owner was dropped, reader entries, and (once per graph and
-/// role) vectors whose creator was. Quotas (work breakdown step 7) add
-/// their rows of `warren.vector_quotas` here (DESIGN.md §5.7).
+/// graphs whose owner was dropped, quotas on readers' vectors, reader
+/// entries, and (once per graph and role) vectors whose creator was.
 const ORPHANS: &str = "
     SELECT 'graph', g.name, g.owner::oid, g.owner::oid FROM warren.graphs g
     WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles r WHERE r.oid = g.owner::oid)
+    UNION ALL
+    SELECT 'quota', g.name, q.role::oid, g.owner::oid
+    FROM warren.vector_quotas q JOIN warren.graphs g USING (graph_id)
+    WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles r WHERE r.oid = q.role::oid)
     UNION ALL
     SELECT DISTINCT 'reader', g.name, x.reader::oid, g.owner::oid
     FROM warren.graphs g, pg_catalog.unnest(g.readers) AS x (reader)
@@ -24,8 +27,8 @@ const ORPHANS: &str = "
     WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles r WHERE r.oid = v.created_by::oid)
     ORDER BY 1, 2, 3";
 
-/// `warren.orphans()`: what names a dropped role (`kind` `graph`, `reader`
-/// or `vector`), with the graph and the dropped role's oid. A superuser
+/// `warren.orphans()`: what names a dropped role (`kind` `graph`,
+/// `quota`, `reader` or `vector`), with the graph and the dropped role's oid. A superuser
 /// and members of the extension's owner see every row; others see those
 /// of graphs they own. `PARALLEL SAFE`: it reads no graph.
 #[pg_extern(schema = "warren", volatile, parallel_safe)]
@@ -60,8 +63,8 @@ fn visible_orphans() -> Result<Vec<(String, String, pg_sys::Oid)>, CatalogError>
 }
 
 /// `warren.drop_orphans()`: drops every graph whose owner was dropped (as
-/// `drop_graph` does), removes reader entries that name dropped roles and
-/// deletes the vectors whose creator was dropped. For a superuser or a
+/// `drop_graph` does), removes reader entries and quotas that name dropped
+/// roles and deletes the vectors whose creator was dropped. For a superuser or a
 /// member of the extension's owner (DESIGN.md §14 item 45). Returns the
 /// number of graphs dropped.
 #[pg_extern(schema = "warren")]
@@ -79,7 +82,7 @@ macro_rules! dropped {
 /// Each pass of the sweep: a query that locks the rows naming a dropped
 /// role and returns their keys, then the statement that changes those rows
 /// (`$1`, their keys), checking each again.
-const PASSES: [(&str, &str); 3] = [
+const PASSES: [(&str, &str); 4] = [
     (
         concat!(
             "SELECT graph_id::int8 FROM warren.graphs g WHERE ",
@@ -121,6 +124,17 @@ const PASSES: [(&str, &str); 3] = [
             dropped!("v.created_by")
         ),
     ),
+    (
+        concat!(
+            "SELECT graph_id::int8 FROM warren.vector_quotas q WHERE ",
+            dropped!("q.role"),
+            " FOR UPDATE"
+        ),
+        concat!(
+            "DELETE FROM warren.vector_quotas q WHERE graph_id = ANY ($1) AND ",
+            dropped!("q.role")
+        ),
+    ),
 ];
 
 fn sweep() -> Result<i64, CatalogError> {
@@ -130,8 +144,6 @@ fn sweep() -> Result<i64, CatalogError> {
     // row would re-check it (EvalPlanQual) under its first snapshot, which
     // misses a role created by the transaction it waited for, and so would
     // drop a graph adopted for that role, or prune a reader just granted.
-    // Quotas (work breakdown step 7) add a pass for the rows of
-    // `warren.vector_quotas` that name dropped roles.
     let dropped = as_catalog_owner(|| {
         Spi::connect_mut(|client| {
             let mut changed = Vec::with_capacity(PASSES.len());
@@ -158,7 +170,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{failure_as, neighbouring_graphs, ownership, rows};
+    use crate::fixture::{failure_as, neighbouring_graphs, ownership, quotas, rows};
 
     /// [`neighbouring_graphs`], then a bare `DROP ROLE dr_owner`; returns
     /// its OID.
@@ -173,11 +185,12 @@ mod tests {
     const LISTED: &str = "SELECT kind || ':' || graph || ':' || role::text FROM warren.orphans()";
 
     #[pg_test]
-    fn orphans_lists_graphs_reader_entries_and_vectors_of_dropped_roles() -> Result<(), Error> {
+    fn orphans_lists_graphs_quotas_reader_entries_and_vectors_of_dropped_roles() -> Result<(), Error>
+    {
         let gone = orphaned()?;
         assert_eq!(
             rows(LISTED)?,
-            Some(format!("graph:dr:{gone} reader:dk:{gone} vector:dk:{gone}"))
+            Some(format!("graph:dr:{gone} quota:dk:{gone} reader:dk:{gone} vector:dk:{gone}"))
         );
         Ok(())
     }
@@ -193,7 +206,7 @@ mod tests {
         Spi::run("SET ROLE dk_stranger")?;
         let strangers = rows(LISTED)?;
         Spi::run("RESET ROLE")?;
-        assert_eq!(owners, Some(format!("reader:dk:{gone} vector:dk:{gone}")));
+        assert_eq!(owners, Some(format!("quota:dk:{gone} reader:dk:{gone} vector:dk:{gone}")));
         assert_eq!(strangers.as_deref(), Some(""));
         Ok(())
     }
@@ -203,6 +216,7 @@ mod tests {
         orphaned()?;
         assert_eq!(Spi::get_one::<i64>("SELECT warren.drop_orphans()")?, Some(1));
         assert_eq!(ownership()?.as_deref(), Some("dk:dk_owner:{} / dk.theirs:dk_owner"));
+        assert_eq!(quotas()?.as_deref(), Some(""));
         assert_eq!(rows(LISTED)?.as_deref(), Some(""));
         Ok(())
     }
@@ -226,7 +240,10 @@ mod tests {
         Spi::run("SET ROLE dr_member")?;
         let listed = rows(LISTED)?;
         Spi::run("RESET ROLE")?;
-        assert_eq!(listed, Some(format!("graph:dr:{gone} reader:dk:{gone} vector:dk:{gone}")));
+        assert_eq!(
+            listed,
+            Some(format!("graph:dr:{gone} quota:dk:{gone} reader:dk:{gone} vector:dk:{gone}"))
+        );
         assert_eq!(failure_as("dr_member", "warren.drop_orphans()")?, None);
         assert_eq!(ownership()?.as_deref(), Some("dk:dk_owner:{} / dk.theirs:dk_owner"));
         Ok(())
@@ -263,7 +280,10 @@ mod tests {
         let setter = rows(LISTED)?;
         Spi::run("RESET ROLE")?;
         assert_eq!(weak.as_deref(), Some(""));
-        assert_eq!(setter, Some(format!("graph:dr:{gone} reader:dk:{gone} vector:dk:{gone}")));
+        assert_eq!(
+            setter,
+            Some(format!("graph:dr:{gone} quota:dk:{gone} reader:dk:{gone} vector:dk:{gone}"))
+        );
         assert_eq!(failure_as("dr_setter", "warren.drop_orphans()")?, None);
         Ok(())
     }
