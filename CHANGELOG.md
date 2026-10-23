@@ -42,6 +42,52 @@
     it, fails with 40001 instead of deleting the new creator's vector.
 
   `ALTER EXTENSION pg_warren UPDATE` creates the five functions.
+- **Cache observability** (DESIGN.md §5.7, §14 items 48 and 49).
+  - `warren.cache()` lists this backend's private cache: each cached
+    version, persisted vector and transient vector of the caller's role,
+    with its bytes and state (`in use`, `pinned`, `idle`, `held`), then a
+    `backend` row with the total against `warren.max_cache_memory`. Only
+    graphs the caller may read are listed.
+  - `warren.backends()` has a row per backend that has used pg_warren,
+    with what it holds privately and maps from the shared cache, and its
+    cache counters (lookups, hits, waits, loads and their bytes and
+    seconds, evictions, and refusals by reason), counted once per
+    statement and version; then a `cluster` row that includes backends
+    that have exited. Another role's backend shows only who it is, unless
+    the caller has that role's privileges or `pg_read_all_stats`, as in
+    `pg_stat_activity`; a backend's role is its authenticated user, as
+    `pg_stat_activity`'s `usesysid`, whatever `SET SESSION AUTHORIZATION`
+    sets. Parallel workers have no row. It needs no configuration on PostgreSQL 17 and 18
+    and `shared_preload_libraries` on 15 and 16; without it, the caller's
+    own row only, with a `NOTICE`.
+  - A backend waiting for another's load of a shared version shows
+    `wait_event` `WarrenSharedLoad` in `pg_stat_activity` on PostgreSQL 17
+    and 18 (`Extension` on 15 and 16).
+
+  `ALTER EXTENSION pg_warren UPDATE` creates both functions; the shared
+  cache's registry is unchanged, so on PostgreSQL 17 and 18 versions stay
+  shared across the upgrade without a restart.
+- **Progress** (DESIGN.md §5.7, §14 item 49).
+  - `warren.progress()` has a row per backend running a long call: its
+    command (the outermost call, such as `refresh`, `compact`, `eigen` or a
+    library function) and the native call running inside it now, each
+    with its graph, version, phase, units done of a total, start time and,
+    for the native call, named counters. A `refresh` shows `reading
+    nodes`, `reading edges` (rows of the planner's estimate), `building`
+    (CSRs), `writing` and `promoting`; a load `loading` (bytes); `eigen`
+    and `distance` their Lanczos steps, with the pairs converged;
+    `louvain` and `leiden` their levels, with local moving's sweeps and
+    refinement inside. Another role's row shows what runs and since when,
+    not how far, unless the caller has that role's privileges or
+    `pg_read_all_stats`; a graph's name shows only to callers who may
+    read the graph. Other backends' rows need no configuration on
+    PostgreSQL 17 and 18 and `shared_preload_libraries` on 15 and 16.
+  - `warren.report_progress(command, graph, phase, done, total)` reports a
+    PL/pgSQL program's own progress until the statement ends. The library's
+    iterative functions call it once per iteration, level or hop.
+
+  `ALTER EXTENSION pg_warren UPDATE` creates both functions and replaces
+  the library's.
 - **Quotas on readers' vectors** (DESIGN.md §5.7, §14 items 46 and 47;
   docs/semantics.md, "Quotas on readers' vectors"). A graph's owner may
   bound the persisted vectors each other role stores on the graph, counted

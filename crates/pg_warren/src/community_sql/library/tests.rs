@@ -63,6 +63,25 @@ mod tests {
         Ok(())
     }
 
+    /// Louvain and Leiden report their levels (DESIGN.md §5.7), and the
+    /// native calls inside them their own phases; a test is one statement,
+    /// so the last report stays.
+    #[pg_test]
+    fn louvain_and_leiden_report_their_levels() -> Result<(), Error> {
+        ring_of_cliques()?;
+        let reported = || {
+            Spi::get_one::<String>(
+                "SELECT (SELECT concat_ws(' ', command, graph, phase, total)
+                         FROM warren.progress() WHERE pid = pg_backend_pid())",
+            )
+        };
+        Spi::run("SELECT warren.louvain('rc', 'l', max_levels := 5)")?;
+        assert_eq!(reported()?.as_deref(), Some("louvain rc level 2 5"));
+        Spi::run("SELECT warren.leiden('rc', 'l2', max_levels := 5, iterations := 1)")?;
+        assert_eq!(reported()?.as_deref(), Some("leiden rc iteration 1, level 2 5"));
+        Ok(())
+    }
+
     /// Leiden aggregates while its refinement merges nodes, as Traag et
     /// al.'s does, rather than stopping at the first level whose local
     /// moving gains nothing: on sparse blocks (20 blocks of 500 nodes,

@@ -138,6 +138,14 @@ impl BuildPlan {
         self.peak_bytes().saturating_sub(self.edge_bytes)
     }
 
+    /// The CSRs the build passes to its sink: a forward one per relation
+    /// and for the merged CSR if it is stored, each with its reverse if the
+    /// build has them.
+    pub fn csr_count(&self) -> u64 {
+        let scopes = self.relation_edges.len() as u64 + u64::from(self.store_merged);
+        scopes * if self.build_reverse { 2 } else { 1 }
+    }
+
     /// Builds the CSRs of `edges`, which must be the edge list planned,
     /// consuming it, and passes each to `sink` as it is completed. Targets
     /// are `u32` when the id space is below 2³², else `u64`.
@@ -314,5 +322,36 @@ mod tests {
         assert_eq!(split.groups.len(), 5);
         assert_eq!(split.bytes_needed(), finest_needed);
         drop(held);
+    }
+
+    /// Counts the CSRs a build passes to it.
+    #[derive(Default)]
+    struct Counting(u64);
+
+    impl CsrSink for Counting {
+        type Error = GraphError;
+
+        fn csr(&mut self, _built: BuiltCsr) -> Result<(), GraphError> {
+            self.0 += 1;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_plan_counts_the_csrs_its_build_passes_to_the_sink() {
+        let memory = BuildMemory::unlimited();
+        for (relations, build_reverse, store_merged) in
+            [(5, true, true), (5, false, true), (5, true, false), (1, true, true), (0, false, true)]
+        {
+            let layout = CsrLayout { build_reverse, store_merged };
+            let edges = match relations {
+                5 => edges(&memory),
+                _ => EdgeList::within(1000, true, &memory),
+            };
+            let plan = BuildPlan::new(&edges, relations, 1000, layout, &memory, 0).unwrap();
+            let mut sink = Counting::default();
+            plan.build(edges, &mut sink).unwrap();
+            assert_eq!(plan.csr_count(), sink.0, "{relations} relations, {layout:?}");
+        }
     }
 }

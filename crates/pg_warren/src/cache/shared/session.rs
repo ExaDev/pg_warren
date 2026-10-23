@@ -262,6 +262,11 @@ impl<M> Session<M> {
         self.mappings.iter().map(|(ticket, _)| *ticket)
     }
 
+    /// This backend's mappings.
+    pub(crate) fn mappings(&self) -> impl Iterator<Item = &Arc<M>> + '_ {
+        self.mappings.iter().map(|(_, mapping)| mapping)
+    }
+
     /// The slots this backend is loading.
     pub(crate) fn loading(&self) -> &[Ticket] {
         &self.loading

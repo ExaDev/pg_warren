@@ -31,7 +31,9 @@ before changing code. Commands, toolchain setup and environment gotchas are in
    `types` or `misc` modules.
    - `warren-core/src/`: `graph/` (csr, id_map, tombstones, relation
      selection), `interrupts` (the cancellation poll shared by traversal and
-     compute), `traversal/`, `compute/` (semiring, kernels, message),
+     compute), `progress` (the port long work reports its phases through),
+     `traversal/`, `compute/` (semiring, kernels, message; `tally`, a pool
+     job's progress),
      `community/` (labels, contraction, projection, modularity, local
      moving, refinement), `spectral/`,
      `version/` (diff, compaction across versions).
@@ -40,7 +42,11 @@ before changing code. Commands, toolchain setup and environment gotchas are in
      (node/edge query columns and read-only cursors), `catalog/` (and
      `quota`, the lock and decision shared by vector writes and ownership
      moves),
-     `segment/` (chunked persistence), `cache/` (loader; `shared`, the shared cache across backends, and `shared::introspection`, `warren.shared_cache()`), `build/`,
+     `segment/` (chunked persistence), `shared_memory` (where shared
+     segments are created and the room left there), `activity/` (the
+     per-backend table in shared memory: cache counters, `warren.backends()`,
+     progress frames, `warren.progress()` and `warren.report_progress()`),
+     `cache/` (loader; `introspection`, `warren.cache()`; `shared`, the shared cache across backends, and `shared::introspection`, `warren.shared_cache()`), `build/`,
      `version_sql/` (compact, diff), `interrupts` (the main-thread poll),
      `read_only` (single-row SPI reads that assign no transaction id),
      `parallel_worker` (what a parallel worker records and raises),
@@ -50,7 +56,10 @@ before changing code. Commands, toolchain setup and environment gotchas are in
      `community_sql/` (contract, project, lift, modularity, local moving,
      and the Louvain/Leiden library).
      Feature dependencies form a DAG: `access`, `source` → `catalog` →
-     `segment` → `vector` → `cache` → `build` → `version_sql`; `cache` →
+     `segment` → `vector` → `cache` → `build` → `version_sql`; `access`,
+     `shared_memory`, `catalog` → `activity` → `vector`, `cache`, `build`,
+     `version_sql`, `interrupts`, `spectral_sql`, `community_sql`;
+     `shared_memory` → `cache`; `cache` →
      `external_ids`, `selection`; and `external_ids`, `selection`,
      `interrupts` → `traversal_sql`, `compute_sql` (siblings: neither depends
      on the other); `interrupts` → `build` (the build maps edge batches on

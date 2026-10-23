@@ -7,6 +7,7 @@ use warren_core::version::compact as renumber;
 
 use super::error::VersionOperationError;
 use crate::access::{entry, require_owner};
+use crate::activity::{self, Running};
 use crate::build::{max_build_memory, Catalog, SpiCatalog};
 use crate::cache::{load, CachedIds};
 use crate::catalog::{
@@ -41,6 +42,7 @@ fn compact_graph(name: &str, node_order: Option<&str>) -> Result<VersionId, Vers
         .current_version
         .ok_or_else(|| VersionOperationError::NoCurrentVersion(graph.name.clone()))?;
     let (carried, built_lsn) = version_record(source)?;
+    let _running = Running::start("compact", Some(graph.graph_id), Some(source));
     let (version, moved) = with_id_type!(graph.id_type, E => compact_version::<E>(
         &graph,
         source,
@@ -94,6 +96,7 @@ pub(crate) fn compact_version<E: CachedIds>(
 ) -> Result<(VersionId, Vec<String>), VersionOperationError> {
     let Stores { segments, vectors, catalog } = stores;
     let loaded = load::<E>(*segments, source, graph.store_merged)?;
+    activity::phase("renumbering", None);
     let compaction = renumber(&loaded.version()?, ordering.order, ordering.memory)?;
     let stats = VersionStats::measure(
         &compaction.id_map,
@@ -108,6 +111,8 @@ pub(crate) fn compact_version<E: CachedIds>(
         compacted_from: Some(source),
         lineage: None,
     })?;
+    activity::version(version);
+    activity::phase("writing", None);
     let bytes = write_version(
         *segments,
         version,
@@ -120,6 +125,7 @@ pub(crate) fn compact_version<E: CachedIds>(
     let rows = compaction.renumbering.old_dense_ids();
     let moved = move_vectors(*vectors, graph.graph_id, source, version, rows, chunk_size)?;
     // With its vectors moved, retention may delete the source on promotion.
+    activity::phase("promoting", None);
     catalog.promote(graph, version)?;
     Ok((version, moved))
 }
@@ -183,6 +189,7 @@ mod unit {
         let mut stores =
             Stores { segments: &mut store, vectors: &mut vectors, catalog: &mut catalog };
         let ordering = CompactionOrder { order: NodeOrder::Id, memory: &BuildMemory::unlimited() };
+        let running = crate::activity::Running::opened("compact");
         let compacted = compact_version::<FixedKeys<i64>>(
             &graph(),
             source,
@@ -193,6 +200,9 @@ mod unit {
         )
         .unwrap()
         .0;
+        let frame = crate::activity::own().operation.frame;
+        assert_eq!((frame.version, frame.phase.as_str()), (Some(compacted), "promoting"));
+        drop(running);
 
         let row = catalog.version(compacted).clone();
         assert_eq!(row.compacted_from, Some(source));

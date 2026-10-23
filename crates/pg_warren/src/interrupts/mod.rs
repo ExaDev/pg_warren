@@ -1,13 +1,18 @@
 //! The Postgres adapter of `warren-core`'s `Interrupts` port: the poll
 //! traversals and compute kernels make on the main thread (DESIGN.md §6.9,
-//! §9.3), and the compute pool whose jobs it polls for (`pool`). Builds,
-//! traversal and compute bindings use it; it depends on no other feature.
+//! §9.3), and the compute pool whose jobs it polls for (`pool`); and of
+//! its `Progress` port, which writes what they report to the open
+//! operation's frame (`activity`, §5.7). Builds, traversal and compute
+//! bindings use it; it depends only on `activity`.
 
 mod pool;
 
 pub(crate) use pool::{define_compute_settings, workers};
 
 use warren_core::interrupts::{Cancelled, Interrupts};
+use warren_core::progress::Progress;
+
+use crate::activity;
 
 /// Polls Postgres for a pending cancel or termination. A pending interrupt
 /// raises its `ERROR` (for example `query_canceled` on `statement_timeout`)
@@ -19,6 +24,26 @@ impl Interrupts for PostgresInterrupts {
     fn check(&mut self) -> Result<(), Cancelled> {
         pgrx::check_for_interrupts!();
         Ok(())
+    }
+
+    fn progress(&mut self) -> Option<&mut dyn Progress> {
+        Some(self)
+    }
+}
+
+/// Reports to the open operation, if any: pure Rust over this backend's
+/// own slot.
+impl Progress for PostgresInterrupts {
+    fn phase(&mut self, name: &'static str, total: Option<u64>) {
+        activity::phase(name, total);
+    }
+
+    fn done(&mut self, done: u64) {
+        activity::done(done);
+    }
+
+    fn detail(&mut self, name: &'static str, value: f64) {
+        activity::detail(name, value);
     }
 }
 

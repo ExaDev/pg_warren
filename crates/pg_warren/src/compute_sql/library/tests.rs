@@ -175,6 +175,52 @@ mod tests {
         Ok(())
     }
 
+    /// Each iterative function reports its command, graph and iterations
+    /// (DESIGN.md §5.7); a test is one statement, so the last report stays.
+    #[pg_test]
+    fn the_iterative_functions_report_their_progress() -> Result<(), Error> {
+        small("t")?;
+        Spi::run("SELECT warren.vector_const('t', 'e', 1)")?;
+        let calls = [
+            ("pagerank", "warren.pagerank('t', 'pr', max_iter := 3, tol := 0)", "iterating 2 3"),
+            ("components_vector", "warren.components_vector('t', 'cc')", "iterating"),
+            (
+                "label_propagation",
+                "warren.label_propagation('t', 'lp', max_iter := 3)",
+                "iterating",
+            ),
+            ("sssp_vector", "warren.sssp_vector('t', 'd', 1::bigint)", "iterating"),
+            (
+                "aggregate_neighbours",
+                "warren.aggregate_neighbours('t', 'e', 'a', hops := 2)",
+                "hop 1 2",
+            ),
+            (
+                "eigenvector_centrality",
+                "warren.eigenvector_centrality('t', 'ev', max_iter := 1000)",
+                "iterating",
+            ),
+            ("katz_centrality", "warren.katz_centrality('t', 'k')", "iterating"),
+            ("hits", "warren.hits('t', 'h', 'a')", "iterating"),
+            (
+                "label_propagation_majority",
+                "warren.label_propagation_majority('t', 'lpm')",
+                "iterating",
+            ),
+        ];
+        for (name, call, phase) in calls {
+            Spi::run(&format!("SELECT {call}"))?;
+            let reported = Spi::get_one::<String>(
+                "SELECT (SELECT concat_ws(' ', command, graph, phase, done, total)
+                         FROM warren.progress() WHERE pid = pg_backend_pid())",
+            )?
+            .unwrap_or_default();
+            let expected = format!("{name} t {phase}");
+            assert!(reported.starts_with(&expected), "{call}: {reported}, not {expected}");
+        }
+        Ok(())
+    }
+
     #[pg_test]
     fn degree_vector_counts_distinct_neighbours() -> Result<(), Error> {
         small("t")?;

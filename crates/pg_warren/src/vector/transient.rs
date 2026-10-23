@@ -80,6 +80,26 @@ pub(crate) fn transient_bytes() -> u64 {
     TRANSIENT.with_borrow(|map| map.values().map(|vector| vector.bytes()).sum())
 }
 
+/// The current role's transient vectors: each one's graph, version, name,
+/// bytes and whether a call holds it.
+pub(crate) fn role_transients() -> Vec<(i32, VersionId, String, u64, bool)> {
+    let role = role();
+    TRANSIENT.with_borrow(|map| {
+        map.iter()
+            .filter(|((_, _, owner, _), _)| *owner == role)
+            .map(|((graph, version, _, name), vector)| {
+                let in_use = Arc::strong_count(vector) > 1;
+                (*graph, *version, name.clone(), vector.bytes(), in_use)
+            })
+            .collect()
+    })
+}
+
+/// How many transient vectors (of every role) this backend holds.
+pub(crate) fn transient_count() -> usize {
+    TRANSIENT.with_borrow(BTreeMap::len)
+}
+
 /// The heap bytes the current role's transient vectors hold.
 pub(crate) fn role_transient_bytes() -> u64 {
     let role = role();

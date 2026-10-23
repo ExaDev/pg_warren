@@ -20,6 +20,7 @@ BEGIN
     PERFORM warren.vector_dense_id(graph, '_warren_components_vector_x', 'i64', false, v);
     LOOP
       i := i + 1;
+      PERFORM warren.report_progress('components_vector', graph, 'iterating', i - 1, NULL);
       PERFORM warren.vector_map(graph, '_warren_components_vector_next', '_warren_components_vector_x', false, v);
       PERFORM warren.spmv(graph, '_warren_components_vector_x', '_warren_components_vector_next', 'min_second',
                           rels := rels, accumulate := 'min', persist := false, version := v);

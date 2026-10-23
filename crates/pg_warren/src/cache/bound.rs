@@ -29,10 +29,11 @@ use super::open::prune_dropped;
 use super::statement::{vector_pinned, version_pinned};
 use super::versions::{VersionCache, CACHE};
 use super::CacheError;
+use crate::activity::{record_private, Memory};
 use crate::catalog::VersionId;
 use crate::vector::{
-    cached_vector_bytes, cached_vectors, forget, role_transient_bytes, transient_bytes,
-    vector_in_use, VectorId,
+    cached_vector_bytes, cached_vector_count, cached_vectors, forget, role_transient_bytes,
+    transient_bytes, transient_count, vector_in_use, VectorId,
 };
 
 /// The default of both limits: 4 GiB, in kB.
@@ -82,7 +83,7 @@ fn bytes(setting: &GucSetting<i32>) -> u64 {
 }
 
 /// `warren.max_cache_memory`, in bytes.
-fn max_cache_memory() -> u64 {
+pub(super) fn max_cache_memory() -> u64 {
     bytes(&MAX_CACHE_MEMORY)
 }
 
@@ -191,9 +192,25 @@ fn entries() -> Vec<Held<Reloadable>> {
 }
 
 /// The bytes the cache holds in all.
-fn cached_bytes() -> u64 {
-    let versions = CACHE.with_borrow(|cache| cache.bytes() + cache.held_by_calls_bytes());
-    versions.saturating_add(cached_vector_bytes()).saturating_add(transient_bytes())
+pub(super) fn cached_bytes() -> u64 {
+    let held = held_memory();
+    held.versions.saturating_add(held.vectors).saturating_add(held.transients)
+}
+
+/// What the cache holds: the bytes of its versions (with those evicted
+/// that calls hold), persisted vectors and transient vectors, and its
+/// entries.
+fn held_memory() -> Memory {
+    let (versions, cached) =
+        CACHE.with_borrow(|cache| (cache.bytes() + cache.held_by_calls_bytes(), cache.len()));
+    let entries = cached + cached_vector_count() + transient_count();
+    Memory {
+        versions,
+        vectors: cached_vector_bytes(),
+        transients: transient_bytes(),
+        entries: entries as u64,
+        mapped: 0,
+    }
 }
 
 /// Evicts the pinned entries no call is using, least recently used first,
@@ -258,14 +275,17 @@ pub(super) fn make_room(expected: u64) {
 
 /// Evicts as [`trim`] does until the cache fits in `within` bytes, or holds
 /// only what the statement has pinned and what cannot be evicted.
+///
+/// Records what the cache then holds in this backend's activity slot
+/// (DESIGN.md §5.7): every lookup and statement end trims.
 fn trim_within(within: u64) {
     let total = cached_bytes();
-    if total <= within {
-        return;
+    if total > within {
+        let evictable: Vec<_> = entries().into_iter().filter(|held| !held.key.pinned()).collect();
+        let others = total.saturating_sub(evictable.iter().map(|held| held.bytes).sum());
+        evict(evictions(evictable, others, within));
     }
-    let evictable: Vec<_> = entries().into_iter().filter(|held| !held.key.pinned()).collect();
-    let others = total.saturating_sub(evictable.iter().map(|held| held.bytes).sum());
-    evict(evictions(evictable, others, within));
+    record_private(held_memory());
 }
 
 /// Evicts `evicted`.

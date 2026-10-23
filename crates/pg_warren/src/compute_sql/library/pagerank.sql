@@ -44,6 +44,7 @@ BEGIN
     PERFORM warren.vector_const(graph, '_warren_pagerank_teleport', 1 - damping, persist := false, version := v);
     WHILE i < max_iter LOOP
       i := i + 1;
+      PERFORM warren.report_progress('pagerank', graph, 'iterating', i - 1, max_iter);
       PERFORM warren.vector_map(graph, '_warren_pagerank_msg',
         'CASE WHEN _warren_pagerank_out > 0 THEN _warren_pagerank_x / _warren_pagerank_out ELSE 0 END', false, v);
       PERFORM warren.vector_map(graph, '_warren_pagerank_dangling_x',

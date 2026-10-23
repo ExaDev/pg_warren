@@ -9,17 +9,19 @@
 //! shared instead.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use pgrx::{ereport, pg_sys, PgSqlErrorCode};
 
 use super::acquire::{acquire, find, Acquired};
 use super::admission::Refusal;
-use super::dsm::{store_name, Dsm, PREFIX};
+use super::dsm::{Dsm, PREFIX};
 use super::eviction::{self, evict_shared};
 use super::setting;
 use super::slot::{Key, Kind};
 use super::SharedVersions;
 use crate::access::as_catalog_owner;
+use crate::activity::{count_read, count_refusal, Read, Refused, Running};
 use crate::cache::installation::installation;
 use crate::cache::load::{fill, fill_vector, plan, plan_vector, CachedIds, LoadedVersion};
 use crate::cache::open::Resolved;
@@ -41,8 +43,11 @@ pub(crate) fn shared<E: CachedIds>(
     resolved: &Resolved,
 ) -> Result<Option<Arc<LoadedVersion<E>>>, CacheError> {
     match port_for(resolved)? {
-        Some(port) => through(port, resolved),
-        None => Ok(None),
+        Ok(port) => through(port, resolved),
+        Err(refused) => {
+            count_refusal(refused);
+            Ok(None)
+        }
     }
 }
 
@@ -54,7 +59,7 @@ pub(crate) fn shared<E: CachedIds>(
 pub(crate) fn shared_hit<E: CachedIds>(
     resolved: &Resolved,
 ) -> Result<Option<Arc<LoadedVersion<E>>>, CacheError> {
-    let Some(mut port) = port_for(resolved)? else {
+    let Ok(mut port) = port_for(resolved)? else {
         return Ok(None);
     };
     let Some(key) = key(resolved.version) else {
@@ -66,36 +71,42 @@ pub(crate) fn shared_hit<E: CachedIds>(
     port.release();
     pin_shared();
     match find(&mut port, key) {
-        Some(attached) => Ok(Some(attached.version::<E>(resolved.version)?)),
+        Some(attached) => {
+            count_read(Read::SharedHit, 0, Duration::ZERO);
+            Ok(Some(attached.version::<E>(resolved.version)?))
+        }
         None => Ok(None),
     }
 }
 
-/// The port to read `resolved` through, or `None` to load it privately:
-/// the shared cache is off or unavailable, or this transaction created the
+/// The port to read `resolved` through, or why to load it privately: the
+/// shared cache is off or unavailable, or this transaction created the
 /// version.
-fn port_for(resolved: &Resolved) -> Result<Option<Dsm>, CacheError> {
+fn port_for(resolved: &Resolved) -> Result<Result<Dsm, Refused>, CacheError> {
     port_unless(|| created_here(VERSION_XMIN, resolved.version))
 }
 
-/// The port, or `None` to read privately: the shared cache is off or
+/// The port, or why to read privately: the shared cache is off or
 /// unavailable, or `created_here` says this transaction created what is
 /// read.
 fn port_unless(
     created_here: impl FnOnce() -> Result<bool, CacheError>,
-) -> Result<Option<Dsm>, CacheError> {
+) -> Result<Result<Dsm, Refused>, CacheError> {
     if setting::cap() == 0 {
         retire();
-        return Ok(None);
+        return Ok(Err(Refused::Unavailable));
     }
     let port = match Dsm::open() {
         Ok(port) => port,
         Err(unavailable) => {
             unavailable.notice();
-            return Ok(None);
+            return Ok(Err(Refused::Unavailable));
         }
     };
-    Ok((!created_here()?).then_some(port))
+    match created_here()? {
+        true => Ok(Err(Refused::Uncommitted)),
+        false => Ok(Ok(port)),
+    }
 }
 
 /// The persisted vector `record` describes from the shared cache, pinned
@@ -106,8 +117,11 @@ fn port_unless(
 /// version does, and is charged to no call.
 pub(crate) fn shared_vector(record: &VectorRecord) -> Result<Option<Arc<AnyVector>>, CacheError> {
     match port_unless(|| created_here(VECTOR_XMIN, record.vector))? {
-        Some(port) => vector_through(port, record),
-        None => Ok(None),
+        Ok(port) => vector_through(port, record),
+        Err(refused) => {
+            count_refusal(refused);
+            Ok(None)
+        }
     }
 }
 
@@ -126,6 +140,7 @@ pub(super) fn vector_through(
     }
     port.release();
     pin_shared();
+    let mut loaded = Loaded::default();
     let acquired = acquire(
         &mut port,
         key,
@@ -134,12 +149,17 @@ pub(super) fn vector_through(
             Ok::<_, CacheError>((PREFIX as u64 + layout.len() as u64, ()))
         },
         |(), region| {
-            fill_vector(&mut SpiVectorStore, record, &layout, region.bytes_mut())?;
-            Ok::<_, CacheError>(region.validate_vector(record)?)
+            loaded.timed(region.bytes_mut().len(), || {
+                fill_vector(&mut SpiVectorStore, record, &layout, region.bytes_mut())?;
+                Ok::<_, CacheError>(region.validate_vector(record)?)
+            })
         },
     )?;
     match acquired {
-        Acquired::Shared(attached) => Ok(Some(attached.vector(record)?)),
+        Acquired::Shared(attached) => {
+            loaded.count();
+            Ok(Some(attached.vector(record)?))
+        }
         Acquired::Private(refusal) => {
             let what = format!("vector \"{}\" ({})", record.name, record.vector);
             notice_refusal(refusal, &what);
@@ -274,6 +294,7 @@ pub(super) fn through<E: CachedIds>(
     port.release();
     pin_shared();
     let (version, store_merged) = (resolved.version, resolved.graph.store_merged);
+    let mut loaded = Loaded::default();
     let acquired = acquire(
         &mut port,
         key,
@@ -283,12 +304,18 @@ pub(super) fn through<E: CachedIds>(
             Ok((PREFIX as u64 + plan.len() as u64, plan))
         },
         |plan, region| {
-            fill::<E>(&mut SpiSegmentStore, version, plan, region.bytes_mut())?;
-            Ok::<_, CacheError>(region.validate::<E>(version)?)
+            loaded.timed(region.bytes_mut().len(), || {
+                let _running = Running::start("load", Some(resolved.graph.graph_id), Some(version));
+                fill::<E>(&mut SpiSegmentStore, version, plan, region.bytes_mut())?;
+                Ok::<_, CacheError>(region.validate::<E>(version)?)
+            })
         },
     )?;
     match acquired {
-        Acquired::Shared(attached) => Ok(Some(attached.version::<E>(version)?)),
+        Acquired::Shared(attached) => {
+            loaded.count();
+            Ok(Some(attached.version::<E>(version)?))
+        }
         Acquired::Private(refusal) => {
             notice_refusal(refusal, &format!("graph version {version}"));
             Ok(None)
@@ -296,10 +323,34 @@ pub(super) fn through<E: CachedIds>(
     }
 }
 
+/// Whether a read through the shared cache loaded what it read, and the
+/// bytes and time of the load, to count it once the read is done.
+#[derive(Default)]
+struct Loaded(Option<(u64, Duration)>);
+
+impl Loaded {
+    /// Runs `load`, a load of `bytes` into a claimed region, timing it.
+    fn timed<R>(&mut self, bytes: usize, load: impl FnOnce() -> R) -> R {
+        let started = Instant::now();
+        let result = load();
+        self.0 = Some((bytes as u64, started.elapsed()));
+        result
+    }
+
+    /// Counts the read: a shared load if it loaded, else a shared hit.
+    fn count(&self) {
+        match self.0 {
+            Some((bytes, took)) => count_read(Read::SharedLoad, bytes, took),
+            None => count_read(Read::SharedHit, 0, Duration::ZERO),
+        }
+    }
+}
+
 /// Says why the shared cache refused `what`, once per statement, if the
-/// cause is configuration.
+/// cause is configuration, and counts the refusal.
 fn notice_refusal(refusal: Refusal, what: &str) {
-    let (cap, store) = (setting::cap(), store_name());
+    count_refusal(refusal.reason());
+    let (cap, store) = (setting::cap(), crate::shared_memory::store_name());
     if let Some(message) = refusal_notice(refusal, what, cap, store, setting::at_default()) {
         if cache_notice_raised(shared_notice_due()) {
             ereport!(NOTICE, PgSqlErrorCode::ERRCODE_SUCCESSFUL_COMPLETION, message);

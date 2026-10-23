@@ -7,16 +7,27 @@
 //! through the domain code (every buffer is owned, and no FFI boundary is
 //! crossed). On worker threads, which may not call Postgres, the main
 //! thread raises a shared [`Cancellation`] flag instead.
+//!
+//! The same hook hands long work the port it reports its progress through
+//! (`progress`, DESIGN.md §5.7), since both are the main thread's.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use thiserror::Error;
 
+use crate::progress::Progress;
+
 /// The poll long-running work makes every ~64K units of work.
 pub trait Interrupts {
     /// Returns [`Cancelled`] if the work should stop now.
     fn check(&mut self) -> Result<(), Cancelled>;
+
+    /// Where the work reports its progress, at the same cadence and on the
+    /// same thread as it polls; `None`, the default, if nowhere.
+    fn progress(&mut self) -> Option<&mut dyn Progress> {
+        None
+    }
 }
 
 /// The caller asked the work to stop.

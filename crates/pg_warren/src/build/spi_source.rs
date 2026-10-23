@@ -10,6 +10,7 @@ use warren_core::graph::BuildMemory;
 use super::error::BuildError;
 use super::source::{EdgeRow, EdgeSink, SourceReader};
 use crate::access::{as_role, with_read_only, with_search_path};
+use crate::activity::{self, Units};
 use crate::catalog::GraphDefinition;
 use crate::source::{
     check_edge_columns, for_each_tuple, open_read_only, require_node_id_type, IdDatum,
@@ -37,13 +38,17 @@ impl<E: IdDatum> SourceReader<E> for SpiSource<'_> {
                         let mut opened =
                             open_read_only::<BuildError>(client, "node_query", &graph.node_query)?;
                         require_node_id_type(&opened.columns, graph.id_type)?;
+                        activity::phase("reading nodes", None);
+                        let mut rows = Units::new();
                         let mut ids = E::node_ids(memory);
                         for_each_tuple::<BuildError>(&mut opened.cursor, |row| {
+                            rows.one();
                             if let Some(id) = row.id::<E>(1)? {
                                 E::push_node_id(&mut ids, id.borrow())?;
                             }
                             Ok(())
                         })?;
+                        rows.finish();
                         Ok(ids)
                     })
                 })
@@ -67,7 +72,10 @@ impl<E: IdDatum> SourceReader<E> for SpiSource<'_> {
                             graph.weighted,
                         )?;
                         sink.expect_rows(opened.estimated_rows);
+                        activity::phase("reading edges", Some(opened.estimated_rows));
+                        let mut rows = Units::new();
                         for_each_tuple(&mut opened.cursor, |row| {
+                            rows.one();
                             let source = row.id::<E>(1)?;
                             let target = row.id::<E>(2)?;
                             sink.row(EdgeRow {
@@ -82,7 +90,9 @@ impl<E: IdDatum> SourceReader<E> for SpiSource<'_> {
                                     false => None,
                                 },
                             })
-                        })
+                        })?;
+                        rows.finish();
+                        Ok(())
                     })
                 })
             })

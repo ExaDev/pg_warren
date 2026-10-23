@@ -11,7 +11,8 @@
 //! version, or its graph, deletes its vectors.
 //!
 //! Depends on `access` (statements run as the catalog owner), `catalog`
-//! (version ids) and `segment` (the chunk size); `cache` and `compute_sql`
+//! (version ids), `segment` (the chunk size) and `activity` (evictions
+//! from the vector cache are counted, §5.7); `cache` and `compute_sql`
 //! use it.
 
 mod cache;
@@ -24,8 +25,8 @@ mod store;
 mod transient;
 
 pub(crate) use cache::{
-    cached_vector_bytes, cached_vectors, evict_vectors, forget, in_use as vector_in_use, load,
-    lookup as lookup_vector, remember,
+    cached_vector_bytes, cached_vector_count, cached_vector_listing, cached_vectors, evict_vectors,
+    forget, in_use as vector_in_use, load, lookup as lookup_vector, remember,
 };
 pub(crate) use carry::{move_vectors, moved_notice};
 pub(crate) use error::VectorError;
@@ -35,7 +36,7 @@ pub(crate) use spi::SpiVectorStore;
 pub(crate) use store::{Binding, Checked, ChunkSource, VectorId, VectorRecord, VectorStore};
 pub(crate) use transient::{
     drop_transient, evict_transients, keep_transient, retain_transients, role_transient_bytes,
-    transient, transient_bytes, transient_versions, transients,
+    role_transients, transient, transient_bytes, transient_count, transient_versions, transients,
 };
 
 #[cfg(test)]

@@ -10,15 +10,16 @@
 
 use warren_core::compute::Workers;
 use warren_core::graph::{
-    BuildCharge, BuildMemory, BuildPlan, CsrLayout, EdgeBatch, EdgeIntake, EdgeList, GraphCsr,
-    GraphError, IdMap, IndexedKeys, Membership, NodeOrder, Permutation, RelationDictionary,
-    RelationIndex,
+    BuildCharge, BuildMemory, BuildPlan, BuiltCsr, CsrDirection, CsrLayout, CsrScope, CsrSink,
+    EdgeBatch, EdgeIntake, EdgeList, GraphCsr, GraphError, IdMap, IndexedKeys, Membership,
+    NodeOrder, Permutation, RelationDictionary, RelationIndex,
 };
 use warren_core::interrupts::Interrupts;
 
 use super::error::BuildError;
 use super::source::{EdgeRow, EdgeSink, SourceReader};
 use super::version::Catalog;
+use crate::activity;
 use crate::cache::{load_identity, Identity};
 use crate::catalog::{GraphDefinition, Lineage, NewVersion, VersionId, VersionStats};
 use crate::segment::{writer_memory, SegmentStore, SegmentWriter, StoredIds};
@@ -157,8 +158,11 @@ pub(crate) fn write_contents<E: StoredIds>(
         compacted_from: None,
         lineage: derivation.as_ref().map(|derivation| derivation.lineage),
     })?;
+    activity::version(version);
     let mut writer = SegmentWriter::new(segments, version, request.chunk_size, memory)?;
-    let built = plan.build(edges, &mut writer)?;
+    activity::phase("building", Some(plan.csr_count()));
+    let built = plan.build(edges, &mut Reported { sink: &mut writer, csrs: 0, edges: 0 })?;
+    activity::phase("writing", None);
     writer.write_identity(&id_map, &relations)?;
     if let Some(derivation) = &derivation {
         writer.write_membership(derivation.membership)?;
@@ -167,9 +171,35 @@ pub(crate) fn write_contents<E: StoredIds>(
         VersionStats::new(&id_map, built.edge_count, dropped_edges, built.deduplicated_edges);
     catalog.record_contents(version, &stats, writer.bytes())?;
     if request.promote {
+        activity::phase("promoting", None);
         catalog.promote(graph, version)?;
     }
     Ok(version)
+}
+
+/// A CSR sink that reports the CSRs passed on, of the plan's, and the
+/// edges of the relations' forward CSRs (DESIGN.md §5.7). A build streams
+/// each CSR to the segment writer as it completes, so its CSRs are built
+/// and written in this one phase.
+struct Reported<'s, S> {
+    sink: &'s mut S,
+    csrs: u64,
+    edges: u64,
+}
+
+impl<S: CsrSink> CsrSink for Reported<'_, S> {
+    type Error = S::Error;
+
+    fn csr(&mut self, built: BuiltCsr) -> Result<(), S::Error> {
+        if let (CsrScope::Relation(_), CsrDirection::Forward) = (built.scope, built.direction) {
+            self.edges += built.csr.edge_count();
+        }
+        self.sink.csr(built)?;
+        self.csrs += 1;
+        activity::done(self.csrs);
+        activity::detail("edges", self.edges as f64);
+        Ok(())
+    }
 }
 
 /// Reads the edge rows into an edge list charged to `memory`, interning new
@@ -537,6 +567,26 @@ mod tests {
         assert!(!row.staged);
         assert_eq!(world.catalog.current_version, Some(version));
         assert_eq!(row.bytes, world.stored_bytes(version));
+    }
+
+    #[test]
+    fn a_build_reports_its_version_and_phases_to_the_open_operation() {
+        let mut world = World::default();
+        let source = MemorySource {
+            nodes: vec![1, 2, 3],
+            edges: vec![edge(1, 2)],
+            ..MemorySource::default()
+        };
+        let running = activity::Running::opened("refresh");
+        let staged = world.refresh(&graph(), &source, false);
+        let operation = activity::own().operation;
+        assert_eq!(operation.frame.version, Some(staged));
+        assert_eq!(operation.frame.phase.as_str(), "writing", "a staged build ends writing");
+        world.refresh(&graph(), &source, true);
+        let operation = activity::own().operation;
+        assert_eq!(operation.frame.phase.as_str(), "promoting");
+        drop(running);
+        assert!(!activity::own().operation.frame.is_some(), "the operation ended");
     }
 
     #[test]

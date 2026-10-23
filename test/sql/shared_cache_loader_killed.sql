@@ -25,8 +25,29 @@ END
 $$;
 \endif
 SELECT assert.equal(dblink_is_busy('a'), 1, 'a is still loading g');
+SELECT pid AS waiter FROM dblink('b', 'SELECT pg_backend_pid()') AS t(pid int) \gset
+SELECT set_config('test.waiter', :'waiter', false);
 SELECT dblink_send_query('b', $$SELECT warren.prewarm('g')$$);
 SELECT pg_sleep(0.2);
+\if :shared
+-- b waits on the shared cache's wait event (DESIGN.md §5.7): named on
+-- PG 17 and later, `Extension` before.
+DO $$
+BEGIN
+    FOR attempt IN 1..500 LOOP
+        EXIT WHEN EXISTS (SELECT FROM pg_stat_activity
+                          WHERE pid = current_setting('test.waiter')::int
+                            AND wait_event_type = 'Extension');
+        PERFORM pg_sleep(0.01);
+    END LOOP;
+END
+$$;
+SELECT assert.equal(
+    (SELECT format('%s %s', wait_event_type, wait_event) FROM pg_stat_activity WHERE pid = :waiter),
+    CASE WHEN current_setting('server_version_num')::int >= 170000 THEN 'Extension WarrenSharedLoad'
+         ELSE 'Extension Extension' END,
+    'b waits for a''s load');
+\endif
 
 -- a is terminated mid-load; b takes the load over.
 SELECT pg_terminate_backend(:loader, 10000);
@@ -34,6 +55,9 @@ SELECT assert.equal(version, :v::bigint, 'b loaded g')
 FROM dblink_get_result('b') AS t(version bigint);
 SELECT count(*) FROM dblink_get_result('b') AS t(version bigint);
 SELECT assert.equal(shared_segments(:v), :one, 'one segment holds g, the loader''s freed');
+SELECT assert.equal((SELECT waits FROM warren.backends() WHERE pid = :waiter), 1::bigint,
+                    'b counted one wait')
+WHERE :'shared';
 SELECT assert.equal(warren.degree('g', 1::bigint, direction := 'both'), 2::bigint,
                     'this backend reads g');
 

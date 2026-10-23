@@ -30,6 +30,7 @@ mod spanning_forest;
 mod strong_components;
 mod summary;
 mod symmetric;
+pub(crate) mod tally;
 mod triangles;
 mod vector;
 mod workers;

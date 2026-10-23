@@ -13,6 +13,7 @@ use std::time::Instant;
 use warren_core::compute::{AnyVector, ComputeMemory};
 
 use super::{read_vector, VectorError, VectorId, VectorRecord, VectorStore};
+use crate::activity::count_private_evictions;
 
 /// One cached vector.
 struct Entry {
@@ -46,6 +47,18 @@ impl VectorCache {
         self.entries.values().map(|entry| entry.vector.bytes()).sum()
     }
 
+    /// Each cached vector's id, graph, bytes, last use and whether a call
+    /// holds it, for `warren.cache()`.
+    pub(crate) fn listing(&self) -> Vec<(VectorId, i32, u64, Instant, bool)> {
+        self.entries
+            .iter()
+            .map(|(id, entry)| {
+                let in_use = Arc::strong_count(&entry.vector) > 1;
+                (*id, entry.graph_id, entry.vector.bytes(), entry.last_used, in_use)
+            })
+            .collect()
+    }
+
     /// Each cached vector's id, bytes and last use, by vector id. A tuple,
     /// not `cache::lru::Held`: `vector` must not depend on `cache`.
     pub(crate) fn held(&self) -> Vec<(VectorId, u64, Instant)> {
@@ -64,9 +77,17 @@ impl VectorCache {
         self.entries.get(&id).is_some_and(|entry| Arc::strong_count(&entry.vector) > 1)
     }
 
-    /// Drops vector `id`, if cached.
+    /// How many vectors are cached.
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Drops vector `id`, if cached. Each vector this and the two below
+    /// drop counts as an eviction (DESIGN.md §5.7).
     pub(crate) fn remove(&mut self, id: VectorId) {
-        self.entries.remove(&id);
+        if self.entries.remove(&id).is_some() {
+            count_private_evictions(1);
+        }
     }
 
     /// The cached vector ids, ascending.
@@ -78,14 +99,18 @@ impl VectorCache {
 
     /// Drops every cached vector not in `existing`.
     pub(crate) fn retain(&mut self, existing: &[VectorId]) {
+        let before = self.entries.len();
         self.entries.retain(|vector, _| existing.contains(vector));
+        count_private_evictions((before - self.entries.len()) as u64);
     }
 
     /// Drops every cached vector of graph `graph_id`; returns how many.
     pub(crate) fn evict_graph(&mut self, graph_id: i32) -> usize {
         let before = self.entries.len();
         self.entries.retain(|_, entry| entry.graph_id != graph_id);
-        before - self.entries.len()
+        let evicted = before - self.entries.len();
+        count_private_evictions(evicted as u64);
+        evicted
     }
 }
 
@@ -140,6 +165,17 @@ pub(crate) fn forget(id: VectorId) {
 /// The heap bytes this backend's cached vectors hold.
 pub(crate) fn cached_vector_bytes() -> u64 {
     CACHE.with_borrow(VectorCache::bytes)
+}
+
+/// Each of this backend's cached vectors' id, graph, bytes, last use and
+/// whether a call holds it.
+pub(crate) fn cached_vector_listing() -> Vec<(VectorId, i32, u64, Instant, bool)> {
+    CACHE.with_borrow(VectorCache::listing)
+}
+
+/// How many vectors this backend caches.
+pub(crate) fn cached_vector_count() -> usize {
+    CACHE.with_borrow(VectorCache::len)
 }
 
 /// Each of this backend's cached vectors' id, bytes and last use, by

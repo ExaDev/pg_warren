@@ -13,10 +13,8 @@
 //! | 24..28 | its kind (`u32`: 1 a version, 2 a vector) |
 //! | 28..64 | reserved, 0 |
 //!
-//! Also where segments are created, and how many bytes are free there.
+//! Also how many bytes segments may take where they are created.
 
-use std::ffi::CStr;
-use std::mem::MaybeUninit;
 use std::ptr::NonNull;
 
 use pgrx::pg_sys;
@@ -53,6 +51,11 @@ impl Segment {
             let address = pg_sys::dsm_segment_address(self.0.as_ptr()).cast::<u8>();
             (address, pg_sys::dsm_segment_map_length(self.0.as_ptr()))
         }
+    }
+
+    /// The bytes it maps.
+    pub(super) fn len(self) -> u64 {
+        self.mapped().1 as u64
     }
 
     /// The region after its prefix, as memory a region is read from.
@@ -199,36 +202,8 @@ fn encode(key: Key) -> [u8; PREFIX] {
 /// `pg_dynshmem` for `mmap` ones; unbounded for `sysv`. 0 if it cannot be
 /// read, which loads privately.
 pub(super) fn store_room() -> u64 {
-    store_space().map_or(0, |(available, size)| beside_reserve(available, size))
-}
-
-/// The bytes available where segments are created, reserve included, and
-/// the store's size: `/dev/shm`'s for `posix` segments, `pg_dynshmem`'s
-/// for `mmap` ones, unbounded for `sysv`; `None` if they cannot be read.
-pub(super) fn store_space() -> Option<(u64, u64)> {
-    // SAFETY: reads a setting on the main thread.
-    let kind = unsafe { pg_sys::dynamic_shared_memory_type } as u32;
-    match kind {
-        pg_sys::DSM_IMPL_POSIX => space(c"/dev/shm"),
-        pg_sys::DSM_IMPL_MMAP => space(c"pg_dynshmem"),
-        _ => Some((u64::MAX, u64::MAX)),
-    }
-}
-
-/// The bytes available to an unprivileged process in the file system of
-/// `path`, and its size, if they can be read.
-fn space(path: &CStr) -> Option<(u64, u64)> {
-    let mut stats = MaybeUninit::<libc::statvfs>::zeroed();
-    // SAFETY: `path` is a C string and `stats` room for the result.
-    if unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) } != 0 {
-        return None;
-    }
-    // SAFETY: `statvfs` succeeded, so it filled `stats`.
-    let stats = unsafe { stats.assume_init() };
-    Some((
-        blocks_bytes(stats.f_bavail, stats.f_frsize),
-        blocks_bytes(stats.f_blocks, stats.f_frsize),
-    ))
+    crate::shared_memory::store_space()
+        .map_or(0, |(available, size)| beside_reserve(available, size))
 }
 
 /// The bytes of `available` that segments may take in a store of `size`
@@ -237,24 +212,6 @@ fn space(path: &CStr) -> Option<(u64, u64)> {
 /// another query fail for room (DESIGN.md §5.6, Size checks).
 pub(super) fn beside_reserve(available: u64, size: u64) -> u64 {
     available.saturating_sub(size / 4)
-}
-
-/// `blocks` of `size` bytes, in bytes.
-// The fields are u64 on Linux and narrower on some other targets.
-#[allow(clippy::useless_conversion)]
-fn blocks_bytes(blocks: libc::fsblkcnt_t, size: libc::c_ulong) -> u64 {
-    u64::from(blocks).saturating_mul(u64::from(size))
-}
-
-/// Where the shortage of a refused segment lies, for its notice.
-pub(in crate::cache::shared) fn store_name() -> &'static str {
-    // SAFETY: as in `store_room`.
-    let kind = unsafe { pg_sys::dynamic_shared_memory_type } as u32;
-    if kind == pg_sys::DSM_IMPL_MMAP {
-        "pg_dynshmem"
-    } else {
-        "/dev/shm"
-    }
 }
 
 #[cfg(test)]
@@ -288,12 +245,5 @@ mod tests {
         assert_eq!(beside_reserve(20 * MB, 64 * MB), 4 * MB);
         assert_eq!(beside_reserve(10 * MB, 64 * MB), 0, "less free than the reserve");
         assert_eq!(beside_reserve(0, 0), 0);
-    }
-
-    #[test]
-    fn free_room_is_read_from_the_file_system_or_is_none() {
-        let (available, size) = space(c"/").unwrap();
-        assert!(size > 0 && available <= size);
-        assert_eq!(space(c"/no/such/directory"), None);
     }
 }

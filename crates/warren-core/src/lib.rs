@@ -14,6 +14,7 @@ pub mod community;
 pub mod compute;
 pub mod graph;
 pub mod interrupts;
+pub mod progress;
 pub mod spectral;
 pub mod traversal;
 pub mod version;

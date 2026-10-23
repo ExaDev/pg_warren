@@ -311,6 +311,18 @@ SELECT assert.equal((SELECT row FROM warren.matrix_rows('roads', 'emb_nbr', NULL
                     ARRAY[80, 20]::float8[], 'mean of neighbour rows');
 SELECT assert.equal((SELECT count(DISTINCT value) FROM warren.vector_values('roads', 'comp', NULL::int)),
                     1::bigint, 'one component');
+DO $$ BEGIN
+    FOR i IN 1..3 LOOP
+        PERFORM warren.report_progress('my_walk', 'roads', 'iterating', i - 1, 3);
+        PERFORM assert.equal((SELECT format('%s %s %s of %s', command, graph, done, total)
+                              FROM warren.progress() WHERE pid = pg_backend_pid()),
+                             format('my_walk roads %s of 3', i - 1), 'compute.md report_progress');
+    END LOOP;
+END $$;
+SELECT pid, command, graph, phase, done, total, operation, operation_phase, detail
+FROM warren.progress();                    -- a row per backend running a long call
+SELECT assert.equal((SELECT count(*) FROM warren.progress() WHERE pid = pg_backend_pid()), 0::bigint,
+                    'the row clears with the statement');
 -- compute.md "Structural kernels"
 SELECT assert.equal(warren.core_number('roads', 'core'), 2::bigint, 'roads has degeneracy 2');
 SELECT assert.equal((SELECT array_agg(value ORDER BY node_id) FROM warren.vector_values('roads', 'core', NULL::int)),
@@ -603,6 +615,11 @@ SELECT kind, graph, version, state, pg_size_pretty(bytes) AS size, pins, mappers
 FROM warren.shared_cache();                -- a row per shared entry you may read, then the cluster's totals
 SELECT assert.equal((SELECT array_agg(kind) FROM warren.shared_cache() WHERE kind = 'cluster'),
                     ARRAY['cluster'], 'one totals row');
+SELECT pid, pg_size_pretty(private_bytes) AS private, pg_size_pretty(mapped_bytes) AS mapped,
+       lookups, shared_hits, private_loads + shared_loads AS loads, refusals
+FROM warren.backends();                    -- a row per backend, then the cluster's totals
+SELECT assert.that((SELECT lookups > 0 FROM warren.backends() WHERE pid = pg_backend_pid()),
+                   'this backend counted its reads');
 SELECT assert.raises($$SELECT * FROM warren.walk('roads', ARRAY[1], ARRAY[warren.s(NULL, 'out', NULL::int[], 1, 3)],
                                                  mode := 'paths', max_results := 20000000)$$,
                      'max_results above warren.max_walk_paths', '54000');
