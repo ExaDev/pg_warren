@@ -42,6 +42,29 @@
     it, fails with 40001 instead of deleting the new creator's vector.
 
   `ALTER EXTENSION pg_warren UPDATE` creates the five functions.
+- **Cache observability** (DESIGN.md §5.7, §14 items 48 and 49).
+  - `warren.cache()` lists this backend's private cache: each cached
+    version, persisted vector and transient vector of the caller's role,
+    with its bytes and state (`in use`, `pinned`, `idle`, `held`), then a
+    `backend` row with the total against `warren.max_cache_memory`. Only
+    graphs the caller may read are listed.
+  - `warren.backends()` has a row per backend that has used pg_warren,
+    with what it holds privately and maps from the shared cache, and its
+    cache counters (lookups, hits, waits, loads and their bytes and
+    seconds, evictions, and refusals by reason), counted once per
+    statement and version; then a `cluster` row that includes backends
+    that have exited. Another role's backend shows only who it is, unless
+    the caller has that role's privileges or `pg_read_all_stats`, as in
+    `pg_stat_activity`. It needs no configuration on PostgreSQL 17 and 18
+    and `shared_preload_libraries` on 15 and 16; without it, the caller's
+    own row only, with a `NOTICE`.
+  - A backend waiting for another's load of a shared version shows
+    `wait_event` `WarrenSharedLoad` in `pg_stat_activity` on PostgreSQL 17
+    and 18 (`Extension` on 15 and 16).
+
+  `ALTER EXTENSION pg_warren UPDATE` creates both functions; the shared
+  cache's registry is unchanged, so on PostgreSQL 17 and 18 versions stay
+  shared across the upgrade without a restart.
 
 ### Fixed
 

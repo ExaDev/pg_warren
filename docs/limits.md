@@ -290,6 +290,22 @@ FROM warren.shared_cache();                -- a row per shared entry you may rea
   bytes, pins and mappers of every database's, and the cap. `pins` counts
   statements using an entry now, `mappers` backends that map it.
 
+  Two more views (0.6.0) show it per backend. `warren.cache()` lists what
+  this backend holds privately, against `warren.max_cache_memory`.
+  `warren.backends()` gives each backend's private and mapped bytes and
+  its cache counters, which count once per statement and version, then the
+  cluster's totals:
+
+```sql
+SELECT pid, pg_size_pretty(private_bytes) AS private, pg_size_pretty(mapped_bytes) AS mapped,
+       lookups, shared_hits, private_loads + shared_loads AS loads, refusals
+FROM warren.backends();                    -- a row per backend, then the cluster's totals
+```
+
+  A `refusals` entry other than 0 says why versions were loaded privately
+  (`no_room` for a full `/dev/shm`, `unavailable` for no shared cache).
+  On PostgreSQL 15 and 16 other backends' rows need the preload.
+
 Measured (DESIGN.md §12, `bench/pooler.py`; 1M nodes and 10M edges, 4
 vCPUs, PgBouncer in transaction mode): 50 pooled backends reading one
 graph hold one copy, 338 MB in all for a 112 MB version against 6.63 GB

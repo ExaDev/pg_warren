@@ -603,6 +603,11 @@ SELECT kind, graph, version, state, pg_size_pretty(bytes) AS size, pins, mappers
 FROM warren.shared_cache();                -- a row per shared entry you may read, then the cluster's totals
 SELECT assert.equal((SELECT array_agg(kind) FROM warren.shared_cache() WHERE kind = 'cluster'),
                     ARRAY['cluster'], 'one totals row');
+SELECT pid, pg_size_pretty(private_bytes) AS private, pg_size_pretty(mapped_bytes) AS mapped,
+       lookups, shared_hits, private_loads + shared_loads AS loads, refusals
+FROM warren.backends();                    -- a row per backend, then the cluster's totals
+SELECT assert.that((SELECT lookups > 0 FROM warren.backends() WHERE pid = pg_backend_pid()),
+                   'this backend counted its reads');
 SELECT assert.raises($$SELECT * FROM warren.walk('roads', ARRAY[1], ARRAY[warren.s(NULL, 'out', NULL::int[], 1, 3)],
                                                  mode := 'paths', max_results := 20000000)$$,
                      'max_results above warren.max_walk_paths', '54000');
