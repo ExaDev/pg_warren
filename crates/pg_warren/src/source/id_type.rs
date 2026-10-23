@@ -2,6 +2,7 @@
 //! §5.2, §5.7), and the external ids of `warren-core` as Postgres values.
 
 use std::borrow::Borrow;
+use std::ffi::CStr;
 use std::fmt::Debug;
 
 use pgrx::{pg_sys, FromDatum, IntoDatum, Uuid};
@@ -86,6 +87,12 @@ pub(crate) trait IdDatum: IndexedKeys + 'static {
 
     /// The id `key`, by value.
     fn owned(key: &Self::Key) -> Self::Owned;
+
+    /// The id `key` as an error message names it: by its type's output
+    /// function, or for text its bytes clipped to [`NAMED_BYTES`] on a
+    /// character boundary and never checked against the encoding, so that
+    /// naming an id raises no error of its own.
+    fn named(key: &Self::Key) -> String;
 
     /// A datum of [`Self::ID_TYPE`] holding `key`. A text id is checked to
     /// be valid in the database encoding first (DESIGN.md §5.7), so no
@@ -208,6 +215,21 @@ impl<E: InPlaceId> IdDatum for FixedKeys<E> {
         *key
     }
 
+    fn named(key: &E) -> String {
+        let Some(datum) = Self::datum(key) else {
+            return String::new();
+        };
+        let (mut output, mut varlena) = (pg_sys::Oid::INVALID, false);
+        // SAFETY: the out-pointers point to live locals; the datum is of the
+        // type whose output function is called, which returns a palloc'd
+        // NUL-terminated string.
+        unsafe {
+            pg_sys::getTypeOutputInfo(E::ID_TYPE.oid(), &mut output, &mut varlena);
+            let text = pg_sys::OidOutputFunctionCall(output, datum);
+            CStr::from_ptr(text).to_string_lossy().into_owned()
+        }
+    }
+
     fn datum(key: &E) -> Option<pg_sys::Datum> {
         key.to_sql().into_datum()
     }
@@ -229,6 +251,9 @@ impl<E: InPlaceId> IdDatum for FixedKeys<E> {
     }
 }
 
+/// The bytes of a text id an error message shows.
+pub(crate) const NAMED_BYTES: usize = 256;
+
 /// The most bytes a `text` holds: Postgres's `MaxAllocSize` (1 GB less one
 /// byte), less the varlena header.
 const MAX_TEXT_BYTES: usize = 0x3fff_ffff - pg_sys::VARHDRSZ;
@@ -247,6 +272,22 @@ impl IdDatum for TextKeys {
 
     fn owned(key: &[u8]) -> Vec<u8> {
         key.to_vec()
+    }
+
+    fn named(key: &[u8]) -> String {
+        if key.len() <= NAMED_BYTES {
+            return String::from_utf8_lossy(key).into_owned();
+        }
+        // SAFETY: `key` holds more than NAMED_BYTES readable bytes, of
+        // which pg_mbcliplen reads at most NAMED_BYTES, stepping by the
+        // database encoding's character lengths without checking them (a
+        // text holds no NUL byte, at which it would stop), and returns a
+        // length within them.
+        let clipped = unsafe {
+            pg_sys::pg_mbcliplen(key.as_ptr().cast(), NAMED_BYTES as i32, NAMED_BYTES as i32)
+        };
+        let clipped = usize::try_from(clipped).unwrap_or(0).min(NAMED_BYTES);
+        format!("{}…", String::from_utf8_lossy(&key[..clipped]))
     }
 
     fn datum(key: &[u8]) -> Option<pg_sys::Datum> {
@@ -383,9 +424,24 @@ mod unit {
 #[pgrx::pg_schema]
 mod tests {
     use pgrx::prelude::*;
-    use warren_core::graph::TextKeys;
+    use warren_core::graph::{FixedKeys, TextKeys};
 
-    use super::IdDatum;
+    use super::{IdDatum, NAMED_BYTES};
+
+    /// An error names a text id clipped to a character boundary, and never
+    /// checks it, so naming it raises no error of its own.
+    #[pg_test]
+    fn a_text_id_is_named_clipped_and_unchecked() {
+        assert_eq!(TextKeys::named("a b".as_bytes()), "a b");
+        let long = "é".repeat(1000);
+        assert_eq!(TextKeys::named(long.as_bytes()), format!("{}…", "é".repeat(NAMED_BYTES / 2)));
+        let odd = format!("x{long}");
+        let named = TextKeys::named(odd.as_bytes());
+        assert_eq!(named, format!("x{}…", "é".repeat((NAMED_BYTES - 1) / 2)), "on a boundary");
+        let invalid = TextKeys::named(&[0xff; 1000]);
+        assert!(invalid.chars().count() <= NAMED_BYTES + 1, "{}", invalid.len());
+        assert_eq!(FixedKeys::<i64>::named(&-7), "-7");
+    }
 
     /// A text id is checked against the database encoding as it becomes a
     /// datum (DESIGN.md §5.7); the test database is UTF8.

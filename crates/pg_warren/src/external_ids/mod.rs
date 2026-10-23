@@ -116,22 +116,6 @@ pub(crate) fn external_array<E: IdDatum>(id_map: &IdMap<E>, path: &[DenseId]) ->
     unsafe { AnyArray::from_polymorphic_datum(pg_sys::Datum::from(array), false, array_type) }
 }
 
-/// The external id `key` as text, by its type's output function.
-pub(crate) fn id_text<E: IdDatum>(key: &E::Key) -> String {
-    let Some(datum) = E::datum(key) else {
-        return String::new();
-    };
-    let (mut output, mut varlena) = (pg_sys::Oid::INVALID, false);
-    // SAFETY: the out-pointers point to live locals; the datum is of the
-    // type whose output function is called, which returns a palloc'd
-    // NUL-terminated string.
-    unsafe {
-        pg_sys::getTypeOutputInfo(E::ID_TYPE.oid(), &mut output, &mut varlena);
-        let text = pg_sys::OidOutputFunctionCall(output, datum);
-        std::ffi::CStr::from_ptr(text).to_string_lossy().into_owned()
-    }
-}
-
 /// The element type of array type `oid`; an error naming `argument` if
 /// `oid` is not an array type (`example` is the id type to suggest).
 pub(crate) fn element_type(

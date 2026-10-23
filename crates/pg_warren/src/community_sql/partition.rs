@@ -10,7 +10,6 @@ use warren_core::graph::BuildMemory;
 use super::CommunitySqlError;
 use crate::cache::CachedIds;
 use crate::compute_sql::Vectors;
-use crate::external_ids::id_text;
 use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
 
@@ -33,7 +32,7 @@ pub(super) fn undirected<E: CachedIds>(
     built.map_err(|error| match error {
         CommunityError::NegativeWeight { from, to, weight } => {
             let id_map = &vectors.loaded.id_map;
-            let external = |dense| id_map.external_id(dense).map(id_text::<E>);
+            let external = |dense| id_map.external_id(dense).map(E::named);
             CommunitySqlError::NegativeWeight {
                 from: external(from).unwrap_or_default(),
                 to: external(to).unwrap_or_default(),

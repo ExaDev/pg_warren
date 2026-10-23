@@ -36,3 +36,12 @@ SELECT assert.equal(
   (SELECT array_agg(n ORDER BY n) FROM warren.neighbours('external', (SELECT id FROM external WHERE n = 7), 'both') x
    JOIN external e ON e.id = x),
   ARRAY[6, 8], 'external ids map as any other');
+
+-- An error names a long id clipped to 256 bytes.
+DO $$
+BEGIN
+  PERFORM warren.vector_from_query('external', 'twice', 'SELECT id, 1 FROM external UNION ALL SELECT id, 2 FROM external WHERE n = 5');
+  RAISE EXCEPTION 'a node with two rows was not refused';
+EXCEPTION WHEN cardinality_violation THEN
+  PERFORM assert.that(length(SQLERRM) < 320 AND SQLERRM LIKE '%…', format('the id is clipped: %s bytes', octet_length(SQLERRM)));
+END $$;

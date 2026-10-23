@@ -33,7 +33,7 @@ use super::vectors::Vectors;
 use super::{entry, ComputeSqlError};
 use crate::access::{with_read_only, with_search_path, Caller};
 use crate::cache::{resolve, CachedIds};
-use crate::external_ids::{id_text, DenseIds};
+use crate::external_ids::DenseIds;
 use crate::interrupts::{workers, PostgresInterrupts};
 use crate::source::{
     describe, for_each_tuple, open_read_only, type_name, with_id_type, ColumnType, Row, SourceError,
@@ -222,7 +222,7 @@ where
         };
         let node = node as usize;
         if std::mem::replace(&mut self.seen[node], true) {
-            return Err(ComputeSqlError::DuplicateNode(id_text::<E>(id.borrow())));
+            return Err(ComputeSqlError::DuplicateNode(E::named(id.borrow())));
         }
         Ok(Some(node))
     }
