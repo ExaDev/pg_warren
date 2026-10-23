@@ -23,7 +23,7 @@ use crate::source::with_id_type;
     sql = r#"
 CREATE FUNCTION warren.components(graph text, id_type anyelement, version bigint DEFAULT NULL)
 RETURNS TABLE (node_id anyelement, component_id bigint)
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'components_wrapper';
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'components_wrapper';
 "#
 )]
 fn components(

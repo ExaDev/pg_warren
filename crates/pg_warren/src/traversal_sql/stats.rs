@@ -1,6 +1,9 @@
 //! `warren.last_stats()`: what the session's last recording traversal did
 //! (DESIGN.md §9.3, Appendix A.6), and the `NOTICE` that makes truncation
-//! visible.
+//! visible. The traversals are `PARALLEL SAFE` (§14 item 33): one that
+//! runs in a parallel worker records nothing, since the worker's record
+//! could never reach the leader, so `last_stats()` describes only calls
+//! the leader ran.
 
 use std::cell::RefCell;
 
@@ -10,6 +13,7 @@ use serde_json::{json, Value};
 use warren_core::traversal::TraversalStats;
 
 use crate::catalog::VersionId;
+use crate::parallel_worker::in_parallel_worker;
 
 thread_local! {
     /// The stats of this session's last recording traversal.
@@ -21,7 +25,8 @@ thread_local! {
 /// `reachable_set`, `shortest_path`, `dijkstra`, `components`); NULL before
 /// the first. Keys: `function`, `graph`, `version`, `nodes_visited`,
 /// `edges_traversed`, `truncated`. A set-returning function updates them as
-/// it streams, so after SQL `LIMIT` stops it they count the work done.
+/// it streams, so after SQL `LIMIT` stops it they count the work done. A
+/// call that a parallel worker ran is not recorded.
 #[pg_extern(schema = "warren", volatile, parallel_restricted)]
 fn last_stats() -> Option<JsonB> {
     LAST.with_borrow(|last| last.clone().map(JsonB))
@@ -59,6 +64,9 @@ impl Recorder {
     }
 
     fn store(&self, stats: TraversalStats) {
+        if in_parallel_worker() {
+            return;
+        }
         let value = stats_json(self.function, &self.graph, self.version, stats);
         LAST.with_borrow_mut(|last| *last = Some(value));
     }

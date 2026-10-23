@@ -12,6 +12,7 @@ use std::cell::Cell;
 use pgrx::{ereport, PgSqlErrorCode};
 
 use super::setting;
+use crate::parallel_worker::cache_notice_raised;
 
 #[cfg(any(feature = "pg17", feature = "pg18", test))]
 use super::dsm::FORMAT;
@@ -47,7 +48,7 @@ impl Unavailable {
     /// The notice, raised once per backend, that versions are loaded
     /// privately, if [`noticed`](Self::noticed) with the cap as it is.
     pub(crate) fn notice(self) {
-        if self.noticed(setting::at_default()) && !NOTICED.replace(true) {
+        if cache_notice_raised(self.noticed(setting::at_default()) && !NOTICED.replace(true)) {
             ereport!(NOTICE, PgSqlErrorCode::ERRCODE_SUCCESSFUL_COMPLETION, self.message());
         }
     }

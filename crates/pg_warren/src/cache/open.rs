@@ -18,6 +18,7 @@ use super::versions::{VersionCache, CACHE};
 use super::{installation, load, trim, CacheError, LoadedVersion};
 use crate::access::{as_catalog_owner, require_reader};
 use crate::catalog::{require_version, GraphDefinition, VersionId};
+use crate::parallel_worker::cache_notice_raised;
 use crate::read_only::{read_one, read_two};
 use crate::segment::SpiSegmentStore;
 use crate::source::IdDatum;
@@ -97,7 +98,7 @@ fn load_private<E: IdDatum + Send + Sync>(
     let expected = expected_bytes::<E>(version)?;
     admit_load(&[version], expected)?;
     if let Some((transient, limit)) = unfit(expected) {
-        if notice_due() {
+        if cache_notice_raised(notice_due()) {
             notice!("{}", unfit_notice(version, expected, limit, transient));
         }
     }

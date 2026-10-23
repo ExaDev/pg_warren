@@ -134,7 +134,7 @@ fn matrix_rows(
     sql = r#"
 CREATE FUNCTION warren.id_map(graph text, id_type anyelement, version bigint DEFAULT NULL)
 RETURNS TABLE (node_id anyelement, dense_id bigint, live boolean)
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'id_map_wrapper';
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'id_map_wrapper';
 "#
 )]
 fn id_map(

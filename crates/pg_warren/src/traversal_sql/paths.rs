@@ -29,7 +29,7 @@ CREATE FUNCTION warren.reachable(graph text, start anyelement, target anyelement
                                  max_depth int DEFAULT NULL, rels text[] DEFAULT NULL,
                                  direction text DEFAULT 'out', version bigint DEFAULT NULL)
 RETURNS boolean
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'reachable_wrapper';
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'reachable_wrapper';
 "#
 )]
 fn reachable(
@@ -73,7 +73,7 @@ CREATE FUNCTION warren.shortest_path(graph text, start anyelement, target anyele
                                      max_depth int DEFAULT NULL, rels text[] DEFAULT NULL,
                                      direction text DEFAULT 'out', version bigint DEFAULT NULL)
 RETURNS anyarray
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'shortest_path_wrapper';
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'shortest_path_wrapper';
 "#
 )]
 fn shortest_path(
@@ -118,7 +118,7 @@ CREATE FUNCTION warren.dijkstra(graph text, start anyelement, target anyelement,
                                 rels text[] DEFAULT NULL, direction text DEFAULT 'out',
                                 version bigint DEFAULT NULL)
 RETURNS TABLE (path anyarray, cost float8)
-STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'dijkstra_wrapper';
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'dijkstra_wrapper';
 "#
 )]
 fn dijkstra(
