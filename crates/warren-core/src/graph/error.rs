@@ -140,7 +140,7 @@ pub enum GraphError {
     #[error("text id offsets do not start at 0")]
     IdOffsetsStart,
     /// A text id map's offsets must never decrease.
-    #[error("text id offsets decrease after dense id {dense}")]
+    #[error("text id offsets of dense id {dense} end before they start")]
     IdOffsetsNotMonotone {
         /// The dense id whose end offset is below its start offset.
         dense: DenseId,

@@ -46,7 +46,7 @@ cd crates/pg_warren && cargo pgrx test pg16
 MIRIFLAGS=-Zmiri-disable-isolation PROPTEST_CASES=16 PROPTEST_DISABLE_FAILURE_PERSISTENCE=true cargo +nightly-2026-10-15 miri test -p warren-core
 
 # Segment decoder fuzzing (nightly + `cargo install cargo-fuzz`); fuzz/ is outside the workspace
-(cd fuzz && cargo +nightly-2026-10-15 fuzz run decode_csr -- -max_total_time=30)   # also decode_id_map, decode_tombstones, decode_relation_dictionary, decode_membership
+(cd fuzz && cargo +nightly-2026-10-15 fuzz run decode_csr -- -max_total_time=30)   # also decode_id_map, decode_text_id_map, decode_tombstones, decode_relation_dictionary, decode_membership
 
 # Optional: run the micro-benchmarks (CI only builds and smoke-runs them)
 cargo bench -p warren-core
