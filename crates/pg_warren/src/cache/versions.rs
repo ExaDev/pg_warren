@@ -202,7 +202,7 @@ mod tests {
     use super::*;
     use crate::cache::load;
     use crate::segment::{write_version, MemorySegmentStore};
-    use warren_core::graph::{EdgeIntake, GraphCsr, IdMap, RelationDictionary};
+    use warren_core::graph::{EdgeIntake, FixedKeys, GraphCsr, IdMap, RelationDictionary};
 
     /// The cached (not merely held) version ids, ascending.
     fn cached(cache: &VersionCache) -> Vec<VersionId> {
@@ -213,7 +213,7 @@ mod tests {
     /// (uuid ids).
     fn store() -> MemorySegmentStore {
         let mut store = MemorySegmentStore::default();
-        let id_map = IdMap::<i64>::new().rebuild(vec![1, 2, 3]).unwrap();
+        let id_map = IdMap::<FixedKeys<i64>>::new().rebuild(vec![1, 2, 3]).unwrap();
         let mut relations = RelationDictionary::new();
         let relation = relations.intern("").unwrap();
         let mut intake = EdgeIntake::directed(&id_map, false);
@@ -222,7 +222,7 @@ mod tests {
         for version in [1, 2] {
             write_version(&mut store, version, &id_map, &relations, &graph, 64).unwrap();
         }
-        let uuids = IdMap::<[u8; 16]>::new().rebuild(vec![[1; 16]]).unwrap();
+        let uuids = IdMap::<FixedKeys<[u8; 16]>>::new().rebuild(vec![[1; 16]]).unwrap();
         let empty =
             GraphCsr::build(EdgeIntake::directed(&uuids, false).finish().0, 1, 1, true).unwrap();
         write_version(&mut store, 3, &uuids, &relations, &empty, 64).unwrap();

@@ -3,7 +3,7 @@
 //! catalog owner.
 
 use pgrx::prelude::*;
-use warren_core::graph::{ExternalId, GraphCsr, IdMap, TargetWidth};
+use warren_core::graph::{ExternalId, FixedKeys, GraphCsr, IdMap, TargetWidth};
 
 use super::retention::{retention, Kept, VersionSummary};
 use super::{CatalogError, GraphDefinition};
@@ -36,7 +36,7 @@ impl VersionStats {
     /// The statistics of a version with this id map and these CSRs, and
     /// the given dropped and deduplicated edge counts.
     pub(crate) fn measure<E: ExternalId>(
-        id_map: &IdMap<E>,
+        id_map: &IdMap<FixedKeys<E>>,
         graph: &GraphCsr,
         dropped_edges: u64,
         deduplicated_edges: u64,
@@ -49,7 +49,7 @@ impl VersionStats {
     /// over its relations, and the given dropped and deduplicated edge
     /// counts.
     pub(crate) fn new<E: ExternalId>(
-        id_map: &IdMap<E>,
+        id_map: &IdMap<FixedKeys<E>>,
         edge_count: u64,
         dropped_edges: u64,
         deduplicated_edges: u64,

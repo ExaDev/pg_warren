@@ -88,7 +88,7 @@ pub(crate) fn contract_version<E: ExternalId>(
 mod tests {
     use pgrx::pg_sys;
     use warren_core::compute::{ComputeMemory, Vector};
-    use warren_core::graph::{EdgeIntake, Membership, NodeOrder, Tombstones};
+    use warren_core::graph::{EdgeIntake, FixedKeys, Membership, NodeOrder, Tombstones};
     use warren_core::interrupts::Uninterrupted;
 
     use super::*;
@@ -183,7 +183,7 @@ mod tests {
             )
         }
 
-        fn id_map(&mut self, version: VersionId) -> IdMap<i64> {
+        fn id_map(&mut self, version: VersionId) -> IdMap<FixedKeys<i64>> {
             let tombstones =
                 Tombstones::decode(&read_segment(&mut self.store, version, "tombstones").unwrap())
                     .unwrap();

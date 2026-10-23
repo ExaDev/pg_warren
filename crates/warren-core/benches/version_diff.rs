@@ -3,7 +3,7 @@
 //! with 1% of nodes removed, 1% added and about 5% of edges replaced.
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
-use warren_core::graph::{EdgeIntake, GraphCsr, GraphError, IdMap, RelationDictionary};
+use warren_core::graph::{EdgeIntake, FixedKeys, GraphCsr, GraphError, IdMap, RelationDictionary};
 use warren_core::version::{diff, GraphVersion, VersionError};
 
 const NODES: i64 = 100_000;
@@ -23,13 +23,13 @@ impl Lcg {
 
 /// One built version.
 struct Version {
-    id_map: IdMap<i64>,
+    id_map: IdMap<FixedKeys<i64>>,
     relations: RelationDictionary,
     graph: GraphCsr,
 }
 
 impl Version {
-    fn view(&self) -> Result<GraphVersion<'_, i64>, VersionError> {
+    fn view(&self) -> Result<GraphVersion<'_, FixedKeys<i64>>, VersionError> {
         GraphVersion::new(&self.id_map, &self.relations, &self.graph)
     }
 }
@@ -37,7 +37,7 @@ impl Version {
 /// Builds the next version of `previous` from external-id node and edge
 /// rows, as `refresh` would.
 fn build(
-    previous: &IdMap<i64>,
+    previous: &IdMap<FixedKeys<i64>>,
     relations: &RelationDictionary,
     nodes: Vec<i64>,
     edges: &[(u64, i64, i64)],

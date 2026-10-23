@@ -3,7 +3,7 @@
 //! statistic between them.
 
 use super::nodes::is_live;
-use crate::graph::{memory, CsrRows, ExternalId, GraphError, IdMap};
+use crate::graph::{memory, CsrRows, GraphError, IdKeys, IdMap};
 
 /// How many live nodes have one degree, before and after.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,8 +31,8 @@ pub struct DegreeShift {
 }
 
 /// Live nodes per degree (index) of the out-degrees in `csr`.
-pub(super) fn out_degree_counts<E: ExternalId>(
-    id_map: &IdMap<E>,
+pub(super) fn out_degree_counts<K: IdKeys>(
+    id_map: &IdMap<K>,
     csr: CsrRows<'_>,
 ) -> Result<Vec<u64>, GraphError> {
     counts_by_degree(id_map, |dense| csr.degree(dense))
@@ -40,8 +40,8 @@ pub(super) fn out_degree_counts<E: ExternalId>(
 
 /// Live nodes per degree (index) of the in-degrees of `csr`, counted from
 /// its targets so that no reverse CSR is needed.
-pub(super) fn in_degree_counts<E: ExternalId>(
-    id_map: &IdMap<E>,
+pub(super) fn in_degree_counts<K: IdKeys>(
+    id_map: &IdMap<K>,
     csr: CsrRows<'_>,
 ) -> Result<Vec<u64>, GraphError> {
     let mut in_degrees = memory::filled(csr.id_space() as usize, 0u64)?;
@@ -54,8 +54,8 @@ pub(super) fn in_degree_counts<E: ExternalId>(
 }
 
 /// Live nodes per degree, indexed by degree, for a degree function.
-fn counts_by_degree<E: ExternalId>(
-    id_map: &IdMap<E>,
+fn counts_by_degree<K: IdKeys>(
+    id_map: &IdMap<K>,
     degree: impl Fn(u64) -> u64,
 ) -> Result<Vec<u64>, GraphError> {
     let live = || (0..id_map.id_space()).filter(|&dense| is_live(id_map, dense));

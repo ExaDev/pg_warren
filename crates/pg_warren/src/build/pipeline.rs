@@ -8,8 +8,9 @@
 //! CSRs are built where the plan shows it, else where it reserves.
 
 use warren_core::graph::{
-    BuildCharge, BuildMemory, BuildPlan, CsrLayout, EdgeIntake, EdgeList, ExternalId, GraphCsr,
-    GraphError, IdMap, Membership, NodeOrder, Permutation, RelationDictionary, RelationIndex,
+    BuildCharge, BuildMemory, BuildPlan, CsrLayout, EdgeIntake, EdgeList, ExternalId, FixedKeys,
+    GraphCsr, GraphError, IdMap, Membership, NodeOrder, Permutation, RelationDictionary,
+    RelationIndex,
 };
 
 use super::error::BuildError;
@@ -97,7 +98,7 @@ pub(crate) fn build<E: ExternalId>(
 /// contraction made them.
 pub(crate) struct Contents<E> {
     /// The id map, tombstones included.
-    pub(crate) id_map: IdMap<E>,
+    pub(crate) id_map: IdMap<FixedKeys<E>>,
     /// The relation dictionary.
     pub(crate) relations: RelationDictionary,
     /// The edges, in dense ids.
@@ -164,7 +165,7 @@ pub(crate) fn write_contents<E: ExternalId>(
 /// NULL, unknown or tombstoned endpoint.
 fn edges<E: ExternalId>(
     graph: &GraphDefinition,
-    id_map: &IdMap<E>,
+    id_map: &IdMap<FixedKeys<E>>,
     implicit: Option<RelationIndex>,
     relations: &mut Relations,
     source: &mut impl SourceReader<E>,
@@ -216,7 +217,7 @@ struct EdgeCollector<'b, 'm, E> {
     /// The one relation of a graph without relations.
     implicit: Option<RelationIndex>,
     relations: &'b mut Relations,
-    intake: EdgeIntake<'m, E>,
+    intake: EdgeIntake<'m, FixedKeys<E>>,
     /// Rows dropped for a NULL relation or weight.
     incomplete_rows: u64,
 }
@@ -275,7 +276,7 @@ mod tests {
     use crate::segment::{read_segment, MemorySegmentStore};
     use pgrx::pg_sys;
     use warren_core::graph::{
-        AnyCsr, EdgeIntake, GraphCsr, GraphError, IdMap, RelationDictionary, Tombstones,
+        AnyCsr, EdgeIntake, FixedKeys, GraphCsr, GraphError, IdMap, RelationDictionary, Tombstones,
     };
 
     fn graph() -> GraphDefinition {
@@ -353,7 +354,7 @@ mod tests {
             read_segment(&mut self.store, version, name).is_ok()
         }
 
-        fn id_map(&mut self, version: VersionId) -> IdMap<i64> {
+        fn id_map(&mut self, version: VersionId) -> IdMap<FixedKeys<i64>> {
             let tombstones = Tombstones::decode(&self.segment(version, "tombstones")).unwrap();
             IdMap::decode(&self.segment(version, "id_map"), tombstones).unwrap()
         }
@@ -384,9 +385,9 @@ mod tests {
         }
     }
 
-    fn neighbours(csr: &AnyCsr, id_map: &IdMap<i64>, external: i64) -> Vec<i64> {
+    fn neighbours(csr: &AnyCsr, id_map: &IdMap<FixedKeys<i64>>, external: i64) -> Vec<i64> {
         let dense = id_map.dense_id(&external).unwrap();
-        csr.neighbours(dense).map(|d| id_map.external_id(d).unwrap()).collect()
+        csr.neighbours(dense).map(|d| *id_map.external_id(d).unwrap()).collect()
     }
 
     #[test]
@@ -485,7 +486,7 @@ mod tests {
         }
         assert_eq!(after.dense_id(&20), None);
         assert!(after.tombstones().contains(1));
-        assert_eq!(after.external_id(1), Some(20));
+        assert_eq!(after.external_id(1), Some(&20));
         assert_eq!(after.dense_id(&5), Some(3));
         assert_eq!(after.dense_id(&40), Some(4));
 

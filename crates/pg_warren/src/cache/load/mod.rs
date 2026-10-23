@@ -19,7 +19,8 @@ use std::sync::{Arc, Weak};
 use pgrx::PgSqlErrorCode;
 use thiserror::Error;
 use warren_core::graph::{
-    BuildCharge, BuildMemory, ExternalId, GraphCsr, GraphError, IdMap, RelationDictionary,
+    BuildCharge, BuildMemory, ExternalId, FixedKeys, GraphCsr, GraphError, IdMap,
+    RelationDictionary,
 };
 use warren_core::version::{GraphVersion, VersionError};
 
@@ -69,7 +70,7 @@ impl SqlError for LoadError {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct LoadedVersion<E> {
     /// Its id map, tombstones included.
-    pub(crate) id_map: IdMap<E>,
+    pub(crate) id_map: IdMap<FixedKeys<E>>,
     /// Its relation dictionary.
     pub(crate) relations: RelationDictionary,
     /// Its CSRs. A loaded graph reports no deduplicated edges: that count
@@ -79,7 +80,7 @@ pub(crate) struct LoadedVersion<E> {
 
 impl<E: ExternalId> LoadedVersion<E> {
     /// The version as `warren-core`'s view of it.
-    pub(crate) fn version(&self) -> Result<GraphVersion<'_, E>, VersionError> {
+    pub(crate) fn version(&self) -> Result<GraphVersion<'_, FixedKeys<E>>, VersionError> {
         GraphVersion::new(&self.id_map, &self.relations, &self.graph)
     }
 
@@ -99,7 +100,7 @@ impl<E: ExternalId> LoadedVersion<E> {
 /// memory it holds.
 pub(crate) struct Identity<E> {
     /// The id map.
-    pub(crate) id_map: IdMap<E>,
+    pub(crate) id_map: IdMap<FixedKeys<E>>,
     /// The charge for the id map.
     pub(crate) id_map_charge: BuildCharge,
     /// The relation dictionary.
@@ -165,13 +166,13 @@ mod tests {
     use crate::segment::{write_version, MemorySegmentStore};
     use crate::source::IdDatum;
     use warren_core::graph::{
-        AnyCsr, CsrLayout, EdgeIntake, GraphCsr, IdMap, RelationCsr, RelationDictionary,
+        AnyCsr, CsrLayout, EdgeIntake, FixedKeys, GraphCsr, IdMap, RelationCsr, RelationDictionary,
     };
 
     /// A version built in memory: ids 10, 20, 30, 40 (or as given) with
     /// the second tombstoned.
     struct Built<E = i64> {
-        id_map: IdMap<E>,
+        id_map: IdMap<FixedKeys<E>>,
         relations: RelationDictionary,
         graph: GraphCsr,
     }

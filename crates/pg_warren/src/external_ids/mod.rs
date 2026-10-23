@@ -14,7 +14,7 @@ pub(crate) use error::ExternalIdError;
 
 use pgrx::prelude::*;
 use pgrx::{AnyArray, AnyElement, FromDatum, IntoDatum};
-use warren_core::graph::{DenseId, IdMap};
+use warren_core::graph::{DenseId, FixedKeys, IdMap};
 
 use crate::source::{type_name, IdDatum};
 
@@ -77,12 +77,15 @@ pub(crate) fn elements<E: IdDatum>(
 }
 
 /// The dense ids of the live nodes among `ids`, in order.
-pub(crate) fn dense_ids<E: IdDatum>(id_map: &IdMap<E>, ids: &[E]) -> Vec<DenseId> {
+pub(crate) fn dense_ids<E: IdDatum>(id_map: &IdMap<FixedKeys<E>>, ids: &[E]) -> Vec<DenseId> {
     ids.iter().filter_map(|id| id_map.dense_id(id)).collect()
 }
 
 /// The external id of `dense` as a SQL value of the graph's id type.
-pub(crate) fn external<E: IdDatum>(id_map: &IdMap<E>, dense: DenseId) -> Option<AnyElement> {
+pub(crate) fn external<E: IdDatum>(
+    id_map: &IdMap<FixedKeys<E>>,
+    dense: DenseId,
+) -> Option<AnyElement> {
     let id = id_map.external_id(dense)?;
     let datum = id.to_sql().into_datum()?;
     // SAFETY: the datum was just made from E's SQL type, whose oid is
@@ -91,9 +94,16 @@ pub(crate) fn external<E: IdDatum>(id_map: &IdMap<E>, dense: DenseId) -> Option<
 }
 
 /// The external ids of `path` as a SQL array of the graph's id type.
-pub(crate) fn external_array<E: IdDatum>(id_map: &IdMap<E>, path: &[DenseId]) -> Option<AnyArray> {
-    let ids: Vec<E::Sql> =
-        path.iter().filter_map(|&dense| id_map.external_id(dense)).map(E::to_sql).collect();
+pub(crate) fn external_array<E: IdDatum>(
+    id_map: &IdMap<FixedKeys<E>>,
+    path: &[DenseId],
+) -> Option<AnyArray> {
+    let ids: Vec<E::Sql> = path
+        .iter()
+        .filter_map(|&dense| id_map.external_id(dense))
+        .copied()
+        .map(E::to_sql)
+        .collect();
     let datum = ids.into_datum()?;
     // SAFETY: get_array_type only reads the type cache.
     let array_type = unsafe { pg_sys::get_array_type(E::Sql::type_oid()) };

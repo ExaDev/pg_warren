@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use pgrx::prelude::*;
 use pgrx::{AnyArray, AnyElement};
-use warren_core::graph::{GraphCsr, GraphError, IdMap};
+use warren_core::graph::{FixedKeys, GraphCsr, GraphError, IdMap};
 use warren_core::traversal::{BfsCursor, Limits, NodeSet, TraversalError, Visit};
 
 use super::args::bound;
@@ -138,13 +138,13 @@ struct Request<'a> {
     pull: bool,
 }
 
-fn bfs_row<E: IdDatum>(id_map: &IdMap<E>, visit: Visit) -> Option<BfsRow> {
+fn bfs_row<E: IdDatum>(id_map: &IdMap<FixedKeys<E>>, visit: Visit) -> Option<BfsRow> {
     let via = visit.via.and_then(|via| external(id_map, via));
     let depth = i32::try_from(visit.depth).unwrap_or(i32::MAX);
     Some((external(id_map, visit.node)?, depth, via))
 }
 
-fn node_row<E: IdDatum>(id_map: &IdMap<E>, visit: Visit) -> Option<AnyElement> {
+fn node_row<E: IdDatum>(id_map: &IdMap<FixedKeys<E>>, visit: Visit) -> Option<AnyElement> {
     external(id_map, visit.node)
 }
 
@@ -161,7 +161,7 @@ impl<E> Borrow<GraphCsr> for VersionGraph<E> {
 struct LevelRows<E, R> {
     loaded: Arc<LoadedVersion<E>>,
     cursor: BfsCursor<VersionGraph<E>>,
-    row: fn(&IdMap<E>, Visit) -> Option<R>,
+    row: fn(&IdMap<FixedKeys<E>>, Visit) -> Option<R>,
     /// The visits of the current level not yet returned, in reverse.
     level: Vec<Visit>,
     more: bool,
@@ -173,7 +173,7 @@ impl<E: IdDatum, R> LevelRows<E, R> {
         request: &Request<'_>,
         version: i64,
         loaded: Arc<LoadedVersion<E>>,
-        row: fn(&IdMap<E>, Visit) -> Option<R>,
+        row: fn(&IdMap<FixedKeys<E>>, Visit) -> Option<R>,
     ) -> Result<Self, TraversalSqlError> {
         let direction = direction(request.direction)?;
         let relations = relations(&loaded.relations, request.rels.as_deref());
