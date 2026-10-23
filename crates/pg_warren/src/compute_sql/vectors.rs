@@ -276,8 +276,7 @@ impl<E: IdDatum> Vectors<E> {
     ) -> Result<Option<VectorId>, ComputeSqlError> {
         self.check_writable(name, persist)?;
         let graph_id = self.graph.graph_id;
-        let old = self.record(name).map(|old| (old.vector, old.created_by));
-        let replacing = old.map(|(vector, _)| vector);
+        let replacing = self.record(name).map(VectorRecord::checked);
         if !persist {
             let replaced = transient(graph_id, self.version, name).map_or(0, |old| old.bytes());
             admit_transient(replaced, vector.bytes())?;
@@ -297,7 +296,7 @@ impl<E: IdDatum> Vectors<E> {
                     }
                     .into());
                 }
-                forget_vector(old);
+                forget_vector(old.vector);
                 self.records.retain(|bound| bound.name != name);
             }
             keep_transient(graph_id, self.version, name, Arc::new(vector));
@@ -309,7 +308,7 @@ impl<E: IdDatum> Vectors<E> {
         let binding = Binding::new(graph_id, self.version, name, caller).replacing(replacing);
         let record = write_vector(&mut SpiVectorStore, &binding, &vector, CHUNK_SIZE)?;
         if let Some(old) = replacing {
-            forget_vector(old);
+            forget_vector(old.vector);
         }
         drop_transient(graph_id, self.version, name);
         let id = record.vector;

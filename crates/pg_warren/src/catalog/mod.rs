@@ -9,6 +9,7 @@
 mod bootstrap;
 mod create_graph;
 mod drop;
+mod dropped_roles;
 mod error;
 mod graph;
 mod info;

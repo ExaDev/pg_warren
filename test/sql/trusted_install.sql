@@ -143,10 +143,80 @@ SET ROLE trusted_installer;
 SELECT assert.equal((SELECT count(*) FROM warren.bfs('secret', ARRAY[1::bigint], 6)), 6::bigint,
                     'a granted reader traverses');
 SELECT assert.raises($$SELECT warren.refresh('secret')$$, 'a reader cannot refresh', '42501');
--- As the extension's owner it can still drop the extension, and with it
--- every graph (documented in DESIGN.md §7).
-DROP EXTENSION pg_warren;
 RESET ROLE;
+
+-- DESIGN.md §5.7: dropping a role needs no superuser and no event trigger.
+-- A non-superuser with a leaving role's privileges reassigns or drops its
+-- graphs before DROP OWNED and DROP ROLE.
+CREATE ROLE trusted_leaver;
+CREATE ROLE trusted_quitter;
+GRANT SELECT ON public.secret_nodes, public.secret_edges TO trusted_leaver, trusted_quitter;
+GRANT trusted_leaver, trusted_quitter TO trusted_owner;
+SET ROLE trusted_leaver;
+SELECT warren.create_graph('leavers', 'SELECT id FROM public.secret_nodes', 'SELECT src, dst FROM public.secret_edges');
+RESET ROLE;
+SET ROLE trusted_quitter;
+SELECT warren.create_graph('quitters', 'SELECT id FROM public.secret_nodes', 'SELECT src, dst FROM public.secret_edges');
+RESET ROLE;
+SET ROLE trusted_owner;
+SELECT assert.equal(warren.reassign_owned('trusted_leaver', 'trusted_owner'), 1::bigint,
+                    'a non-superuser reassigns a leaving role''s graph');
+SELECT assert.equal(warren.drop_owned('trusted_quitter'), 1::bigint,
+                    'a non-superuser drops a leaving role''s graph');
+RESET ROLE;
+DROP OWNED BY trusted_leaver, trusted_quitter;
+DROP ROLE trusted_leaver, trusted_quitter;
+SELECT assert.equal((SELECT string_agg(name || ':' || owner::text, ' ' ORDER BY name) FROM warren.graphs
+                     WHERE name IN ('leavers', 'quitters')), 'leavers:trusted_owner', 'one moved, one dropped');
+
+-- §14 item 45: a graph whose owner was dropped without any of that may be
+-- dropped by the extension's owner, the installer, but only a superuser
+-- may adopt it.
+CREATE ROLE trusted_vanished;
+GRANT SELECT ON public.secret_nodes, public.secret_edges TO trusted_vanished;
+SET ROLE trusted_vanished;
+SELECT warren.create_graph('vanished', 'SELECT id FROM public.secret_nodes', 'SELECT src, dst FROM public.secret_edges');
+SELECT warren.create_graph('adopted', 'SELECT id FROM public.secret_nodes', 'SELECT src, dst FROM public.secret_edges');
+RESET ROLE;
+REVOKE ALL ON public.secret_nodes, public.secret_edges FROM trusted_vanished;
+DROP ROLE trusted_vanished;
+SET ROLE trusted_owner;
+SELECT assert.equal((SELECT count(*) FROM warren.orphans() WHERE kind = 'graph'), 0::bigint,
+                    'another role does not see orphaned graphs');
+SELECT assert.raises($$SELECT warren.drop_graph('vanished')$$, 'another role drops an orphan', '42704');
+SELECT assert.raises($$SELECT warren.drop_orphans()$$, 'another role sweeps', '42501');
+RESET ROLE;
+SET ROLE trusted_installer;
+SELECT assert.equal((SELECT string_agg(graph, ' ' ORDER BY graph) FROM warren.orphans() WHERE kind = 'graph'),
+                    'adopted vanished', 'the installer sees the orphaned graphs');
+SELECT assert.raises($$SELECT warren.set_owner('adopted', 'trusted_installer')$$,
+                     'the installer adopts an orphan', '42501');
+SELECT warren.drop_graph('vanished');
+RESET ROLE;
+SELECT warren.set_owner('adopted', 'trusted_owner');
+SELECT assert.equal((SELECT owner::text FROM warren.graphs WHERE name = 'adopted'), 'trusted_owner',
+                    'a superuser adopts an orphan');
+SELECT assert.equal((SELECT count(*) FROM warren.orphans()), 0::bigint, 'nothing is left orphaned');
+
+-- The event trigger is a superuser's opt-in: the installer cannot create
+-- it, and while it exists the installer's DROP EXTENSION needs CASCADE.
+SET ROLE trusted_installer;
+SELECT assert.raises($$CREATE EVENT TRIGGER warren_drop_owned ON ddl_command_start
+                       WHEN TAG IN ('DROP OWNED') EXECUTE FUNCTION warren.on_drop_owned()$$,
+                     'the installer creates the event trigger', '42501');
+RESET ROLE;
+SELECT assert.equal((SELECT count(*) FROM pg_event_trigger), 0::bigint,
+                    'the extension created no event trigger');
+CREATE EVENT TRIGGER warren_drop_owned ON ddl_command_start
+    WHEN TAG IN ('DROP OWNED') EXECUTE FUNCTION warren.on_drop_owned();
+SET ROLE trusted_installer;
+SELECT assert.raises($$DROP EXTENSION pg_warren$$, 'DROP EXTENSION with the trigger', '2BP01');
+-- As the extension's owner it can still drop the extension, and with it
+-- every graph (documented in DESIGN.md §7), and the trigger with CASCADE,
+-- which does not check who owns what it drops.
+DROP EXTENSION pg_warren CASCADE;
+RESET ROLE;
+SELECT assert.equal((SELECT count(*) FROM pg_event_trigger), 0::bigint, 'CASCADE drops the trigger');
 SELECT assert.equal((SELECT count(*) FROM pg_namespace WHERE nspname = 'warren'), 0::bigint,
                     'dropping the extension drops the catalog');
 SELECT assert.equal((SELECT count(*) FROM pg_proc WHERE proname = 'planted_trigger'), 0::bigint,

@@ -55,7 +55,7 @@ pub(crate) fn drop_named(
     require_creator_or_owner(record.created_by, graph.owner, &graph.name, name)?;
     // By id: the row checked above, never one of that name committed since
     // by another transaction.
-    if !store.delete(record.vector)? {
+    if !store.delete(record.checked())? {
         return Err(VectorError::WrittenConcurrently { name: name.to_owned(), version }.into());
     }
     forget_vector(record.vector);

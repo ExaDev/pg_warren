@@ -47,6 +47,12 @@ const REREAD: &str = "SELECT g.current_version, v.version_id, g.node_order, g.ow
                              ON v.version_id = g.current_version AND v.graph_id = g.graph_id
                       WHERE g.graph_id = $1";
 
+/// The assignments that make role `$2` a graph's owner and remove it from
+/// its readers, whose order is kept (DESIGN.md §5.7).
+pub(super) const NEW_OWNER: &str = "owner = $2::oid::regrole, readers = ARRAY(
+         SELECT r.reader FROM pg_catalog.unnest(readers) WITH ORDINALITY AS r (reader, position)
+         WHERE r.reader::oid <> $2 ORDER BY r.position)::regrole[]";
+
 thread_local! {
     /// The saved plan of [`FIND`].
     static FIND_PLAN: OnceCell<OwnedPreparedStatement> = const { OnceCell::new() };
@@ -396,11 +402,7 @@ impl GraphDefinition {
         as_catalog_owner(|| {
             Spi::connect_mut(|client| {
                 client.update(
-                    "UPDATE warren.graphs SET owner = $2::oid::regrole, readers = ARRAY(
-                         SELECT r.reader FROM pg_catalog.unnest(readers)
-                                              WITH ORDINALITY AS r (reader, position)
-                         WHERE r.reader::oid <> $2 ORDER BY r.position)::regrole[]
-                     WHERE graph_id = $1",
+                    &format!("UPDATE warren.graphs SET {NEW_OWNER} WHERE graph_id = $1"),
                     None,
                     &[self.graph_id.into(), owner.into()],
                 )?;
