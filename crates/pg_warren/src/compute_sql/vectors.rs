@@ -24,8 +24,8 @@ use crate::catalog::{GraphDefinition, VersionId};
 use crate::segment::CHUNK_SIZE;
 use crate::source::IdDatum;
 use crate::vector::{
-    drop_transient, keep_transient, transient, transients, write_vector, Binding, SpiVectorStore,
-    VectorError, VectorId, VectorRecord, VectorStore,
+    admit_to_quota, drop_transient, keep_transient, transient, transients, write_vector, Binding,
+    SpiVectorStore, VectorError, VectorId, VectorRecord, VectorStore,
 };
 
 /// The budget cached vectors are charged to while cached: unlimited, since
@@ -266,8 +266,10 @@ impl<E: IdDatum> Vectors<E> {
     /// any vector of that name of either kind; a persisted one replaced
     /// must have been written by the caller, or the caller must own the
     /// graph. A transient one is refused if it would take this backend's
-    /// transient vectors past `warren.max_cache_memory`; either kind is
-    /// kept in the cache only as far as the cap allows.
+    /// transient vectors past `warren.max_cache_memory`, a persisted one if
+    /// it would take the caller's persisted vectors on the graph past its
+    /// quota (DESIGN.md §5.7); either kind is kept in the cache only as far
+    /// as the cap allows.
     pub(crate) fn save(
         &mut self,
         name: &str,
@@ -277,7 +279,11 @@ impl<E: IdDatum> Vectors<E> {
         self.check_writable(name, persist)?;
         let graph_id = self.graph.graph_id;
         let replacing = self.record(name).map(VectorRecord::checked);
-        if !persist {
+        if persist {
+            let written = vector_bytes(vector.dtype(), vector.width(), vector.id_space());
+            let replaced = replacing.map(|old| old.vector);
+            admit_to_quota(&self.graph, name, replaced, written).map_err(VectorError::from)?;
+        } else {
             let replaced = transient(graph_id, self.version, name).map_or(0, |old| old.bytes());
             admit_transient(replaced, vector.bytes())?;
         }

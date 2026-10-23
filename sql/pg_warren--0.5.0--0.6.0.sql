@@ -37,3 +37,27 @@ CREATE FUNCTION warren."drop_orphans"() RETURNS bigint
 STRICT
 LANGUAGE c
 AS 'MODULE_PATHNAME', 'drop_orphans_wrapper';
+
+-- Quotas on readers' vectors (DESIGN.md §5.7, §14 items 46 and 47): the
+-- graph's default, per-role overrides (dumped with the extension, revoked
+-- from PUBLIC as every catalog table is), and the index a quota's sum
+-- scans. Existing graphs have no quota.
+ALTER TABLE warren.graphs ADD COLUMN reader_vector_quota bigint CHECK (reader_vector_quota >= 0);
+
+CREATE INDEX vectors_created_by ON warren.vectors (graph_id, created_by);
+
+CREATE TABLE warren.vector_quotas (
+    graph_id  int NOT NULL REFERENCES warren.graphs ON DELETE CASCADE,
+    role      regrole NOT NULL,
+    bytes     bigint NOT NULL CHECK (bytes >= 0),
+    PRIMARY KEY (graph_id, role)
+);
+REVOKE ALL ON warren.vector_quotas FROM PUBLIC;
+SELECT pg_catalog.pg_extension_config_dump('warren.vector_quotas', '');
+
+CREATE FUNCTION warren."set_vector_quota"(name text, bytes bigint, role regrole DEFAULT NULL)
+RETURNS void VOLATILE LANGUAGE c AS 'MODULE_PATHNAME', 'set_vector_quota_wrapper';
+
+CREATE FUNCTION warren."vector_usage"(name text)
+RETURNS TABLE (role regrole, vectors bigint, bytes bigint, quota bigint)
+STRICT STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'vector_usage_wrapper';

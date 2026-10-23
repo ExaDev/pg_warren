@@ -9,7 +9,8 @@ use super::{CatalogError, GraphDefinition};
 use crate::access::{as_catalog_owner, entry, is_reader, require_reader};
 use crate::read_only::read_one;
 
-/// `warren.info`: graph `name`'s definition, current version, staleness
+/// `warren.info`: graph `name`'s definition (with its default quota on
+/// readers' vectors, `reader_vector_quota`), current version, staleness
 /// (`now() - built_at` of the current version), total bytes, and every
 /// version with its statistics, oldest first.
 #[pg_extern(schema = "warren", stable, parallel_safe)]
@@ -28,6 +29,7 @@ fn describe(name: &str) -> Result<JsonB, CatalogError> {
                  'has_relations', g.has_relations, 'build_reverse', g.build_reverse,
                  'store_merged', g.store_merged, 'node_order', g.node_order,
                  'retain_versions', g.retain_versions, 'current_version', g.current_version,
+                 'reader_vector_quota', g.reader_vector_quota,
                  'staleness', (SELECT (now() - c.built_at)::text FROM warren.versions c
                                WHERE c.version_id = g.current_version
                                  AND c.graph_id = g.graph_id),
@@ -133,6 +135,9 @@ mod tests {
         assert_eq!(info("{retain_versions}")?.as_deref(), Some("2"));
         assert_eq!(info("{store_merged}")?.as_deref(), Some("true"));
         assert_eq!(info("{node_order}")?.as_deref(), Some("\"id\""));
+        assert_eq!(info("{reader_vector_quota}")?.as_deref(), Some("null"));
+        Spi::run("SELECT warren.set_vector_quota('i', 4096)")?;
+        assert_eq!(info("{reader_vector_quota}")?.as_deref(), Some("4096"));
         assert_eq!(info("{current_version}")?, Some(promoted.to_string()));
         assert_eq!(info("{versions,1,version}")?, Some(staged.to_string()));
         assert_eq!(info("{versions,0,current}")?.as_deref(), Some("true"));

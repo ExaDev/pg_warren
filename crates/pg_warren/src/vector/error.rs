@@ -4,6 +4,7 @@ use pgrx::PgSqlErrorCode;
 use thiserror::Error;
 use warren_core::compute::ComputeError;
 
+use super::quota::QuotaError;
 use super::VectorId;
 use crate::access::{AccessError, SqlError};
 use crate::catalog::VersionId;
@@ -44,6 +45,9 @@ pub(crate) enum VectorError {
     /// out.
     #[error(transparent)]
     Compute(#[from] ComputeError),
+    /// A quota refused the write, or could not be read (DESIGN.md §5.7).
+    #[error(transparent)]
+    Quota(#[from] QuotaError),
     /// The switch to the catalog owner failed.
     #[error(transparent)]
     Access(#[from] AccessError),
@@ -67,6 +71,7 @@ impl SqlError for VectorError {
                 PgSqlErrorCode::ERRCODE_OUT_OF_MEMORY
             }
             Self::Compute(_) => PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+            Self::Quota(error) => error.sqlstate(),
             Self::Access(error) => error.sqlstate(),
             Self::Spi(_) => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
         }
