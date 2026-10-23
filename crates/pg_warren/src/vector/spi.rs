@@ -7,7 +7,7 @@ use pgrx::spi::SpiHeapTupleData;
 use pgrx::PgOid;
 use warren_core::compute::Dtype;
 
-use super::{Binding, ChunkSource, VectorError, VectorId, VectorRecord, VectorStore};
+use super::{Binding, Checked, ChunkSource, VectorError, VectorId, VectorRecord, VectorStore};
 use crate::access::as_catalog_owner;
 use crate::catalog::VersionId;
 use crate::read_only::read_one;
@@ -148,13 +148,17 @@ impl VectorStore for SpiVectorStore {
         })
     }
 
-    fn delete(&mut self, vector: VectorId) -> Result<bool, VectorError> {
+    fn delete(&mut self, checked: Checked) -> Result<bool, VectorError> {
         as_catalog_owner(|| {
             Spi::connect_mut(|client| {
+                // The creator too: a `reassign_owned` that held the row may
+                // have given it to another role, which the caller's check
+                // was not of (EvalPlanQual re-checks both on the new row).
                 let deleted = client.update(
-                    "DELETE FROM warren.vectors WHERE vector_id = $1",
+                    "DELETE FROM warren.vectors WHERE vector_id = $1 AND created_by::oid = $2
+                     RETURNING vector_id",
                     None,
-                    &[vector.into()],
+                    &[checked.vector.into(), checked.created_by.into()],
                 )?;
                 Ok(!deleted.is_empty())
             })
@@ -256,15 +260,15 @@ mod tests {
             "a write that found no x must not delete the one there"
         );
         let second =
-            write_vector(&mut store, &binding.replacing(Some(first.vector)), &ones, CHUNK_SIZE)
+            write_vector(&mut store, &binding.replacing(Some(first.checked())), &ones, CHUNK_SIZE)
                 .map_err(|_| Error::InvalidPosition)?;
         let existing =
             store.existing(&[first.vector, second.vector]).map_err(|_| Error::InvalidPosition)?;
         assert_eq!(existing, [second.vector]);
         let chunks = Spi::get_one::<i64>("SELECT count(*) FROM warren.vector_chunks")?;
         assert_eq!(chunks, Some(1));
-        assert!(store.delete(second.vector).map_err(|_| Error::InvalidPosition)?);
-        assert!(!store.delete(second.vector).map_err(|_| Error::InvalidPosition)?);
+        assert!(store.delete(second.checked()).map_err(|_| Error::InvalidPosition)?);
+        assert!(!store.delete(second.checked()).map_err(|_| Error::InvalidPosition)?);
         let left = Spi::get_one::<i64>("SELECT count(*) FROM warren.vector_chunks")?;
         assert_eq!(left, Some(0));
         Ok(())

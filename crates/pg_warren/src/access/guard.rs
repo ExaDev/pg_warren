@@ -258,6 +258,8 @@ mod tests {
         ("dijkstra", "warren.dijkstra('victim', 1::bigint, 2::bigint)"),
         ("distance", "warren.distance('victim', {v}, {v}, 'edit')"),
         ("drop_graph", "warren.drop_graph('victim')"),
+        ("drop_orphans", "warren.drop_orphans()"),
+        ("drop_owned", "warren.drop_owned('eve_minion')"),
         ("drop_vector", "warren.drop_vector('victim', 'c')"),
         ("drop_version", "warren.drop_version('victim', {v})"),
         ("eigen", "warren.eigen('victim', 1)"),
@@ -285,12 +287,15 @@ mod tests {
         ("modularity", "warren.modularity('victim', 'c')"),
         ("most_similar", "warren.most_similar('victim', 1::bigint)"),
         ("neighbours", "warren.neighbours('victim', 1::bigint)"),
+        ("on_drop_owned", "warren.on_drop_owned()"),
+        ("orphans", "warren.orphans()"),
         ("pagerank", "warren.pagerank('victim', 'pr')"),
         ("prewarm", "warren.prewarm('victim')"),
         ("project", "warren.project('victim', 'c', 'victim_q', 'p')"),
         ("promote", "warren.promote('victim', {v})"),
         ("reachable", "warren.reachable('victim', 1::bigint, 2::bigint)"),
         ("reachable_set", "warren.reachable_set('victim', ARRAY[1::bigint])"),
+        ("reassign_owned", "warren.reassign_owned('eve_minion', 'eve')"),
         ("refresh", "warren.refresh('victim')"),
         ("revoke", "warren.revoke('victim', 'eve')"),
         ("s", "warren.s(NULL)"),
@@ -362,9 +367,12 @@ mod tests {
         let version = refresh("victim", true)?;
         hostile_eve()?;
         // Label vector `c` and quotient `victim_q`, which eve reads, so
-        // that contract, project and lift run all the way as eve.
+        // that contract, project and lift run all the way as eve; and
+        // `eve_minion`, whose privileges eve has, so that drop_owned and
+        // reassign_owned run all the way too (it owns nothing).
         Spi::run(
-            "SELECT warren.grant('victim', 'eve');
+            "CREATE ROLE eve_minion; GRANT eve_minion TO eve;
+             SELECT warren.grant('victim', 'eve');
              SELECT warren.vector_const('victim', 'c', 1);
              SELECT warren.contract('victim', 'c', 'victim_q');
              SELECT warren.vector_const('victim_q', 'c', 1);

@@ -29,7 +29,7 @@ pub(crate) use carry::{move_vectors, moved_notice};
 pub(crate) use error::VectorError;
 pub(crate) use persist::{read_vector, write_vector};
 pub(crate) use spi::SpiVectorStore;
-pub(crate) use store::{Binding, ChunkSource, VectorId, VectorRecord, VectorStore};
+pub(crate) use store::{Binding, Checked, ChunkSource, VectorId, VectorRecord, VectorStore};
 pub(crate) use transient::{
     drop_transient, evict_transients, keep_transient, retain_transients, role_transient_bytes,
     transient, transient_bytes, transient_versions, transients,

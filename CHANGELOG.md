@@ -14,6 +14,34 @@
   kept, except the new owner; the old owner keeps no access unless granted
   (docs/semantics.md, "Access"). `ALTER EXTENSION pg_warren UPDATE`
   creates it.
+- **Cleanup after a dropped role** (DESIGN.md §5.7, §14 items 44 and 45;
+  docs/semantics.md, "Dropping a role"). `DROP ROLE` cannot see the roles
+  a graph records, and `REASSIGN OWNED` moves no graph, so:
+  - `warren.reassign_owned(old, new)` and `warren.drop_owned(role)`, SQL
+    counterparts of `REASSIGN OWNED` and `DROP OWNED` for graphs, their
+    vectors and reader entries, each needing the privileges of the role
+    as the commands do. Run one before `DROP OWNED` in each database.
+  - `warren.on_drop_owned()`, an event-trigger function a superuser may
+    opt into with `CREATE EVENT TRIGGER … ON ddl_command_start WHEN TAG IN
+    ('DROP OWNED')`. With it, `DROP OWNED` is refused (2BP01) while a role
+    it names owns graphs, naming them, and otherwise also removes the
+    role's reader entries and vectors. The extension never creates the
+    trigger, so trusted installs work without it; while it exists, `DROP
+    EXTENSION` needs `CASCADE`, and a non-superuser's restore of a dump
+    fails at that statement.
+  - `warren.orphans()` and `warren.drop_orphans()` list and remove graphs,
+    reader entries and vectors that name roles dropped without any of the
+    above.
+  - A graph whose owner was dropped may now be dropped by the extension's
+    owner (or a member with its privileges or the right to `SET ROLE` to
+    it) as well as by a superuser (`drop_graph`, `drop_orphans`), and adopted by a superuser with `warren.set_owner`,
+    which refused it before ("the owner no longer exists").
+
+  - A `drop_vector`, a replacement or `compact`'s move that checked a
+    vector's creator, and then waited behind a `reassign_owned` that changed
+    it, fails with 40001 instead of deleting the new creator's vector.
+
+  `ALTER EXTENSION pg_warren UPDATE` creates the five functions.
 
 ### Fixed
 

@@ -89,6 +89,105 @@ pub(crate) fn require_can_become(role: pg_sys::Oid, graph: &str) -> Result<(), A
     }
 }
 
+/// Checks that the caller has the privileges of role `role`, as `DROP
+/// OWNED` and `REASSIGN OWNED` require (`has_privs_of_role`: a member that
+/// does not inherit them has not), to do `action` to what it owns
+/// (DESIGN.md §5.7); returns the role's name.
+pub(crate) fn require_privileges_of(
+    role: pg_sys::Oid,
+    action: &'static str,
+) -> Result<String, AccessError> {
+    let name = role_name(role).ok_or(AccessError::RoleNotFound(role.to_u32()))?;
+    match has_privileges_of(role) {
+        true => Ok(name),
+        false => Err(AccessError::NoPrivilegesOf { role: name, action }),
+    }
+}
+
+/// Whether the caller has the privileges of role `role`, an existing role.
+pub(crate) fn has_privileges_of(role: pg_sys::Oid) -> bool {
+    // SAFETY: reads the current user and its cached role memberships, on
+    // the main thread.
+    unsafe { pg_sys::has_privs_of_role(pg_sys::GetUserId(), role) }
+}
+
+/// Checks that the caller may give role `role` the graphs and vectors of
+/// role `from`, as `REASSIGN OWNED` checks its new owner: as
+/// [`require_can_become`] does for one graph.
+pub(crate) fn require_can_receive(role: pg_sys::Oid, from: &str) -> Result<(), AccessError> {
+    let name = role_name(role).ok_or(AccessError::RoleNotFound(role.to_u32()))?;
+    match can_set_role(role) {
+        true => Ok(()),
+        false => Err(AccessError::CannotReceive { role: name, from: from.to_owned() }),
+    }
+}
+
+/// Whether the caller may drop graphs whose owner was dropped: as the
+/// extension's owner, the role that ran `CREATE EXTENSION` (the installer,
+/// in a trusted install), which could drop every graph with `DROP
+/// EXTENSION` anyway (DESIGN.md §14 item 45). A superuser may.
+pub(crate) fn may_drop_orphans() -> Result<bool, AccessError> {
+    Ok(acts_as(extension_owner()?))
+}
+
+/// Checks [`may_drop_orphans`].
+pub(crate) fn require_orphan_dropper() -> Result<(), AccessError> {
+    let owner = extension_owner()?;
+    match acts_as(owner) {
+        true => Ok(()),
+        false => Err(AccessError::NotOrphanDropper(role_name(owner).unwrap_or_default())),
+    }
+}
+
+/// Checks that the caller may give graph `graph`, whose owner was dropped,
+/// a new owner: only a superuser may, since its versions were built with
+/// what the dropped owner could see (DESIGN.md §14 item 45).
+pub(crate) fn require_adopter(graph: &str) -> Result<(), AccessError> {
+    match is_superuser()? {
+        true => Ok(()),
+        false => Err(AccessError::AdoptOrphan(graph.to_owned())),
+    }
+}
+
+/// `pg_extension.extowner` of pg_warren.
+fn extension_owner() -> Result<pg_sys::Oid, AccessError> {
+    read_one::<pg_sys::Oid>(
+        "SELECT extowner FROM pg_catalog.pg_extension WHERE extname = 'pg_warren'",
+        &[],
+    )?
+    .ok_or(AccessError::ExtensionMissing)
+}
+
+/// Whether the caller could do what role `role` may, as `DROP EXTENSION`
+/// requires of the extension's owner: on PG 16+, it has the role's
+/// privileges or may `SET ROLE` to it, so a membership granted `WITH
+/// INHERIT FALSE, SET FALSE` is not enough; on PG 15, a member of it.
+#[cfg(not(feature = "pg15"))]
+fn acts_as(role: pg_sys::Oid) -> bool {
+    has_privileges_of(role) || can_set_role(role)
+}
+
+/// Whether the caller could do what role `role` may: on PG 15, a member of
+/// it (a membership there always allows `SET ROLE`).
+#[cfg(feature = "pg15")]
+fn acts_as(role: pg_sys::Oid) -> bool {
+    is_member(role)
+}
+
+/// Refuses `action` on what the bootstrap superuser owns, as `DROP OWNED`
+/// and `REASSIGN OWNED` do: it is required by the database system.
+pub(crate) fn refuse_bootstrap_superuser(
+    role: pg_sys::Oid,
+    action: &'static str,
+) -> Result<(), AccessError> {
+    match role == pg_sys::Oid::from(pg_sys::BOOTSTRAP_SUPERUSERID) {
+        true => {
+            Err(AccessError::RequiredBySystem { role: role_name(role).unwrap_or_default(), action })
+        }
+        false => Ok(()),
+    }
+}
+
 /// Whether the current user may `SET ROLE` to `role`.
 #[cfg(not(feature = "pg15"))]
 fn can_set_role(role: pg_sys::Oid) -> bool {
@@ -127,7 +226,7 @@ fn membership(owner: pg_sys::Oid, readers: &[pg_sys::Oid]) -> (Option<String>, b
 }
 
 /// The name of role `role`, if it exists.
-fn role_name(role: pg_sys::Oid) -> Option<String> {
+pub(crate) fn role_name(role: pg_sys::Oid) -> Option<String> {
     // SAFETY: a syscache lookup on the main thread; with `noerr` it returns
     // NULL for a role that does not exist, else a palloc'd name.
     let name = unsafe { pg_sys::GetUserNameFromId(role, true) };

@@ -62,7 +62,7 @@ pub(crate) fn move_vectors(
         write_vector(store, &binding, &moved, chunk_size)?;
         // By id: a vector of that name written to the source since it was
         // listed is not moved, so it must not be deleted either.
-        if !store.delete(record.vector)? {
+        if !store.delete(record.checked())? {
             return Err(VectorError::WrittenConcurrently {
                 name: record.name.clone(),
                 version: from,

@@ -96,6 +96,14 @@ pub(crate) enum CatalogError {
         /// What was refused.
         action: &'static str,
     },
+    /// `warren.on_drop_owned()` was called other than by an event trigger
+    /// (DESIGN.md §5.7).
+    #[error("warren.on_drop_owned() may be called only by an event trigger")]
+    NotEventTrigger,
+    /// `DROP OWNED` names a role that owns graphs, with the event trigger
+    /// installed (DESIGN.md §14 item 44a); the message names them.
+    #[error("{0}")]
+    OwnsGraphs(String),
     /// An SPI call failed.
     #[error(transparent)]
     Spi(#[from] pgrx::spi::Error),
@@ -122,6 +130,10 @@ impl SqlError for CatalogError {
             Self::Source(error) => error.sqlstate(),
             Self::NodeOrder(error) => graph_sqlstate(error),
             Self::DerivedByContraction { .. } => PgSqlErrorCode::ERRCODE_WRONG_OBJECT_TYPE,
+            Self::NotEventTrigger => {
+                PgSqlErrorCode::ERRCODE_E_R_I_E_EVENT_TRIGGER_PROTOCOL_VIOLATED
+            }
+            Self::OwnsGraphs(_) => PgSqlErrorCode::ERRCODE_DEPENDENT_OBJECTS_STILL_EXIST,
             Self::Spi(_) => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
         }
     }

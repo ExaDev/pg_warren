@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from harness.dump import STATE, differences, restore_command, unexpected_warnings
+from harness.dump import STATE, differences, restore_command, restore_errors, unexpected_warnings
 
 
 class FakeCluster:
@@ -24,6 +24,24 @@ def test_a_plain_dump_is_restored_by_psql_stopping_at_the_first_error():
     assert command[0] == "/pg/bin/psql" and "ON_ERROR_STOP=1" in command
     assert ("-U", "installer") == tuple(command[command.index("-U"):command.index("-U") + 2])
     assert "-1" not in command and "--single-transaction" not in command
+
+
+def test_a_plain_dump_may_be_restored_past_its_errors():
+    command = restore_command(FakeCluster(), "db", Path("d.sql"), custom=False, stop_on_error=False)
+    assert command[0] == "/pg/bin/psql" and "ON_ERROR_STOP=1" not in command
+
+
+def test_only_the_event_trigger_may_fail_a_non_superusers_restore():
+    stderr = """psql:/tmp/t.sql:40: ERROR:  permission denied to create event trigger "warren_drop_owned"
+HINT:  Must be superuser to create an event trigger.
+psql:/tmp/t.sql:41: ERROR:  event trigger "warren_drop_owned" does not exist
+psql:/tmp/t.sql:50: ERROR:  relation "public.nodes" does not exist
+"""
+    assert restore_errors(stderr) == (
+        ['permission denied to create event trigger "warren_drop_owned"',
+         'event trigger "warren_drop_owned" does not exist'],
+        ['relation "public.nodes" does not exist'],
+    )
 
 
 def test_equal_states_have_no_differences():
