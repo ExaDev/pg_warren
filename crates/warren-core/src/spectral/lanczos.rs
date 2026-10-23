@@ -265,6 +265,18 @@ struct Lanczos<'o, 'g, E> {
     /// Random vectors drawn so far.
     streams: u64,
     iterations: usize,
+    /// What the last Rayleigh–Ritz step found, reported as progress.
+    estimates: Estimates,
+}
+
+/// What the Rayleigh–Ritz steps so far found, for progress (DESIGN.md
+/// §5.7): the wanted pairs converged, the restarts, and the largest
+/// residual estimate of a wanted pair, relative to the largest Ritz value.
+#[derive(Debug, Clone, Copy, Default)]
+struct Estimates {
+    converged: usize,
+    restarts: usize,
+    residual: Option<f64>,
 }
 
 /// How a Rayleigh–Ritz step ends the iteration, if it does.
@@ -301,6 +313,7 @@ where
             previous: None,
             streams: 0,
             iterations: 0,
+            estimates: Estimates::default(),
         })
     }
 
@@ -328,6 +341,9 @@ where
         mut self,
         resources: &mut Resources<'_, I>,
     ) -> Result<Eigen, SpectralError> {
+        if let Some(progress) = resources.interrupts.progress() {
+            progress.phase("lanczos", Some(self.max_iter as u64));
+        }
         if !self.extend_randomly(resources)? {
             let dimension = self.dimension as u64;
             return Err(SpectralError::EigenpairCount { k: self.options.k, dimension });
@@ -335,6 +351,7 @@ where
         loop {
             resources.interrupts.check().map_err(ComputeError::from)?;
             let beta = self.step(resources)?;
+            self.report(resources);
             let len = self.basis.len();
             if len < self.size() && self.iterations < self.max_iter {
                 if self.extend(resources, beta)? {
@@ -345,8 +362,11 @@ where
                 return self.finish(resources, Outcome::Converged);
             }
             let ritz = self.ritz(resources.memory)?;
-            match self.outcome(&ritz, beta.unwrap_or(0.0)) {
+            let outcome = self.outcome(&ritz, beta.unwrap_or(0.0));
+            self.report(resources);
+            match outcome {
                 Outcome::Continue(converged) => {
+                    self.estimates.restarts += 1;
                     self.restart(resources, &ritz, converged)?;
                     if !self.extend(resources, beta)? {
                         // `finish` decomposes again: release this one first,
@@ -421,14 +441,28 @@ where
         Ok(true)
     }
 
+    /// Reports the steps taken and the last estimates.
+    fn report<I: Interrupts>(&self, resources: &mut Resources<'_, I>) {
+        let Some(progress) = resources.interrupts.progress() else { return };
+        progress.done(self.iterations as u64);
+        progress.detail("converged", self.estimates.converged as f64);
+        progress.detail("restarts", self.estimates.restarts as f64);
+        if let Some(residual) = self.estimates.residual {
+            progress.detail("residual", residual);
+        }
+    }
+
     /// Whether the `k` wanted Ritz pairs have converged, given the norm of
-    /// the residual left after the last basis vector.
-    fn outcome(&self, ritz: &Ritz, beta: f64) -> Outcome {
+    /// the residual left after the last basis vector; records the estimates.
+    fn outcome(&mut self, ritz: &Ritz, beta: f64) -> Outcome {
         let len = self.basis.len();
         let scale = ritz.values.iter().fold(0.0f64, |m, v| m.max(v.abs()));
-        let converged = (0..self.options.k)
-            .filter(|&l| (beta * ritz.vectors[(len - 1, l)]).abs() <= self.options.tol * scale)
-            .count();
+        let estimate = |l: usize| (beta * ritz.vectors[(len - 1, l)]).abs();
+        let converged =
+            (0..self.options.k).filter(|&l| estimate(l) <= self.options.tol * scale).count();
+        let largest = (0..self.options.k).map(estimate).fold(0.0f64, f64::max);
+        self.estimates.converged = converged;
+        self.estimates.residual = Some(if scale > 0.0 { largest / scale } else { largest });
         let done = len == self.dimension || converged == self.options.k;
         match (done, self.iterations >= self.max_iter) {
             (true, _) => Outcome::Converged,
@@ -472,11 +506,15 @@ where
 
     /// The `k` wanted eigenpairs from `ritz`.
     fn finish_with<I: Interrupts>(
-        self,
+        mut self,
         resources: &mut Resources<'_, I>,
         ritz: Ritz,
         outcome: Outcome,
     ) -> Result<Eigen, SpectralError> {
+        if outcome == Outcome::Converged {
+            self.estimates.converged = self.options.k;
+            self.report(resources);
+        }
         let mut pairs = Vec::new();
         for l in 0..self.options.k {
             let coordinates: Vec<f64> = ritz.vectors.column(l).iter().copied().collect();

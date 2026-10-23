@@ -25,6 +25,7 @@ use rayon::prelude::*;
 
 use super::random::{priority, unit};
 use super::{CommunityError, Undirected};
+use crate::compute::tally::{Reporting, Tally};
 use crate::compute::{ComputeError, ComputeMemory, Vector, Workers};
 use crate::graph::{DenseId, Tombstones};
 use crate::interrupts::{Cancellation, Interrupts, Work};
@@ -82,8 +83,10 @@ pub fn refine<I: Interrupts>(
     let threads = workers.threads();
     let scratch = memory.charge(scratch_bytes(nodes, longest, threads))?;
     memory.reclaim_for(Grouping::BYTES_PER_NODE.saturating_mul(nodes.saturating_add(1)));
-    let pool = Pool { memory, threads };
-    let count = workers.run(interrupts, |cancellation| {
+    let tally = Tally::new(None);
+    let pool = Pool { memory, threads, tally: &tally };
+    let mut reporting = Reporting::start(interrupts, &tally, "refining", []);
+    let count = workers.run(&mut reporting, |cancellation| {
         Ok(run(
             cancellation,
             pool,
@@ -95,6 +98,7 @@ pub fn refine<I: Interrupts>(
             labels.values_mut()?,
         ))
     })??;
+    reporting.report();
     drop(scratch);
     Ok(Refined { labels, communities: count })
 }
@@ -113,12 +117,13 @@ fn scratch_bytes(nodes: u64, longest: u64, threads: usize) -> u64 {
         .saturating_add((threads as u64).saturating_mul(longest.saturating_add(1) * per_entry))
 }
 
-/// The budget [`run`] charges on the pool, and the threads that refine
-/// communities at once.
+/// The budget [`run`] charges on the pool, the threads that refine
+/// communities at once, and the communities refined so far.
 #[derive(Clone, Copy)]
 struct Pool<'a> {
     memory: &'a ComputeMemory,
     threads: usize,
+    tally: &'a Tally<0>,
 }
 
 /// A community's refined communities, or why it could not be refined.
@@ -197,6 +202,7 @@ fn run(
         .map_err(|_| ComputeError::OutOfMemory { bytes: (distinct * 8) as u64 })?;
     starts.extend((1..members.len()).filter(|&at| starts_community(at)));
     starts.push(members.len());
+    pool.tally.set_total(distinct as u64);
     let mut place = reserved(nodes as usize, usize::MAX)?;
     for range in starts.windows(2) {
         for (at, &node) in members[range[0]..range[1]].iter().enumerate() {
@@ -214,7 +220,10 @@ fn run(
         .map(|range| {
             let mut work = Work::new(cancellation);
             work.check()?;
-            Group::new(graph, &members[range[0]..range[1]], &place)?.refine(options, &mut work)
+            let roots =
+                Group::new(graph, &members[range[0]..range[1]], &place)?.refine(options, &mut work);
+            pool.tally.add_done(1);
+            roots
         })
         .collect_into_vec(&mut refined);
     let key = |node: DenseId| keys.map_or(node as i64, |keys| keys[node as usize]);
@@ -401,6 +410,7 @@ mod tests {
     use crate::community::modularity;
     use crate::compute::reference::{self, Edges};
     use crate::interrupts::Uninterrupted;
+    use crate::progress::recorded::Recorded;
 
     fn workers() -> &'static Workers {
         static WORKERS: OnceLock<Workers> = OnceLock::new();
@@ -591,6 +601,36 @@ mod tests {
                 }
             }
             prop_assert!(connected(&graph, labels));
+        }
+
+        /// It reports the communities refined of their number, and
+        /// reporting changes no community label.
+        #[test]
+        fn it_reports_the_communities_refined_and_reporting_changes_nothing(
+            (n, edges, communities, seed) in (2u64..30).prop_flat_map(|n| (
+                Just(n),
+                prop::collection::vec((0..n, 0..n, 1..4u32), 0..90),
+                prop::collection::vec(0i64..4, n as usize),
+                any::<u64>(),
+            )),
+        ) {
+            let edges: Edges =
+                edges.into_iter().map(|(s, t, w)| (0, s, t, f64::from(w))).collect();
+            let graph = undirected(n, &edges);
+            let options = Refinement { seed, ..OPTIONS };
+            let tombstones = Tombstones::new(n).unwrap();
+            let memory = ComputeMemory::new(u64::MAX);
+            let mut recorded = Recorded::default();
+            let found = refine(
+                workers(), &memory, &mut recorded, &graph, &tombstones, &communities, None, options,
+            )
+            .unwrap();
+            let unreported = refined(&graph, &communities, workers(), options);
+            prop_assert_eq!(found.labels.values(), unreported.labels.values());
+            let distinct = communities.iter().collect::<BTreeSet<_>>().len() as u64;
+            prop_assert_eq!(recorded.phases(), vec![("refining", None), ("refining", Some(distinct))]);
+            let done = recorded.checked_done();
+            prop_assert_eq!(done.last(), Some(&distinct));
         }
     }
 }

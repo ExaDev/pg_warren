@@ -8,6 +8,7 @@ use super::*;
 use crate::compute::reference::{self, Edges};
 use crate::compute::{ComputeError, ComputeMemory, Element, Workers};
 use crate::interrupts::{Cancelled, Uninterrupted};
+use crate::progress::recorded::Recorded;
 use crate::spectral::reference::{self as dense_reference, Dense};
 use crate::spectral::Operator;
 
@@ -548,4 +549,58 @@ fn the_default_tolerance_is_near_the_rounding_of_f32_vectors() {
     // Their explicit residual floors near 1e-7·‖M‖, so a tighter default
     // would buy steps, not accuracy (DESIGN.md §6.5).
     assert_eq!(EigenOptions::new(3).tol, 1e-6);
+}
+
+fn solve_reported(
+    graph: &GraphCsr,
+    operator: Operator,
+    options: &EigenOptions,
+) -> (Eigen, Recorded) {
+    let memory = ComputeMemory::new(1 << 26);
+    let mut recorded = Recorded::default();
+    let mut resources =
+        Resources { workers: workers(2), memory: &memory, interrupts: &mut recorded };
+    let eigen = eigen(&mut resources, graph, &GraphMatrix::new(operator), options).unwrap();
+    (eigen, recorded)
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(16))]
+
+    #[test]
+    fn lanczos_reports_its_steps_of_max_iter_and_reporting_changes_nothing(
+        n in 8u64..120,
+        density in 0usize..4,
+        seed in any::<u64>(),
+        k in 1usize..4,
+        max_iter in prop::option::of(1usize..60),
+        operator in operators(),
+    ) {
+        let edges = random_graph(n, density * n as usize, seed);
+        let graph = reference::graph(n, 2, &edges, true, seed % 2 == 0);
+        let options = EigenOptions { which: Which::Smallest, seed, max_iter, ..EigenOptions::new(k) };
+        let (eigen, recorded) = solve_reported(&graph, operator, &options);
+        prop_assert_eq!(&eigen, &solve_on(2, &graph, &GraphMatrix::new(operator), &options).unwrap());
+        let total = max_iter.unwrap_or(1000 * 20.max(2 * k + 1).min(n as usize)).max(k) as u64;
+        prop_assert_eq!(recorded.phases(), vec![("lanczos", Some(total))]);
+        prop_assert_eq!(recorded.checked_done(), vec![eigen.iterations as u64]);
+        let converged = recorded.last_detail("converged").unwrap();
+        prop_assert!(converged <= k as f64);
+        prop_assert!(!eigen.converged || converged == k as f64);
+        prop_assert!(recorded.last_detail("restarts").unwrap() >= 0.0);
+    }
+}
+
+#[test]
+fn a_restarting_solve_reports_its_restarts_and_largest_residual() {
+    let n = 200;
+    let edges = random_graph(n, 600, 7);
+    let graph = reference::graph(n, 2, &edges, true, true);
+    let options = EigenOptions { which: Which::Smallest, ..EigenOptions::new(3) };
+    let (eigen, recorded) = solve_reported(&graph, Operator::NormalizedLaplacian, &options);
+    assert!(eigen.converged);
+    assert!(recorded.last_detail("restarts").unwrap() >= 1.0);
+    assert_eq!(recorded.last_detail("converged"), Some(3.0));
+    let residual = recorded.last_detail("residual").unwrap();
+    assert!(residual.is_finite() && residual >= 0.0);
 }

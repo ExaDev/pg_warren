@@ -38,6 +38,7 @@ use rayon::prelude::*;
 use super::modularity::GROUPING_BYTES_PER_NODE;
 use super::random::priority;
 use super::{modularity, CommunityError, Undirected};
+use crate::compute::tally::{Reporting, Tally};
 use crate::compute::{ComputeError, ComputeMemory, MemoryCharge, Vector, Workers};
 use crate::graph::{DenseId, Tombstones};
 use crate::interrupts::{Cancellation, Interrupts};
@@ -107,20 +108,23 @@ pub fn local_moving<I: Interrupts>(
     }
     let mut labels = Vector::filled(memory, nodes, 1, 0i64)?;
     memory.reclaim_for(State::bytes(nodes, graph, workers.threads()));
-    let outcome = workers.run(interrupts, |cancellation| {
-        Ok(run(
-            memory,
-            cancellation,
-            graph,
-            tombstones,
-            initial,
-            keys,
-            options,
-            labels.values_mut()?,
-        ))
+    let tally = Tally::new(Some(u64::from(options.max_sweeps)));
+    let mut reporting = Reporting::start(interrupts, &tally, "moving", ["moved"]);
+    let outcome = workers.run(&mut reporting, |cancellation| {
+        let job = Job { cancellation, tally: &tally };
+        Ok(run(memory, job, graph, tombstones, initial, keys, options, labels.values_mut()?))
     })??;
+    reporting.report();
     let (communities, sweeps, moves, modularity) = outcome;
     Ok(Moved { labels, communities, sweeps, moves, modularity })
+}
+
+/// What [`local_moving`]'s job on the pool polls and reports to: the sweeps
+/// done, and the nodes moved.
+#[derive(Clone, Copy)]
+struct Job<'a> {
+    cancellation: &'a Cancellation,
+    tally: &'a Tally<1>,
 }
 
 /// [`local_moving`]'s work on the pool: writes the labels and returns the
@@ -128,7 +132,7 @@ pub fn local_moving<I: Interrupts>(
 #[allow(clippy::too_many_arguments)] // the kernel's inputs, passed through from one call
 fn run(
     memory: &ComputeMemory,
-    cancellation: &Cancellation,
+    Job { cancellation, tally }: Job<'_>,
     graph: &Undirected,
     tombstones: &Tombstones,
     initial: Option<&[i64]>,
@@ -164,6 +168,8 @@ fn run(
             }
         }
         moves += moved;
+        tally.set_done(u64::from(sweeps));
+        tally.set_detail(0, moves as f64);
         // A sweep that moves none leaves no node woken.
         if moved == 0 || q - before <= options.tolerance {
             break;
@@ -558,6 +564,7 @@ mod tests {
     use super::*;
     use crate::compute::reference::{self, Edges};
     use crate::interrupts::Uninterrupted;
+    use crate::progress::recorded::Recorded;
 
     fn workers() -> &'static Workers {
         static WORKERS: OnceLock<Workers> = OnceLock::new();
@@ -669,6 +676,36 @@ mod tests {
             let start = modularity(&memory, &graph, &singletons, 1.0).unwrap();
             prop_assert!((found.modularity - q).abs() < 1e-12, "{} != {q}", found.modularity);
             prop_assert!(q >= start - 1e-12, "{q} < {start}");
+        }
+    }
+
+    proptest! {
+        /// It reports its sweeps of `max_sweeps` and the nodes moved, and
+        /// reporting changes no community label.
+        #[test]
+        fn it_reports_its_sweeps_and_moves_and_reporting_changes_nothing(
+            (n, edges) in (2u64..40).prop_flat_map(|n| (
+                Just(n),
+                prop::collection::vec((0..n, 0..n, 1..4u32), 0..120),
+            )),
+            seed in any::<u64>(),
+            max_sweeps in 1u32..6,
+        ) {
+            let edges: Edges = edges.into_iter().map(|(s, t, w)| (0, s, t, f64::from(w))).collect();
+            let graph = undirected(n, &edges);
+            let options = LocalMoving { seed, max_sweeps, ..OPTIONS };
+            let tombstones = Tombstones::new(n).unwrap();
+            let memory = ComputeMemory::new(u64::MAX);
+            let mut recorded = Recorded::default();
+            let found = local_moving(
+                workers(), &memory, &mut recorded, &graph, &tombstones, None, None, options,
+            )
+            .unwrap();
+            let unreported = moved(&graph, workers(), None, options);
+            prop_assert_eq!(found.labels.values(), unreported.labels.values());
+            prop_assert_eq!(recorded.phases(), vec![("moving", Some(u64::from(max_sweeps)))]);
+            prop_assert_eq!(recorded.checked_done(), vec![u64::from(found.sweeps)]);
+            prop_assert_eq!(recorded.last_detail("moved"), Some(found.moves as f64));
         }
     }
 
