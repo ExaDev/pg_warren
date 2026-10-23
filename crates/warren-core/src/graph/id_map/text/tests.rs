@@ -70,32 +70,37 @@ fn a_text_id_map_holds_its_three_arrays_and_its_tombstones() {
     assert_eq!(id_map.bytes(), keys + id_map.tombstones().bytes());
 }
 
+/// A large base rebuilt by a small arena, so that extending the base is the
+/// rebuild's peak.
+fn large_base() -> (IdMap<TextKeys>, Vec<Vec<u8>>) {
+    let id = |node: u32| format!("https://example.org/node/{node:08}").into_bytes();
+    let base: Vec<Vec<u8>> = (0..2_000).map(id).collect();
+    let next = (0..100).chain(2_000..2_100).map(id).collect();
+    (first_build(&base.iter().map(Vec::as_slice).collect::<Vec<_>>()), next)
+}
+
 /// A rebuild into its base extends the base's bytes and offsets in place
-/// (DESIGN.md §5.7): at its peak it holds the base, the arena, the fresh
-/// ids and the new order and tombstones, about 2·N·L + 28·N bytes, and
-/// never a second copy of the base's bytes.
+/// (DESIGN.md §5.7): at its peak it holds the base, the larger of the
+/// arena and the base's bytes (which a reallocation may move), the fresh
+/// ids, and the new order and tombstones; never a copy of the base's
+/// bytes and offsets beside the arena.
 #[test]
 fn a_rebuild_into_its_base_extends_it_in_place() {
-    let nodes = 2_000u32;
-    let id = |node: u32| format!("https://example.org/node/{node:08}").into_bytes();
-    let ids: Vec<Vec<u8>> = (0..nodes).map(id).collect();
-    let base = first_build(&ids.iter().map(Vec::as_slice).collect::<Vec<_>>());
-    let length = ids[0].len() as u64;
+    let (base, next) = large_base();
+    let length = base.keys().id_bytes().len() as u64 / 2_000;
     let memory = BuildMemory::unlimited();
     let base_bytes = base.bytes();
     let charge = memory.charge(base_bytes).unwrap();
-    // 100 kept, 1,900 tombstoned and 100 fresh.
-    let next: Vec<Vec<u8>> = (0..100).chain(nodes..nodes + 100).map(id).collect();
     let arena = ids_in(&memory, &next.iter().map(Vec::as_slice).collect::<Vec<_>>());
     let held = memory.in_use() - base_bytes;
+    let moved = base.keys().id_bytes().len() as u64;
     let (rebuilt, charge) = base.rebuild_into(charge, arena).unwrap();
     assert_eq!(charge.bytes(), rebuilt.bytes());
-    assert_eq!(rebuilt.dense_id(&id(nodes)), Some(u64::from(nodes)));
-    let (n, fresh) = (u64::from(nodes) + 100, 100);
-    let design = held + n * length + 28 * n + Tombstones::bytes_for(n);
-    assert!(memory.peak() <= design, "{} > {design}", memory.peak());
-    let exact = base_bytes + held + fresh * (length + 8) + 4 * n + Tombstones::bytes_for(n);
-    assert!(memory.peak() <= exact, "{} > {exact}", memory.peak());
+    assert_eq!(rebuilt.dense_id(&next[150]), Some(2_050));
+    let (n, fresh) = (2_100, 100);
+    let bound =
+        base_bytes + held.max(moved) + 2 * fresh * (length + 8) + 4 * n + Tombstones::bytes_for(n);
+    assert!(memory.peak() <= bound, "{} > {bound}", memory.peak());
 }
 
 /// A rebuild from a borrowed base copies it, charged.
@@ -117,7 +122,6 @@ fn a_rebuild_charges_what_it_holds() {
 fn text_ids_are_charged_as_they_arrive() {
     let memory = BuildMemory::new(1 << 20);
     let ids = ids_in(&memory, &[b"abc", b"", b"abc"]);
-    assert_eq!(ids.len(), 3);
     assert!(memory.in_use() >= 3 + 3 * 16);
     drop(ids);
     assert_eq!(memory.in_use(), 0);
@@ -259,6 +263,103 @@ fn the_hash_index_maps_live_ids_and_confirms_their_bytes() {
     ));
     let empty = IdMap::<TextKeys>::new();
     assert_eq!(TextIndex::new(&empty, &memory).unwrap().dense_id(b""), None);
+}
+
+#[test]
+fn compaction_refuses_dense_ids_out_of_key_order_or_repeated() {
+    let keys = first_build(&[b"a", b"b", b"c"]).keys().clone();
+    assert_eq!(keys.compacted(&[2, 0]), Err(GraphError::IdMapNotSorted));
+    assert_eq!(keys.compacted(&[0, 0]), Err(GraphError::IdMapNotSorted));
+    assert_eq!(keys.compacted(&[0, 3]), Err(GraphError::IdMapNotPermutation));
+    let compacted = keys.compacted(&[0, 2]).unwrap();
+    assert_eq!(compacted.dense_id(b"c"), Some(1));
+}
+
+/// The returned charge is on the ids' budget and covers the new id map,
+/// whatever budget the base's charge was on.
+#[test]
+fn a_rebuild_into_charges_the_ids_budget_for_the_new_id_map() {
+    let memory = BuildMemory::unlimited();
+    let other = BuildMemory::unlimited();
+    let base = first_build(&[b"a", b"b"]);
+    let charge = other.charge(base.bytes()).unwrap();
+    let (rebuilt, charge) = base.rebuild_into(charge, ids_in(&memory, &[b"b", b"c"])).unwrap();
+    assert_eq!(charge.bytes(), rebuilt.bytes());
+    assert_eq!((memory.in_use(), other.in_use()), (rebuilt.bytes(), 0));
+    drop(charge);
+
+    // An owned base passed with no charge is charged in full.
+    let base = first_build(&[b"a", b"b"]);
+    let none = BuildCharge::none(&memory);
+    let (rebuilt, charge) = base.rebuild_into(none, ids_in(&memory, &[b"b", b"c"])).unwrap();
+    assert_eq!(charge.bytes(), rebuilt.bytes());
+    assert_eq!(memory.in_use(), rebuilt.bytes());
+}
+
+/// Growing an owned buffer in place may move it, so its bytes are
+/// charged twice while it is reserved; a budget one byte short fails
+/// there, and releases everything.
+#[test]
+fn extending_an_owned_base_charges_the_move_of_a_reallocation() {
+    let (base, next) = large_base();
+    let next: Vec<&[u8]> = next.iter().map(Vec::as_slice).collect();
+    let memory = BuildMemory::unlimited();
+    let charge = memory.charge(base.bytes()).unwrap();
+    let base_bytes = base.bytes() + base.keys().id_bytes().len() as u64;
+    let (_rebuilt, _charge) = base.clone().rebuild_into(charge, ids_in(&memory, &next)).unwrap();
+    assert!(memory.peak() >= base_bytes, "{} < {base_bytes}", memory.peak());
+
+    let limited = BuildMemory::new(memory.peak() - 1);
+    let charge = limited.charge(base.bytes()).unwrap();
+    assert!(matches!(
+        base.rebuild_into(charge, ids_in(&limited, &next)),
+        Err(GraphError::BuildMemoryLimit { .. })
+    ));
+    assert_eq!(limited.in_use(), 0);
+}
+
+#[test]
+fn an_id_longer_than_the_arena_grows_by_is_taken() {
+    let long = vec![b'x'; 1 << 20];
+    let memory = BuildMemory::unlimited();
+    let ids = ids_in(&memory, &[b"a", &long, b"b"]);
+    let id_map = IdMap::<TextKeys>::new().rebuild_within(ids).unwrap().0;
+    assert_eq!(id_map.dense_id(&long), Some(2));
+    assert_eq!(id_map.external_id(2), Some(long.as_slice()));
+    assert_eq!(id_map.external_id(1), Some(b"b".as_slice()));
+}
+
+#[test]
+fn a_single_node_text_id_map_works_throughout() {
+    let mut id_map = first_build(&[b"only"]);
+    assert_eq!(
+        (id_map.dense_id(b"only"), id_map.external_id(0)),
+        (Some(0), Some(b"only".as_slice()))
+    );
+    let identity = Permutation::locality(
+        &crate::graph::EdgeList::for_id_space(1, false),
+        1,
+        &BuildMemory::unlimited(),
+    )
+    .unwrap();
+    id_map.renumber(&identity, &BuildMemory::unlimited()).unwrap();
+    assert_eq!(id_map, first_build(&[b"only"]));
+    assert_eq!(id_map.keys().compacted(&[0]).unwrap(), *id_map.keys());
+    let segments = id_map.encode_text(6).unwrap();
+    let decoded = IdMap::decode_text(
+        segments.id_bytes(),
+        segments.id_offsets(),
+        segments.id_order(),
+        id_map.tombstones().clone(),
+        6,
+    );
+    assert_eq!(decoded.as_ref(), Ok(&id_map));
+    let index = TextIndex::new(&id_map, &BuildMemory::unlimited()).unwrap();
+    assert_eq!((index.dense_id(b"only"), index.dense_id(b"")), (Some(0), None));
+    let gone = rebuild(&id_map, &[]);
+    assert_eq!((gone.id_space(), gone.node_count(), gone.dense_id(b"only")), (1, 0, None));
+    assert_eq!(TextIndex::new(&gone, &BuildMemory::unlimited()).unwrap().dense_id(b"only"), None);
+    assert_eq!(gone.keys().compacted(&[]).unwrap(), TextKeys::default());
 }
 
 fn text_builds() -> impl Strategy<Value = Vec<Vec<Vec<u8>>>> {

@@ -107,8 +107,9 @@ impl<T> Base<'_, T> {
 }
 
 /// `base` followed by `more`, and the charge for what that allocated: an
-/// owned buffer grows in place by exactly `more`, anything else is copied
-/// into a buffer reserved exactly.
+/// owned buffer grows in place by exactly `more` (with its own bytes
+/// charged again while it is reserved, since the allocator may move it),
+/// anything else is copied into a buffer reserved exactly.
 fn extended<T: Copy>(
     base: Base<'_, T>,
     more: impl ExactSizeIterator<Item = T>,
@@ -121,9 +122,13 @@ fn extended<T: Copy>(
     match owned {
         Ok(mut buffer) => {
             let charge = budget.charge(bytes_of::<T>(more.len()))?;
+            // A reallocation may move the buffer, holding both copies for
+            // a moment: the base's part is charged until it returns.
+            let moving = budget.charge(bytes_of::<T>(buffer.len()))?;
             buffer
                 .try_reserve_exact(more.len())
                 .map_err(|_| GraphError::OutOfMemory { elements: buffer.len() + more.len() })?;
+            drop(moving);
             buffer.extend(more);
             Ok((buffer, charge))
         }

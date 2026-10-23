@@ -1,10 +1,11 @@
 //! The hash index a build maps edge endpoints through (DESIGN.md §5.7): an
 //! open-addressing table of dense ids with 2 slots a live node, indexed by
-//! a multiplicative range reduction of std's `RandomState` hash of an id's
-//! bytes (SipHash-1-3, its keys drawn per index), probed linearly. The keys
-//! are never persisted, and every hit is confirmed by comparing bytes, so
-//! no collision an id's author aims at changes an answer. It is `Sync`, so
-//! the compute pool can probe it.
+//! a multiplicative range reduction of an id's hash under std's keyed
+//! default hasher (`RandomState`: secret keys, drawn per thread and varied
+//! per instance; std does not promise which algorithm), probed linearly.
+//! The keys are never persisted, and every hit is confirmed by comparing
+//! bytes, so a collision changes no answer, only a probe's length. It is
+//! `Sync`, so the compute pool can probe it.
 
 use std::hash::{BuildHasher, RandomState};
 
@@ -23,6 +24,12 @@ pub struct TextIndex<'m> {
     hasher: RandomState,
     _charge: BuildCharge,
 }
+
+/// The compute pool probes one index from many threads.
+const _: fn() = || {
+    fn sync<T: Sync>() {}
+    sync::<TextIndex<'static>>();
+};
 
 /// Each slot holds a dense id plus 1, or 0 when empty, at the width of the
 /// id space.

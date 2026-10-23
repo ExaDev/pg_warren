@@ -42,8 +42,8 @@ pub(crate) use membership::NO_COMMUNITY;
 pub use node_order::{NodeOrder, Permutation};
 pub use relation::{RelationDictionary, RelationIndex, RelationSelection};
 pub use segment::{
-    check_encoding, ChunkSink, CsrPart, CsrSegments, SegmentKind, TextIdPart, TextIdSegments,
-    SEGMENT_HEADER_LEN,
+    check_id_bytes_header, ChunkSink, CsrPart, CsrSegments, SegmentKind, TextIdPart,
+    TextIdSegments, SEGMENT_HEADER_LEN,
 };
 #[cfg(test)]
 pub(crate) use segment_buffer::HeapSegment;

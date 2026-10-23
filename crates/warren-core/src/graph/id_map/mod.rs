@@ -51,20 +51,32 @@ impl<K: IdKeys> IdMap<K> {
 
     /// [`Self::rebuild_within`], consuming this id map, whose buffers it
     /// may extend in place rather than copy (a text id map's bytes and
-    /// offsets, DESIGN.md §5.7). `charge` is this id map's charge, which the
-    /// returned charge takes over: it is the bytes the new id map holds.
+    /// offsets, DESIGN.md §5.7). `charge` should be this id map's charge on
+    /// the budget `ids` is charged to: it is held until the new id map is
+    /// built, then taken over. Whatever it was, the returned charge is on
+    /// `ids`' budget and is exactly the bytes the new id map holds, charged
+    /// in full if it was on another budget or short (an error if that does
+    /// not fit). On an error, this id map and `charge` are dropped.
     pub fn rebuild_into(
         self,
-        mut charge: BuildCharge,
+        charge: BuildCharge,
         ids: K::Ids,
     ) -> Result<(Self, BuildCharge), GraphError> {
+        let memory = ids.memory().clone();
         let merged = self.merged(ids)?;
         let Self { keys: base, tombstones } = self;
         drop(tombstones);
         let (keys, keys_charge) = merged.keys.finish_into(base)?;
         let (id_map, rebuilt) = merged.tombstones.into_map(keys, keys_charge)?;
+        let mut charge = match charge.memory().is(&memory) {
+            true => charge,
+            false => BuildCharge::none(&memory),
+        };
         charge.absorb(rebuilt);
-        charge.shrink(charge.bytes().saturating_sub(id_map.bytes()));
+        match charge.bytes().checked_sub(id_map.bytes()) {
+            Some(spare) => charge.shrink(spare),
+            None => charge.grow(id_map.bytes() - charge.bytes())?,
+        }
         Ok((id_map, charge))
     }
 
@@ -142,9 +154,12 @@ impl<K: IdKeys> IdMap<K> {
 
     /// Renumbers every dense id, tombstones included, by `permutation`,
     /// which must permute this id map's id space; else changes nothing.
-    /// The renumbered tombstones, if there are any, are charged to `memory`
-    /// while they are built. A shared id map's copy is not charged: only a
-    /// first build renumbers, and its id map is one it built and owns.
+    /// What it builds beside what it replaces is charged to `memory` while
+    /// both are held: the renumbered tombstones, if there are any, and for
+    /// text keys new bytes, offsets and order, about N·L + 12·N bytes for N
+    /// ids of mean length L. Fixed keys are renumbered in place; a shared
+    /// fixed id map's copy is not charged: only a first build renumbers,
+    /// and its id map is one it built and owns.
     pub fn renumber(
         &mut self,
         permutation: &Permutation,

@@ -3,11 +3,11 @@
 //! segment.
 
 use super::{
-    decode, elements, encode, encode_chunked, encode_chunked_in, encode_in, read_header, ChunkSink,
-    SegmentKind, SEGMENT_HEADER_LEN,
+    check_id_bytes_header, decode, elements, encode, encode_chunked, encode_chunked_in, encode_in,
+    read_header, ChunkSink, SegmentKind, SEGMENT_HEADER_LEN,
 };
 use crate::graph::{
-    BuildCharge, BuildMemory, GraphError, IdMap, IdOrder, TargetWidth, TextKeys, Tombstones,
+    memory, BuildCharge, BuildMemory, GraphError, IdMap, IdOrder, TargetWidth, TextKeys, Tombstones,
 };
 
 /// One of a text id map's three segments.
@@ -118,7 +118,14 @@ impl IdMap<TextKeys> {
         let mut charge = memory.charge(tombstones.len() as u64)?;
         let tombstones = Tombstones::decode(tombstones)?;
         let payload = |segment: &[u8]| segment.len().saturating_sub(SEGMENT_HEADER_LEN) as u64;
-        let scratch = Tombstones::bytes_for(tombstones.id_space());
+        // The order check's bitmap covers the offsets' id space, which the
+        // tombstones must match before anything else is decoded.
+        let id_space = (payload(id_offsets) / 8).saturating_sub(1);
+        if tombstones.id_space() != id_space {
+            let found = tombstones.id_space();
+            return Err(GraphError::TombstonesLength { expected: id_space, found });
+        }
+        let scratch = Tombstones::bytes_for(id_space);
         charge.grow(payload(id_bytes) + payload(id_offsets) + payload(id_order) + scratch)?;
         let id_map = Self::decode_text(id_bytes, id_offsets, id_order, tombstones, encoding)?;
         charge.shrink(charge.bytes().saturating_sub(id_map.bytes()));
@@ -137,11 +144,10 @@ impl IdMap<TextKeys> {
         encoding: u8,
     ) -> Result<Self, GraphError> {
         let offsets = decode::<u64>(SegmentKind::IdOffsets, id_offsets)?;
-        let (header, payload) = read_header(id_bytes, SegmentKind::IdBytes)?;
-        if header.encoding != encoding {
-            return Err(GraphError::IdEncoding { expected: encoding, found: header.encoding });
-        }
-        let bytes = elements::<u8>(&header, payload)?;
+        let payload = id_bytes.get(SEGMENT_HEADER_LEN..).ok_or(GraphError::SegmentTruncated)?;
+        check_id_bytes_header(id_bytes, payload.len() as u64, encoding)?;
+        let mut bytes = memory::with_capacity(payload.len())?;
+        bytes.extend_from_slice(payload);
         let id_space = offsets.len().saturating_sub(1) as u64;
         let (header, payload) = read_header(id_order, SegmentKind::IdOrder)?;
         let order = match TargetWidth::for_id_space(id_space) {
@@ -154,7 +160,7 @@ impl IdMap<TextKeys> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{check_encoding, with_header};
+    use super::super::with_header;
     use super::*;
     use crate::graph::{BuildMemory, GraphError, IdMap, TextIds, TextKeys, Tombstones};
     use proptest::prelude::*;
@@ -212,12 +218,58 @@ mod tests {
             Err(GraphError::IdEncoding { expected: UTF8, found: 0 })
         );
         let header = &segments.id_bytes()[..SEGMENT_HEADER_LEN];
-        assert_eq!(check_encoding(header, 0), Ok(()));
+        assert_eq!(check_id_bytes_header(header, 4, 0), Ok(4));
         assert_eq!(
-            check_encoding(header, UTF8),
+            check_id_bytes_header(header, 4, UTF8),
             Err(GraphError::IdEncoding { expected: UTF8, found: 0 })
         );
-        assert_eq!(SegmentKind::IdBytes.check_header(header, 1, 4), Ok(4));
+    }
+
+    /// An `id_bytes` header is checked only with its encoding.
+    #[test]
+    fn an_id_bytes_header_is_checked_with_its_encoding() {
+        let segments = example().encode_text(UTF8).unwrap();
+        let header = &segments.id_bytes()[..SEGMENT_HEADER_LEN];
+        assert_eq!(check_id_bytes_header(header, 4, UTF8), Ok(4));
+        assert_eq!(
+            SegmentKind::IdBytes.check_header(header, 1, 4),
+            Err(GraphError::IdBytesEncodingUnchecked)
+        );
+        assert_eq!(
+            check_id_bytes_header(header, 5, UTF8),
+            Err(GraphError::SegmentLength { expected: 4, found: 5 })
+        );
+        let mut wide = header.to_vec();
+        wide[6] = 8;
+        assert_eq!(
+            check_id_bytes_header(&wide, 4, UTF8),
+            Err(GraphError::SegmentWidth { expected: 1, found: 8 })
+        );
+        assert_eq!(
+            check_id_bytes_header(segments.id_offsets(), 4, UTF8),
+            Err(GraphError::SegmentKind { expected: 9, found: 8 })
+        );
+    }
+
+    /// The tombstones are checked against the offsets' id space before the
+    /// order is decoded and checked.
+    #[test]
+    fn tombstones_of_another_id_space_are_refused_first() {
+        let bad_order = segments(b"ba", &[0, 1, 2], &[1, 1]);
+        let tombstones = Tombstones::new(3).unwrap();
+        let expected = Err(GraphError::TombstonesLength { expected: 2, found: 3 });
+        assert_eq!(decode(&bad_order, &tombstones).map(|_| ()), expected);
+        let memory = BuildMemory::unlimited();
+        let within = IdMap::decode_text_within(
+            bad_order.id_bytes(),
+            bad_order.id_offsets(),
+            bad_order.id_order(),
+            &tombstones.encode().unwrap(),
+            UTF8,
+            &memory,
+        );
+        assert_eq!(within.map(|_| ()), expected);
+        assert_eq!(memory.in_use(), 0);
     }
 
     #[test]

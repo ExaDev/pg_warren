@@ -109,12 +109,19 @@ impl IdKeys for TextKeys {
         Ok(())
     }
 
-    /// Copies the ids at `old_dense_ids`; the new order is the identity.
+    /// Copies the ids at `old_dense_ids`, checking that they are strictly
+    /// in id order (so distinct), as the identity order they get requires.
     fn compacted(&self, old_dense_ids: &[DenseId]) -> Result<Self, GraphError> {
         let keys = |old| self.key(old).ok_or(GraphError::IdMapNotPermutation);
         let mut length = 0;
+        let mut previous: Option<&[u8]> = None;
         for &old in old_dense_ids {
-            length += keys(old)?.len();
+            let key = keys(old)?;
+            if previous.is_some_and(|previous| previous >= key) {
+                return Err(GraphError::IdMapNotSorted);
+            }
+            previous = Some(key);
+            length += key.len();
         }
         let mut bytes = memory::with_capacity(length)?;
         let mut offsets = memory::with_capacity(old_dense_ids.len() + 1)?;
@@ -205,17 +212,17 @@ impl TextKeys {
 
 impl IdMap<TextKeys> {
     /// A text id map from its three arrays and its tombstones, as segment
-    /// buffers, owned or shared views, after checking them (see
-    /// `TextKeys::checked`) and that the tombstones cover the same id
-    /// space.
+    /// buffers, owned or shared views, after checking that the tombstones
+    /// cover the offsets' id space, then the arrays (see
+    /// `TextKeys::checked`), whose order check allocates by that id space.
     pub fn from_text_segments(
         bytes: SegmentBuffer<u8>,
         offsets: SegmentBuffer<u64>,
         order: IdOrder,
         tombstones: Tombstones,
     ) -> Result<Self, GraphError> {
+        check_tombstones(offsets.len().saturating_sub(1) as u64, &tombstones)?;
         let keys = TextKeys::checked(bytes, offsets, order)?;
-        check_tombstones(keys.id_space(), &tombstones)?;
         Ok(Self { keys, tombstones })
     }
 }

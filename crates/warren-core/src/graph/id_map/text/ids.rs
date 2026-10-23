@@ -46,16 +46,6 @@ impl TextIds {
         self.bytes.extend(id.iter().copied());
         Ok(())
     }
-
-    /// The number of ids taken, duplicates included.
-    pub fn len(&self) -> usize {
-        self.ends.len()
-    }
-
-    /// Whether no id was taken.
-    pub fn is_empty(&self) -> bool {
-        self.ends.is_empty()
-    }
 }
 
 /// The id at `position` of an arena's `ends`.

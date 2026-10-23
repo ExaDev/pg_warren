@@ -68,34 +68,55 @@ impl SegmentKind {
     /// of this kind, with elements `width` bytes wide, whose payload is
     /// `payload_len` bytes. Returns the header's count (for tombstones,
     /// the id space in bits, stored in whole `u64` words). An `id_bytes`
-    /// header's encoding is checked by [`check_encoding`].
+    /// header is refused here: [`check_id_bytes_header`] checks it with its
+    /// encoding.
     pub fn check_header(
         self,
         header: &[u8],
         width: usize,
         payload_len: u64,
     ) -> Result<u64, GraphError> {
-        let header = header.get(..SEGMENT_HEADER_LEN).ok_or(GraphError::SegmentTruncated)?;
-        let (header, _) = read_header(header, self)?;
-        expect_width(&header, width)?;
-        let elements = match self {
-            Self::Tombstones => header.count.div_ceil(64),
-            _ => header.count,
-        };
-        expect_length(payload_len, elements, width)?;
-        Ok(header.count)
+        if self == Self::IdBytes {
+            return Err(GraphError::IdBytesEncodingUnchecked);
+        }
+        checked_header(self, header, width, payload_len).map(|header| header.count)
     }
 }
 
-/// Checks that an `id_bytes` header (its first [`SEGMENT_HEADER_LEN`]
-/// bytes) records `encoding`, the database's (DESIGN.md §5.7).
-pub fn check_encoding(header: &[u8], encoding: u8) -> Result<(), GraphError> {
-    let header = header.get(..SEGMENT_HEADER_LEN).ok_or(GraphError::SegmentTruncated)?;
-    let (header, _) = read_header(header, SegmentKind::IdBytes)?;
+/// Checks an `id_bytes` header (its first [`SEGMENT_HEADER_LEN`] bytes)
+/// as decoding does, before its payload is read: its kind, a width of 1, a
+/// payload of `payload_len` bytes, and that it records `encoding`, the
+/// database's (DESIGN.md §5.7). Returns the header's count, the bytes'
+/// length. Whether the bytes are valid in that encoding is not checked
+/// here (see DESIGN.md §5.7).
+pub fn check_id_bytes_header(
+    header: &[u8],
+    payload_len: u64,
+    encoding: u8,
+) -> Result<u64, GraphError> {
+    let header = checked_header(SegmentKind::IdBytes, header, 1, payload_len)?;
     match header.encoding == encoding {
-        true => Ok(()),
+        true => Ok(header.count),
         false => Err(GraphError::IdEncoding { expected: encoding, found: header.encoding }),
     }
+}
+
+/// [`SegmentKind::check_header`]'s checks, returning the header.
+fn checked_header(
+    kind: SegmentKind,
+    header: &[u8],
+    width: usize,
+    payload_len: u64,
+) -> Result<Header, GraphError> {
+    let header = header.get(..SEGMENT_HEADER_LEN).ok_or(GraphError::SegmentTruncated)?;
+    let (header, _) = read_header(header, kind)?;
+    expect_width(&header, width)?;
+    let elements = match kind {
+        SegmentKind::Tombstones => header.count.div_ceil(64),
+        _ => header.count,
+    };
+    expect_length(payload_len, elements, width)?;
+    Ok(header)
 }
 
 /// A decoded segment header.

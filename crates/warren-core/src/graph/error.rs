@@ -162,6 +162,9 @@ pub enum GraphError {
         /// The encoding in the `id_bytes` header.
         found: u8,
     },
+    /// An `id_bytes` header is checked with its encoding.
+    #[error("an id_bytes header must be checked with its encoding")]
+    IdBytesEncodingUnchecked,
     /// A relation name must be valid UTF-8.
     #[error("relation name is not valid UTF-8")]
     RelationNameNotUtf8,
