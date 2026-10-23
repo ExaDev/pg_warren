@@ -311,7 +311,7 @@ pub(crate) use with_id_type;
 
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
-mod tests {
+mod unit {
     use super::*;
 
     #[test]
@@ -377,7 +377,7 @@ mod tests {
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
-mod in_database {
+mod tests {
     use pgrx::prelude::*;
     use warren_core::graph::TextKeys;
 

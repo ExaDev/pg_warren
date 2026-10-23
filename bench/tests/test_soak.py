@@ -549,3 +549,33 @@ def test_a_shared_version_needs_no_raised_pass():
     assert not soak.needs_raised_pass({**over, "shared_bytes": 6 * GIB}, id_space)
     assert soak.needs_raised_pass({"cached_bytes": None, "cache_memory_bytes": 4 * GIB}, id_space)
     assert not soak.needs_raised_pass({"cached_bytes": GIB, "cache_memory_bytes": 4 * GIB}, id_space)
+
+
+TEXT = "https://example.org/resource/"
+
+
+def test_a_text_case_names_each_node_by_an_iri():
+    case = soak.replace(soak.CASES["a"], ids="text")
+    assert soak.edge_query(case, seed=0.25) == (
+        f"SELECT '{TEXT}' || src, '{TEXT}' || dst FROM soak_edges")
+    sql = soak.create_graph_sql(case, seed=0.25)
+    assert f"$n$SELECT '{TEXT}' || id FROM generate_series(1::bigint, 10000000) id$n$" in sql
+    assert soak.CASES["a"].ids == "bigint"
+
+
+def test_a_text_case_estimates_its_id_map_from_its_iris():
+    small = soak.replace(soak.CASES["a"], ids="text").scaled(1_000_000)  # 10 nodes, 100 edges
+    # Offsets 8(N+1) and targets 4M per direction; then the IRIs' bytes
+    # (nine of one digit, one of two), their offsets 8(N+1), their u32
+    # order 4N, and the tombstones N/8.
+    iris = 10 * len(TEXT) + 9 + 2
+    assert soak.segment_estimate(small) == 2 * (8 * 11 + 4 * 100) + iris + 8 * 11 + 4 * 10 + 1
+
+
+def test_a_text_case_passes_text_ids_to_the_calls():
+    calls = {call.name: call for call in soak.library_calls("soak", nodes=10, ids="text")}
+    assert "NULL::text" in calls["minimum_spanning_forest"].sql
+    assert f"'{TEXT}1'::text" in calls["most_similar"].sql
+    assert f"'{TEXT}' || (1 + (i * 7919) % 10)" in calls["similarity"].sql
+    assert f"SELECT '{TEXT}' || id, 1 FROM generate_series(1::bigint, 10, 100) id" in calls["similar_pairs"].setup[0]
+    assert "NULL::text" in soak.community_stats_sql("soak", "louvain", ids="text")

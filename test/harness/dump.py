@@ -39,7 +39,11 @@ SEED = """
         FROM public.nodes;
     CREATE TABLE public.small_nodes AS SELECT generate_series(1, 3) AS id;
     CREATE TABLE public.small_edges AS SELECT 1 AS src, 2 AS dst;
-    GRANT SELECT ON public.nodes, public.edges, public.small_nodes, public.small_edges TO dump_owner;
+    CREATE TABLE public.iri_nodes AS SELECT 'https://example.org/' || id AS id FROM public.nodes;
+    INSERT INTO public.iri_nodes VALUES (''), ('é');
+    CREATE TABLE public.iri_edges AS SELECT id::varchar AS src, 'é' AS dst FROM public.iri_nodes;
+    GRANT SELECT ON public.nodes, public.edges, public.small_nodes, public.small_edges,
+                    public.iri_nodes, public.iri_edges TO dump_owner;
     SET ROLE dump_owner;
     SELECT warren.create_graph('g', 'SELECT id FROM public.nodes',
                                'SELECT src, dst, rel, w FROM public.edges',
@@ -49,10 +53,16 @@ SEED = """
     SELECT warren.refresh('g');
     SELECT warren.vector_const('g', 'one', 1);
     SELECT warren.refresh('small');
+    SELECT warren.create_graph('iri', 'SELECT id FROM public.iri_nodes',
+                               'SELECT src, dst FROM public.iri_edges');
+    SELECT warren.refresh('iri');
+    SELECT warren.vector_from_query('iri', 'len', 'SELECT id, length(id) FROM public.iri_nodes');
     SELECT warren.grant('g', 'dump_reader');
     RESET ROLE;
     DELETE FROM public.nodes WHERE id = 8;
     SELECT warren.refresh('g');
+    DELETE FROM public.iri_nodes WHERE id = '';
+    SELECT warren.refresh('iri');
     SELECT warren.compact('g');
     SELECT warren.vector_degree('g', 'deg');
     SET ROLE dump_reader;
@@ -90,6 +100,14 @@ STATE = {
         FROM warren.versions v JOIN warren.graphs g USING (graph_id),
              warren.neighbours(g.name, 1, 'both', version := v.version_id) n
         WHERE g.name = 'small' ORDER BY 1, 2""",
+    "text_ids": """
+        SELECT v.version_id, m.node_id, m.dense_id, m.live,
+               ARRAY(SELECT warren.neighbours(g.name, m.node_id, 'in', version := v.version_id) n ORDER BY n),
+               (SELECT x.value FROM warren.vectors w, warren.vector_values(g.name, w.name, NULL::text, w.version_id) x
+                WHERE w.graph_id = g.graph_id AND w.version_id = v.version_id AND x.node_id = m.node_id)
+        FROM warren.versions v JOIN warren.graphs g USING (graph_id),
+             warren.id_map(g.name, NULL::text, v.version_id) m
+        WHERE g.name = 'iri' AND m.live ORDER BY 1, 3""",
     "lifted": "SELECT * FROM public.lifted() ORDER BY 1",
     "event_triggers": """
         SELECT evtname, evtevent, evtfoid::regprocedure::text, array_to_string(evttags, ','), evtenabled
