@@ -3,11 +3,13 @@
 
 mod fixed;
 mod keys;
+mod text;
 
 use std::cmp::Ordering;
 
 pub use fixed::{ExternalId, FixedKeys, FixedRebuild, IdPair};
 pub use keys::{FreshKeys, IdKeys, KeysRebuild, NodeIds};
+pub use text::{IdOrder, TextIds, TextIndex, TextKeys, TextRebuild};
 
 use super::{BuildCharge, BuildMemory, DenseId, GraphError, Permutation, Tombstones};
 

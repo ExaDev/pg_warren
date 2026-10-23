@@ -289,6 +289,14 @@ impl<T: PartialEq> BuildBuffer<T> {
     }
 }
 
+impl<T> BuildBuffer<T> {
+    /// Removes consecutive values that `same` says are equal, keeping the
+    /// first of each run.
+    pub fn dedup_by(&mut self, same: impl FnMut(&mut T, &mut T) -> bool) {
+        self.values.dedup_by(same);
+    }
+}
+
 impl<T: Clone> BuildBuffer<T> {
     /// A buffer of `len` copies of `value`.
     pub fn filled(memory: &BuildMemory, len: usize, value: T) -> Result<Self, GraphError> {
