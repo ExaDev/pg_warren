@@ -1,11 +1,15 @@
-//! Why an id argument does not fit the graph.
+//! Why an id argument does not fit the graph, or a call's ids could not
+//! be looked up.
 
 use pgrx::PgSqlErrorCode;
 use thiserror::Error;
+use warren_core::graph::GraphError;
 
 use crate::access::SqlError;
+use crate::extension::graph_sqlstate;
 
-/// Why an id argument does not fit the graph.
+/// Why an id argument does not fit the graph, or a call's ids could not be
+/// looked up.
 #[derive(Debug, Error)]
 pub(crate) enum ExternalIdError {
     /// An id argument that must be given was NULL.
@@ -38,6 +42,9 @@ pub(crate) enum ExternalIdError {
         /// The argument's type.
         found: String,
     },
+    /// A call's hash index of the graph's ids could not be built.
+    #[error(transparent)]
+    Index(#[from] GraphError),
 }
 
 impl SqlError for ExternalIdError {
@@ -47,6 +54,7 @@ impl SqlError for ExternalIdError {
             Self::IdType { .. } | Self::NotAnArray { .. } => {
                 PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH
             }
+            Self::Index(error) => graph_sqlstate(error),
         }
     }
 }
