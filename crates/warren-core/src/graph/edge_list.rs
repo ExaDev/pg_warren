@@ -6,7 +6,7 @@ use std::mem::size_of;
 
 use super::build_memory::growth;
 use super::{
-    BuildBuffer, BuildMemory, DenseId, ExternalId, GraphError, IdMap, Permutation, RelationIndex,
+    BuildBuffer, BuildMemory, DenseId, GraphError, IdKeys, IdMap, Permutation, RelationIndex,
     Target, TargetWidth,
 };
 
@@ -249,27 +249,27 @@ fn renumber_endpoints<T: Target>(
 
 /// Remaps edges from external ids to dense ids through an id map.
 #[derive(Debug)]
-pub struct EdgeIntake<'m, E> {
-    id_map: &'m IdMap<E>,
+pub struct EdgeIntake<'m, K> {
+    id_map: &'m IdMap<K>,
     directed: bool,
     edges: EdgeList,
     dropped_edges: u64,
 }
 
-impl<'m, E: ExternalId> EdgeIntake<'m, E> {
+impl<'m, K: IdKeys> EdgeIntake<'m, K> {
     /// An intake for a directed graph.
-    pub fn directed(id_map: &'m IdMap<E>, weighted: bool) -> Self {
+    pub fn directed(id_map: &'m IdMap<K>, weighted: bool) -> Self {
         Self::new(id_map, true, weighted)
     }
 
     /// An intake for an undirected graph: each edge is emitted in both
     /// directions with the same weight, except a self-loop, which is emitted
     /// once.
-    pub fn undirected(id_map: &'m IdMap<E>, weighted: bool) -> Self {
+    pub fn undirected(id_map: &'m IdMap<K>, weighted: bool) -> Self {
         Self::new(id_map, false, weighted)
     }
 
-    fn new(id_map: &'m IdMap<E>, directed: bool, weighted: bool) -> Self {
+    fn new(id_map: &'m IdMap<K>, directed: bool, weighted: bool) -> Self {
         let edges = EdgeList::for_id_space(id_map.id_space(), weighted);
         Self { id_map, directed, edges, dropped_edges: 0 }
     }
@@ -295,8 +295,8 @@ impl<'m, E: ExternalId> EdgeIntake<'m, E> {
     pub fn push(
         &mut self,
         relation: RelationIndex,
-        source: Option<&E>,
-        target: Option<&E>,
+        source: Option<&K::Key>,
+        target: Option<&K::Key>,
         weight: f64,
     ) -> Result<(), GraphError> {
         let source = source.and_then(|id| self.id_map.dense_id(id));
@@ -323,9 +323,9 @@ impl<'m, E: ExternalId> EdgeIntake<'m, E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{Permutation, RelationDictionary, TargetWidth};
+    use crate::graph::{FixedKeys, Permutation, RelationDictionary, TargetWidth};
 
-    fn id_map() -> IdMap<i64> {
+    fn id_map() -> IdMap<FixedKeys<i64>> {
         // 10 → 0, 20 → 1 (tombstoned), 30 → 2
         IdMap::new().rebuild(vec![10, 20, 30]).unwrap().rebuild(vec![10, 30]).unwrap()
     }

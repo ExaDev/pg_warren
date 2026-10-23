@@ -5,11 +5,11 @@
 //! different nodes. Relations play no part.
 
 use super::VersionError;
-use crate::graph::{ExternalId, IdMap};
+use crate::graph::{IdKeys, IdMap};
 
 /// `Ok` if every dense id of both `a` and `b` names the same external id
 /// in each; else the first that does not.
-pub fn shared_dense_ids<E: ExternalId>(a: &IdMap<E>, b: &IdMap<E>) -> Result<(), VersionError> {
+pub fn shared_dense_ids<K: IdKeys>(a: &IdMap<K>, b: &IdMap<K>) -> Result<(), VersionError> {
     let shared = a.id_space().min(b.id_space());
     match (0..shared).find(|&dense| a.external_id(dense) != b.external_id(dense)) {
         Some(dense) => Err(VersionError::IdSpacesDiverge { dense }),

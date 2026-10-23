@@ -276,7 +276,7 @@ mod tests {
         assert_eq!(port()?.evict(&|evicted| *evicted == key), 1);
         end_message();
         assert_eq!(slot(key), Some((State::Draining, 0, 1)), "the piece still reads the segment");
-        assert_eq!(piece.external_id(99), Some(100), "and reads it");
+        assert_eq!(piece.external_id(99), Some(&100), "and reads it");
         drop(piece);
         end_message();
         assert_eq!(slot(key), None, "released once nothing read through it is held");

@@ -4,7 +4,9 @@
 use proptest::prelude::*;
 
 use super::GraphVersion;
-use crate::graph::{CsrLayout, EdgeIntake, EdgeList, GraphCsr, IdMap, RelationDictionary};
+use crate::graph::{
+    CsrLayout, EdgeIntake, EdgeList, FixedKeys, GraphCsr, IdMap, RelationDictionary,
+};
 
 /// One edge row: (relation name index, source, target, weight).
 pub(crate) type EdgeRow = (u8, i64, i64, u8);
@@ -12,7 +14,7 @@ pub(crate) type EdgeRow = (u8, i64, i64, u8);
 /// The structures of one built version.
 #[derive(Debug, Clone)]
 pub(crate) struct Build {
-    pub(crate) id_map: IdMap<i64>,
+    pub(crate) id_map: IdMap<FixedKeys<i64>>,
     pub(crate) relations: RelationDictionary,
     pub(crate) graph: GraphCsr,
 }
@@ -77,7 +79,7 @@ impl Build {
     }
 
     /// This build as a version view.
-    pub(crate) fn version(&self) -> GraphVersion<'_, i64> {
+    pub(crate) fn version(&self) -> GraphVersion<'_, FixedKeys<i64>> {
         GraphVersion::new(&self.id_map, &self.relations, &self.graph).unwrap()
     }
 }

@@ -92,11 +92,11 @@ fn degree_json(shift: &DegreeShift) -> Value {
 #[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod unit {
     use super::*;
-    use warren_core::graph::{EdgeIntake, GraphCsr, IdMap, RelationDictionary};
+    use warren_core::graph::{EdgeIntake, FixedKeys, GraphCsr, IdMap, RelationDictionary};
     use warren_core::version::{diff, GraphVersion};
 
     struct Built {
-        id_map: IdMap<i64>,
+        id_map: IdMap<FixedKeys<i64>>,
         relations: RelationDictionary,
         graph: GraphCsr,
     }
@@ -115,7 +115,7 @@ mod unit {
         Built { id_map, relations, graph }
     }
 
-    fn view(b: &Built) -> GraphVersion<'_, i64> {
+    fn view(b: &Built) -> GraphVersion<'_, FixedKeys<i64>> {
         GraphVersion::new(&b.id_map, &b.relations, &b.graph).unwrap()
     }
 

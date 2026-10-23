@@ -60,7 +60,9 @@ fn refresh_graph(name: &str, promote: bool, label: Option<&str>) -> Result<Versi
 mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
-    use warren_core::graph::{AnyCsr, EdgeIntake, GraphCsr, IdMap, RelationDictionary, Tombstones};
+    use warren_core::graph::{
+        AnyCsr, EdgeIntake, FixedKeys, GraphCsr, IdMap, RelationDictionary, Tombstones,
+    };
 
     use crate::fixture;
     use crate::segment::{read_segment, SpiSegmentStore};
@@ -78,7 +80,7 @@ mod tests {
         read_segment(&mut SpiSegmentStore, version, name).unwrap_or_default()
     }
 
-    fn stored_id_map(version: i64) -> Option<IdMap<i64>> {
+    fn stored_id_map(version: i64) -> Option<IdMap<FixedKeys<i64>>> {
         let tombstones = Tombstones::decode(&segment(version, "tombstones")).ok()?;
         IdMap::decode(&segment(version, "id_map"), tombstones).ok()
     }
@@ -247,8 +249,8 @@ mod tests {
         let uuid = refresh("SELECT warren.refresh('u')")?;
         assert_eq!(version_row(uuid)?.as_deref(), Some("1|f|2|2|1|0|0|4|t|"));
         let tombstones = Tombstones::decode(&segment(uuid, "tombstones")).ok();
-        let id_map =
-            tombstones.and_then(|t| IdMap::<[u8; 16]>::decode(&segment(uuid, "id_map"), t).ok());
+        let id_map = tombstones
+            .and_then(|t| IdMap::<FixedKeys<[u8; 16]>>::decode(&segment(uuid, "id_map"), t).ok());
         let mut first = [0; 16];
         first[15] = 1;
         assert_eq!(id_map.and_then(|m| m.dense_id(&first)), Some(0));

@@ -134,7 +134,7 @@ mod unit {
     use crate::segment::{write_version, MemorySegmentStore};
     use crate::vector::MemoryVectorStore;
     use pgrx::pg_sys;
-    use warren_core::graph::{EdgeIntake, GraphCsr, IdMap, RelationDictionary};
+    use warren_core::graph::{EdgeIntake, FixedKeys, GraphCsr, IdMap, RelationDictionary};
 
     fn graph() -> GraphDefinition {
         GraphDefinition {
@@ -162,7 +162,7 @@ mod unit {
     #[test]
     fn compaction_records_a_promoted_version_in_a_new_id_space() {
         // 10, 20 (tombstoned), 30, 40; edges 10 → 30, 40 → 10.
-        let id_map = IdMap::<i64>::new()
+        let id_map = IdMap::<FixedKeys<i64>>::new()
             .rebuild(vec![10, 20, 30, 40])
             .and_then(|m| m.rebuild(vec![10, 30, 40]))
             .unwrap();

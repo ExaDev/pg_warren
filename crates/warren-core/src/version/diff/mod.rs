@@ -17,7 +17,7 @@ use edges::edge_delta;
 use nodes::node_delta;
 
 use super::{shared_dense_ids, GraphVersion, VersionError};
-use crate::graph::ExternalId;
+use crate::graph::IdKeys;
 
 /// The structural delta from an earlier version of a graph to a later one.
 #[derive(Debug, Clone, PartialEq)]
@@ -40,9 +40,9 @@ pub struct VersionDiff {
 /// the same external id to each of `before`'s dense ids. That fails across
 /// a compaction boundary (DESIGN.md §5.2) unless the compaction renumbered
 /// nothing.
-pub fn diff<E: ExternalId>(
-    before: &GraphVersion<'_, E>,
-    after: &GraphVersion<'_, E>,
+pub fn diff<K: IdKeys>(
+    before: &GraphVersion<'_, K>,
+    after: &GraphVersion<'_, K>,
 ) -> Result<VersionDiff, VersionError> {
     let (earlier, later) = (before.id_map(), after.id_map());
     if later.id_space() < earlier.id_space() {

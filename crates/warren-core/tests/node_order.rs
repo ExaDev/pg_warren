@@ -15,8 +15,8 @@ mod locality {
         spmv, AnyVector, ComputeMemory, Product, Semiring, Vector, Workers,
     };
     use warren_core::graph::{
-        AnyCsr, BuildMemory, CsrLayout, DenseId, Direction, EdgeIntake, GraphCsr, IdMap, NodeOrder,
-        Permutation, RelationDictionary, RelationSelection,
+        AnyCsr, BuildMemory, CsrLayout, DenseId, Direction, EdgeIntake, FixedKeys, GraphCsr, IdMap,
+        NodeOrder, Permutation, RelationDictionary, RelationSelection,
     };
     use warren_core::interrupts::Uninterrupted;
     use warren_core::traversal::{bfs, components, Adjacency, Limits};
@@ -26,7 +26,7 @@ mod locality {
 
     /// A graph built from external ids in one node order.
     struct Built {
-        id_map: IdMap<i64>,
+        id_map: IdMap<FixedKeys<i64>>,
         graph: GraphCsr,
     }
 
@@ -63,7 +63,7 @@ mod locality {
 
     impl Built {
         fn external(&self, dense: DenseId) -> i64 {
-            self.id_map.external_id(dense).unwrap()
+            *self.id_map.external_id(dense).unwrap()
         }
 
         fn dense(&self, external: i64) -> DenseId {
