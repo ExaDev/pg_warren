@@ -6,25 +6,25 @@
 //! Each returns rows of external ids, computed on the compute pool within
 //! the call's memory budget, and persists nothing.
 
+use std::borrow::Borrow;
 use std::mem::size_of;
 use std::sync::Arc;
 
 use pgrx::prelude::*;
-use pgrx::spi::SpiTupleTable;
 use pgrx::AnyElement;
 use warren_core::compute::{self, ComputeError, ComputeMemory, Mask, Neighbourhood, Similarity};
 use warren_core::graph::DenseId;
 
 use super::from_query::{check_id_column, id_type_name};
-use super::settings::workers;
 use super::vectors::Vectors;
 use super::{entry, selection, ComputeSqlError};
 use crate::access::{with_read_only, with_search_path, Caller};
-use crate::cache::{cached, compute_memory, resolve, LoadedVersion};
-use crate::external_ids::{check_type, element, external};
+use crate::cache::{cached, compute_memory, resolve, CachedIds, LoadedVersion};
+use crate::external_ids::{check_type, element, external, DenseIds};
+use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
 use crate::selection::relations;
-use crate::source::{describe, for_each_tuple, open_read_only, with_id_type, IdDatum, SourceError};
+use crate::source::{describe, for_each_tuple, open_read_only, with_id_type, Row, SourceError};
 
 /// The similarity `measure` names.
 fn measure(measure: Option<&str>) -> Result<Similarity, ComputeSqlError> {
@@ -102,7 +102,7 @@ fn similarity(
 
 /// The pairs of live nodes `query`'s rows name, in its order, and their
 /// charge.
-fn read_pairs<E: IdDatum>(
+fn read_pairs<E: CachedIds>(
     caller: &Caller,
     query: &str,
     loaded: &LoadedVersion<E>,
@@ -128,7 +128,8 @@ fn read_pairs<E: IdDatum>(
                     format!("SELECT q.u::{id_type}, q.v::{id_type} FROM ({query}\n) AS q(u, v)");
                 let mut opened = open_read_only::<ComputeSqlError>(client, "pairs", &wrapped)?;
                 let mut pairs = Pairs { pairs: Vec::new(), charge: memory.charge(0)?, memory };
-                for_each_tuple(&mut opened.cursor, |row| pairs.push(loaded, row))?;
+                let mut ids = DenseIds::new(&loaded.id_map, memory);
+                for_each_tuple(&mut opened.cursor, |row| pairs.push(&mut ids, row))?;
                 Ok((pairs.pairs, pairs.charge))
             })
         })
@@ -144,14 +145,16 @@ struct Pairs<'m> {
 
 impl Pairs<'_> {
     /// Adds the row's pair if both ids are live nodes.
-    fn push<E: IdDatum>(
+    fn push<E: CachedIds>(
         &mut self,
-        loaded: &LoadedVersion<E>,
-        row: &SpiTupleTable<'_>,
+        ids: &mut DenseIds<'_, E>,
+        row: &Row<'_>,
     ) -> Result<(), ComputeSqlError> {
-        let dense = |ordinal| -> Result<Option<DenseId>, ComputeSqlError> {
-            let id = row.get::<E::Sql>(ordinal)?.map(E::from_sql);
-            Ok(id.and_then(|id| loaded.id_map.dense_id(&id)))
+        let mut dense = |ordinal| -> Result<Option<DenseId>, ComputeSqlError> {
+            match row.id::<E>(ordinal)? {
+                Some(id) => Ok(ids.dense_id(id.borrow())?),
+                None => Ok(None),
+            }
         };
         let (Some(u), Some(v)) = (dense(1)?, dense(2)?) else {
             return Ok(());
@@ -203,7 +206,7 @@ fn most_similar(
         let rows: Vec<(AnyElement, f64)> = with_id_type!(resolved.graph.id_type, E => {
             let id = element::<E>(graph, "node", node)?;
             let loaded = cached::<E>(&resolved)?;
-            match loaded.id_map.dense_id(&id) {
+            match loaded.id_map.dense_id(id.borrow()) {
                 None => Vec::new(),
                 Some(dense) => {
                     let selected = relations(&loaded.relations, rels.as_deref());

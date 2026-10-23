@@ -6,11 +6,11 @@ use pgrx::{AnyElement, JsonB};
 use serde_json::{json, Value};
 use warren_core::compute::{summarise, top_k};
 
-use super::settings::workers;
 use super::vectors::Vectors;
 use super::{entry, ComputeSqlError};
 use crate::cache::resolve;
 use crate::external_ids::{check_type, external};
+use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
 use crate::source::with_id_type;
 

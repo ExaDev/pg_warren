@@ -15,9 +15,9 @@ use warren_core::graph::DenseId;
 
 use super::vectors::Vectors;
 use super::{entry, ComputeSqlError};
-use crate::cache::{resolve, LoadedVersion};
+use crate::cache::{resolve, CachedIds, LoadedVersion};
 use crate::external_ids::{check_type, external};
-use crate::source::{with_id_type, IdDatum};
+use crate::source::with_id_type;
 
 /// Element `index` of `vector` as a `double precision`.
 pub(super) fn element(vector: &AnyVector, index: usize) -> f64 {
@@ -31,7 +31,9 @@ pub(super) fn element(vector: &AnyVector, index: usize) -> f64 {
 }
 
 /// The live nodes of `loaded` with their external ids, in dense id order.
-fn live<E: IdDatum>(loaded: Arc<LoadedVersion<E>>) -> impl Iterator<Item = (DenseId, AnyElement)> {
+fn live<E: CachedIds>(
+    loaded: Arc<LoadedVersion<E>>,
+) -> impl Iterator<Item = (DenseId, AnyElement)> {
     (0..loaded.id_map.id_space()).filter_map(move |node| {
         match loaded.id_map.tombstones().contains(node) {
             true => None,
@@ -42,7 +44,7 @@ fn live<E: IdDatum>(loaded: Arc<LoadedVersion<E>>) -> impl Iterator<Item = (Dens
 
 /// Opens vector `name` of `graph` at `version` for reading as rows,
 /// checking the id type witness (argument `witness` of `fcinfo`).
-fn open<E: IdDatum>(
+fn open<E: CachedIds>(
     graph: &str,
     name: &str,
     version: Option<i64>,

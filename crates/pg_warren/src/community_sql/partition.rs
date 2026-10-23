@@ -8,15 +8,16 @@ use warren_core::compute::MemoryCharge;
 use warren_core::graph::BuildMemory;
 
 use super::CommunitySqlError;
-use crate::compute_sql::{workers, Vectors};
+use crate::cache::CachedIds;
+use crate::compute_sql::Vectors;
+use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
-use crate::source::IdDatum;
 
 /// The undirected weighted view of `vectors`' version: each edge weighs
 /// its weight if `weighted` (NULL: if the graph has weights), else 1; the
 /// two directions of a directed graph add up. A negative or NaN weight is
 /// refused, naming the edge by its external ids.
-pub(super) fn undirected<E: IdDatum>(
+pub(super) fn undirected<E: CachedIds>(
     vectors: &Vectors<E>,
     weighted: Option<bool>,
 ) -> Result<Undirected, CommunitySqlError> {
@@ -31,7 +32,7 @@ pub(super) fn undirected<E: IdDatum>(
     built.map_err(|error| match error {
         CommunityError::NegativeWeight { from, to, weight } => {
             let id_map = &vectors.loaded.id_map;
-            let external = |dense| id_map.external_id(dense).map(|id| format!("{id:?}"));
+            let external = |dense| id_map.external_id(dense).map(E::named);
             CommunitySqlError::NegativeWeight {
                 from: external(from).unwrap_or_default(),
                 to: external(to).unwrap_or_default(),
@@ -46,7 +47,7 @@ pub(super) fn undirected<E: IdDatum>(
 /// tombstoned node), refused as `contract` refuses labels that are not
 /// integers, with its charge to the call's budget. `what` names the
 /// argument, for the error.
-pub(super) fn integers<E: IdDatum>(
+pub(super) fn integers<E: CachedIds>(
     vectors: &mut Vectors<E>,
     name: &str,
     what: &'static str,

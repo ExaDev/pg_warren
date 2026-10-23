@@ -12,9 +12,8 @@ use pgrx::prelude::*;
 use pgrx::{AnyElement, IntoDatum, PgSqlErrorCode};
 use warren_core::compute::{Bytes, Gathered, Message, Received, RowAt};
 
-use crate::cache::LoadedVersion;
+use crate::cache::{CachedIds, LoadedVersion};
 use crate::external_ids::external;
-use crate::source::IdDatum;
 
 /// A row of the result.
 pub(super) type Row = (AnyElement, AnyElement);
@@ -24,7 +23,7 @@ pub(super) type Build<M> =
     Box<dyn for<'a> FnMut(<M as Message>::View<'a>, pg_sys::Oid) -> Option<pg_sys::Datum>>;
 
 /// The rows of a gather, built one at a time.
-pub(super) struct Stream<E: IdDatum, M: Message> {
+pub(super) struct Stream<E: CachedIds, M: Message> {
     /// The loaded version, for external ids.
     pub(super) loaded: Arc<LoadedVersion<E>>,
     /// The kernel's result.
@@ -39,7 +38,7 @@ pub(super) struct Stream<E: IdDatum, M: Message> {
     pub(super) at: RowAt,
 }
 
-impl<E: IdDatum, M: Message> Iterator for Stream<E, M> {
+impl<E: CachedIds, M: Message> Iterator for Stream<E, M> {
     type Item = Row;
 
     fn next(&mut self) -> Option<Row> {

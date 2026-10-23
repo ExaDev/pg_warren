@@ -11,7 +11,8 @@ use super::partition::{integers, undirected};
 use super::CommunitySqlError;
 use crate::access::entry;
 use crate::cache::resolve;
-use crate::compute_sql::{workers, Vectors};
+use crate::compute_sql::Vectors;
+use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
 use crate::source::with_id_type;
 

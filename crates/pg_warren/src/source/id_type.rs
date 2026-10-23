@@ -1,8 +1,15 @@
 //! The types a graph's node ids may have (`graphs.id_type`, DESIGN.md §5.1,
-//! §5.2), and the external ids of `warren-core` as Postgres values.
+//! §5.2, §5.7), and the external ids of `warren-core` as Postgres values.
+
+use std::borrow::Borrow;
+use std::ffi::CStr;
+use std::fmt::Debug;
 
 use pgrx::{pg_sys, FromDatum, IntoDatum, Uuid};
-use warren_core::graph::ExternalId;
+use warren_core::graph::{
+    BuildBuffer, BuildMemory, ExternalId, FixedKeys, GraphError, IdMap, IndexedKeys, TextIds,
+    TextIndex, TextKeys,
+};
 
 /// A graph's id type: the type of its node query's one column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,15 +20,19 @@ pub(crate) enum IdType {
     Int8,
     /// `uuid`, as `[u8; 16]` external ids.
     Uuid,
+    /// `text` (or `varchar`, read as `text`), as the bytes of each id in
+    /// the database encoding.
+    Text,
 }
 
 impl IdType {
-    /// The id type with this type oid, if it is one.
+    /// The id type with this type oid, if it is one: `varchar` is `text`.
     pub(crate) fn from_oid(oid: pg_sys::Oid) -> Option<Self> {
         match oid {
             pg_sys::INT4OID => Some(Self::Int4),
             pg_sys::INT8OID => Some(Self::Int8),
             pg_sys::UUIDOID => Some(Self::Uuid),
+            pg_sys::TEXTOID | pg_sys::VARCHAROID => Some(Self::Text),
             _ => None,
         }
     }
@@ -32,6 +43,7 @@ impl IdType {
             Self::Int4 => pg_sys::INT4OID,
             Self::Int8 => pg_sys::INT8OID,
             Self::Uuid => pg_sys::UUIDOID,
+            Self::Text => pg_sys::TEXTOID,
         }
     }
 
@@ -41,12 +53,70 @@ impl IdType {
             Self::Int4 => "integer",
             Self::Int8 => "bigint",
             Self::Uuid => "uuid",
+            Self::Text => "text",
         }
+    }
+
+    /// Whether a column of type `oid` holds ids of this type: its own
+    /// type, or `varchar` for `text`, which has the same representation.
+    pub(crate) fn reads(self, oid: pg_sys::Oid) -> bool {
+        Self::from_oid(oid) == Some(self)
     }
 }
 
-/// An external id type with its Postgres value type: what the adapter
-/// reads from source rows and SQL arguments and returns to SQL.
+/// The key storage of an id type with its Postgres values: how the adapter
+/// reads ids from source rows and SQL arguments and returns them to SQL.
+/// Implemented by [`FixedKeys`] of each [`InPlaceId`] and by [`TextKeys`].
+pub(crate) trait IdDatum: IndexedKeys + 'static {
+    /// The id type.
+    const ID_TYPE: IdType;
+    /// An external id held by value, as an argument holds it.
+    type Owned: Borrow<Self::Key> + Clone + Debug + Send + Sync + 'static;
+    /// An external id read in place from a datum that lives for `'t`.
+    type InPlace<'t>: Borrow<Self::Key>;
+
+    /// The id a datum holds, read in place (a text id is detoasted, if it
+    /// must be, into the current memory context, else not copied), or
+    /// `None` for a NULL datum.
+    ///
+    /// # Safety
+    ///
+    /// `datum` is NULL or a datum of a type [`IdType::reads`] accepts for
+    /// [`Self::ID_TYPE`], which lives for `'t`.
+    unsafe fn in_place<'t>(datum: pg_sys::Datum, is_null: bool) -> Option<Self::InPlace<'t>>;
+
+    /// The id `key`, by value.
+    fn owned(key: &Self::Key) -> Self::Owned;
+
+    /// The id `key` as an error message names it: by its type's output
+    /// function, or for text its bytes clipped to [`NAMED_BYTES`] on a
+    /// character boundary and never checked against the encoding, so that
+    /// naming an id raises no error of its own.
+    fn named(key: &Self::Key) -> String;
+
+    /// A datum of [`Self::ID_TYPE`] holding `key`. A text id is checked to
+    /// be valid in the database encoding first (DESIGN.md §5.7), so no
+    /// invalid text reaches SQL: a version's bytes are not checked when it
+    /// is loaded.
+    fn datum(key: &Self::Key) -> Option<pg_sys::Datum>;
+
+    /// The external id an integer of a narrower SQL type widens to, if
+    /// this is an integer id type it fits.
+    fn from_integer(value: i64) -> Option<Self::Owned>;
+
+    /// No node ids, to take a node query's, charged to `memory`.
+    fn node_ids(memory: &BuildMemory) -> Self::Ids;
+
+    /// Appends `key` to `ids`.
+    fn push_node_id(ids: &mut Self::Ids, key: &Self::Key) -> Result<(), GraphError>;
+
+    /// The bytes of the hash index a call that maps many ids builds over
+    /// `id_map` (DESIGN.md §5.7), or `None` for an id type that maps them by
+    /// binary search alone.
+    fn lookup_index_bytes(id_map: &IdMap<Self>) -> Option<u64>;
+}
+
+/// A fixed-width external id type with its Postgres value type.
 ///
 /// # Safety
 ///
@@ -56,7 +126,9 @@ impl IdType {
 /// at most 8. Its segments are copied there unchanged on a little-endian
 /// target, so `Self::WIDTH` must be `size_of::<Self>()` and, on such a
 /// target, an id's encoding (`write_le`) must be its bytes in memory.
-pub(crate) unsafe trait IdDatum: ExternalId + Send + Sync + 'static {
+pub(crate) unsafe trait InPlaceId: ExternalId + Send + Sync + 'static {
+    /// The id type.
+    const ID_TYPE: IdType;
     /// The Rust type pgrx reads and writes the SQL value as.
     type Sql: FromDatum + IntoDatum;
 
@@ -73,7 +145,8 @@ pub(crate) unsafe trait IdDatum: ExternalId + Send + Sync + 'static {
 
 // SAFETY: an integer: any bits are a value, no padding, alignment 4;
 // encoded little-endian in its size.
-unsafe impl IdDatum for i32 {
+unsafe impl InPlaceId for i32 {
+    const ID_TYPE: IdType = IdType::Int4;
     type Sql = i32;
 
     fn from_sql(value: i32) -> Self {
@@ -91,7 +164,8 @@ unsafe impl IdDatum for i32 {
 
 // SAFETY: an integer: any bits are a value, no padding, alignment 8;
 // encoded little-endian in its size.
-unsafe impl IdDatum for i64 {
+unsafe impl InPlaceId for i64 {
+    const ID_TYPE: IdType = IdType::Int8;
     type Sql = i64;
 
     fn from_sql(value: i64) -> Self {
@@ -109,7 +183,8 @@ unsafe impl IdDatum for i64 {
 
 // SAFETY: bytes: any bits are a value, no padding, alignment 1;
 // encoded as themselves.
-unsafe impl IdDatum for [u8; 16] {
+unsafe impl InPlaceId for [u8; 16] {
+    const ID_TYPE: IdType = IdType::Uuid;
     type Sql = Uuid;
 
     fn from_sql(value: Uuid) -> Self {
@@ -125,22 +200,153 @@ unsafe impl IdDatum for [u8; 16] {
     }
 }
 
+impl<E: InPlaceId> IdDatum for FixedKeys<E> {
+    const ID_TYPE: IdType = E::ID_TYPE;
+    type Owned = E;
+    type InPlace<'t> = E;
+
+    unsafe fn in_place<'t>(datum: pg_sys::Datum, is_null: bool) -> Option<Self::InPlace<'t>> {
+        // SAFETY: the caller guarantees a NULL datum or one of E's SQL type.
+        let sql = unsafe { E::Sql::from_polymorphic_datum(datum, is_null, E::ID_TYPE.oid()) };
+        sql.map(E::from_sql)
+    }
+
+    fn owned(key: &E) -> E {
+        *key
+    }
+
+    fn named(key: &E) -> String {
+        let Some(datum) = Self::datum(key) else {
+            return String::new();
+        };
+        let (mut output, mut varlena) = (pg_sys::Oid::INVALID, false);
+        // SAFETY: the out-pointers point to live locals; the datum is of the
+        // type whose output function is called, which returns a palloc'd
+        // NUL-terminated string.
+        unsafe {
+            pg_sys::getTypeOutputInfo(E::ID_TYPE.oid(), &mut output, &mut varlena);
+            let text = pg_sys::OidOutputFunctionCall(output, datum);
+            CStr::from_ptr(text).to_string_lossy().into_owned()
+        }
+    }
+
+    fn datum(key: &E) -> Option<pg_sys::Datum> {
+        key.to_sql().into_datum()
+    }
+
+    fn from_integer(value: i64) -> Option<E> {
+        E::from_integer(value)
+    }
+
+    fn node_ids(memory: &BuildMemory) -> BuildBuffer<E> {
+        BuildBuffer::new(memory)
+    }
+
+    fn push_node_id(ids: &mut BuildBuffer<E>, key: &E) -> Result<(), GraphError> {
+        ids.push(*key)
+    }
+
+    fn lookup_index_bytes(_: &IdMap<Self>) -> Option<u64> {
+        None
+    }
+}
+
+/// The bytes of a text id an error message shows.
+pub(crate) const NAMED_BYTES: usize = 256;
+
+/// The most bytes a `text` holds: Postgres's `MaxAllocSize` (1 GB less one
+/// byte), less the varlena header.
+const MAX_TEXT_BYTES: usize = 0x3fff_ffff - pg_sys::VARHDRSZ;
+
+impl IdDatum for TextKeys {
+    const ID_TYPE: IdType = IdType::Text;
+    type Owned = Vec<u8>;
+    type InPlace<'t> = &'t [u8];
+
+    unsafe fn in_place<'t>(datum: pg_sys::Datum, is_null: bool) -> Option<Self::InPlace<'t>> {
+        // SAFETY: the caller guarantees a NULL datum or a `text` or
+        // `varchar` one living for 't; both are varlenas, read as their
+        // bytes.
+        unsafe { <&[u8]>::from_polymorphic_datum(datum, is_null, pg_sys::TEXTOID) }
+    }
+
+    fn owned(key: &[u8]) -> Vec<u8> {
+        key.to_vec()
+    }
+
+    fn named(key: &[u8]) -> String {
+        if key.len() <= NAMED_BYTES {
+            return String::from_utf8_lossy(key).into_owned();
+        }
+        // SAFETY: `key` holds more than NAMED_BYTES readable bytes, of
+        // which pg_mbcliplen reads at most NAMED_BYTES, stepping by the
+        // database encoding's character lengths without checking them (a
+        // text holds no NUL byte, at which it would stop), and returns a
+        // length within them.
+        let clipped = unsafe {
+            pg_sys::pg_mbcliplen(key.as_ptr().cast(), NAMED_BYTES as i32, NAMED_BYTES as i32)
+        };
+        let clipped = usize::try_from(clipped).unwrap_or(0).min(NAMED_BYTES);
+        format!("{}…", String::from_utf8_lossy(&key[..clipped]))
+    }
+
+    fn datum(key: &[u8]) -> Option<pg_sys::Datum> {
+        let fits = i32::try_from(key.len()).ok().filter(|_| key.len() <= MAX_TEXT_BYTES);
+        let Some(len) = fits else {
+            pgrx::ereport!(
+                ERROR,
+                pgrx::PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+                format!("a text id of {} bytes is too long to return", key.len())
+            );
+        };
+        let start = key.as_ptr().cast::<std::ffi::c_char>();
+        // SAFETY: `start` points to `len` readable bytes. Both functions
+        // are guarded and raise an ERROR rather than return a bad value:
+        // pg_verifymbstr, with `noError` false, raises 22021 for bytes
+        // invalid in the database encoding; the length fits a text.
+        unsafe {
+            pg_sys::pg_verifymbstr(start, len, false);
+            Some(pg_sys::Datum::from(pg_sys::cstring_to_text_with_len(start, len)))
+        }
+    }
+
+    fn from_integer(_: i64) -> Option<Vec<u8>> {
+        None
+    }
+
+    fn node_ids(memory: &BuildMemory) -> TextIds {
+        TextIds::new(memory)
+    }
+
+    fn push_node_id(ids: &mut TextIds, key: &[u8]) -> Result<(), GraphError> {
+        ids.push(key)
+    }
+
+    fn lookup_index_bytes(id_map: &IdMap<Self>) -> Option<u64> {
+        Some(TextIndex::bytes_for(id_map))
+    }
+}
+
 /// Evaluates `$body` with `$E` the external id type of `$id_type`
-/// (`i32`, `i64` or `[u8; 16]`): how the adapter dispatches a call on a
+/// (`FixedKeys` of `i32`, `i64` or `[u8; 16]`, or `TextKeys`): how the adapter dispatches a call on a
 /// graph's id type to code generic over [`IdDatum`].
 macro_rules! with_id_type {
     ($id_type:expr, $E:ident => $body:expr) => {
         match $id_type {
             $crate::source::IdType::Int4 => {
-                type $E = i32;
+                type $E = ::warren_core::graph::FixedKeys<i32>;
                 $body
             }
             $crate::source::IdType::Int8 => {
-                type $E = i64;
+                type $E = ::warren_core::graph::FixedKeys<i64>;
                 $body
             }
             $crate::source::IdType::Uuid => {
-                type $E = [u8; 16];
+                type $E = ::warren_core::graph::FixedKeys<[u8; 16]>;
+                $body
+            }
+            $crate::source::IdType::Text => {
+                type $E = ::warren_core::graph::TextKeys;
                 $body
             }
         }
@@ -150,12 +356,12 @@ pub(crate) use with_id_type;
 
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
-mod tests {
+mod unit {
     use super::*;
 
     #[test]
     fn an_external_id_is_encoded_as_its_bytes_in_memory() {
-        fn check<E: IdDatum>(id: E, in_memory: &[u8]) {
+        fn check<E: InPlaceId>(id: E, in_memory: &[u8]) {
             assert_eq!(E::WIDTH, std::mem::size_of::<E>());
             let mut encoded = Vec::new();
             id.write_le(&mut encoded);
@@ -176,10 +382,15 @@ mod tests {
 
     #[test]
     fn id_types_round_trip_through_their_oids() {
-        for id_type in [IdType::Int4, IdType::Int8, IdType::Uuid] {
+        for id_type in [IdType::Int4, IdType::Int8, IdType::Uuid, IdType::Text] {
             assert_eq!(IdType::from_oid(id_type.oid()), Some(id_type));
+            assert!(id_type.reads(id_type.oid()));
         }
-        assert_eq!(IdType::from_oid(pg_sys::TEXTOID), None);
+        assert_eq!(IdType::from_oid(pg_sys::VARCHAROID), Some(IdType::Text));
+        assert!(IdType::Text.reads(pg_sys::VARCHAROID));
+        for refused in [pg_sys::BPCHAROID, pg_sys::NAMEOID, pg_sys::INT2OID, pg_sys::BYTEAOID] {
+            assert_eq!(IdType::from_oid(refused), None);
+        }
     }
 
     #[test]
@@ -195,15 +406,55 @@ mod tests {
         assert_eq!(i32::from_integer(7), Some(7));
         assert_eq!(i32::from_integer(i64::from(i32::MAX) + 1), None);
         assert_eq!(<[u8; 16]>::from_integer(1), None);
+        assert_eq!(<TextKeys as IdDatum>::from_integer(1), None);
     }
 
     #[test]
     fn dispatch_picks_the_external_id_type() {
-        fn width(id_type: IdType) -> usize {
-            with_id_type!(id_type, E => <E as ExternalId>::WIDTH)
+        fn dispatched(id_type: IdType) -> IdType {
+            with_id_type!(id_type, E => <E as IdDatum>::ID_TYPE)
         }
-        assert_eq!(width(IdType::Int4), 4);
-        assert_eq!(width(IdType::Int8), 8);
-        assert_eq!(width(IdType::Uuid), 16);
+        for id_type in [IdType::Int4, IdType::Int8, IdType::Uuid, IdType::Text] {
+            assert_eq!(dispatched(id_type), id_type);
+        }
+    }
+}
+
+#[cfg(any(test, feature = "pg_test"))]
+#[pgrx::pg_schema]
+mod tests {
+    use pgrx::prelude::*;
+    use warren_core::graph::{FixedKeys, TextKeys};
+
+    use super::{IdDatum, NAMED_BYTES};
+
+    /// An error names a text id clipped to a character boundary, and never
+    /// checks it, so naming it raises no error of its own.
+    #[pg_test]
+    fn a_text_id_is_named_clipped_and_unchecked() {
+        assert_eq!(TextKeys::named("a b".as_bytes()), "a b");
+        let long = "é".repeat(1000);
+        assert_eq!(TextKeys::named(long.as_bytes()), format!("{}…", "é".repeat(NAMED_BYTES / 2)));
+        let odd = format!("x{long}");
+        let named = TextKeys::named(odd.as_bytes());
+        assert_eq!(named, format!("x{}…", "é".repeat((NAMED_BYTES - 1) / 2)), "on a boundary");
+        let invalid = TextKeys::named(&[0xff; 1000]);
+        assert!(invalid.chars().count() <= NAMED_BYTES + 1, "{}", invalid.len());
+        assert_eq!(FixedKeys::<i64>::named(&-7), "-7");
+    }
+
+    /// A text id is checked against the database encoding as it becomes a
+    /// datum (DESIGN.md §5.7); the test database is UTF8.
+    #[pg_test(error = "invalid byte sequence for encoding \"UTF8\": 0xff")]
+    fn a_text_id_invalid_in_the_database_encoding_is_refused() {
+        TextKeys::datum(&[b'a', 0xff]);
+    }
+
+    #[pg_test]
+    fn a_text_id_becomes_a_text_datum() {
+        let datum = TextKeys::datum("é".as_bytes());
+        // SAFETY: the datum was just made as a text.
+        let text = datum.and_then(|datum| unsafe { String::from_datum(datum, false) });
+        assert_eq!(text.as_deref(), Some("é"));
     }
 }

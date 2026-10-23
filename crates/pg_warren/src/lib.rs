@@ -37,7 +37,7 @@ pub extern "C-unwind" fn _PG_init() {
     cache::define_memory_settings();
     cache::define_shared_cache();
     traversal_sql::define_max_walk_paths();
-    compute_sql::define_compute_settings();
+    interrupts::define_compute_settings();
 }
 
 /// Required by `cargo pgrx test`; must be visible at the crate root.

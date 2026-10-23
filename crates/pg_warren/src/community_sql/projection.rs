@@ -6,15 +6,15 @@
 use pgrx::prelude::*;
 use warren_core::community::{self, Aggregate};
 use warren_core::compute::{ComputeMemory, MemoryCharge};
-use warren_core::graph::Membership;
+use warren_core::graph::{FixedKeys, Membership};
 
 use super::CommunitySqlError;
 use crate::access::{entry, is_reader};
-use crate::cache::{cached, compute_memory, resolve, Resolved};
+use crate::cache::{cached, compute_memory, resolve, CachedIds, Resolved};
 use crate::catalog::{parent_of, GraphDefinition, GraphSource};
 use crate::compute_sql::Vectors;
 use crate::segment::{read_segment, SpiSegmentStore, MEMBERSHIP};
-use crate::source::{with_id_type, IdDatum};
+use crate::source::with_id_type;
 
 /// `warren.project`: vector `y` of `out_graph`'s version `version` (NULL:
 /// its current one) as each community's `agg` (`sum`, `mean`, `max`, `min`
@@ -93,7 +93,7 @@ struct Pair {
 /// within one compute budget.
 struct Opened<E> {
     parent: Vectors<E>,
-    quotient: Vectors<i64>,
+    quotient: Vectors<FixedKeys<i64>>,
     membership: Membership,
     _membership_charge: MemoryCharge,
     memory: ComputeMemory,
@@ -145,9 +145,9 @@ impl Pair {
     }
 
     /// Loads both versions and the membership, charged to one budget.
-    fn open<E: IdDatum + Send + Sync>(self) -> Result<Opened<E>, CommunitySqlError> {
+    fn open<E: CachedIds + Send + Sync>(self) -> Result<Opened<E>, CommunitySqlError> {
         let parent_loaded = cached::<E>(&self.parent)?;
-        let quotient_loaded = cached::<i64>(&self.quotient)?;
+        let quotient_loaded = cached::<FixedKeys<i64>>(&self.quotient)?;
         let memory = compute_memory();
         let parent_nodes = parent_loaded.id_map.id_space();
         // The segment as read, and the membership decoded from it.

@@ -3,7 +3,6 @@
 //! §5.5, §7). Every query function opens its version this way on every
 //! call.
 
-use std::mem::size_of;
 use std::sync::Arc;
 
 use pgrx::pg_sys;
@@ -15,13 +14,12 @@ use super::bound::{admit_load, make_room, unfit, unfit_notice};
 use super::shared::{evict_vector, prune as prune_shared, shared, shared_hit};
 use super::statement::{notice_due, pin_vector, pin_version, version_pinned};
 use super::versions::{VersionCache, CACHE};
-use super::{installation, load, trim, CacheError, LoadedVersion};
+use super::{installation, load, trim, CacheError, CachedIds, LoadedVersion};
 use crate::access::{as_catalog_owner, require_reader};
 use crate::catalog::{require_version, GraphDefinition, VersionId};
 use crate::parallel_worker::cache_notice_raised;
 use crate::read_only::{read_one, read_two};
 use crate::segment::SpiSegmentStore;
-use crate::source::IdDatum;
 use crate::vector::{
     self, cached_vectors, forget, lookup_vector, remember, retain_transients, transient_versions,
     SpiVectorStore, VectorError, VectorId, VectorRecord,
@@ -74,7 +72,7 @@ pub(crate) fn resolve(
 /// by trimming the cache to `warren.max_cache_memory`, evicting only what
 /// the statement has not read. A hit trims it too, so a lowered cap takes
 /// effect at the next lookup.
-pub(crate) fn cached<E: IdDatum + Send + Sync>(
+pub(crate) fn cached<E: CachedIds>(
     resolved: &Resolved,
 ) -> Result<Arc<LoadedVersion<E>>, CacheError> {
     if let Some(loaded) = CACHE.with_borrow_mut(|cache| cache.get::<E>(resolved.version)) {
@@ -90,9 +88,7 @@ pub(crate) fn cached<E: IdDatum + Send + Sync>(
 
 /// The version `resolved` names, loaded into this backend's cache, as
 /// [`cached`] describes.
-fn load_private<E: IdDatum + Send + Sync>(
-    resolved: &Resolved,
-) -> Result<Arc<LoadedVersion<E>>, CacheError> {
+fn load_private<E: CachedIds>(resolved: &Resolved) -> Result<Arc<LoadedVersion<E>>, CacheError> {
     let (graph_id, version) = (resolved.graph.graph_id, resolved.version);
     prune_dropped()?;
     let expected = expected_bytes::<E>(version)?;
@@ -125,7 +121,7 @@ fn load_private<E: IdDatum + Send + Sync>(
 /// loaded into the shared cache if it admits them, and the rest are
 /// refused together, before either is loaded into this backend's cache,
 /// if they would not fit beside what it holds.
-pub(crate) fn cached_pair<E: IdDatum + Send + Sync>(
+pub(crate) fn cached_pair<E: CachedIds>(
     first: &Resolved,
     second: &Resolved,
 ) -> Result<[Arc<LoadedVersion<E>>; 2], CacheError> {
@@ -167,9 +163,7 @@ pub(crate) fn cached_pair<E: IdDatum + Send + Sync>(
 /// The loaded version `resolved` names if this backend's cache or the
 /// shared cache holds it, pinned until the statement ends; nothing is
 /// loaded.
-fn hit<E: IdDatum + Send + Sync>(
-    resolved: &Resolved,
-) -> Result<Option<Arc<LoadedVersion<E>>>, CacheError> {
+fn hit<E: CachedIds>(resolved: &Resolved) -> Result<Option<Arc<LoadedVersion<E>>>, CacheError> {
     if let Some(loaded) = CACHE.with_borrow_mut(|cache| cache.get::<E>(resolved.version)) {
         pin_version(resolved.version);
         return Ok(Some(loaded));
@@ -264,9 +258,10 @@ pub(crate) fn evict_graph(graph_id: i32) -> usize {
 }
 
 /// About the bytes loading `version` adds to the cache: its stored
-/// segments (`warren.versions.bytes`) and the id map's second direction,
-/// which is built at load (an external id per dense id).
-pub(super) fn expected_bytes<E: IdDatum>(version: VersionId) -> Result<u64, CacheError> {
+/// segments (`warren.versions.bytes`) and what a load builds beside them:
+/// a fixed type's second direction (an external id per dense id); nothing
+/// for a text id map, which stores both directions (DESIGN.md §5.7).
+pub(super) fn expected_bytes<E: CachedIds>(version: VersionId) -> Result<u64, CacheError> {
     let (stored, id_space) = as_catalog_owner(|| {
         Ok::<_, CacheError>(read_two::<i64, i64>(
             "SELECT bytes, id_space FROM warren.versions WHERE version_id = $1",
@@ -274,8 +269,8 @@ pub(super) fn expected_bytes<E: IdDatum>(version: VersionId) -> Result<u64, Cach
         )?)
     })?;
     let count = |value: Option<i64>| value.and_then(|value| u64::try_from(value).ok());
-    let second_direction = count(id_space).unwrap_or(0).saturating_mul(size_of::<E>() as u64);
-    Ok(count(stored).unwrap_or(0).saturating_add(second_direction))
+    let built = E::built_at_load(count(id_space).unwrap_or(0));
+    Ok(count(stored).unwrap_or(0).saturating_add(built))
 }
 
 /// Which of `versions` still exist.
@@ -301,6 +296,7 @@ fn existing_versions(versions: &[VersionId]) -> Result<Vec<VersionId>, CacheErro
 mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
+    use warren_core::graph::FixedKeys;
 
     use std::sync::Arc;
 
@@ -310,9 +306,9 @@ mod tests {
     };
 
     /// Graph `name`'s current version, through the cache.
-    fn open(name: &str) -> Result<Arc<super::LoadedVersion<i64>>, Error> {
+    fn open(name: &str) -> Result<Arc<super::LoadedVersion<FixedKeys<i64>>>, Error> {
         let resolved = resolve(name, None, "read").map_err(|_| Error::InvalidPosition)?;
-        cached::<i64>(&resolved).map_err(|_| Error::InvalidPosition)
+        cached::<FixedKeys<i64>>(&resolved).map_err(|_| Error::InvalidPosition)
     }
 
     /// A version a call holds, evicted by the cap, is shared by later

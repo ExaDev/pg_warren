@@ -22,16 +22,16 @@ use warren_core::compute::{
 use warren_core::graph::RelationSelection;
 
 use super::from_query::{check_id_column, id_type_name};
-use super::settings::workers;
 use super::vectors::Vectors;
 use super::{entry, ComputeSqlError};
 use crate::access::{with_search_path, Caller};
-use crate::cache::{resolve, Resolved};
+use crate::cache::{resolve, CachedIds, Resolved};
 use crate::external_ids::check_type;
+use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
 use crate::read_only::read_one;
 use crate::selection::{direction, relations};
-use crate::source::{describe, type_name, with_id_type, IdDatum, SourceError};
+use crate::source::{describe, type_name, with_id_type, SourceError};
 pub(crate) use codec::TypeError;
 use codec::{Codec, ResultType};
 use emit::{Build, Row, Stream};
@@ -140,7 +140,7 @@ fn result_oid(result: ResultType) -> Result<pg_sys::Oid, ComputeSqlError> {
 
 impl Arguments<'_> {
     /// Where the messages come from.
-    fn prepare<E: IdDatum>(
+    fn prepare<E: CachedIds>(
         &self,
         vectors: &mut Vectors<E>,
         caller: &Caller,
@@ -190,7 +190,7 @@ impl Arguments<'_> {
     }
 
     /// Gathers at id type `E`.
-    fn run<E: IdDatum>(
+    fn run<E: CachedIds>(
         &self,
         resolved: Resolved,
         caller: &Caller,
@@ -272,7 +272,7 @@ macro_rules! sql_element {
 }
 sql_element!(f64, f32, bool);
 
-impl<E: IdDatum> Run<'_, E> {
+impl<E: CachedIds> Run<'_, E> {
     /// Fans `messages` out, combines them, and streams the result, whose
     /// single values `build` makes.
     fn stream<M: Combine + 'static>(

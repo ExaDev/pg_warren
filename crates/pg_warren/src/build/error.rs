@@ -2,13 +2,14 @@
 
 use pgrx::PgSqlErrorCode;
 use thiserror::Error;
+use warren_core::compute::ComputeError;
 use warren_core::graph::GraphError;
 
 use crate::access::AccessError;
 use crate::access::SqlError;
 use crate::cache::LoadError;
 use crate::catalog::CatalogError;
-use crate::extension::graph_sqlstate;
+use crate::extension::{compute_sqlstate, graph_sqlstate};
 use crate::segment::SegmentError;
 use crate::source::SourceError;
 
@@ -36,6 +37,9 @@ pub(crate) enum BuildError {
     /// The graph structure could not be built, encoded or decoded.
     #[error(transparent)]
     Graph(#[from] GraphError),
+    /// Mapping edge endpoints on the compute pool failed or was cancelled.
+    #[error(transparent)]
+    Compute(#[from] ComputeError),
 }
 
 impl SqlError for BuildError {
@@ -48,6 +52,7 @@ impl SqlError for BuildError {
             Self::Load(error) => error.sqlstate(),
             Self::Spi(_) => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
             Self::Graph(error) => graph_sqlstate(error),
+            Self::Compute(error) => compute_sqlstate(error),
         }
     }
 }

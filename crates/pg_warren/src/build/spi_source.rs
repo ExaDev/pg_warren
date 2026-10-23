@@ -2,16 +2,17 @@
 //! read-only cursors under the build's pinned snapshot, as the graph owner
 //! (DESIGN.md §5.4 step 1, §7).
 
+use std::borrow::Borrow;
+
 use pgrx::prelude::*;
-use warren_core::graph::{BuildBuffer, BuildMemory};
+use warren_core::graph::BuildMemory;
 
 use super::error::BuildError;
 use super::source::{EdgeRow, EdgeSink, SourceReader};
 use crate::access::{as_role, with_read_only, with_search_path};
 use crate::catalog::GraphDefinition;
 use crate::source::{
-    check_edge_columns, for_each_row, for_each_tuple, open_read_only, require_node_id_type,
-    text_in_place, IdDatum,
+    check_edge_columns, for_each_tuple, open_read_only, require_node_id_type, IdDatum,
 };
 
 /// A graph's sources, read through SPI.
@@ -27,7 +28,7 @@ impl<'g> SpiSource<'g> {
 }
 
 impl<E: IdDatum> SourceReader<E> for SpiSource<'_> {
-    fn node_ids(&mut self, memory: &BuildMemory) -> Result<BuildBuffer<E>, BuildError> {
+    fn node_ids(&mut self, memory: &BuildMemory) -> Result<E::Ids, BuildError> {
         let graph = self.graph;
         as_role(graph.owner, || {
             with_search_path(&graph.search_path, || {
@@ -36,10 +37,10 @@ impl<E: IdDatum> SourceReader<E> for SpiSource<'_> {
                         let mut opened =
                             open_read_only::<BuildError>(client, "node_query", &graph.node_query)?;
                         require_node_id_type(&opened.columns, graph.id_type)?;
-                        let mut ids = BuildBuffer::new(memory);
-                        for_each_row::<BuildError>(&mut opened.cursor, |row| {
-                            if let Some(id) = row.get::<E::Sql>(1)?.map(E::from_sql) {
-                                ids.push(id)?;
+                        let mut ids = E::node_ids(memory);
+                        for_each_tuple::<BuildError>(&mut opened.cursor, |row| {
+                            if let Some(id) = row.id::<E>(1)? {
+                                E::push_node_id(&mut ids, id.borrow())?;
                             }
                             Ok(())
                         })?;
@@ -50,7 +51,7 @@ impl<E: IdDatum> SourceReader<E> for SpiSource<'_> {
         })
     }
 
-    fn edges(&mut self, sink: &mut dyn EdgeSink<E>) -> Result<(), BuildError> {
+    fn edges(&mut self, sink: &mut dyn EdgeSink<E::Key>) -> Result<(), BuildError> {
         let graph = self.graph;
         let weight_column = if graph.has_relations { 4 } else { 3 };
         as_role(graph.owner, || {
@@ -67,11 +68,13 @@ impl<E: IdDatum> SourceReader<E> for SpiSource<'_> {
                         )?;
                         sink.expect_rows(opened.estimated_rows);
                         for_each_tuple(&mut opened.cursor, |row| {
+                            let source = row.id::<E>(1)?;
+                            let target = row.id::<E>(2)?;
                             sink.row(EdgeRow {
-                                source: row.get::<E::Sql>(1)?.map(E::from_sql),
-                                target: row.get::<E::Sql>(2)?.map(E::from_sql),
+                                source: source.as_ref().map(Borrow::borrow),
+                                target: target.as_ref().map(Borrow::borrow),
                                 relation: match graph.has_relations {
-                                    true => text_in_place(row, 3)?,
+                                    true => row.text(3)?,
                                     false => None,
                                 },
                                 weight: match graph.weighted {
@@ -93,6 +96,8 @@ impl<E: IdDatum> SourceReader<E> for SpiSource<'_> {
 mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
+
+    use warren_core::graph::FixedKeys;
 
     use super::SpiSource;
     use crate::build::error::BuildError;
@@ -147,7 +152,7 @@ mod tests {
         let graph = GraphDefinition::find("leak").map_err(|_| Error::InvalidPosition)?;
         let mut probe = Probe { before: allocated(), first_batch: 0, peak: 0, rows: 0 };
         with_pinned_snapshot(|| {
-            SourceReader::<i64>::edges(&mut SpiSource::new(&graph), &mut probe)
+            SourceReader::<FixedKeys<i64>>::edges(&mut SpiSource::new(&graph), &mut probe)
         })
         .map_err(|_| Error::InvalidPosition)?;
         assert_eq!(probe.rows, 400_000);

@@ -7,13 +7,17 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 
 use pgrx::prelude::*;
-use pgrx::spi::{SpiClient, SpiCursor, SpiHeapTupleData, SpiTupleTable};
+use pgrx::spi::{SpiClient, SpiCursor, SpiTupleTable};
 use pgrx::{PgList, PgMemoryContexts, PgTupleDesc};
 
-use super::{ColumnType, SourceError};
+use super::{ColumnType, IdDatum, SourceError};
 
 /// Rows fetched from a cursor at a time.
 const BATCH_ROWS: std::ffi::c_long = 10_000;
+
+/// The bytes the rows of a batch may hold in their memory context (what
+/// reading them detoasts) before it is reset, within the batch.
+const RESET_BYTES: u64 = 64 << 20;
 
 /// Runs `f` under one snapshot, taken after a command counter increment so
 /// that it sees every earlier write of this transaction, including the
@@ -156,8 +160,30 @@ unsafe fn column_types(descriptor: pg_sys::TupleDesc) -> Vec<ColumnType> {
         .map(|attribute| ColumnType {
             oid: attribute.atttypid,
             name: type_name(attribute.atttypid),
+            nondeterministic: nondeterministic(attribute.attcollation),
         })
         .collect()
+}
+
+/// The name of `collation` if it is a nondeterministic collation.
+fn nondeterministic(collation: pg_sys::Oid) -> Option<String> {
+    if collation == pg_sys::Oid::INVALID {
+        return None;
+    }
+    // SAFETY: a valid collation oid, from a tuple descriptor; both calls
+    // read the syscache and raise an ERROR for an unknown oid rather than
+    // return a bad value. get_collation_name returns NULL or a palloc'd
+    // NUL-terminated string.
+    unsafe {
+        if pg_sys::get_collation_isdeterministic(collation) {
+            return None;
+        }
+        let name = pg_sys::get_collation_name(collation);
+        Some(match name.is_null() {
+            true => collation.to_u32().to_string(),
+            false => CStr::from_ptr(name).to_string_lossy().into_owned(),
+        })
+    }
 }
 
 /// A type's SQL name, as `format_type` prints it.
@@ -168,50 +194,36 @@ pub(crate) fn type_name(oid: pg_sys::Oid) -> String {
 }
 
 /// Passes every remaining row of `cursor` to `each`, a batch at a time,
-/// checking for interrupts between batches and freeing each batch after it.
-pub(crate) fn for_each_row<E: From<pgrx::spi::Error>>(
-    cursor: &mut SpiCursor<'_>,
-    mut each: impl FnMut(&SpiHeapTupleData<'_>) -> Result<(), E>,
-) -> Result<(), E> {
-    loop {
-        check_for_interrupts!();
-        let batch = cursor.fetch(BATCH_ROWS)?;
-        if batch.is_empty() {
-            return Ok(());
-        }
-        for row in batch {
-            each(&row)?;
-        }
-        // SAFETY: SPI_tuptable is the batch just consumed, which nothing
-        // refers to any more.
-        unsafe { pg_sys::SPI_freetuptable(pg_sys::SPI_tuptable) };
-    }
-}
-
-/// [`for_each_row`], passing each row as its batch's tuple table positioned
-/// at it, so that [`text_in_place`] can read a text column without the copy
-/// pgrx's typed getters make into a memory context that lives until SPI
-/// finishes (one allocation per row, held for the whole read). Each batch
-/// runs in a memory context reset after it, which holds whatever reading a
-/// row detoasts.
+/// checking for interrupts between batches and freeing each batch after
+/// it. Each row is a [`Row`] of its batch's tuple table, so that its id
+/// and text columns can be read in place, without the copy pgrx's typed
+/// getters make into a memory context that lives until SPI finishes (one
+/// allocation per row, held for the whole read). Rows are read in a memory
+/// context of their own, which holds whatever reading them detoasts: it is
+/// reset after each batch, and within one once it holds [`RESET_BYTES`].
 pub(crate) fn for_each_tuple<E: From<pgrx::spi::Error>>(
     cursor: &mut SpiCursor<'_>,
-    mut each: impl FnMut(&SpiTupleTable<'_>) -> Result<(), E>,
+    mut each: impl FnMut(&Row<'_>) -> Result<(), E>,
 ) -> Result<(), E> {
     let mut rows = PgMemoryContexts::new("warren rows");
+    let context = rows.value();
     loop {
         check_for_interrupts!();
         let mut batch = cursor.fetch(BATCH_ROWS)?;
         if batch.is_empty() {
             return Ok(());
         }
-        // SAFETY: `rows` is a context this function owns; what is allocated
-        // in it while the batch is read is used only by `each`, which
-        // copies what it keeps, before the reset below.
+        // SAFETY: `rows` is a context this function owns. What is allocated
+        // in it while a row is read is reachable only through that `Row`,
+        // whose borrow ends with the call of `each` that it is passed to,
+        // before the context is reset, here or below.
         let read = unsafe {
             rows.switch_to(|_| {
                 while batch.next().is_some() {
-                    each(&batch)?;
+                    each(&Row { table: &batch })?;
+                    if pg_sys::MemoryContextMemAllocated(context, true) as u64 > RESET_BYTES {
+                        pg_sys::MemoryContextReset(context);
+                    }
                 }
                 Ok::<_, E>(())
             })
@@ -225,18 +237,108 @@ pub(crate) fn for_each_tuple<E: From<pgrx::spi::Error>>(
     }
 }
 
-/// The `text` in column `ordinal` of the row `table` is at, read in place
-/// from the tuple (or, if stored out of line or compressed, detoasted into
-/// the current memory context), without a copy.
-pub(crate) fn text_in_place<'t>(
-    table: &'t SpiTupleTable<'_>,
-    ordinal: usize,
-) -> Result<Option<&'t str>, pgrx::spi::Error> {
-    let Some(datum) = table.get_datum_by_ordinal(ordinal)? else {
-        return Ok(None);
-    };
-    // SAFETY: `datum` is the non-NULL `text` (the caller checked the
-    // column's type) of the tuple `table` is at, which lives until the tuple
-    // table is freed, so for as long as `table` is borrowed.
-    Ok(unsafe { <&str as FromDatum>::from_polymorphic_datum(datum, false, pg_sys::TEXTOID) })
+/// A row of a cursor, as [`for_each_tuple`] passes it: its batch's tuple
+/// table positioned at it, for one call. What is read from it in place
+/// borrows the row, so it cannot outlive the call, after which the memory
+/// context that holds what reading it detoasted may be reset. Its typed
+/// getters (through `Deref`) copy what they return.
+pub(crate) struct Row<'r> {
+    table: &'r SpiTupleTable<'r>,
+}
+
+impl<'r> Row<'r> {
+    /// The external id in column `ordinal` (of a type `E` reads), read in
+    /// place as [`Row::text`] reads a `text`.
+    pub(crate) fn id<E: IdDatum>(
+        &self,
+        ordinal: usize,
+    ) -> Result<Option<E::InPlace<'_>>, pgrx::spi::Error> {
+        let Some(datum) = self.table.get_datum_by_ordinal(ordinal)? else {
+            return Ok(None);
+        };
+        // SAFETY: `datum` is the non-NULL id (the caller checked the
+        // column's type) of the tuple the table is at, which lives until the
+        // tuple table is freed; detoasted, it lives in the rows' memory
+        // context, which is not reset while the row is borrowed.
+        Ok(unsafe { E::in_place(datum, false) })
+    }
+
+    /// The `text` in column `ordinal`, read in place from the tuple (or, if
+    /// stored out of line or compressed, detoasted into the rows' memory
+    /// context), without a copy.
+    pub(crate) fn text(&self, ordinal: usize) -> Result<Option<&str>, pgrx::spi::Error> {
+        let Some(datum) = self.table.get_datum_by_ordinal(ordinal)? else {
+            return Ok(None);
+        };
+        // SAFETY: as for `id`: the non-NULL `text` of the tuple, which lives
+        // while the row is borrowed.
+        Ok(unsafe { <&str as FromDatum>::from_polymorphic_datum(datum, false, pg_sys::TEXTOID) })
+    }
+}
+
+impl<'r> std::ops::Deref for Row<'r> {
+    type Target = SpiTupleTable<'r>;
+
+    fn deref(&self) -> &SpiTupleTable<'r> {
+        self.table
+    }
+}
+
+#[cfg(any(test, feature = "pg_test"))]
+#[pgrx::pg_schema]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
+mod tests {
+    use pgrx::prelude::*;
+
+    use super::*;
+
+    /// Reading a cursor in a test failed.
+    #[derive(Debug)]
+    struct ReadError;
+
+    impl From<SourceError> for ReadError {
+        fn from(_: SourceError) -> Self {
+            Self
+        }
+    }
+
+    impl From<pgrx::spi::Error> for ReadError {
+        fn from(_: pgrx::spi::Error) -> Self {
+            Self
+        }
+    }
+
+    /// Ids detoasted while a batch is read are freed as it is read, not
+    /// only once it ends: 100 rows of a compressed 1 MB text, all in one
+    /// batch, never hold more than the reset threshold and a row.
+    #[pg_test]
+    fn detoasted_rows_are_freed_within_a_batch() -> Result<(), pgrx::spi::Error> {
+        Spi::run(
+            "CREATE TABLE big_ids AS \
+             SELECT repeat(md5(n::text), 32768) AS id FROM generate_series(1, 100) n",
+        )?;
+        let read = with_pinned_snapshot(|| {
+            Spi::connect(|client| {
+                let mut opened =
+                    open_read_only::<ReadError>(client, "query", "SELECT id FROM big_ids")?;
+                let (mut rows, mut most) = (0, 0);
+                for_each_tuple::<ReadError>(&mut opened.cursor, |row| {
+                    assert_eq!(row.text(1)?.map(str::len), Some(1 << 20));
+                    // SAFETY: reads the size of the current context.
+                    let held = unsafe {
+                        pg_sys::MemoryContextMemAllocated(pg_sys::CurrentMemoryContext, true)
+                    };
+                    rows += 1;
+                    most = most.max(held);
+                    Ok(())
+                })?;
+                Ok::<_, ReadError>((rows, most))
+            })
+        });
+        assert!(read.is_ok(), "{read:?}");
+        let (rows, most) = read.unwrap_or_default();
+        assert_eq!(rows, 100);
+        assert!(most < (RESET_BYTES + (2 << 20)) as usize, "{most} bytes held");
+        Ok(())
+    }
 }

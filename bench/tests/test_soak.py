@@ -305,7 +305,7 @@ def test_the_settings_are_recorded_after_each_pass_sets_them_and_loads_the_libra
     runner = soak.Soak(None, options, provenance={})
     runner.session = lambda: FakeSession(log)
     result = {"stages": {}, "cached_bytes": GIB}
-    runner._queries(result, "raised", cap="8GB")
+    runner._queries(result, soak.CASES["a"], "raised", cap="8GB")
     snapshot = next(i for i, sql in enumerate(log) if "pg_settings" in sql)
     assert snapshot > max(i for i, sql in enumerate(log) if sql.startswith("SET "))
     # pg_settings lists warren.* only once a call has loaded the library.
@@ -330,7 +330,7 @@ def test_the_first_pass_runs_at_the_given_cap_and_counts_pagerank_against_it():
     options.eigen = False
     runner = soak.Soak(None, options, provenance={})
     runner.session = lambda: FakeSession(log)
-    runner._queries({"stages": {}, "cached_bytes": GIB}, "default", cap=runner.first_cap())
+    runner._queries({"stages": {}, "cached_bytes": GIB}, soak.CASES["a"], "default", cap=runner.first_cap())
     assert "SET warren.max_cache_memory = '418945kB'" in log
     assert any("warren.pagerank" in sql and "pg_stat_get_xact" in sql for sql in log)
     # Then once more from a cold cache, which must load the version once.
@@ -549,3 +549,39 @@ def test_a_shared_version_needs_no_raised_pass():
     assert not soak.needs_raised_pass({**over, "shared_bytes": 6 * GIB}, id_space)
     assert soak.needs_raised_pass({"cached_bytes": None, "cache_memory_bytes": 4 * GIB}, id_space)
     assert not soak.needs_raised_pass({"cached_bytes": GIB, "cache_memory_bytes": 4 * GIB}, id_space)
+
+
+TEXT = "https://example.org/resource/"
+
+
+def test_a_text_case_names_each_node_by_an_iri():
+    case = soak.replace(soak.CASES["a"], ids="text")
+    assert soak.edge_query(case, seed=0.25) == (
+        f"SELECT '{TEXT}' || src, '{TEXT}' || dst FROM soak_edges")
+    sql = soak.create_graph_sql(case, seed=0.25)
+    assert f"$n$SELECT '{TEXT}' || id FROM generate_series(1::bigint, 10000000) id$n$" in sql
+    assert soak.CASES["a"].ids == "bigint"
+
+
+def test_a_text_case_estimates_its_id_map_from_its_iris():
+    small = soak.replace(soak.CASES["a"], ids="text").scaled(1_000_000)  # 10 nodes, 100 edges
+    # Offsets 8(N+1) and targets 4M per direction; then the IRIs' bytes
+    # (nine of one digit, one of two), their offsets 8(N+1), their u32
+    # order 4N, and the tombstones N/8.
+    iris = 10 * len(TEXT) + 9 + 2
+    assert soak.segment_estimate(small) == 2 * (8 * 11 + 4 * 100) + iris + 8 * 11 + 4 * 10 + 1
+
+
+def test_a_text_case_passes_text_ids_to_the_calls():
+    calls = {call.name: call for call in soak.library_calls("soak", nodes=10, ids="text")}
+    assert "NULL::text" in calls["minimum_spanning_forest"].sql
+    assert f"'{TEXT}1'::text" in calls["most_similar"].sql
+    assert f"'{TEXT}' || (1 + (i * 7919) % 10)" in calls["similarity"].sql
+    assert f"SELECT '{TEXT}' || id, 1 FROM generate_series(1::bigint, 10, 100) id" in calls["similar_pairs"].setup[0]
+    assert "NULL::text" in soak.community_stats_sql("soak", "louvain", ids="text")
+
+
+def test_a_full_text_case_checks_its_edges_as_its_bigint_case_does():
+    case = soak.replace(soak.CASES["a"], ids="text")
+    with pytest.raises(soak.GeneratorDrift):
+        soak.check_edges(case, {"deduplicated_edges": 0, "edge_count": case.edges})

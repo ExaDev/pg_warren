@@ -10,10 +10,11 @@ use super::caveats::caveats;
 use super::matrix::{solver_options, OperatorArguments};
 use super::SpectralSqlError;
 use crate::access::entry;
-use crate::cache::resolve;
-use crate::compute_sql::{drop_named, vector_bytes, workers, Vectors};
+use crate::cache::{resolve, CachedIds};
+use crate::compute_sql::{drop_named, vector_bytes, Vectors};
+use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
-use crate::source::{with_id_type, IdDatum};
+use crate::source::with_id_type;
 
 /// One row of `eigen`'s result.
 type Row = (i32, f64, f64);
@@ -25,7 +26,7 @@ type Row = (i32, f64, f64);
 /// whether transient eigenvectors fit `warren.max_cache_memory` (with the
 /// transient ones they replace or drop released), is checked before
 /// solving, so a refusal writes none.
-fn solve<E: IdDatum>(
+fn solve<E: CachedIds>(
     mut vectors: Vectors<E>,
     operator: &OperatorArguments,
     options: &EigenOptions,
@@ -130,7 +131,7 @@ fn eigen(
 }
 
 /// The eigenpairs of `operator` over `vectors`' version.
-pub(super) fn eigenpairs<E: IdDatum>(
+pub(super) fn eigenpairs<E: CachedIds>(
     vectors: &Vectors<E>,
     operator: &OperatorArguments,
     options: &EigenOptions,
@@ -146,7 +147,7 @@ pub(super) fn eigenpairs<E: IdDatum>(
 
 /// Refuses `eigenpairs(vectors, operator, options)` if its working set
 /// cannot fit the compute memory, without solving.
-pub(super) fn admit<E: IdDatum>(
+pub(super) fn admit<E: CachedIds>(
     vectors: &Vectors<E>,
     operator: &OperatorArguments,
     options: &EigenOptions,

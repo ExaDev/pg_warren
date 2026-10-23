@@ -18,11 +18,10 @@ use super::ComputeSqlError;
 use crate::access::require_creator_or_owner;
 use crate::cache::{
     admit_transient, cached, cached_pair, cached_vector, cached_vector_hit, compute_memory,
-    forget_vector, keep_vector, shared_vector, trim, LoadedVersion, Resolved,
+    forget_vector, keep_vector, shared_vector, trim, CachedIds, LoadedVersion, Resolved,
 };
 use crate::catalog::{GraphDefinition, VersionId};
 use crate::segment::CHUNK_SIZE;
-use crate::source::IdDatum;
 use crate::vector::{
     admit_to_quota, drop_transient, keep_transient, transient, transients, write_vector, Binding,
     SpiVectorStore, VectorError, VectorId, VectorRecord, VectorStore,
@@ -101,7 +100,7 @@ struct Read {
     vector: Arc<AnyVector>,
 }
 
-impl<E: IdDatum> Vectors<E> {
+impl<E: CachedIds> Vectors<E> {
     /// Opens `resolved`'s version and lists its vectors, with a fresh call
     /// budget of `warren.max_compute_memory` (less what the statement holds
     /// past the cache's cap, the version included).
@@ -333,6 +332,7 @@ mod tests {
 
     use pgrx::prelude::*;
     use pgrx::spi::Error;
+    use warren_core::graph::FixedKeys;
 
     use super::Vectors;
     use crate::cache::resolve;
@@ -349,7 +349,8 @@ mod tests {
         // p (16,000 bytes) cannot be kept beside the transient vectors.
         Spi::run("SET LOCAL warren.max_cache_memory = '64kB'")?;
         let resolved = resolve("a", None, "read").map_err(|_| Error::InvalidPosition)?;
-        let mut vectors = Vectors::<i64>::open(resolved).map_err(|_| Error::InvalidPosition)?;
+        let mut vectors =
+            Vectors::<FixedKeys<i64>>::open(resolved).map_err(|_| Error::InvalidPosition)?;
         let first = vectors.get("p").map_err(|_| Error::InvalidPosition)?;
         let second = vectors.get("p").map_err(|_| Error::InvalidPosition)?;
         assert!(Arc::ptr_eq(&first, &second), "p was loaded again");

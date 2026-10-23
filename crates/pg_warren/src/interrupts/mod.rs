@@ -1,7 +1,11 @@
 //! The Postgres adapter of `warren-core`'s `Interrupts` port: the poll
 //! traversals and compute kernels make on the main thread (DESIGN.md §6.9,
-//! §9.3). Traversal and compute bindings both use it; it depends on no
-//! other feature.
+//! §9.3), and the compute pool whose jobs it polls for (`pool`). Builds,
+//! traversal and compute bindings use it; it depends on no other feature.
+
+mod pool;
+
+pub(crate) use pool::{define_compute_settings, workers};
 
 use warren_core::interrupts::{Cancelled, Interrupts};
 

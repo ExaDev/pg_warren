@@ -37,6 +37,10 @@ pub(crate) trait SegmentStore {
         segment: &str,
         each: &mut EachChunk<'_, SegmentError>,
     ) -> Result<(), SegmentError>;
+
+    /// The database encoding (`pg_database.encoding`), which a text id
+    /// map's `id_bytes` header records and must match (DESIGN.md §5.7).
+    fn encoding(&self) -> u8;
 }
 
 /// The chunk size of production builds: 8 MiB (DESIGN.md §5.1, §14 item 3).
@@ -132,10 +136,21 @@ pub(crate) mod tests {
         assert_eq!(error.sqlstate(), PgSqlErrorCode::ERRCODE_OUT_OF_MEMORY);
     }
 
-    /// An in-memory [`SegmentStore`].
-    #[derive(Debug, Default)]
+    /// An in-memory [`SegmentStore`], in a database of encoding
+    /// `encoding` (UTF8, 6, by default).
+    #[derive(Debug)]
     pub(crate) struct MemorySegmentStore {
         pub(crate) chunks: BTreeMap<(VersionId, String, i32), Vec<u8>>,
+        pub(crate) encoding: u8,
+    }
+
+    /// `PG_UTF8`.
+    pub(crate) const UTF8: u8 = 6;
+
+    impl Default for MemorySegmentStore {
+        fn default() -> Self {
+            Self { chunks: BTreeMap::new(), encoding: UTF8 }
+        }
     }
 
     impl SegmentStore for MemorySegmentStore {
@@ -172,6 +187,10 @@ pub(crate) mod tests {
                 .iter()
                 .filter(|((v, s, _), _)| *v == version && s == segment)
                 .try_for_each(|((_, _, chunk_no), data)| each(*chunk_no, data))
+        }
+
+        fn encoding(&self) -> u8 {
+            self.encoding
         }
     }
 

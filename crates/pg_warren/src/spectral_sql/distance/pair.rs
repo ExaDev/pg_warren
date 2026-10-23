@@ -12,11 +12,11 @@ use warren_core::spectral::{
 use warren_core::version;
 
 use super::super::SpectralSqlError;
-use crate::cache::Resolved;
+use crate::cache::{CachedIds, Resolved};
 use crate::catalog::compaction_between;
-use crate::compute_sql::{workers, Vectors};
+use crate::compute_sql::Vectors;
+use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
-use crate::source::IdDatum;
 
 /// The versions compared, `before` first.
 pub(super) struct Pair<E> {
@@ -27,7 +27,7 @@ pub(super) struct Pair<E> {
     alignment: Option<IdAlignment>,
 }
 
-impl<E: IdDatum> Pair<E> {
+impl<E: CachedIds> Pair<E> {
     /// Opens `before` and `after`. Versions of one graph must not have a
     /// compaction between them, and their shared dense ids must name the
     /// same nodes; versions of two graphs are aligned by external id.

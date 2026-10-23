@@ -114,6 +114,7 @@ mod tests {
     use crate::segment::SpiSegmentStore;
     use crate::vector::{read_vector, SpiVectorStore, VectorRecord, VectorStore};
     use warren_core::compute::AnyVector;
+    use warren_core::graph::FixedKeys;
 
     #[pg_test]
     fn the_shared_cache_is_on_by_default() -> Result<(), Error> {
@@ -131,7 +132,7 @@ mod tests {
         let setting = Spi::get_one::<String>("SHOW warren.shared_cache_memory")?;
         assert_eq!(setting.as_deref(), Some("0"));
         let (key, resolved) = graph("off", 50)?;
-        assert!(shared::<i64>(&resolved).map_err(|_| Error::InvalidPosition)?.is_none());
+        assert!(shared::<FixedKeys<i64>>(&resolved).map_err(|_| Error::InvalidPosition)?.is_none());
         assert_eq!(slot(key), None);
         Ok(())
     }
@@ -140,7 +141,7 @@ mod tests {
     fn an_uncommitted_version_is_loaded_privately() -> Result<(), Error> {
         set_cap(c"64MB")?;
         let (key, resolved) = graph("uncommitted", 50)?;
-        assert!(shared::<i64>(&resolved).map_err(|_| Error::InvalidPosition)?.is_none());
+        assert!(shared::<FixedKeys<i64>>(&resolved).map_err(|_| Error::InvalidPosition)?.is_none());
         Spi::run("SELECT warren.prewarm('uncommitted')")?;
         assert_eq!(slot(key), None);
         let evicted = Spi::get_one::<i64>("SELECT warren.evict('uncommitted')")?;
@@ -152,12 +153,16 @@ mod tests {
     fn a_version_is_loaded_once_and_shared_by_later_statements() -> Result<(), Error> {
         set_cap(c"64MB")?;
         let (key, resolved) = graph("shared_once", 2000)?;
-        let read =
-            || through::<i64>(port()?, &resolved).ok().flatten().ok_or(Error::InvalidPosition);
+        let read = || {
+            through::<FixedKeys<i64>>(port()?, &resolved)
+                .ok()
+                .flatten()
+                .ok_or(Error::InvalidPosition)
+        };
         let first = read()?;
         assert_eq!(slot(key), Some((State::Ready, 1, 1)), "pinned and mapped by its loader");
-        let private =
-            load::<i64>(&mut SpiSegmentStore, key.id, true).map_err(|_| Error::InvalidPosition)?;
+        let private = load::<FixedKeys<i64>>(&mut SpiSegmentStore, key.id, true)
+            .map_err(|_| Error::InvalidPosition)?;
         assert_eq!((&first.id_map, &first.graph), (&private.id_map, &private.graph));
         end_statement();
         assert_eq!(slot(key), Some((State::Ready, 0, 1)), "mapped across statements");
@@ -174,8 +179,12 @@ mod tests {
     fn a_version_read_again_in_its_statement_skips_the_registry() -> Result<(), Error> {
         set_cap(c"64MB")?;
         let (key, resolved) = graph("fast", 100)?;
-        let read =
-            || through::<i64>(port()?, &resolved).ok().flatten().ok_or(Error::InvalidPosition);
+        let read = || {
+            through::<FixedKeys<i64>>(port()?, &resolved)
+                .ok()
+                .flatten()
+                .ok_or(Error::InvalidPosition)
+        };
         let first = read()?;
         let clocks = with_backend(|backend| backend.locked(|registry, _| registry.clocks()));
         let again = read()?;
@@ -190,7 +199,8 @@ mod tests {
     fn a_version_larger_than_the_cap_is_loaded_privately() -> Result<(), Error> {
         set_cap(c"64kB")?;
         let (key, resolved) = graph("too_large", 20_000)?;
-        let read = through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?;
+        let read =
+            through::<FixedKeys<i64>>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?;
         assert!(read.is_none());
         assert_eq!(slot(key), None, "a refusal changes nothing");
         Ok(())
@@ -211,7 +221,8 @@ mod tests {
         });
         assert!(matches!(claimed, Some(Claim::Load { .. })));
         assert_eq!(slot(key), Some((State::Loading, 0, 0)));
-        let read = through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?;
+        let read =
+            through::<FixedKeys<i64>>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?;
         assert!(read.is_some(), "a waiter took the load over and loaded it");
         assert_eq!(slot(key), Some((State::Ready, 1, 1)));
         drop(read);
@@ -238,7 +249,7 @@ mod tests {
         // to this test's alone: the tests share the registry.
         set_cap(c"64MB")?;
         let (key, resolved) = graph("retired", 100)?;
-        drop(through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?);
+        drop(through::<FixedKeys<i64>>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?);
         end_statement();
         end_message();
         assert_eq!(slot(key), Some((State::Ready, 0, 1)));
@@ -251,8 +262,12 @@ mod tests {
     fn a_draining_version_read_again_is_revived() -> Result<(), Error> {
         set_cap(c"64MB")?;
         let (key, resolved) = graph("revived", 100)?;
-        let read =
-            || through::<i64>(port()?, &resolved).ok().flatten().ok_or(Error::InvalidPosition);
+        let read = || {
+            through::<FixedKeys<i64>>(port()?, &resolved)
+                .ok()
+                .flatten()
+                .ok_or(Error::InvalidPosition)
+        };
         let first = read()?;
         end_statement();
         assert_eq!(port()?.evict(&|evicted| *evicted == key), 1);
@@ -270,7 +285,8 @@ mod tests {
     fn a_piece_of_a_version_held_past_it_keeps_the_mapping() -> Result<(), Error> {
         set_cap(c"64MB")?;
         let (key, resolved) = graph("piece", 100)?;
-        let read = through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?;
+        let read =
+            through::<FixedKeys<i64>>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?;
         let piece = read.ok_or(Error::InvalidPosition)?.id_map.clone();
         end_statement();
         assert_eq!(port()?.evict(&|evicted| *evicted == key), 1);
@@ -287,7 +303,7 @@ mod tests {
     fn an_evicted_version_is_released_at_the_end_of_the_message() -> Result<(), Error> {
         set_cap(c"64MB")?;
         let (key, resolved) = graph("evicted", 100)?;
-        drop(through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?);
+        drop(through::<FixedKeys<i64>>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?);
         end_statement();
         end_message();
         assert_eq!(slot(key), Some((State::Ready, 0, 1)), "a ready version stays mapped");
@@ -302,7 +318,7 @@ mod tests {
     fn evict_by_an_owner_evicts_the_graphs_unpinned_shared_versions() -> Result<(), Error> {
         set_cap(c"64MB")?;
         let (key, resolved) = graph("evicted_by_owner", 100)?;
-        drop(through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?);
+        drop(through::<FixedKeys<i64>>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?);
         let evict = "SELECT warren.evict('evicted_by_owner')";
         assert_eq!(Spi::get_one::<i64>(evict)?, Some(0), "its statement pins it");
         assert_eq!(slot(key), Some((State::Ready, 1, 0)), "pinned, its mapping released");
@@ -316,7 +332,7 @@ mod tests {
     fn evict_by_another_role_only_releases_its_own_mappings() -> Result<(), Error> {
         set_cap(c"64MB")?;
         let (key, resolved) = graph("evicted_by_stranger", 100)?;
-        drop(through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?);
+        drop(through::<FixedKeys<i64>>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?);
         end_statement();
         Spi::run("CREATE ROLE evict_stranger; SET ROLE evict_stranger")?;
         let evicted = Spi::get_one::<i64>("SELECT warren.evict('evicted_by_stranger')")?;
@@ -330,7 +346,7 @@ mod tests {
     /// retention drops it: its key and the new version's resolution.
     fn superseded(name: &str) -> Result<(Key, Resolved), Error> {
         let (key, resolved) = graph(name, 100)?;
-        drop(through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?);
+        drop(through::<FixedKeys<i64>>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?);
         end_statement();
         refresh(name, true)?;
         assert_eq!(slot(key), Some((State::Ready, 0, 1)));
@@ -351,7 +367,8 @@ mod tests {
     fn a_shared_load_prunes_shared_versions_that_no_longer_exist() -> Result<(), Error> {
         set_cap(c"64MB")?;
         let (key, resolved) = superseded("pruned_shared")?;
-        let current = through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?;
+        let current =
+            through::<FixedKeys<i64>>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?;
         assert!(current.is_some());
         assert_eq!(slot(key), None, "evicted, and released by this backend");
         drop(current);
@@ -376,9 +393,12 @@ mod tests {
     {
         set_cap(c"64MB")?;
         let [(old, old_read), (current, current_read)] = promoted("promoted")?;
-        drop(through::<i64>(port()?, &old_read).map_err(|_| Error::InvalidPosition)?);
+        drop(through::<FixedKeys<i64>>(port()?, &old_read).map_err(|_| Error::InvalidPosition)?);
         end_statement();
-        drop(through::<i64>(port()?, &current_read).map_err(|_| Error::InvalidPosition)?);
+        drop(
+            through::<FixedKeys<i64>>(port()?, &current_read)
+                .map_err(|_| Error::InvalidPosition)?,
+        );
         assert_eq!(slot(old), None, "evicted, and released by this backend");
         assert_eq!(slot(current), Some((State::Ready, 1, 1)));
         forget(current)
@@ -388,8 +408,12 @@ mod tests {
     fn loading_the_current_version_spares_the_versions_a_statement_pins() -> Result<(), Error> {
         set_cap(c"64MB")?;
         let [(old, old_read), (current, current_read)] = promoted("promoted_pinned")?;
-        let held = through::<i64>(port()?, &old_read).map_err(|_| Error::InvalidPosition)?;
-        drop(through::<i64>(port()?, &current_read).map_err(|_| Error::InvalidPosition)?);
+        let held =
+            through::<FixedKeys<i64>>(port()?, &old_read).map_err(|_| Error::InvalidPosition)?;
+        drop(
+            through::<FixedKeys<i64>>(port()?, &current_read)
+                .map_err(|_| Error::InvalidPosition)?,
+        );
         assert_eq!(slot(old), Some((State::Ready, 1, 1)), "its statement pins it");
         drop(held);
         forget(old)?;
@@ -400,9 +424,12 @@ mod tests {
     fn loading_another_version_evicts_nothing() -> Result<(), Error> {
         set_cap(c"64MB")?;
         let [(old, old_read), (current, current_read)] = promoted("promoted_other")?;
-        drop(through::<i64>(port()?, &current_read).map_err(|_| Error::InvalidPosition)?);
+        drop(
+            through::<FixedKeys<i64>>(port()?, &current_read)
+                .map_err(|_| Error::InvalidPosition)?,
+        );
         end_statement();
-        drop(through::<i64>(port()?, &old_read).map_err(|_| Error::InvalidPosition)?);
+        drop(through::<FixedKeys<i64>>(port()?, &old_read).map_err(|_| Error::InvalidPosition)?);
         assert_eq!(slot(current), Some((State::Ready, 0, 1)));
         forget(old)?;
         forget(current)
@@ -413,7 +440,8 @@ mod tests {
         set_cap(c"64MB")?;
         let (key, resolved) = graph("uncharged", 2000)?;
         Spi::run("SET LOCAL warren.max_cache_memory = '64kB'")?;
-        let shared = through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?;
+        let shared =
+            through::<FixedKeys<i64>>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?;
         assert!(shared.is_some(), "about 94 kB, larger than the private cap");
         assert_eq!(compute_memory().in_use(), 0, "nothing of the shared version is charged");
         let budget = compute_memory();
@@ -421,7 +449,7 @@ mod tests {
         assert_eq!(slot(key), Some((State::Ready, 1, 1)), "nor evicted by a budget's reclaim");
         // The same version read privately (it is uncommitted) is charged
         // past the cap while the call holds it.
-        let private = cached::<i64>(&resolved).map_err(|_| Error::InvalidPosition)?;
+        let private = cached::<FixedKeys<i64>>(&resolved).map_err(|_| Error::InvalidPosition)?;
         assert!(compute_memory().in_use() > 0, "a private version past the cap is charged");
         drop((shared, private));
         forget(key)
@@ -543,7 +571,7 @@ mod tests {
     fn the_view_lists_shared_versions_and_vectors_to_their_graphs_readers() -> Result<(), Error> {
         set_cap(c"64MB")?;
         let (version, resolved) = graph("listed", 100)?;
-        drop(through::<i64>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?);
+        drop(through::<FixedKeys<i64>>(port()?, &resolved).map_err(|_| Error::InvalidPosition)?);
         Spi::run("SELECT warren.vector_const('listed', 'x', 1)")?;
         let bound = SpiVectorStore.bound(version.id).map_err(|_| Error::InvalidPosition)?;
         let record = bound.into_iter().next().ok_or(Error::InvalidPosition)?;

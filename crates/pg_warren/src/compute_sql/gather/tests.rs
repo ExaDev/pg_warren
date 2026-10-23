@@ -6,6 +6,7 @@ mod tests {
     use pgrx::spi::Error;
 
     use warren_core::compute::{Bytes, Messages};
+    use warren_core::graph::FixedKeys;
 
     use crate::cache::resolve;
     use crate::compute_sql::gather::read;
@@ -381,7 +382,7 @@ mod tests {
         unsafe { pg_sys::getTypeBinaryOutputInfo(pg_sys::INT4ARRAYOID, &mut send, &mut varlena) };
         let (rows, first_batch, peak) = with_pinned_snapshot(|| {
             entry(|caller| {
-                let vectors = Vectors::<i64>::open(resolve("big", None, "read")?)?;
+                let vectors = Vectors::<FixedKeys<i64>>::open(resolve("big", None, "read")?)?;
                 let mut messages = Messages::<Bytes>::new(&vectors.memory)?;
                 let (before, mut rows, mut first_batch, mut peak) = (allocated(), 0, 0, 0);
                 read::from_query(

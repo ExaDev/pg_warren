@@ -3,12 +3,13 @@
 
 use pgrx::PgSqlErrorCode;
 use thiserror::Error;
-use warren_core::compute::{ArithmeticError, ComputeError};
+use warren_core::compute::ComputeError;
 use warren_core::version::VersionError;
 
 use crate::access::{self, AccessError, SqlError};
 use crate::cache::{CacheError, LoadError};
 use crate::catalog::{CatalogError, VersionId};
+use crate::extension::compute_sqlstate;
 use crate::external_ids::ExternalIdError;
 use crate::selection::SelectionError;
 use crate::vector::VectorError;
@@ -162,57 +163,6 @@ impl SqlError for ComputeSqlError {
             Self::Source(error) => error.sqlstate(),
             Self::Compute(error) => compute_sqlstate(error),
             Self::Spi(_) => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-        }
-    }
-}
-
-/// The SQLSTATE of a kernel error: the one Postgres raises for the same
-/// arithmetic, so the compiled path and the executor agree.
-pub(crate) fn compute_sqlstate(error: &ComputeError) -> PgSqlErrorCode {
-    match error {
-        ComputeError::MemoryLimit { .. } => PgSqlErrorCode::ERRCODE_CONFIGURATION_LIMIT_EXCEEDED,
-        ComputeError::OutOfMemory { .. } => PgSqlErrorCode::ERRCODE_OUT_OF_MEMORY,
-        ComputeError::UnknownDtype(_)
-        | ComputeError::UnknownSemiring(_)
-        | ComputeError::UnknownBinaryOp(_)
-        | ComputeError::UnknownReduction(_)
-        | ComputeError::UnknownNorm(_)
-        | ComputeError::UnknownCombiner(_)
-        | ComputeError::UnknownSimilarity(_)
-        | ComputeError::ZeroWidth
-        | ComputeError::WidthMismatch { .. }
-        | ComputeError::Cycle { .. }
-        | ComputeError::NonPositiveWeight => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
-        ComputeError::DtypeMismatch { .. }
-        | ComputeError::OperandType { .. }
-        | ComputeError::CombinerType { .. } => PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
-        ComputeError::IdSpaceMismatch { .. } => {
-            PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE
-        }
-        ComputeError::NullResult { .. } => PgSqlErrorCode::ERRCODE_NULL_VALUE_NOT_ALLOWED,
-        ComputeError::Arithmetic(error) => arithmetic_sqlstate(*error),
-        ComputeError::Cancelled => PgSqlErrorCode::ERRCODE_QUERY_CANCELED,
-        ComputeError::VectorBytes { .. } | ComputeError::VectorLength { .. } => {
-            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED
-        }
-        _ => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-    }
-}
-
-/// The SQLSTATE `float.c` and `int8.c` raise for an arithmetic error.
-fn arithmetic_sqlstate(error: ArithmeticError) -> PgSqlErrorCode {
-    match error {
-        ArithmeticError::BigintOutOfRange
-        | ArithmeticError::FloatOverflow
-        | ArithmeticError::FloatUnderflow => PgSqlErrorCode::ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE,
-        ArithmeticError::DivisionByZero => PgSqlErrorCode::ERRCODE_DIVISION_BY_ZERO,
-        ArithmeticError::SqrtOfNegative
-        | ArithmeticError::ZeroToNegativePower
-        | ArithmeticError::ComplexPower => {
-            PgSqlErrorCode::ERRCODE_INVALID_ARGUMENT_FOR_POWER_FUNCTION
-        }
-        ArithmeticError::LogOfZero | ArithmeticError::LogOfNegative => {
-            PgSqlErrorCode::ERRCODE_INVALID_ARGUMENT_FOR_LOG
         }
     }
 }

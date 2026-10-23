@@ -6,11 +6,13 @@
 //! 38).
 
 mod fill;
+mod id_map;
 mod plan;
 mod vector;
 mod views;
 
 pub(super) use fill::fill;
+pub(crate) use id_map::CachedIds;
 pub(super) use plan::plan;
 pub(super) use vector::{fill_vector, plan_vector, read_vector};
 
@@ -19,8 +21,7 @@ use std::sync::{Arc, Weak};
 use pgrx::PgSqlErrorCode;
 use thiserror::Error;
 use warren_core::graph::{
-    BuildCharge, BuildMemory, ExternalId, FixedKeys, GraphCsr, GraphError, IdMap,
-    RelationDictionary,
+    BuildCharge, BuildMemory, GraphCsr, GraphError, IdKeys, IdMap, RelationDictionary,
 };
 use warren_core::version::{GraphVersion, VersionError};
 
@@ -29,9 +30,8 @@ use crate::access::SqlError;
 use crate::catalog::VersionId;
 use crate::extension::graph_sqlstate;
 use crate::segment::{
-    read_segment_within, SegmentError, SegmentStore, ID_MAP, RELATION_DICTIONARY, TOMBSTONES,
+    read_segment_within, SegmentError, SegmentStore, StoredIds, RELATION_DICTIONARY, TOMBSTONES,
 };
-use crate::source::IdDatum;
 use crate::vector::VectorError;
 
 /// Why a version could not be loaded.
@@ -70,7 +70,7 @@ impl SqlError for LoadError {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct LoadedVersion<E> {
     /// Its id map, tombstones included.
-    pub(crate) id_map: IdMap<FixedKeys<E>>,
+    pub(crate) id_map: IdMap<E>,
     /// Its relation dictionary.
     pub(crate) relations: RelationDictionary,
     /// Its CSRs. A loaded graph reports no deduplicated edges: that count
@@ -78,9 +78,9 @@ pub(crate) struct LoadedVersion<E> {
     pub(crate) graph: GraphCsr,
 }
 
-impl<E: ExternalId> LoadedVersion<E> {
+impl<E: IdKeys> LoadedVersion<E> {
     /// The version as `warren-core`'s view of it.
-    pub(crate) fn version(&self) -> Result<GraphVersion<'_, FixedKeys<E>>, VersionError> {
+    pub(crate) fn version(&self) -> Result<GraphVersion<'_, E>, VersionError> {
         GraphVersion::new(&self.id_map, &self.relations, &self.graph)
     }
 
@@ -100,7 +100,7 @@ impl<E: ExternalId> LoadedVersion<E> {
 /// memory it holds.
 pub(crate) struct Identity<E> {
     /// The id map.
-    pub(crate) id_map: IdMap<FixedKeys<E>>,
+    pub(crate) id_map: IdMap<E>,
     /// The charge for the id map.
     pub(crate) id_map_charge: BuildCharge,
     /// The relation dictionary.
@@ -112,15 +112,14 @@ pub(crate) struct Identity<E> {
 /// The id map and relation dictionary of `version`, without its CSRs: what
 /// a build needs of the version it starts from. Their segments, their
 /// decoding and what they hold are charged to `memory`.
-pub(crate) fn load_identity<E: ExternalId>(
+pub(crate) fn load_identity<E: StoredIds>(
     segments: &mut impl SegmentStore,
     version: VersionId,
     memory: &BuildMemory,
 ) -> Result<Identity<E>, LoadError> {
     let (tombstones, _tombstones_charge) =
         read_segment_within(segments, version, TOMBSTONES, memory)?;
-    let (id_map, _id_map_charge) = read_segment_within(segments, version, ID_MAP, memory)?;
-    let (id_map, id_map_charge) = IdMap::decode_within(&id_map, &tombstones, memory)?;
+    let (id_map, id_map_charge) = E::read_id_map(segments, version, &tombstones, memory)?;
     let (encoded, _encoded_charge) =
         read_segment_within(segments, version, RELATION_DICTIONARY, memory)?;
     // Decoded first, then charged: it holds about twice the encoding,
@@ -137,7 +136,7 @@ pub(crate) fn load_identity<E: ExternalId>(
 /// there is one CSR per relation, a merged CSR without relations, or with
 /// several if the graph stores it (`store_merged`), and reverse CSRs for
 /// all or none.
-pub(crate) fn load<E: IdDatum>(
+pub(crate) fn load<E: CachedIds>(
     segments: &mut impl SegmentStore,
     version: VersionId,
     store_merged: bool,
@@ -151,7 +150,7 @@ pub(crate) fn load<E: IdDatum>(
 /// The version `memory` holds, filled by [`fill`], read through views of
 /// its region and validated as [`load`] validates it, and the region,
 /// which lives while any view of it does.
-pub(super) fn read<E: IdDatum>(
+pub(super) fn read<E: CachedIds>(
     memory: Box<dyn RegionMemory>,
     version: VersionId,
 ) -> Result<(LoadedVersion<E>, Weak<Region>), LoadError> {
@@ -164,9 +163,10 @@ pub(super) fn read<E: IdDatum>(
 mod tests {
     use super::*;
     use crate::segment::{write_version, MemorySegmentStore};
-    use crate::source::IdDatum;
+    use crate::source::InPlaceId;
     use warren_core::graph::{
         AnyCsr, CsrLayout, EdgeIntake, FixedKeys, GraphCsr, IdMap, RelationCsr, RelationDictionary,
+        TextIds, TextKeys,
     };
 
     /// A version built in memory: ids 10, 20, 30, 40 (or as given) with
@@ -185,7 +185,7 @@ mod tests {
         built_with([10i64, 20, 30, 40], relations, weighted, layout)
     }
 
-    fn built_with<E: IdDatum>(
+    fn built_with<E: InPlaceId>(
         ids: [E; 4],
         relations: &[&str],
         weighted: bool,
@@ -208,11 +208,11 @@ mod tests {
         Built { id_map, relations: dictionary, graph }
     }
 
-    fn stored<E: IdDatum>(version: &Built<E>) -> MemorySegmentStore {
+    fn stored<E: InPlaceId>(version: &Built<E>) -> MemorySegmentStore {
         stored_in_chunks(version, 32)
     }
 
-    fn stored_in_chunks<E: IdDatum>(version: &Built<E>, chunk_size: usize) -> MemorySegmentStore {
+    fn stored_in_chunks<E: InPlaceId>(version: &Built<E>, chunk_size: usize) -> MemorySegmentStore {
         let mut store = MemorySegmentStore::default();
         let (id_map, relations, graph) = (&version.id_map, &version.relations, &version.graph);
         write_version(&mut store, 7, id_map, relations, graph, chunk_size).unwrap();
@@ -225,7 +225,7 @@ mod tests {
 
     fn loads_as_written(version: &Built) {
         let store_merged = version.graph.merged().is_some() || version.relations.len() < 2;
-        let loaded = load::<i64>(&mut stored(version), 7, store_merged).unwrap();
+        let loaded = load::<FixedKeys<i64>>(&mut stored(version), 7, store_merged).unwrap();
         assert_eq!(loaded.id_map, version.id_map);
         assert_eq!(loaded.relations, version.relations);
         assert_eq!(loaded.graph, version.graph);
@@ -250,9 +250,9 @@ mod tests {
             loads_as_written(&version);
             // What the cache holds, and so counts against its cap, is the
             // stored version's bytes less its merged CSR's.
-            let loaded = load::<i64>(&mut stored(&version), 7, false).unwrap();
+            let loaded = load::<FixedKeys<i64>>(&mut stored(&version), 7, false).unwrap();
             let with_merged = built(&["cites", "extends", "funds"], true, build_reverse);
-            let with_merged = load::<i64>(&mut stored(&with_merged), 7, true).unwrap();
+            let with_merged = load::<FixedKeys<i64>>(&mut stored(&with_merged), 7, true).unwrap();
             let merged = with_merged.graph.merged().map_or(0, |merged| merged.bytes());
             assert!(merged > 0);
             assert_eq!(loaded.bytes() + merged, with_merged.bytes());
@@ -276,7 +276,7 @@ mod tests {
         store.chunks.retain(|(_, name, _), _| !name.contains(':'));
         let memory = BuildMemory::unlimited();
         let Identity { id_map, id_map_charge, relations, relations_charge } =
-            load_identity::<i64>(&mut store, 7, &memory).unwrap();
+            load_identity::<FixedKeys<i64>>(&mut store, 7, &memory).unwrap();
         assert_eq!(id_map, version.id_map);
         assert_eq!(relations, version.relations);
         assert_eq!(id_map_charge.bytes(), id_map.bytes());
@@ -286,7 +286,7 @@ mod tests {
         assert!(memory.peak() > 2 * id_map.bytes(), "{}", memory.peak());
         let tight = BuildMemory::new(id_map.bytes());
         assert!(matches!(
-            load_identity::<i64>(&mut store, 7, &tight),
+            load_identity::<FixedKeys<i64>>(&mut store, 7, &tight),
             Err(LoadError::Graph(GraphError::BuildMemoryLimit { .. }))
                 | Err(LoadError::Segment(SegmentError::Graph(GraphError::BuildMemoryLimit { .. })))
         ));
@@ -298,7 +298,7 @@ mod tests {
         let mut store = stored(&version);
         store.chunks.retain(|(_, name, _), _| name != "targets:0");
         assert!(matches!(
-            load::<i64>(&mut store, 7, true),
+            load::<FixedKeys<i64>>(&mut store, 7, true),
             Err(LoadError::Segment(SegmentError::SegmentMissing { version: 7, .. }))
         ));
     }
@@ -308,10 +308,10 @@ mod tests {
         let mut store = stored(&built(&["a", "b"], false, true));
         store.chunks.retain(|(_, name, _), _| !name.ends_with(":merged"));
         assert!(matches!(
-            load::<i64>(&mut store, 7, true),
+            load::<FixedKeys<i64>>(&mut store, 7, true),
             Err(LoadError::Segment(SegmentError::SegmentMissing { version: 7, .. }))
         ));
-        assert!(load::<i64>(&mut store, 7, false).is_ok());
+        assert!(load::<FixedKeys<i64>>(&mut store, 7, false).is_ok());
     }
 
     #[test]
@@ -321,17 +321,17 @@ mod tests {
         let mut other_store = stored(&other);
         let rel_dict = other_store.chunks.remove(&(7, "rel_dict".to_owned(), 0)).unwrap();
         store.chunks.insert((7, "rel_dict".to_owned(), 0), rel_dict);
-        assert!(load::<i64>(&mut store, 7, true).is_err());
+        assert!(load::<FixedKeys<i64>>(&mut store, 7, true).is_err());
     }
 
     #[test]
     fn ids_of_every_type_load_as_written_whatever_the_chunk_size() {
-        fn check<E: IdDatum>(ids: [E; 4]) {
+        fn check<E: InPlaceId>(ids: [E; 4]) {
             let layout = CsrLayout { build_reverse: true, store_merged: true };
             let version = built_with(ids, &["a", "b"], true, layout);
             for chunk_size in [1, 5, 7, 12, 32, 4096] {
                 let mut store = stored_in_chunks(&version, chunk_size);
-                let loaded = load::<E>(&mut store, 7, true).unwrap();
+                let loaded = load::<FixedKeys<E>>(&mut store, 7, true).unwrap();
                 assert_eq!(loaded.id_map, version.id_map, "chunks of {chunk_size}");
                 assert_eq!(loaded.graph, version.graph);
             }
@@ -345,7 +345,7 @@ mod tests {
     fn every_array_of_a_loaded_version_is_aligned_in_one_region() {
         let layout = CsrLayout { build_reverse: true, store_merged: true };
         let version = built_with([10i32, 20, 30, 40], &["a", "b", "c"], true, layout);
-        let loaded = load::<i32>(&mut stored(&version), 7, true).unwrap();
+        let loaded = load::<FixedKeys<i32>>(&mut stored(&version), 7, true).unwrap();
         let mut starts = Vec::new();
         let mut csrs: Vec<&RelationCsr> = loaded.graph.relations().iter().collect();
         csrs.extend(loaded.graph.merged());
@@ -371,7 +371,7 @@ mod tests {
         let first = store.chunks.get_mut(&(7, "offsets:0".to_owned(), 0)).unwrap();
         first[8] += 1;
         assert!(matches!(
-            load::<i64>(&mut store, 7, true),
+            load::<FixedKeys<i64>>(&mut store, 7, true),
             Err(LoadError::Segment(SegmentError::Graph(GraphError::SegmentLength { .. })))
                 | Err(LoadError::Graph(GraphError::SegmentLength { .. }))
         ));
@@ -383,7 +383,7 @@ mod tests {
         let targets = store.chunks.get(&(7, "targets:0".to_owned(), 0)).unwrap().clone();
         store.chunks.insert((7, "offsets:0".to_owned(), 0), targets);
         assert!(matches!(
-            load::<i64>(&mut store, 7, true),
+            load::<FixedKeys<i64>>(&mut store, 7, true),
             Err(LoadError::Segment(SegmentError::Graph(GraphError::SegmentKind { .. })))
                 | Err(LoadError::Graph(GraphError::SegmentKind { .. }))
         ));
@@ -397,7 +397,7 @@ mod tests {
         // The first pair's dense id.
         id_map[16 + 8..16 + 16].copy_from_slice(&99u64.to_le_bytes());
         assert!(matches!(
-            load::<i64>(&mut store, 7, true),
+            load::<FixedKeys<i64>>(&mut store, 7, true),
             Err(LoadError::Graph(GraphError::IdMapNotPermutation))
         ));
     }
@@ -409,11 +409,103 @@ mod tests {
         let tombstones = store.chunks.get_mut(&(7, "tombstones".to_owned(), 0)).unwrap();
         tombstones[8..16].copy_from_slice(&3u64.to_le_bytes());
         assert!(matches!(
-            load::<i64>(&mut store, 7, true),
+            load::<FixedKeys<i64>>(&mut store, 7, true),
             Err(LoadError::Segment(SegmentError::Graph(GraphError::TombstonesLength {
                 expected: 4,
                 found: 3
             }))) | Err(LoadError::Graph(GraphError::TombstonesLength { expected: 4, found: 3 }))
         ));
+    }
+
+    /// A text version: ids `""`, `a`, `b` (tombstoned) and a long one,
+    /// with edges between the live ones, its segments in `chunk_size`
+    /// chunks.
+    fn text_version(chunk_size: usize) -> (IdMap<TextKeys>, GraphCsr, MemorySegmentStore) {
+        let long = vec![b'x'; 300];
+        let ids: [&[u8]; 4] = [b"", b"a", b"b", &long];
+        let memory = BuildMemory::unlimited();
+        let text = |ids: &[&[u8]]| {
+            let mut text = TextIds::new(&memory);
+            ids.iter().for_each(|id| text.push(id).unwrap());
+            text
+        };
+        let (first, _) = IdMap::new().rebuild_within(text(&ids)).unwrap();
+        let (id_map, _) = first.rebuild_within(text(&[ids[0], ids[1], ids[3]])).unwrap();
+        let mut dictionary = RelationDictionary::new();
+        let relation = dictionary.intern("r").unwrap();
+        let mut intake = EdgeIntake::directed(&id_map, false);
+        intake.push(relation, Some(ids[0]), Some(ids[3]), 1.0).unwrap();
+        intake.push(relation, Some(ids[3]), Some(ids[1]), 1.0).unwrap();
+        intake.push(relation, Some(ids[2]), Some(ids[1]), 1.0).unwrap();
+        let (edges, dropped) = intake.finish();
+        assert_eq!(dropped, 1);
+        let layout = CsrLayout { build_reverse: true, store_merged: true };
+        let graph = GraphCsr::build_as(edges, 1, id_map.id_space(), layout).unwrap();
+        let mut store = MemorySegmentStore::default();
+        write_version(&mut store, 7, &id_map, &dictionary, &graph, chunk_size).unwrap();
+        (id_map, graph, store)
+    }
+
+    #[test]
+    fn a_text_version_loads_as_written_whatever_the_chunk_size() {
+        for chunk_size in [1, 5, 7, 12, 32, 4096] {
+            let (id_map, graph, mut store) = text_version(chunk_size);
+            let loaded = load::<TextKeys>(&mut store, 7, true).unwrap();
+            assert_eq!(loaded.id_map, id_map, "chunks of {chunk_size}");
+            assert_eq!(loaded.graph, graph);
+            assert_eq!(loaded.id_map.dense_id(&[b'x'; 300]), Some(3));
+            assert_eq!(loaded.id_map.dense_id(b"b"), None);
+            assert!(!store.chunks.keys().any(|(_, name, _)| name == "id_map"));
+        }
+    }
+
+    #[test]
+    fn a_text_version_holds_its_segments_alone() {
+        let (id_map, graph, mut store) = text_version(4096);
+        let loaded = load::<TextKeys>(&mut store, 7, true).unwrap();
+        assert_eq!(loaded.id_map.bytes(), id_map.bytes());
+        assert_eq!(<TextKeys as CachedIds>::built_at_load(id_map.id_space()), 0);
+        assert!(loaded.bytes() >= id_map.bytes() + graph.bytes());
+    }
+
+    #[test]
+    fn a_text_version_of_another_encoding_is_refused() {
+        let (_, _, mut store) = text_version(4096);
+        store.encoding = 8;
+        assert!(matches!(
+            load::<TextKeys>(&mut store, 7, true),
+            Err(LoadError::Segment(SegmentError::Graph(GraphError::IdEncoding {
+                expected: 8,
+                found: 6
+            })))
+        ));
+        let memory = BuildMemory::unlimited();
+        assert!(matches!(
+            load_identity::<TextKeys>(&mut store, 7, &memory),
+            Err(LoadError::Segment(SegmentError::Graph(GraphError::IdEncoding { .. })))
+        ));
+    }
+
+    #[test]
+    fn a_text_version_whose_order_is_not_sorted_is_refused() {
+        let (_, _, mut store) = text_version(4096);
+        let order = store.chunks.get_mut(&(7, "id_order".to_owned(), 0)).unwrap();
+        // The first two dense ids in byte order, swapped.
+        let (first, second) = (order[16..20].to_vec(), order[20..24].to_vec());
+        order[16..20].copy_from_slice(&second);
+        order[20..24].copy_from_slice(&first);
+        assert!(matches!(
+            load::<TextKeys>(&mut store, 7, true),
+            Err(LoadError::Graph(GraphError::IdMapNotSorted))
+        ));
+    }
+
+    #[test]
+    fn a_text_version_whose_offsets_run_past_its_bytes_is_refused() {
+        let (_, _, mut store) = text_version(4096);
+        let offsets = store.chunks.get_mut(&(7, "id_offsets".to_owned(), 0)).unwrap();
+        let last = offsets.len() - 8;
+        offsets[last..].copy_from_slice(&999u64.to_le_bytes());
+        assert!(load::<TextKeys>(&mut store, 7, true).is_err());
     }
 }
