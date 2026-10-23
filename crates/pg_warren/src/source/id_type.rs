@@ -229,6 +229,10 @@ impl<E: InPlaceId> IdDatum for FixedKeys<E> {
     }
 }
 
+/// The most bytes a `text` holds: Postgres's `MaxAllocSize` (1 GB less one
+/// byte), less the varlena header.
+const MAX_TEXT_BYTES: usize = 0x3fff_ffff - pg_sys::VARHDRSZ;
+
 impl IdDatum for TextKeys {
     const ID_TYPE: IdType = IdType::Text;
     type Owned = Vec<u8>;
@@ -246,7 +250,8 @@ impl IdDatum for TextKeys {
     }
 
     fn datum(key: &[u8]) -> Option<pg_sys::Datum> {
-        let Ok(len) = i32::try_from(key.len()) else {
+        let fits = i32::try_from(key.len()).ok().filter(|_| key.len() <= MAX_TEXT_BYTES);
+        let Some(len) = fits else {
             pgrx::ereport!(
                 ERROR,
                 pgrx::PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
@@ -257,8 +262,7 @@ impl IdDatum for TextKeys {
         // SAFETY: `start` points to `len` readable bytes. Both functions
         // are guarded and raise an ERROR rather than return a bad value:
         // pg_verifymbstr, with `noError` false, raises 22021 for bytes
-        // invalid in the database encoding, and the copy raises 54000 for
-        // a text past the varlena limit.
+        // invalid in the database encoding; the length fits a text.
         unsafe {
             pg_sys::pg_verifymbstr(start, len, false);
             Some(pg_sys::Datum::from(pg_sys::cstring_to_text_with_len(start, len)))
