@@ -11,7 +11,6 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use pgrx::prelude::*;
-use pgrx::spi::SpiTupleTable;
 use pgrx::AnyElement;
 use warren_core::compute::{self, ComputeError, ComputeMemory, Mask, Neighbourhood, Similarity};
 use warren_core::graph::DenseId;
@@ -25,9 +24,7 @@ use crate::external_ids::{check_type, element, external, DenseIds};
 use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
 use crate::selection::relations;
-use crate::source::{
-    describe, for_each_tuple, id_in_place, open_read_only, with_id_type, SourceError,
-};
+use crate::source::{describe, for_each_tuple, open_read_only, with_id_type, Row, SourceError};
 
 /// The similarity `measure` names.
 fn measure(measure: Option<&str>) -> Result<Similarity, ComputeSqlError> {
@@ -151,10 +148,10 @@ impl Pairs<'_> {
     fn push<E: CachedIds>(
         &mut self,
         ids: &mut DenseIds<'_, E>,
-        row: &SpiTupleTable<'_>,
+        row: &Row<'_>,
     ) -> Result<(), ComputeSqlError> {
         let mut dense = |ordinal| -> Result<Option<DenseId>, ComputeSqlError> {
-            match id_in_place::<E>(row, ordinal)? {
+            match row.id::<E>(ordinal)? {
                 Some(id) => Ok(ids.dense_id(id.borrow())?),
                 None => Ok(None),
             }

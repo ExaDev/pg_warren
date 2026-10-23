@@ -25,7 +25,6 @@ use std::ffi::CStr;
 
 use pgrx::datum::UnboxDatum;
 use pgrx::prelude::*;
-use pgrx::spi::SpiTupleTable;
 use pgrx::{Array, FromDatum, IntoDatum};
 use warren_core::compute::{map, AnyVector, ComputeError, Dtype, MemoryCharge, Value, Vector};
 
@@ -37,8 +36,7 @@ use crate::cache::{resolve, CachedIds};
 use crate::external_ids::{id_text, DenseIds};
 use crate::interrupts::{workers, PostgresInterrupts};
 use crate::source::{
-    describe, for_each_tuple, id_in_place, open_read_only, type_name, with_id_type, ColumnType,
-    SourceError,
+    describe, for_each_tuple, open_read_only, type_name, with_id_type, ColumnType, Row, SourceError,
 };
 
 /// The SQL type a dtype's values are cast to.
@@ -214,9 +212,9 @@ where
     fn node<E: CachedIds>(
         &mut self,
         ids: &mut DenseIds<'_, E>,
-        row: &SpiTupleTable<'_>,
+        row: &Row<'_>,
     ) -> Result<Option<usize>, ComputeSqlError> {
-        let Some(id) = id_in_place::<E>(row, 1)? else {
+        let Some(id) = row.id::<E>(1)? else {
             return Ok(None);
         };
         let Some(node) = ids.dense_id(id.borrow())? else {
@@ -258,7 +256,7 @@ where
         &mut self,
         vectors: &Vectors<E>,
         ids: &mut DenseIds<'_, E>,
-        row: &SpiTupleTable<'_>,
+        row: &Row<'_>,
     ) -> Result<(), ComputeSqlError> {
         let Some(node) = self.node(ids, row)? else {
             return Ok(());
@@ -275,7 +273,7 @@ where
         &mut self,
         vectors: &Vectors<E>,
         ids: &mut DenseIds<'_, E>,
-        row: &SpiTupleTable<'_>,
+        row: &Row<'_>,
     ) -> Result<(), ComputeSqlError> {
         let Some(node) = self.node(ids, row)? else {
             return Ok(());

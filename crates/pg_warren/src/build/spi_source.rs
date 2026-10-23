@@ -12,8 +12,7 @@ use super::source::{EdgeRow, EdgeSink, SourceReader};
 use crate::access::{as_role, with_read_only, with_search_path};
 use crate::catalog::GraphDefinition;
 use crate::source::{
-    check_edge_columns, for_each_tuple, id_in_place, open_read_only, require_node_id_type,
-    text_in_place, IdDatum,
+    check_edge_columns, for_each_tuple, open_read_only, require_node_id_type, IdDatum,
 };
 
 /// A graph's sources, read through SPI.
@@ -40,7 +39,7 @@ impl<E: IdDatum> SourceReader<E> for SpiSource<'_> {
                         require_node_id_type(&opened.columns, graph.id_type)?;
                         let mut ids = E::node_ids(memory);
                         for_each_tuple::<BuildError>(&mut opened.cursor, |row| {
-                            if let Some(id) = id_in_place::<E>(row, 1)? {
+                            if let Some(id) = row.id::<E>(1)? {
                                 E::push_node_id(&mut ids, id.borrow())?;
                             }
                             Ok(())
@@ -69,13 +68,13 @@ impl<E: IdDatum> SourceReader<E> for SpiSource<'_> {
                         )?;
                         sink.expect_rows(opened.estimated_rows);
                         for_each_tuple(&mut opened.cursor, |row| {
-                            let source = id_in_place::<E>(row, 1)?;
-                            let target = id_in_place::<E>(row, 2)?;
+                            let source = row.id::<E>(1)?;
+                            let target = row.id::<E>(2)?;
                             sink.row(EdgeRow {
                                 source: source.as_ref().map(Borrow::borrow),
                                 target: target.as_ref().map(Borrow::borrow),
                                 relation: match graph.has_relations {
-                                    true => text_in_place(row, 3)?,
+                                    true => row.text(3)?,
                                     false => None,
                                 },
                                 weight: match graph.weighted {

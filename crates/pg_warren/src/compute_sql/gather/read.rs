@@ -12,7 +12,6 @@
 use std::borrow::Borrow;
 
 use pgrx::prelude::*;
-use pgrx::spi::SpiTupleTable;
 use pgrx::{AnyElement, FromDatum, IntoDatum};
 use warren_core::compute::{Bytes, Element, Messages};
 use warren_core::graph::DenseId;
@@ -22,7 +21,7 @@ use super::super::ComputeSqlError;
 use crate::access::{with_read_only, with_search_path, Caller};
 use crate::cache::CachedIds;
 use crate::external_ids::DenseIds;
-use crate::source::{for_each_tuple, id_in_place, open_read_only};
+use crate::source::{for_each_tuple, open_read_only, Row};
 
 /// Every live node's value of `vector` (width 1), as a message.
 pub(super) fn from_vector<E: CachedIds, T: Element>(
@@ -49,7 +48,7 @@ pub(super) fn from_query<E: CachedIds>(
     vectors: &Vectors<E>,
     caller: &Caller,
     query: &str,
-    mut each: impl FnMut(DenseId, &SpiTupleTable<'_>) -> Result<(), ComputeSqlError>,
+    mut each: impl FnMut(DenseId, &Row<'_>) -> Result<(), ComputeSqlError>,
 ) -> Result<(), ComputeSqlError> {
     with_search_path(caller.search_path(), || {
         with_read_only(|| {
@@ -57,7 +56,7 @@ pub(super) fn from_query<E: CachedIds>(
                 let mut opened = open_read_only::<ComputeSqlError>(client, "messages", query)?;
                 let mut ids = DenseIds::new(&vectors.loaded.id_map, &vectors.memory);
                 for_each_tuple(&mut opened.cursor, |row| {
-                    let Some(id) = id_in_place::<E>(row, 1)? else {
+                    let Some(id) = row.id::<E>(1)? else {
                         return Ok(());
                     };
                     match ids.dense_id(id.borrow())? {
@@ -74,7 +73,7 @@ pub(super) fn from_query<E: CachedIds>(
 pub(super) fn element<T: Element + FromDatum + IntoDatum>(
     messages: &mut Messages<T>,
     node: DenseId,
-    row: &SpiTupleTable<'_>,
+    row: &Row<'_>,
 ) -> Result<(), ComputeSqlError> {
     if let Some(value) = row.get::<T>(2)? {
         messages.push(node, value)?;
@@ -87,7 +86,7 @@ pub(super) fn element<T: Element + FromDatum + IntoDatum>(
 pub(super) fn payload(
     messages: &mut Messages<Bytes>,
     node: DenseId,
-    row: &SpiTupleTable<'_>,
+    row: &Row<'_>,
 ) -> Result<(), ComputeSqlError> {
     let Some(value) = row.get::<AnyElement>(2)? else {
         return Ok(());
@@ -113,7 +112,7 @@ pub(super) fn binary(
     send: pg_sys::Oid,
     messages: &mut Messages<Bytes>,
     node: DenseId,
-    row: &SpiTupleTable<'_>,
+    row: &Row<'_>,
 ) -> Result<(), ComputeSqlError> {
     let Some(value) = row.get::<AnyElement>(2)? else {
         return Ok(());

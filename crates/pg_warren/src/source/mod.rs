@@ -17,7 +17,6 @@ pub(crate) use columns::{
     check_edge_columns, check_node_columns, require_node_id_type, ColumnType, SourceError,
 };
 pub(crate) use cursor::{
-    describe, for_each_tuple, id_in_place, open_read_only, source_columns, text_in_place,
-    type_name, with_pinned_snapshot,
+    describe, for_each_tuple, open_read_only, source_columns, type_name, with_pinned_snapshot, Row,
 };
 pub(crate) use id_type::{with_id_type, IdDatum, IdType, InPlaceId};
