@@ -115,6 +115,8 @@ jobs:
       - name: Install pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: ./.github/actions/setup-postgres
+        # A stalled PGDG mirror once held a job here for hours; fail and re-run instead.
+        timeout-minutes: 30
         with:
           pg-major: "16"
       - uses: Swatinem/rust-cache@v2
@@ -143,6 +145,8 @@ jobs:
       - name: Install pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: ./.github/actions/setup-postgres
+        # A stalled PGDG mirror once held a job here for hours; fail and re-run instead.
+        timeout-minutes: 30
         with:
           pg-major: ${{ matrix.pg }}
       - uses: Swatinem/rust-cache@v2
@@ -228,6 +232,8 @@ jobs:
       - name: Install pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: ./.github/actions/setup-postgres
+        # A stalled PGDG mirror once held a job here for hours; fail and re-run instead.
+        timeout-minutes: 30
         with:
           pg-major: "16"
       - uses: actions/setup-python@v5

@@ -96,6 +96,13 @@
   an iteration takes ~3 s, against ~37 s before on the same machine. Its
   results are unchanged.
 
+- A level graph (`contract(graph, labels, NULL)`, the graphs `louvain` and
+  `leiden` contract each level into) stores each relation's forward CSR
+  only, without a reverse or merged CSR whatever the input's layout. The
+  partitions are the same; on a directed graph each level writes about
+  half the segments and WAL (at 1M nodes and 10M random edges, `louvain`'s
+  levels 293 MB instead of 536 MB, `leiden`'s 945 MB instead of 1.76 GB).
+
 ### Performance
 
 - Every graph read checked the caller's access with a catalog query planned
@@ -133,6 +140,13 @@
 
 ### Fixed
 
+- `leiden_refine` (and so `leiden`) charged 88 bytes a node to
+  `warren.max_compute_memory` up front, every community's state at once,
+  and was refused (53400) in the first refinement of a 10M-node,
+  100M-edge random graph at the default limit. It now charges what it
+  holds: 24 bytes a node beside the result's label vector (8 bytes a
+  node), then 48 a community and the state of the communities being
+  refined, at most one a thread.
 - After `DROP EXTENSION pg_warren` and `CREATE EXTENSION pg_warren` in a
   database, a backend that had read graphs before could serve the old
   installation's cached versions and vectors for the new installation's

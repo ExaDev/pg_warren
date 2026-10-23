@@ -686,6 +686,11 @@ With five weighted relations and no merged CSR (3.44 GB cached) each takes
 default limits but `louvain` (stopped for disk) and `leiden` (refused).
 With the merged CSR (6.0 GB, over the cache cap) every call also pays the
 22 s load, and `similar_pairs`, `louvain` and `leiden` are refused (53400).
+Those two rows predate two fixes (DESIGN.md §14 item 40), not yet re-run
+at this scale: level graphs store forward CSRs only, which halves a
+directed graph's level segments (measured at 1M nodes, the same
+partitions), and Leiden's refinement charges its real peak, so its first
+refinement fits.
 
 ## Known limitations
 
@@ -782,34 +787,42 @@ vectors.
   neighbours moved) and a contraction of the whole graph per level. Their
   scratch is charged to `warren.max_compute_memory`: the undirected view
   (16 bytes per stored edge, both directions of a directed graph, and per
-  node) and up to 56 bytes per node while moving. Each level writes its
-  graph's version (segments and WAL); the level's graph is dropped when
-  the next is built, but its rows stay until `VACUUM` after the run's
-  transaction ends, so the disk a run needs grows with its levels: on the
-  1M-node block graph (75 MB of segments) `louvain` wrote 166 MB of
-  segments and about 190 MB of WAL, `leiden` 294 MB and 323 MB for one
-  iteration (516 MB of segments for the default two); at 10M nodes
-  (0.72 GB of segments) `louvain` wrote 2.5 GB of segments and `leiden`,
-  with its default two iterations, 7.8 GB (and as much WAL).
+  node), up to 56 bytes per node while moving, and in Leiden's refinement
+  24 bytes per node (beside its 8-byte-a-node label vector) plus 48 per
+  community (and, for the communities being refined at once, one per
+  thread, 24 bytes per member). Each level writes
+  its graph's version (segments and WAL), each relation's forward CSR
+  only (no reverse or merged CSR, whatever the input's layout); the
+  level's graph is dropped when the next is built, but its rows stay until
+  `VACUUM` after the run's transaction ends, so the disk a run needs grows
+  with its levels: on the 1M-node block graph (75 MB of segments)
+  `louvain` wrote 166 MB of segments and about 190 MB of WAL, `leiden`
+  294 MB and 323 MB for one iteration (516 MB of segments for the default
+  two); at 10M nodes (0.72 GB of segments) `louvain` wrote 2.5 GB of
+  segments and `leiden`, with its default two iterations, 7.8 GB (and as
+  much WAL).
 - **At 10M nodes, on graphs with little community structure, Louvain and
-  Leiden do not run at the default limits** (the 0.4.0 soak's uniform
-  random graphs of 10M nodes and 100M edges; see "The library at the
-  soak's scale" above):
-  - `leiden` is refused with 53400 (`configuration_limit_exceeded`) in its
-    first level's refinement: beside the undirected view (3.2 GB for
-    100M directed edges) and the moving state, its 88 bytes per node do
-    not fit `warren.max_compute_memory`'s 4GB default. Raise
-    `warren.max_compute_memory` for such graphs.
-  - `louvain` writes several GB of level segments, because each level's
-    graph stays nearly as large as the input: it had written 7.5 GB of
-    segments (and 9.1 GB of WAL) when the soak stopped it for disk after
-    383 s, where the same graph at 1M nodes needed 0.61 GB. Those rows
+  Leiden need several GB of disk** (the 0.4.0 soak's uniform random graphs
+  of 10M nodes and 100M edges; see "The library at the soak's scale"
+  above): a random graph's levels merge little (1M nodes → 448,022
+  communities at level 1), so several levels keep nearly all the edges,
+  and each is stored with 8-byte weights.
+  - `louvain` had written 7.5 GB of segments (and 9.1 GB of WAL) when the
+    soak stopped it for disk after 383 s, before level graphs stored
+    forward CSRs only, which halves that for a directed input: at 1M
+    nodes and 10M edges its levels now write 293 MB of segments (536 MB
+    before), `leiden`'s 945 MB (1.76 GB), for the same partitions
+    (`bench/results/communities/random-1m-level-graphs.txt`). Those rows
     stay on disk until `VACUUM` after the run's transaction ends.
+  - `leiden` was refused with 53400 in its first level's refinement,
+    which charged 88 bytes per node beside the 3.2 GB undirected view; it
+    now charges about 38 there and fits the 4GB default, but its eight or
+    so large levels are likely still past a disk like the soak's.
   - The planned fix for the disk is for `contract` to keep a quotient in
     memory for the rest of the statement instead of writing it as a
     version, which helps every multilevel algorithm (DESIGN.md §6.7,
-    §13); a native in-memory Louvain/Leiden kernel is deferred past
-    0.4.0.
+    §13, §14 item 40); a native in-memory Louvain/Leiden kernel is
+    deferred past 0.4.0.
 - `contract` is linear: a counting sort of the nodes by community, then one
   pass over the stored edges, on one thread, plus a build of the quotient
   (its edges, at most the parent's). Its scratch, charged to
