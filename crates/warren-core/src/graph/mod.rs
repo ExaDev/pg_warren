@@ -34,7 +34,7 @@ pub use direction::Direction;
 pub use edge_list::{EdgeIntake, EdgeList};
 pub use error::GraphError;
 pub use id_map::{
-    ExternalId, FixedKeys, FixedRebuild, IdKeys, IdMap, IdPair, KeysRebuild, NodeIds,
+    ExternalId, FixedKeys, FixedRebuild, FreshKeys, IdKeys, IdMap, IdPair, KeysRebuild, NodeIds,
 };
 pub use membership::Membership;
 pub(crate) use membership::NO_COMMUNITY;
