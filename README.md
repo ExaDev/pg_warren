@@ -290,8 +290,8 @@ See [CHANGELOG.md](CHANGELOG.md). This is pre-1.0 software: the SQL surface
 may still change between minor versions, with an upgrade script each time.
 
 Not there yet: the rest of the road to 1.0 (DESIGN.md §13) is text ids,
-ownership transfer, cleanup when an owner role is dropped, quotas and
-observability (M10);
+cleanup when an owner role is dropped, quotas and observability (M10;
+ownership transfer, `warren.set_owner`, is built for 0.6.0);
 benchmarks and robustness on real graphs and deployments, and packages
 (M11); and a reviewed, frozen SQL surface (M12, 1.0.0). Incremental
 maintenance, general sparse matrix algebra (contraction's `PᵀAP` is the

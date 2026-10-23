@@ -30,7 +30,7 @@ fn refresh_graph(name: &str, promote: bool, label: Option<&str>) -> Result<Versi
     let mut graph = GraphDefinition::find(name)?;
     require_owner(graph.owner, &graph.name, "refresh")?;
     graph.require_query_source("refresh")?;
-    graph.lock()?;
+    graph.lock("refresh")?;
     graph.require_sound_current_version()?;
     if let Some(base) = graph.current_version {
         require_current_id_space(&graph, base)?;

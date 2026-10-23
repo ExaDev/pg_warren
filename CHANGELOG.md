@@ -2,6 +2,28 @@
 
 ## 0.6.0 — in development
 
+### Added
+
+- **`warren.set_owner(name, owner regrole)`** gives a graph a new owner, as
+  `ALTER MATERIALIZED VIEW … OWNER TO` does (DESIGN.md §5.7, §14 item 43).
+  The caller must be a member of the current owner and able to `SET ROLE`
+  to the new one (on PostgreSQL 15, a member of it). The source queries
+  are opened as the new owner first, so one that cannot read them is
+  refused (42501), as are queries whose columns no longer fit (42804).
+  Versions and vectors stay as built until the next `refresh`; readers are
+  kept, except the new owner; the old owner keeps no access unless granted
+  (docs/semantics.md, "Access"). `ALTER EXTENSION pg_warren UPDATE`
+  creates it.
+
+### Fixed
+
+- `refresh`, `compact`, `promote`, `drop_version`, `grant`, `revoke`,
+  `drop_graph` and `contract` into an existing quotient check ownership
+  again once they hold the graph's row lock (`grant`, `revoke` and
+  `drop_graph` now take it). They checked only before it, so a call queued behind an ownership
+  transfer ran with an ownership its caller no longer had (harness test
+  `set_owner_race`).
+
 ## 0.5.0 — the shared cache (2026-10-23)
 
 Milestone M9 of DESIGN.md §13, the first on the road to 1.0. A loaded

@@ -1925,6 +1925,14 @@ STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'matrix_rows_wrapper
 /* </end connected objects> */
 
 /* <begin connected objects> */
+-- crates/pg_warren/src/catalog/owner.rs:19
+-- pg_warren::catalog::owner::set_owner
+
+CREATE FUNCTION warren."set_owner"(name text, owner regrole) RETURNS void
+STRICT VOLATILE LANGUAGE c AS 'MODULE_PATHNAME', 'set_owner_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
 -- crates/pg_warren/src/catalog/readers.rs:25
 -- pg_warren::catalog::readers::revoke
 

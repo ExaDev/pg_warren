@@ -84,6 +84,7 @@ mod tests {
         ("refresh", "u"),
         ("revoke", "u"),
         ("s", "s"),
+        ("set_owner", "u"),
         ("shared_cache", "s"),
         ("shortest_path", "s"),
         ("similar_pairs", "r"),

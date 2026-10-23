@@ -32,7 +32,7 @@ fn compact_graph(name: &str, node_order: Option<&str>) -> Result<VersionId, Vers
     let mut graph = GraphDefinition::find(name)?;
     require_owner(graph.owner, &graph.name, "compact")?;
     graph.require_query_source("compact")?;
-    graph.lock()?;
+    graph.lock("compact")?;
     graph.require_sound_current_version()?;
     if let Some(order) = node_order.filter(|&order| order != graph.node_order) {
         graph.set_node_order(order)?;

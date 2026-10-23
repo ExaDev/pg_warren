@@ -83,6 +83,21 @@ pub(crate) fn check_node_columns(columns: &[ColumnType]) -> Result<IdType, Sourc
         .ok_or_else(|| mistyped("node_query", 1, "node id", "integer, bigint or uuid", id))
 }
 
+/// Checks that a node query returns the node ids of a graph whose id type
+/// is `id_type`: its sources may have changed since the graph was created.
+pub(crate) fn require_node_id_type(
+    columns: &[ColumnType],
+    id_type: IdType,
+) -> Result<(), SourceError> {
+    let found = check_node_columns(columns)?;
+    match columns {
+        [id] if found != id_type => {
+            Err(mistyped("node_query", 1, "node id", id_type.sql_name(), id))
+        }
+        _ => Ok(()),
+    }
+}
+
 /// The columns an edge query must return: source and target ids of the
 /// graph's id type, then a `text` relation if the graph has relations, then
 /// a `float8` weight if it is weighted.
@@ -164,6 +179,25 @@ mod tests {
                 expected: "integer, bigint or uuid",
                 found: "text".to_owned(),
             })
+        );
+    }
+
+    #[test]
+    fn a_node_query_must_keep_its_graphs_id_type() {
+        assert_eq!(require_node_id_type(&[int8()], IdType::Int8), Ok(()));
+        assert_eq!(
+            require_node_id_type(&[int4()], IdType::Int8),
+            Err(SourceError::ColumnType {
+                query: "node_query",
+                column: 1,
+                role: "node id",
+                expected: "bigint",
+                found: "integer".to_owned(),
+            })
+        );
+        assert_eq!(
+            require_node_id_type(&[], IdType::Int8),
+            Err(SourceError::ColumnCount { query: "node_query", expected: "1", found: 0 })
         );
     }
 

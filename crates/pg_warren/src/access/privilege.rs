@@ -76,6 +76,34 @@ pub(crate) fn require_creator_or_owner(
     }
 }
 
+/// Checks that the caller may make `role` the owner of graph `graph`, as
+/// `ALTER … OWNER TO` checks a new owner (DESIGN.md §5.7): on PG 16+, the
+/// caller can `SET ROLE` to it (`member_can_set_role`, the test of
+/// `check_can_set_role`); on PG 15, which has no `SET` option, it is a
+/// member of it. A superuser may always.
+pub(crate) fn require_can_become(role: pg_sys::Oid, graph: &str) -> Result<(), AccessError> {
+    let name = role_name(role).ok_or(AccessError::RoleNotFound(role.to_u32()))?;
+    match can_set_role(role) {
+        true => Ok(()),
+        false => Err(AccessError::CannotBecome { role: name, graph: graph.to_owned() }),
+    }
+}
+
+/// Whether the current user may `SET ROLE` to `role`.
+#[cfg(not(feature = "pg15"))]
+fn can_set_role(role: pg_sys::Oid) -> bool {
+    // SAFETY: reads the current user and its cached role memberships, on
+    // the main thread.
+    unsafe { pg_sys::member_can_set_role(pg_sys::GetUserId(), role) }
+}
+
+/// Whether the current user may `SET ROLE` to `role`: on PG 15, whether
+/// it is a member of it.
+#[cfg(feature = "pg15")]
+fn can_set_role(role: pg_sys::Oid) -> bool {
+    is_member(role)
+}
+
 /// Whether the caller is a superuser.
 pub(crate) fn is_superuser() -> Result<bool, AccessError> {
     Ok(read_one::<bool>(
