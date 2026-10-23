@@ -44,7 +44,7 @@ before changing code. Commands, toolchain setup and environment gotchas are in
      `parallel_worker` (what a parallel worker records and raises),
      `external_ids/` (id arguments ↔ dense ids), `selection/` (direction and
      relations), `traversal_sql/`, `vector/` (persistence and cache of named
-     vectors), `compute_sql/`, `spectral_sql/` (eigen, distance),
+     vectors; `quota`, the bound on readers' vectors), `compute_sql/`, `spectral_sql/` (eigen, distance),
      `community_sql/` (contract, project, lift, modularity, local moving,
      and the Louvain/Leiden library).
      Feature dependencies form a DAG: `access`, `source` → `catalog` →
