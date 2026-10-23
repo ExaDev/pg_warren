@@ -5,6 +5,7 @@
 ::pgrx::pg_module_magic!(name, version);
 
 mod access;
+mod activity;
 mod build;
 mod cache;
 mod catalog;
@@ -23,6 +24,7 @@ mod parallel_worker;
 mod read_only;
 mod segment;
 mod selection;
+mod shared_memory;
 mod source;
 mod spectral_sql;
 mod traversal_sql;
@@ -30,9 +32,11 @@ mod vector;
 mod version_sql;
 
 /// Library initialisation: registers the GUCs and, when preloaded on
-/// PG 15 and 16, the hooks that place the shared cache's registry.
+/// PG 15 and 16, the hooks that place the shared cache's registry and the
+/// activity table.
 #[pgrx::pg_guard]
 pub extern "C-unwind" fn _PG_init() {
+    activity::request_preload();
     build::define_max_build_memory();
     cache::define_memory_settings();
     cache::define_shared_cache();

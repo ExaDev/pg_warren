@@ -90,20 +90,12 @@ fn checked(found: u32) -> Result<(), Unavailable> {
     }
 }
 
-/// The size of the first segment of a DSA area: Postgres's DSM registry
-/// keeps its index of named segments in one (`dsa_create`), created with
-/// the cluster's first named segment.
+/// The room `GetNamedDSMSegment` may take to create the registry.
 #[cfg(any(feature = "pg17", feature = "pg18", test))]
-const DSA_INITIAL_SEGMENT: usize = 1024 * 1024;
-
-/// The room `GetNamedDSMSegment` may take to create the registry: its own
-/// segment, the DSM registry's area if no other extension created it
-/// first, and as much again to spare.
-#[cfg(any(feature = "pg17", feature = "pg18", test))]
-const REGISTRY_ROOM: u64 = (std::mem::size_of::<Shared>() + 2 * DSA_INITIAL_SEGMENT) as u64;
+const REGISTRY_ROOM: u64 = crate::shared_memory::named_segment_room(std::mem::size_of::<Shared>());
 
 /// Whether the registry may be created where the store (`store`) has
-/// `space` (its available bytes and size, `segment::store_space`):
+/// `space` (its available bytes and size, `shared_memory::store_space`):
 /// without room, `GetNamedDSMSegment` would raise an ERROR where the shared
 /// cache must instead be unavailable (DESIGN.md §5.6, Size checks). The
 /// room counts the reserve that versions leave free: a cache filled to it
@@ -123,7 +115,7 @@ fn room_for_registry(space: Option<(u64, u64)>, store: &'static str) -> Result<(
 /// has another format or the store has no room to create it.
 #[cfg(any(feature = "pg17", feature = "pg18"))]
 pub(super) fn locate() -> Result<Located, Unavailable> {
-    room_for_registry(super::segment::store_space(), super::segment::store_name())?;
+    room_for_registry(crate::shared_memory::store_space(), crate::shared_memory::store_name())?;
     let mut found = false;
     // SAFETY: called on the main thread inside a transaction; the name is
     // a static C string; `create` sets up a new segment of the size asked
@@ -285,7 +277,7 @@ mod tests {
     fn the_registry_is_created_only_where_it_and_the_dsm_registrys_area_fit() {
         const MB: u64 = 1 << 20;
         let unavailable = |store| Err(Unavailable::NoRegistryRoom { store });
-        assert!(REGISTRY_ROOM >= (std::mem::size_of::<Shared>() + DSA_INITIAL_SEGMENT) as u64);
+        assert!(REGISTRY_ROOM >= std::mem::size_of::<Shared>() as u64 + MB);
         assert_eq!(room_for_registry(Some((REGISTRY_ROOM, 64 * MB)), "/dev/shm"), Ok(()));
         assert_eq!(room_for_registry(Some((u64::MAX, u64::MAX)), "/dev/shm"), Ok(()), "sysv");
         assert_eq!(

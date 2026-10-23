@@ -5,6 +5,7 @@
 //! loads the version privately, as 0.4.0 does.
 
 use super::slot::{Slot, State};
+use crate::activity::Refused;
 use crate::cache::lru::{evictions, Held};
 
 /// What bounds the shared cache when a version is admitted.
@@ -36,6 +37,21 @@ pub(crate) enum Refusal {
     /// Postgres's DSM control slots, which were all in use
     /// (`DSM_CREATE_NULL_IF_MAXSEGMENTS`).
     NoSegment,
+}
+
+impl Refusal {
+    /// The reason `warren.backends()` counts it under (DESIGN.md §5.7): a
+    /// cap of `0` is the shared cache off, so unavailable.
+    pub(crate) fn reason(self) -> Refused {
+        match self {
+            Self::Disabled => Refused::Unavailable,
+            Self::TooLarge => Refused::TooLarge,
+            Self::NoRoom => Refused::NoRoom,
+            Self::NoSlot => Refused::NoSlot,
+            Self::StoreFull => Refused::StoreFull,
+            Self::NoSegment => Refused::NoSegment,
+        }
+    }
 }
 
 /// How a version is admitted.

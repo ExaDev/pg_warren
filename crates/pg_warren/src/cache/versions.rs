@@ -13,6 +13,7 @@ use warren_core::graph::ExternalId;
 
 use super::lru::Held;
 use super::LoadedVersion;
+use crate::activity::count_private_evictions;
 use crate::catalog::VersionId;
 
 thread_local! {
@@ -40,6 +41,18 @@ impl HeldByCall {
     fn held(&self) -> bool {
         self.version.strong_count() > 0
     }
+}
+
+/// A version the cache lists: cached, or evicted while a call holds it
+/// (no last use).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Listed {
+    pub(crate) version: VersionId,
+    pub(crate) graph_id: i32,
+    pub(crate) bytes: u64,
+    pub(crate) last_used: Option<Instant>,
+    /// Whether a call holds it.
+    pub(crate) in_use: bool,
 }
 
 /// Loaded versions by version id. Callers hold `Arc` clones, so evicting a
@@ -116,6 +129,11 @@ impl VersionCache {
         self.entries.values().map(|entry| entry.bytes).sum()
     }
 
+    /// How many versions are cached.
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
     /// Each cached version's bytes and last use, by version id.
     pub(crate) fn held(&self) -> Vec<Held<VersionId>> {
         let mut held: Vec<_> = self
@@ -131,11 +149,36 @@ impl VersionCache {
         held
     }
 
-    /// Drops version `version`, if cached. A caller holding it keeps it,
-    /// and a later lookup finds that copy while it is held.
+    /// Every version cached, and every version evicted that a call still
+    /// holds, for `warren.cache()`.
+    pub(crate) fn listing(&self) -> Vec<Listed> {
+        let cached = self.entries.iter().map(|(version, entry)| Listed {
+            version: *version,
+            graph_id: entry.graph_id,
+            bytes: entry.bytes,
+            last_used: Some(entry.last_used),
+            in_use: Arc::strong_count(&entry.version) > 1,
+        });
+        let held =
+            self.held_by_calls.iter().filter(|(_, held)| held.held()).map(|(version, held)| {
+                Listed {
+                    version: *version,
+                    graph_id: held.graph_id,
+                    bytes: held.bytes,
+                    last_used: None,
+                    in_use: true,
+                }
+            });
+        cached.chain(held).collect()
+    }
+
+    /// Drops version `version`, if cached, counting the eviction (DESIGN.md
+    /// §5.7). A caller holding it keeps it, and a later lookup finds that
+    /// copy while it is held.
     pub(crate) fn remove(&mut self, version: VersionId) {
         self.held_by_calls.retain(|_, held| held.held());
         if let Some(entry) = self.entries.remove(&version) {
+            count_private_evictions(1);
             let held = HeldByCall {
                 graph_id: entry.graph_id,
                 version: Arc::downgrade(&entry.version),
@@ -325,6 +368,25 @@ mod tests {
         cache.remove(1);
         drop((held, again));
         assert_eq!(cache.known_versions(), [2], "no longer held");
+    }
+
+    #[test]
+    fn the_listing_shows_cached_versions_and_those_calls_hold() {
+        let mut store = store();
+        let mut cache = VersionCache::default();
+        let held = cache.insert(10, 1, load::<i64>(&mut store, 1, true).unwrap());
+        cache.insert(10, 2, load::<i64>(&mut store, 2, true).unwrap());
+        let mut listing = cache.listing();
+        listing.sort_by_key(|listed| listed.version);
+        let shown: Vec<_> = listing.iter().map(|l| (l.version, l.in_use)).collect();
+        assert_eq!(shown, [(1, true), (2, false)], "a call holds version 1");
+        cache.remove(1);
+        let listing = cache.listing();
+        let evicted = listing.iter().find(|listed| listed.version == 1).unwrap();
+        assert_eq!((evicted.last_used, evicted.in_use), (None, true), "held, no longer cached");
+        assert_eq!(evicted.bytes, held.bytes());
+        drop(held);
+        assert_eq!(cache.listing().len(), 1, "gone once no call holds it");
     }
 
     #[test]

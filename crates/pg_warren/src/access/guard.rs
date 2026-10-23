@@ -238,8 +238,10 @@ mod tests {
     /// of graph `victim`.
     const CALLS: &[(&str, &str)] = &[
         ("aggregate_neighbours", "warren.aggregate_neighbours('victim', 'c', 'a')"),
+        ("backends", "warren.backends()"),
         ("betweenness_centrality", "warren.betweenness_centrality('victim', 'bc')"),
         ("bfs", "warren.bfs('victim', ARRAY[1::bigint], 2)"),
+        ("cache", "warren.cache()"),
         ("closeness_centrality", "warren.closeness_centrality('victim', 'cc', k := 2)"),
         ("clustering", "warren.clustering('victim', 'cl')"),
         ("compact", "warren.compact('victim', 'locality')"),

@@ -5,6 +5,7 @@
 
 use std::mem::size_of;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use pgrx::pg_sys;
 
@@ -13,10 +14,11 @@ use warren_core::compute::{AnyVector, ComputeMemory};
 
 use super::bound::{admit_load, make_room, unfit, unfit_notice};
 use super::shared::{evict_vector, prune as prune_shared, shared, shared_hit};
-use super::statement::{notice_due, pin_vector, pin_version, version_pinned};
+use super::statement::{notice_due, pin_vector, pin_version, vector_pinned, version_pinned};
 use super::versions::{VersionCache, CACHE};
 use super::{installation, load, trim, CacheError, LoadedVersion};
 use crate::access::{as_catalog_owner, require_reader};
+use crate::activity::{self, count_read, Read};
 use crate::catalog::{require_version, GraphDefinition, VersionId};
 use crate::parallel_worker::cache_notice_raised;
 use crate::read_only::{read_one, read_two};
@@ -44,6 +46,7 @@ pub(crate) fn resolve(
     version: Option<VersionId>,
     action: &'static str,
 ) -> Result<Resolved, CacheError> {
+    activity::claim();
     forget_other_installations();
     let graph = GraphDefinition::find(name)?;
     require_reader(graph.owner, &graph.readers, &graph.name, action)?;
@@ -78,7 +81,7 @@ pub(crate) fn cached<E: IdDatum + Send + Sync>(
     resolved: &Resolved,
 ) -> Result<Arc<LoadedVersion<E>>, CacheError> {
     if let Some(loaded) = CACHE.with_borrow_mut(|cache| cache.get::<E>(resolved.version)) {
-        pin_version(resolved.version);
+        pin_private_hit(resolved.version);
         trim();
         return Ok(loaded);
     }
@@ -105,7 +108,9 @@ fn load_private<E: IdDatum + Send + Sync>(
     make_room(expected);
     // Load outside any borrow of the cache: loading runs SPI, which may
     // raise an ERROR that unwinds through this frame.
+    let started = Instant::now();
     let loaded = load::<E>(&mut SpiSegmentStore, version, resolved.graph.store_merged)?;
+    count_read(Read::PrivateLoad, loaded.bytes(), started.elapsed());
     let current = resolved.graph.current_version == Some(version);
     pin_version(version);
     let loaded = CACHE.with_borrow_mut(|cache| {
@@ -171,10 +176,19 @@ fn hit<E: IdDatum + Send + Sync>(
     resolved: &Resolved,
 ) -> Result<Option<Arc<LoadedVersion<E>>>, CacheError> {
     if let Some(loaded) = CACHE.with_borrow_mut(|cache| cache.get::<E>(resolved.version)) {
-        pin_version(resolved.version);
+        pin_private_hit(resolved.version);
         return Ok(Some(loaded));
     }
     shared_hit::<E>(resolved)
+}
+
+/// Pins version `version`, found in this backend's cache, for the
+/// statement, counting the hit if the statement had not read it yet.
+fn pin_private_hit(version: VersionId) {
+    if !version_pinned(version) {
+        count_read(Read::PrivateHit, 0, Duration::ZERO);
+    }
+    pin_version(version);
 }
 
 /// Persisted vector `id`, if this backend's vector cache holds it: pinned
@@ -182,6 +196,9 @@ fn hit<E: IdDatum + Send + Sync>(
 /// then trimmed). Its bytes are already counted by the cache.
 pub(crate) fn cached_vector_hit(id: VectorId) -> Option<Arc<AnyVector>> {
     let vector = lookup_vector(id)?;
+    if !vector_pinned(id) {
+        count_read(Read::PrivateHit, 0, Duration::ZERO);
+    }
     pin_vector(id);
     trim();
     Some(vector)
@@ -195,7 +212,9 @@ pub(crate) fn cached_vector(
     graph_id: i32,
     record: &VectorRecord,
 ) -> Result<Arc<AnyVector>, VectorError> {
+    let started = Instant::now();
     let vector = vector::load(&mut SpiVectorStore, memory, graph_id, record)?;
+    count_read(Read::PrivateLoad, vector.bytes(), started.elapsed());
     pin_vector(record.vector);
     trim();
     Ok(vector)

@@ -8,6 +8,7 @@ use std::sync::Arc;
 use super::admission::Refusal;
 use super::slot::Key;
 use super::{Claimed, Found, SharedVersions};
+use crate::activity::count_wait;
 
 /// Where a version is read from.
 #[derive(Debug)]
@@ -57,11 +58,20 @@ pub(crate) fn acquire<P: SharedVersions, T, E>(
 /// statement, waiting while another backend loads it; `None` on a miss,
 /// which it does not claim. So a call reading two versions takes those
 /// shared first, pinned, and a load for its partner cannot evict them.
+///
+/// A lookup that waits counts once among this backend's waits (DESIGN.md
+/// §5.7).
 pub(crate) fn find<P: SharedVersions>(port: &mut P, key: Key) -> Option<Arc<P::View>> {
+    let mut waited = false;
     loop {
         match port.lookup(key) {
             Found::Ready(view) => return Some(view),
-            Found::Loading(loading) => port.wait(loading),
+            Found::Loading(loading) => {
+                if !std::mem::replace(&mut waited, true) {
+                    count_wait();
+                }
+                port.wait(loading);
+            }
             Found::Missing => return None,
         }
     }

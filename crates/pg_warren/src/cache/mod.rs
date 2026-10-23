@@ -10,17 +10,20 @@
 //! statement pin, which keeps what a top-level statement has read cached
 //! until it ends; `warren.prewarm` / `warren.evict`; and the shared cache
 //! (`shared`, §5.6), one copy of a version or persisted vector per
-//! cluster.
+//! cluster; and `warren.cache()` (`introspection`, §5.7), what this
+//! backend's private cache holds.
 //!
 //! Depends on `segment` (to read chunks), `catalog` (graphs and versions),
-//! `access` (reader checks), `source` (id types) and `vector` (evict and
+//! `access` (reader checks), `source` (id types), `vector` (evict and
 //! the size bound free cached vectors too, and the bound counts transient
-//! vectors); `build`, `version_sql`, `traversal_sql` and
+//! vectors), `activity` (its counters and sizes, §5.7) and
+//! `shared_memory` (room for segments); `build`, `version_sql`, `traversal_sql` and
 //! `compute_sql` use it.
 
 mod bound;
 mod error;
 mod installation;
+mod introspection;
 mod load;
 mod lru;
 mod open;

@@ -30,6 +30,7 @@ use super::session::{Mapped, Session, Unattached, Use};
 use super::slot::{Handle, Key, Process, Slot, State, Ticket};
 use super::unavailable::Unavailable;
 use super::{setting, Claimed, Found, SharedVersions};
+use crate::activity::{count_shared_evictions, record_mapped};
 use crate::cache::load::{read, read_vector, LoadError, LoadedVersion};
 use crate::cache::region::Region;
 use crate::catalog::VersionId;
@@ -41,7 +42,7 @@ use segment::{Segment, SegmentRegion};
 pub(crate) use placement::request_preload;
 #[cfg(any(feature = "pg17", feature = "pg18", test))]
 pub(in crate::cache::shared) use placement::FORMAT;
-pub(in crate::cache::shared) use segment::{store_name, PREFIX};
+pub(in crate::cache::shared) use segment::PREFIX;
 
 /// How long a waiter sleeps on a loading slot before it checks that the
 /// loader still exists, in milliseconds.
@@ -73,6 +74,8 @@ pub(crate) struct Dsm(());
 /// kept while the mapping is.
 pub(crate) struct Attached {
     segment: Segment,
+    /// The bytes the segment maps, read once, at the mapping.
+    bytes: u64,
     held: Mutex<Held>,
 }
 
@@ -189,6 +192,7 @@ impl Backend {
             let mut registry =
                 Registry::resume((*shared).clocks, &mut (*shared).slots, &(*shared).pins);
             let result = f(&mut registry, &mut self.session);
+            record_mapped(self.session.mappings().map(|mapped| mapped.bytes).sum());
             (*shared).clocks = registry.clocks();
             (*shared).drains.store(registry.clocks().drains(), Ordering::Release);
             result
@@ -264,7 +268,7 @@ impl SharedVersions for Dsm {
         let Some(segment) = segment::attach(handle, key) else {
             broken("a ready version's segment cannot be attached or holds another version")
         };
-        let attached = Arc::new(Attached { segment, held: Mutex::default() });
+        let attached = Arc::new(Attached::new(segment, Held::default()));
         let mapped = with_backend(|backend| {
             backend.locked(|registry, session| session.mapped(registry, ticket, attached))
         });
@@ -286,6 +290,7 @@ impl SharedVersions for Dsm {
         });
         match claim {
             Some(Claim::Load { ticket, evicted }) => {
+                count_shared_evictions(evicted.len() as u64);
                 evicted.into_iter().for_each(segment::unpin);
                 match segment::create(bytes, key) {
                     Some(segment) => {
@@ -300,6 +305,7 @@ impl SharedVersions for Dsm {
             }
             Some(Claim::Taken) => Claimed::Taken,
             Some(Claim::Refused { refusal, drained }) => {
+                count_shared_evictions(drained.len() as u64);
                 drained.into_iter().for_each(segment::unpin);
                 Claimed::Refused(refusal)
             }
@@ -311,7 +317,7 @@ impl SharedVersions for Dsm {
         let Loading { ticket, segment, held, .. } = loading;
         segment.keep();
         let handle = segment.handle();
-        let attached = Arc::new(Attached { segment, held: Mutex::new(held) });
+        let attached = Arc::new(Attached::new(segment, held));
         let published = with_backend(|backend| {
             let published = backend
                 .locked(|registry, session| session.publish(registry, ticket, handle, attached));
@@ -352,9 +358,8 @@ impl SharedVersions for Dsm {
             // SAFETY: as above; it checks for interrupts, so a cancel or
             // `statement_timeout` ends the wait with an ERROR, after which
             // the transaction's abort cancels the sleep.
-            let timed_out = unsafe {
-                pg_sys::ConditionVariableTimedSleep(changed, WAIT_MS, pg_sys::PG_WAIT_EXTENSION)
-            };
+            let timed_out =
+                unsafe { pg_sys::ConditionVariableTimedSleep(changed, WAIT_MS, wait_event()) };
             if timed_out {
                 take_over_if_gone(loading);
             }
@@ -419,6 +424,7 @@ impl SharedVersions for Dsm {
         let evicted = with_backend(|backend| backend.locked(|registry, _| registry.evict(which)));
         let evicted = evicted.unwrap_or_default();
         let count = evicted.len();
+        count_shared_evictions(count as u64);
         evicted.into_iter().for_each(segment::unpin);
         count
     }
@@ -444,6 +450,29 @@ impl SharedVersions for Dsm {
             loading.iter().for_each(|ticket| backend.broadcast(ticket.slot));
         });
     }
+}
+
+/// The wait event a backend waiting for another's load shows in
+/// `pg_stat_activity` (DESIGN.md §5.7): `WarrenSharedLoad`, of type
+/// `Extension`, on PG 17 and 18, registered once per backend
+/// (`WaitEventExtensionNew` needs no preload); `Extension` on PG 15 and 16.
+fn wait_event() -> u32 {
+    #[cfg(any(feature = "pg17", feature = "pg18"))]
+    {
+        thread_local! {
+            static SHARED_LOAD: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+        }
+        if let Some(event) = SHARED_LOAD.get() {
+            return event;
+        }
+        // SAFETY: on the main thread, with a static name; Postgres returns
+        // the same id in every backend that registers the name.
+        let event = unsafe { pg_sys::WaitEventExtensionNew(c"WarrenSharedLoad".as_ptr()) };
+        SHARED_LOAD.set(Some(event));
+        event
+    }
+    #[cfg(any(feature = "pg15", feature = "pg16"))]
+    pg_sys::PG_WAIT_EXTENSION
 }
 
 /// Whether a release of evicted mappings is due: a slot has started
@@ -472,7 +501,7 @@ fn revive(
             let Some(segment) = segment::attach(handle, key) else {
                 broken("a draining version's segment cannot be attached or holds another version")
             };
-            Arc::new(Attached { segment, held: Mutex::default() })
+            Arc::new(Attached::new(segment, Held::default()))
         }
     };
     attached.segment.repin();
@@ -524,6 +553,11 @@ impl Mapped for Attached {
 }
 
 impl Attached {
+    /// A mapping of `segment`, keeping what `held` holds.
+    fn new(segment: Segment, held: Held) -> Self {
+        Self { segment, bytes: segment.len(), held: Mutex::new(held) }
+    }
+
     /// The loaded version this mapping holds, `version` with external ids
     /// `E`: built over the segment's region (and validated) the first time,
     /// then kept with the mapping, which it keeps in use while a call holds
@@ -568,7 +602,7 @@ impl Attached {
     /// it (`Session::release` checks): the loaded version is dropped first.
     fn detach(self: Arc<Self>) {
         if let Ok(attached) = Arc::try_unwrap(self) {
-            let Self { segment, held } = attached;
+            let Self { segment, held, .. } = attached;
             drop(held);
             segment.detach();
         }

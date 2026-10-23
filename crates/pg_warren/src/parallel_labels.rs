@@ -28,8 +28,10 @@ mod tests {
     /// restricted, `s` safe.
     const LABELS: &[(&str, &str)] = &[
         ("aggregate_neighbours", "u"),
+        ("backends", "s"),
         ("betweenness_centrality", "u"),
         ("bfs", "s"),
+        ("cache", "r"),
         ("closeness_centrality", "u"),
         ("clustering", "u"),
         ("compact", "u"),
@@ -123,7 +125,9 @@ mod tests {
         // `evict`, which frees them).
         "warren.vector_reduce('pp', 't', 'sum')",
         "warren.vector_values('pp', 't', NULL::bigint)",
+        "warren.backends()",
         "warren.bfs('pp', ARRAY[1::bigint], 2)",
+        "warren.cache()",
         "warren.components('pp', NULL::bigint)",
         "warren.degree('pp', 1::bigint)",
         "warren.diff('pp', {v}, {v})",

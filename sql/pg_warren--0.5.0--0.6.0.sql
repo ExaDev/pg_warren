@@ -37,3 +37,45 @@ CREATE FUNCTION warren."drop_orphans"() RETURNS bigint
 STRICT
 LANGUAGE c
 AS 'MODULE_PATHNAME', 'drop_orphans_wrapper';
+
+-- Observability (DESIGN.md §5.7, §14 items 48 and 49): this backend's
+-- private cache, and every backend's from the activity table in shared
+-- memory. warren.shared_cache() keeps its shape.
+CREATE FUNCTION warren."cache"() RETURNS TABLE (
+	"kind" TEXT,
+	"graph" TEXT,
+	"version" bigint,
+	"vector" TEXT,
+	"vector_id" bigint,
+	"bytes" bigint,
+	"state" TEXT,
+	"last_use" bigint,
+	"cap" bigint
+)
+STRICT VOLATILE PARALLEL RESTRICTED
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'cache_wrapper';
+
+CREATE FUNCTION warren."backends"() RETURNS TABLE (
+	"kind" text,
+	"pid" int,
+	"database" oid,
+	"role" regrole,
+	"private_bytes" bigint,
+	"transient_bytes" bigint,
+	"mapped_bytes" bigint,
+	"lookups" bigint,
+	"private_hits" bigint,
+	"shared_hits" bigint,
+	"waits" bigint,
+	"private_loads" bigint,
+	"shared_loads" bigint,
+	"loaded_bytes" bigint,
+	"load_seconds" float8,
+	"private_evictions" bigint,
+	"shared_evictions" bigint,
+	"refusals" jsonb,
+	"since" timestamptz
+)
+VOLATILE PARALLEL SAFE
+LANGUAGE c AS 'MODULE_PATHNAME', 'backends_wrapper';
