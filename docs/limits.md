@@ -766,7 +766,7 @@ docs/semantics.md, "Parallel query labels").
 **Not yet supported:** `text` node ids; incremental maintenance (every
 `refresh` is a full rebuild); `refresh` or `compact` of a graph derived by
 contraction (contract again); edge properties beyond one weight;
-ownership transfer; cleanup of graphs and vectors when their owner role is
+cleanup of graphs and vectors when their owner role is
 dropped (a superuser can still `drop_graph`); per-role quotas on readers'
 vectors.
 

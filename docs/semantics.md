@@ -236,7 +236,7 @@ what a traversal reveals. So access is per graph:
 
 | Role | May |
 |---|---|
-| Owner (the role that ran `create_graph`, and its members) | everything: `refresh`, `promote`, `drop_version`, `compact`, `drop_graph`, `grant`, `revoke`, and all reads |
+| Owner (the role that ran `create_graph`, or was given the graph with `set_owner`, and its members) | everything: `refresh`, `promote`, `drop_version`, `compact`, `drop_graph`, `grant`, `revoke`, `set_owner`, and all reads |
 | Reader (a role in `readers`, and its members) | traversal, compute, `info`, `diff`, `distance`, `eigen`, `prewarm`, and writing vectors |
 | Anyone | `evict` (it frees only the caller's memory), `last_stats`, `version` |
 
@@ -246,8 +246,34 @@ SELECT warren.revoke('social', 'analyst');
 ```
 
 Everyone else gets `insufficient_privilege` (42501). The `warren.*` tables
-are revoked from `PUBLIC`; all access goes through the functions. Ownership
-cannot be transferred.
+are revoked from `PUBLIC`; all access goes through the functions.
+
+**Ownership transfer.** `set_owner` gives a graph a new owner, as `ALTER
+MATERIALIZED VIEW … OWNER TO` does a materialised view:
+
+```sql
+SELECT warren.set_owner('social', 'analytics');   -- owner, and may SET ROLE analytics
+```
+
+- The caller must be a member of the current owner, and able to `SET ROLE`
+  to the new one: on PostgreSQL 16+, a membership with the `SET` option; on
+  15, a membership. A superuser always may. Otherwise 42501.
+- The source queries are opened (not run) as the new owner, under the
+  graph's `search_path`, as `refresh` will run them. A new owner that cannot
+  read them is refused with 42501, and queries whose columns no longer fit
+  the graph with 42804, before anything changes. `create_graph`'s `NOTICE`
+  about writable schemas on the `search_path` is raised again, judged for
+  the new owner. A graph derived by `contract` has no source queries.
+- Built versions and vectors stay as they are: they were computed with the
+  old owner's visibility, until the next `refresh` (as a materialised view
+  keeps its data). Readers are kept, except the new owner, which no longer
+  needs to be one. The old owner keeps no access unless it is granted.
+  Vectors keep the role that wrote them; the new owner may replace or drop
+  any of them.
+- It waits for a running `refresh`, `compact`, `promote` or `drop_version` of
+  the graph, and they wait for it. Each checks ownership again once it has
+  the graph's row, so a call queued behind a transfer by a role that no
+  longer owns the graph is refused (42501).
 
 **Vectors.** Readers share one name space of vectors per version. A persisted
 vector may be replaced or dropped only by the role that wrote it or by the
