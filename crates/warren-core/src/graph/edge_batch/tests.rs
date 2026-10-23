@@ -6,6 +6,13 @@ use crate::interrupts::Cancellation;
 
 type Row<K> = (Option<K>, Option<K>, f64);
 
+/// Whether each batch is mapped before it is taken: both, except under
+/// Miri, where only the unmapped path runs. `EdgeBatch::map` runs on the
+/// `rayon` pool, whose work stealing runs through crossbeam-epoch, which
+/// Miri's Stacked Borrows model rejects (a known report against
+/// crossbeam-epoch 0.9, not this crate, which has no unsafe here).
+const MAPPED: &[bool] = if cfg!(miri) { &[false] } else { &[false, true] };
+
 /// The text id map of `ids`, then a rebuild without `dropped`, which
 /// tombstones it.
 fn text_map(ids: &[&[u8]], dropped: &[u8]) -> IdMap<TextKeys> {
@@ -92,8 +99,9 @@ fn a_mapped_batch_takes_the_edges_rows_would() {
         let expected = row_by_row(&id_map, directed, &rows);
         assert_eq!(expected.2, 4);
         for size in [1, 2, 7] {
-            assert_eq!(batched(&id_map, directed, &rows, size, true), expected);
-            assert_eq!(batched(&id_map, directed, &rows, size, false), expected);
+            for &map in MAPPED {
+                assert_eq!(batched(&id_map, directed, &rows, size, map), expected);
+            }
         }
     }
 }
@@ -110,11 +118,14 @@ fn fixed_ids_are_batched_as_text_ids_are() {
     ];
     let expected = row_by_row(&id_map, true, &rows);
     assert_eq!(expected, (vec![(0, 2), (2, 0)], vec![1.0, 4.0], 2));
-    assert_eq!(batched(&id_map, true, &rows, 3, true), expected);
-    assert_eq!(batched(&id_map, true, &rows, 3, false), expected);
+    for &map in MAPPED {
+        assert_eq!(batched(&id_map, true, &rows, 3, map), expected);
+    }
 }
 
+// Not under Miri: the map runs on the pool (see `MAPPED`).
 #[test]
+#[cfg(not(miri))]
 fn a_cancelled_map_stops() {
     let id_map = text_map(&[b"a", b"b"], b"");
     let memory = BuildMemory::unlimited();
@@ -193,7 +204,8 @@ proptest! {
             .map(|(at, (s, t))| (s.as_deref(), t.as_deref(), at as f64))
             .collect();
         let expected = row_by_row(&id_map, directed, &rows);
-        prop_assert_eq!(batched(&id_map, directed, &rows, size, true), expected.clone());
-        prop_assert_eq!(batched(&id_map, directed, &rows, size, false), expected);
+        for &map in MAPPED {
+            prop_assert_eq!(batched(&id_map, directed, &rows, size, map), expected.clone());
+        }
     }
 }
