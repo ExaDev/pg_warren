@@ -21,8 +21,7 @@ pub(crate) use any::AnyCsrSlices;
 pub use any::{AnyCsr, Neighbours};
 pub use build::{BuildPlan, BuildSummary, BuiltCsr, CsrDirection, CsrScope, CsrSink};
 pub use graph_csr::{CsrLayout, GraphCsr, RelationCsr};
-pub(crate) use rows::RowSweep;
-pub use rows::{AllRelations, CsrRows, RowNeighbours};
+pub use rows::{AllRelations, CsrRows, RowNeighbours, RowSweep};
 pub(crate) use slices::CsrSlices;
 pub use target::{Target, TargetWidth};
 

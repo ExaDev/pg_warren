@@ -121,7 +121,7 @@ impl<'g> CsrRows<'g> {
     /// These rows, for reading sources mostly in ascending order: each
     /// CSR's arrays borrowed once, with a hint per CSR (merging on the
     /// fly, a buffer of a few words per relation).
-    pub(crate) fn sweep(&self) -> Result<RowSweep<'g>, GraphError> {
+    pub fn sweep(&self) -> Result<RowSweep<'g>, GraphError> {
         fn hinted<'g, T: Target>(
             csrs: impl Iterator<Item = Option<&'g Csr<T>>>,
             count: usize,
@@ -157,12 +157,12 @@ fn wide(csr: &AnyCsr) -> Option<&Csr<u64>> {
 
 /// [`CsrRows`] read with sources mostly ascending, as a sweep or a sorted
 /// frontier reads them: where a CSR's offsets are sparse, a row is sought
-/// from where that CSR's last one was found ([`CsrSlices::seek`]), so
+/// from where that CSR's last one was found, galloping forward, so
 /// ascending sources cost O(1) a row rather than a binary search in each
 /// relation. A source below the last one is still found, by a search from
 /// the start. Every CSR of a graph version has one target width.
 #[derive(Debug)]
-pub(crate) struct RowSweep<'g>(Sweep<'g>);
+pub struct RowSweep<'g>(Sweep<'g>);
 
 #[derive(Debug)]
 enum Sweep<'g> {
@@ -190,7 +190,7 @@ impl<'g, T: Target> Hinted<'g, T> {
 
 impl<'g> RowSweep<'g> {
     /// [`CsrRows::neighbours`].
-    pub(crate) fn neighbours(&mut self, source: DenseId) -> RowNeighbours<'g> {
+    pub fn neighbours(&mut self, source: DenseId) -> RowNeighbours<'g> {
         RowNeighbours(match &mut self.0 {
             Sweep::One(csr, hint) => Merge::One(csr.neighbours_at(csr.seek(source, hint))),
             Sweep::Narrow(csrs) => {
@@ -203,7 +203,7 @@ impl<'g> RowSweep<'g> {
     }
 
     /// [`CsrRows::degree_bound`].
-    pub(crate) fn degree_bound(&mut self, source: DenseId) -> u64 {
+    pub fn degree_bound(&mut self, source: DenseId) -> u64 {
         match &mut self.0 {
             Sweep::One(csr, hint) => csr.seek(source, hint).len() as u64,
             Sweep::Narrow(csrs) => csrs.iter_mut().map(|csr| csr.degree(source)).sum(),

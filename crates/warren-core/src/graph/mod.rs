@@ -28,9 +28,10 @@ mod tombstones;
 pub use build_memory::{BuildBuffer, BuildCharge, BuildMemory};
 pub use csr::{
     AllRelations, AnyCsr, BuildPlan, BuildSummary, BuiltCsr, Csr, CsrDirection, CsrLayout, CsrRows,
-    CsrScope, CsrSink, GraphCsr, Neighbours, RelationCsr, RowNeighbours, Target, TargetWidth,
+    CsrScope, CsrSink, GraphCsr, Neighbours, RelationCsr, RowNeighbours, RowSweep, Target,
+    TargetWidth,
 };
-pub(crate) use csr::{AnyCsrSlices, CsrSlices, RowSweep};
+pub(crate) use csr::{AnyCsrSlices, CsrSlices};
 pub use direction::Direction;
 pub use edge_batch::{EdgeBatch, Endpoints, FixedEndpoints, IndexedKeys, TextEndpoints};
 pub use edge_list::{EdgeIntake, EdgeList};
