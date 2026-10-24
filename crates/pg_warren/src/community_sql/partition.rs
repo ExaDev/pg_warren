@@ -14,15 +14,19 @@ use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
 
 /// The undirected weighted view of `vectors`' version: each edge weighs
-/// its weight if `weighted` (NULL: if the graph has weights), else 1; the
-/// two directions of a directed graph add up. A negative or NaN weight is
-/// refused, naming the edge by its external ids.
+/// its weight if `weighted` (NULL: if the graph has weights), else 1, and
+/// an edge in several relations is one edge, its weights summed, or with
+/// `per_relation` an edge in each (NULL is refused); the two directions of
+/// a directed graph add up. A negative or NaN weight is refused, naming
+/// the edge by its external ids.
 pub(super) fn undirected<E: CachedIds>(
     vectors: &Vectors<E>,
     weighted: Option<bool>,
+    per_relation: Option<bool>,
 ) -> Result<Undirected, CommunitySqlError> {
+    let per_relation = per_relation.ok_or(CommunitySqlError::NullArgument("per_relation"))?;
     let weighting =
-        Weighting { weighted: weighted.unwrap_or(vectors.graph.weighted), per_relation: false };
+        Weighting { weighted: weighted.unwrap_or(vectors.graph.weighted), per_relation };
     let directed = vectors.graph.directed;
     let graph = &vectors.loaded.graph;
     vectors.memory.reclaim_for(Undirected::bytes(graph, directed));

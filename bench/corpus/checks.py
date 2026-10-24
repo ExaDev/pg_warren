@@ -126,14 +126,16 @@ class Warren:
         q = float(self.database.query(f"SELECT warren.{function}('g', '{function}')")[0][0])
         return {node: int(value) for node, value in self.vector(function).items()}, q
 
-    def modularity(self, labels):
-        """`warren.modularity` of the partition `labels` (node → integer)."""
+    def modularity(self, labels, per_relation=False):
+        """`warren.modularity` of the partition `labels` (node → integer),
+        a pair in several relations counted once or `per_relation`."""
         self.database.execute(f"DROP TABLE IF EXISTS given_labels; "
                               f"CREATE TABLE given_labels (id {self.id_type}, label bigint)")
         self.database.copy_in("given_labels", sorted(labels.items()))
         self.database.execute("SELECT warren.vector_from_query('g', 'given_labels', "
                               "'SELECT id, label FROM given_labels', 'i64')")
-        return float(self.database.query("SELECT warren.modularity('g', 'given_labels')")[0][0])
+        return float(self.database.query(
+            f"SELECT warren.modularity('g', 'given_labels', per_relation := {str(per_relation).lower()})")[0][0])
 
 
 def _path_pairs(nodes, count, seed):
@@ -167,11 +169,16 @@ def _modularity_finding(check, warren, oracle, status_if_different, note):
             "warren": warren, "oracle": oracle, "difference": warren - oracle, "note": note}
 
 
-def _community_findings(warren, reference):
+def _community_findings(warren, reference, relations):
     nx_labels, nx_q = reference.louvain()
     warren_on_nx = warren.modularity(nx_labels)
     findings = [_modularity_finding("modularity definition", warren_on_nx, nx_q, "mismatch",
                                     "warren.modularity and NetworkX scoring NetworkX's Louvain partition")]
+    if relations:
+        each = reference.modularity(nx_labels, reference.undirected_view(per_relation=True))
+        findings.append(_modularity_finding(
+            "modularity per relation", warren.modularity(nx_labels, per_relation=True), each, "mismatch",
+            "per_relation := true against NetworkX with A at k for an unweighted pair in k relations"))
     for function in ("louvain", "leiden"):
         labels, q = warren.community(function)
         returned = reference.modularity({n: label for n, label in labels.items()})
@@ -204,5 +211,5 @@ def run(warren, reference, dataset, create_graph_sql):
     findings.append(compare("clustering", warren.library("clustering"), reference.clustering(),
                             tolerance=CLUSTERING_TOLERANCE, documented=(reference.self_loop_nodes(), SELF_LOOP)))
     findings.append(compare("core_number", warren.library("core_number"), reference.core_number()))
-    findings += _community_findings(warren, reference)
+    findings += _community_findings(warren, reference, dataset.relations)
     return version, findings

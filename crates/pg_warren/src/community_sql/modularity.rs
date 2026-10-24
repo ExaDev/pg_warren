@@ -16,7 +16,9 @@ use crate::source::with_id_type;
 /// partition that vector `labels` (integers, one per node) gives `graph`'s
 /// version `version` (NULL: the current one): directions ignored (an
 /// edge and its reverse add up), edges weighted if `weighted` (NULL: if
-/// the graph has weights), an undirected self-loop counted once in its
+/// the graph has weights), an edge in several relations one edge, its
+/// weights summed, or with `per_relation` an edge in each (`spmv`'s `A`,
+/// DESIGN.md §6.3), an undirected self-loop counted once in its
 /// node's degree, as `contract` counts it, so a partition scores as the
 /// singletons of its quotient; 0 for a graph without edges. On an
 /// undirected graph it is NetworkX's `community.modularity` with each
@@ -30,6 +32,7 @@ fn modularity(
     resolution: default!(Option<f64>, "1.0"),
     weighted: default!(Option<bool>, "NULL"),
     version: default!(Option<i64>, "NULL"),
+    per_relation: default!(Option<bool>, "false"),
 ) -> Option<f64> {
     entry(|_| -> Result<Option<f64>, CommunitySqlError> {
         let graph = graph.ok_or(CommunitySqlError::NullArgument("graph"))?;
@@ -40,7 +43,7 @@ fn modularity(
         with_id_type!(resolved.graph.id_type, E => {
             let mut vectors = Vectors::<E>::open(resolved)?;
             let (labels, _charge) = integers(&mut vectors, labels, "labels")?;
-            let view = undirected(&vectors, weighted)?;
+            let view = undirected(&vectors, weighted, per_relation)?;
             Ok(Some(score(&vectors.memory, &view, labels.values(), resolution)?))
         })
     })
@@ -145,6 +148,29 @@ pub(super) mod tests {
     }
 
     #[pg_test]
+    fn per_relation_a_pair_counts_once_in_each_of_its_relations() -> Result<(), Error> {
+        for (name, store_merged) in [("merged", true), ("unmerged", false)] {
+            a_pair_in_two_relations(name, store_merged)?;
+            // m = 3: 1 – 2 weighs 2. (4 − 4²/6) / 6 + (2 − 2²/6) / 6 = 4/9.
+            let q = Spi::get_one::<f64>(&format!(
+                "SELECT warren.modularity('{name}', 'p', per_relation := true)"
+            ))?
+            .unwrap_or_default();
+            assert!((q - 4.0 / 9.0).abs() < 1e-15, "{name}: {q}");
+            // Its quotient, contracted per relation, sums the relations' counts.
+            Spi::run(&format!(
+                "SELECT warren.contract('{name}', 'p', '{name}_q', per_relation := true);
+                 SELECT warren.vector_dense_id('{name}_q', 'alone')"
+            ))?;
+            let quotient =
+                Spi::get_one::<f64>(&format!("SELECT warren.modularity('{name}_q', 'alone')"))?
+                    .unwrap_or_default();
+            assert!((quotient - q).abs() < 1e-15, "{name}_q: {quotient}");
+        }
+        Ok(())
+    }
+
+    #[pg_test]
     fn modularity_refuses_bad_arguments() -> Result<(), Error> {
         two_triangles()?;
         Spi::run(
@@ -161,6 +187,10 @@ pub(super) mod tests {
         assert_eq!(
             failure("warren.modularity('tt', NULL)")?.as_deref(),
             Some("22004: labels must not be NULL")
+        );
+        assert_eq!(
+            failure("warren.modularity('tt', 'halves', per_relation := NULL)")?.as_deref(),
+            Some("22004: per_relation must not be NULL")
         );
         Ok(())
     }

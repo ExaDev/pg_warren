@@ -55,6 +55,31 @@ Edges are cleaned at build time, and counted, never silently:
 | Self-loops | kept | |
 | NULL node ids | ignored | |
 
+### A pair in several relations
+
+Two nodes can be linked in several relations at once, `1 → 2` as both
+`phone` and `address`. Functions whose result this can change take
+`per_relation boolean DEFAULT false`:
+
+- **By default the pair is one edge**, the merged CSR's: its weights
+  summed, 1 when unweighted. This is the simple graph of distinct pairs,
+  what topology wants.
+- **`per_relation := true` makes it an edge in each relation**, each with
+  its relation's weight (1 when unweighted), as if they were parallel
+  edges: an unweighted pair in three relations weighs 3 in modularity,
+  and a sum of weights is the same either way.
+
+`rels` restricts both to the selected relations. Use `per_relation` when
+the multiplicity is the signal, such as two accounts sharing a phone, an
+address and a device. Through 0.6.0 the community functions counted such
+a pair once per relation and the rest once; see DESIGN.md §5.3 for the
+whole table.
+
+| Functions | `per_relation` |
+|---|---|
+| `modularity`, `louvain`, `leiden`, `local_moving`, `leiden_refine` | yes |
+| `contract` | yes: counting (`weighted := false`, or an unweighted graph), the default counts the pair once, in the first of its relations; per relation in each. Weights are summed either way |
+
 ## Versions
 
 `warren.refresh(name)` runs both queries and builds a new **version**: an

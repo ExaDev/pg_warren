@@ -12,6 +12,18 @@
   the pair in the first of its relations. Weighted pairs are unchanged:
   their weights are summed across relations.
 
+### Added
+
+- **`per_relation boolean DEFAULT false`** on `modularity`, `contract`,
+  `local_moving`, `leiden_refine`, `louvain` and `leiden`: `true` reads a
+  pair linked in several relations as an edge in each (one per relation,
+  as parallel edges), for when that multiplicity is the signal.
+
+### Upgrading
+
+- `ALTER EXTENSION pg_warren UPDATE` drops and recreates the functions
+  that gain `per_relation`, keeping their privileges.
+
 ## 0.6.0 — identity, lifecycle and visibility (2026-10-24)
 
 Milestone M10 of DESIGN.md §13. Nodes can be keyed on strings: `text` is

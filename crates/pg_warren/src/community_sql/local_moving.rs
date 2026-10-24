@@ -25,8 +25,8 @@ use crate::source::with_id_type;
 /// sweep, to the neighbouring community that most raises modularity at
 /// `resolution`, until a sweep moves none, raises modularity by no more
 /// than `tolerance`, or `max_sweeps` have run. The graph is undirected for
-/// this (`warren.modularity`'s view); `seed` orders the sweep. Returns the
-/// number of communities.
+/// this (`warren.modularity`'s view, `weighted` and `per_relation` as
+/// there); `seed` orders the sweep. Returns the number of communities.
 #[allow(clippy::too_many_arguments)] // the SQL signature of DESIGN.md §6.7
 #[pg_extern(schema = "warren", volatile, parallel_unsafe)]
 fn local_moving(
@@ -41,6 +41,7 @@ fn local_moving(
     weighted: default!(Option<bool>, "NULL"),
     persist: default!(Option<bool>, "true"),
     version: default!(Option<i64>, "NULL"),
+    per_relation: default!(Option<bool>, "false"),
 ) -> Option<i64> {
     entry(|_| -> Result<Option<i64>, CommunitySqlError> {
         let graph = graph.ok_or(CommunitySqlError::NullArgument("graph"))?;
@@ -71,7 +72,7 @@ fn local_moving(
             vectors.check_writable(out, persist)?;
             let initial = initial.map(|name| integers(&mut vectors, name, "initial")).transpose()?;
             let keys = keys.map(|name| integers(&mut vectors, name, "keys")).transpose()?;
-            let view = undirected(&vectors, weighted)?;
+            let view = undirected(&vectors, weighted, per_relation)?;
             let moved = moving(
                 &*workers()?,
                 &vectors.memory,
@@ -95,7 +96,8 @@ fn local_moving(
 /// inside its community and connected, labelled by the smallest of its
 /// members' `keys` (NULL: dense ids). `randomness` is θ of Traag et al.
 /// (0: always the best merge); `seed` orders the nodes and seeds the
-/// draws. Returns the number of refined communities.
+/// draws; `weighted` and `per_relation` are `warren.modularity`'s. Returns
+/// the number of refined communities.
 #[allow(clippy::too_many_arguments)] // the SQL signature of DESIGN.md §6.7
 #[pg_extern(schema = "warren", volatile, parallel_unsafe)]
 fn leiden_refine(
@@ -109,6 +111,7 @@ fn leiden_refine(
     weighted: default!(Option<bool>, "NULL"),
     persist: default!(Option<bool>, "true"),
     version: default!(Option<i64>, "NULL"),
+    per_relation: default!(Option<bool>, "false"),
 ) -> Option<i64> {
     entry(|_| -> Result<Option<i64>, CommunitySqlError> {
         let graph = graph.ok_or(CommunitySqlError::NullArgument("graph"))?;
@@ -133,7 +136,7 @@ fn leiden_refine(
             vectors.check_writable(out, persist)?;
             let (partition, _charge) = integers(&mut vectors, communities, "communities")?;
             let keys = keys.map(|name| integers(&mut vectors, name, "keys")).transpose()?;
-            let view = undirected(&vectors, weighted)?;
+            let view = undirected(&vectors, weighted, per_relation)?;
             let refined = refine(
                 &*workers()?,
                 &vectors.memory,

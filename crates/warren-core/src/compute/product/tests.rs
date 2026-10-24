@@ -328,6 +328,7 @@ fn product_of<'a>(
         transpose: s.transpose,
         relations: selected.as_deref().map_or(RelationSelection::All, RelationSelection::Only),
         weighted: s.weighted,
+        per_relation: false,
         mask: mask
             .as_ref()
             .zip(s.mask.as_ref())
@@ -573,5 +574,89 @@ fn a_product_over_several_relations_charges_its_row_scratch() {
             let extra = least_budget(&unmerged, transpose) - least_budget(&stored, transpose);
             assert!(extra >= longest * 16, "{transpose} {reverse}: {extra}");
         }
+    }
+}
+
+/// A product over random relations, for the per-relation properties:
+/// integer weights and values, so every semiring is exact.
+fn relation_products() -> impl Strategy<Value = (Scenario, bool, Vec<f64>)> {
+    scenarios(1).prop_flat_map(|s| {
+        let x = prop::collection::vec((-3i8..4).prop_map(f64::from), s.id_space as usize);
+        (Just(s), any::<bool>(), x)
+    })
+}
+
+/// `s`'s product over every relation, plain, with `per_relation`.
+fn over_all(s: &Scenario, graph: &GraphCsr, x: &[f64], per_relation: bool) -> Option<Vec<f64>> {
+    let product = Product {
+        transpose: s.transpose,
+        weighted: s.weighted,
+        per_relation,
+        ..Product::new(s.semiring)
+    };
+    let mut y = vector(1, vec![0.0; x.len()]);
+    let run = spmv(
+        workers(),
+        &memory(),
+        &mut Uninterrupted,
+        graph,
+        &product,
+        &vector(1, x.to_vec()),
+        &mut y,
+    );
+    run.ok().map(|()| values(&y))
+}
+
+proptest! {
+    #[test]
+    fn per_relation_is_each_relations_product_added((s, store_merged, x) in relation_products()) {
+        // The multigraph of the relations' edges, an edge in several
+        // relations parallel edges: its product is ⊕ over the relations of
+        // each relation's own.
+        let layout = CsrLayout { build_reverse: s.reverse, store_merged };
+        let graph = reference::graph_as(s.id_space, s.relation_count, &s.edges, s.weighted_graph, layout);
+        let Some(found) = over_all(&s, &graph, &x, true) else { return Ok(()) };
+        let indexes = reference::relations(s.relation_count);
+        let mut expected: Vec<Option<f64>> = vec![None; x.len()];
+        for (r, relation) in indexes.iter().enumerate() {
+            let only = [*relation];
+            let product = Product {
+                transpose: s.transpose,
+                weighted: s.weighted,
+                relations: RelationSelection::Only(&only),
+                ..Product::new(s.semiring)
+            };
+            let mut y = vector(1, vec![0.0; x.len()]);
+            run(&graph, &product, &vector(1, x.clone()), &mut y);
+            for (row, &value) in values::<f64>(&y).iter().enumerate() {
+                // Only rows with an entry in the relation: `any` has no identity.
+                let row_of = |&(edge_relation, u, v, _): &(usize, u64, u64, f64)| {
+                    edge_relation == r && (if s.transpose { v } else { u }) == row as u64
+                };
+                if !s.edges.iter().any(row_of) {
+                    continue;
+                }
+                let sum = &mut expected[row];
+                *sum = Some(match *sum {
+                    None => value,
+                    Some(sum) => f64::apply(s.semiring.add().op(), sum, value).unwrap(),
+                });
+            }
+        }
+        let identity = f64::identity(s.semiring.add());
+        let expected: Vec<f64> = expected.into_iter().map(|v| v.unwrap_or(identity)).collect();
+        prop_assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn by_default_it_is_the_deduplicated_graphs_product((s, store_merged, x) in relation_products()) {
+        // Every edge in one relation: the build folds an edge in several
+        // relations into one, its weights summed, as the merged CSR does.
+        let layout = CsrLayout { build_reverse: s.reverse, store_merged };
+        let graph = reference::graph_as(s.id_space, s.relation_count, &s.edges, s.weighted_graph, layout);
+        let Some(found) = over_all(&s, &graph, &x, false) else { return Ok(()) };
+        let one: Edges = s.edges.iter().map(|&(_, u, v, w)| (0, u, v, w)).collect();
+        let deduplicated = reference::graph(s.id_space, 1, &one, s.weighted_graph, s.reverse);
+        prop_assert_eq!(found, over_all(&s, &deduplicated, &x, false).unwrap());
     }
 }

@@ -112,6 +112,7 @@ impl Arguments<'_> {
             transpose: self.transpose,
             relations: selected.as_deref().map_or(RelationSelection::All, RelationSelection::Only),
             weighted: self.weighted,
+            per_relation: false,
             mask: mask.as_deref().map(|vector| Mask { vector, complement: self.complement }),
             replace: self.replace,
             accumulate: self.accumulate,

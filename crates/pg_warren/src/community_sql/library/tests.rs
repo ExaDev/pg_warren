@@ -63,6 +63,31 @@ mod tests {
         Ok(())
     }
 
+    /// In either counting of a pair in several relations, Louvain and
+    /// Leiden return the modularity of their partition counted so.
+    #[pg_test]
+    fn louvain_and_leiden_count_a_pair_as_asked() -> Result<(), Error> {
+        crate::community_sql::modularity::tests::a_pair_in_two_relations("two", false)?;
+        for algorithm in ["louvain", "leiden"] {
+            for (per_relation, expected) in [(false, 0.5), (true, 4.0 / 9.0)] {
+                let q = Spi::get_one::<f64>(&format!(
+                    "SELECT warren.{algorithm}('two', '{algorithm}', per_relation := {per_relation})"
+                ))?
+                .unwrap_or_default();
+                let scored = Spi::get_one::<f64>(&format!(
+                    "SELECT warren.modularity('two', '{algorithm}', per_relation := {per_relation})"
+                ))?
+                .unwrap_or_default();
+                assert_eq!(q, scored, "{algorithm}, per_relation {per_relation}");
+                assert!(
+                    (q - expected).abs() < 1e-15,
+                    "{algorithm}, per_relation {per_relation}: {q}"
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Louvain and Leiden report their levels (DESIGN.md §5.7), and the
     /// native calls inside them their own phases; a test is one statement,
     /// so the last report stays.

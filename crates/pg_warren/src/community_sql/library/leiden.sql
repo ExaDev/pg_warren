@@ -31,7 +31,7 @@ CREATE FUNCTION warren.leiden(graph text, "out" text, resolution float8 DEFAULT 
                               seed bigint DEFAULT 0, max_levels int DEFAULT 100,
                               tolerance float8 DEFAULT 1e-7, randomness float8 DEFAULT 0.01,
                               iterations int DEFAULT 2, weighted boolean DEFAULT NULL, levels_prefix text DEFAULT NULL,
-                              version bigint DEFAULT NULL)
+                              version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
 RETURNS float8 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   v bigint := coalesce(version, (warren.info(graph) ->> 'current_version')::bigint);
@@ -98,6 +98,7 @@ BEGIN
                                      keys := CASE WHEN level > 1 THEN '_warren_leiden_keys' END,
                                      resolution := resolution, seed := seed, tolerance := tolerance,
                                      weighted := CASE WHEN level = 1 THEN weighted ELSE true END,
+                                   per_relation := level = 1 AND per_relation,
                                      persist := false, version := gv);
         -- This level's partition, on `graph`.
         IF level = 1 THEN
@@ -113,6 +114,7 @@ BEGIN
                                           keys := CASE WHEN level > 1 THEN '_warren_leiden_keys' END,
                                           resolution := resolution, seed := seed, randomness := randomness,
                                           weighted := CASE WHEN level = 1 THEN weighted ELSE true END,
+                                   per_relation := level = 1 AND per_relation,
                                           persist := false, version := gv);
           IF level = 1 THEN
             PERFORM warren.vector_map(graph, '_warren_leiden_refined_down', '_warren_leiden_refined', false, v);
@@ -134,7 +136,8 @@ BEGIN
         -- A level graph of its own, named after its version, a name no
         -- graph can have had.
         next_v := warren.contract(graph, '_warren_leiden_refined_down', NULL,
-                                  weighted := coalesce(weighted, true), version := v);
+                                  weighted := coalesce(weighted, true), version := v,
+                                per_relation := per_relation);
         next_g := '_warren_level_' || next_v;
         -- The next level starts from the unrefined partition: every member
         -- of a refined community is in the same community, so min is it.
@@ -167,7 +170,7 @@ BEGIN
       END IF;
     END LOOP;
     PERFORM warren.vector_map(graph, "out", '_warren_leiden_down', true, v);
-    q := warren.modularity(graph, "out", resolution, weighted, v);
+    q := warren.modularity(graph, "out", resolution, weighted, v, per_relation);
   EXCEPTION WHEN OTHERS OR query_canceled THEN
     PERFORM warren.drop_vector(graph, '_warren_leiden_' || part, v, true) FROM unnest(parts) part;
     RAISE;
