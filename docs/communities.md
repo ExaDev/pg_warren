@@ -48,6 +48,13 @@ then add up to the counts of distinct edges, as `spmv` counts such an
 edge once. With `per_relation := true` it counts in each of its
 relations ([semantics.md](semantics.md#a-pair-in-several-relations)).
 
+So a relation-filtered read of a counting quotient sees a shared pair
+only in the first of its relations: if every edge of `b` is also in `a`,
+the quotient's relation `b` has no edges, and `has_edge(q, c, d, 'b')`,
+`spmv(..., rels := ARRAY['b'])` and the traversals over `b` find none.
+To keep each relation's own edges, contract with `per_relation := true`,
+or weighted (weights are summed in each relation either way).
+
 ```sql
 SELECT warren.vector_const('regions', 'one', 1);
 SELECT warren.spmv('regions', 'one', 'km_out');       -- each region's weighted degree

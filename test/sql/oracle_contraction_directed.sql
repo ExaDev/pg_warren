@@ -41,3 +41,16 @@ SELECT assert.equal((SELECT count(*) FROM quotient_edges WHERE rels = 'all'), (S
 SELECT assert.equal((SELECT count(*) FROM quotient_edges f JOIN oracle_quotient o USING (source, target)
                      WHERE f.rels = 'all' AND f.weight = o.weight), (SELECT count(*) FROM oracle_quotient),
                     'each counts the distinct edges it joins');
+-- A counting quotient keeps a pair in several relations in the first of
+-- them only: every edge of b is also in a, so the quotient's relation b
+-- has no edge, and a read filtered to b sees none. Per relation, or
+-- weighted, each relation keeps its own.
+SELECT warren.vector_const('q', 'one', 1);
+SELECT warren.spmv('q', 'one', 'b_out', rels := ARRAY['b']);
+SELECT assert.equal((SELECT count(*) FROM warren.vector_values('q', 'b_out', NULL::bigint) WHERE value <> 0),
+                    0::bigint, 'relation b of a counting quotient is empty');
+SELECT warren.contract('g', 'label', 'qp', weighted := false, per_relation := true);
+SELECT warren.vector_const('qp', 'one', 1);
+SELECT warren.spmv('qp', 'one', 'b_out', rels := ARRAY['b']);
+SELECT assert.that((SELECT count(*) FROM warren.vector_values('qp', 'b_out', NULL::bigint) WHERE value <> 0) > 0,
+                   'per relation, relation b keeps its edges');
