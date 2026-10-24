@@ -3,8 +3,9 @@
 fetched with (recorded in `pins.json` the first time), and converted to
 its tables (`tables`). The graph/v1 document is deleted once converted, so
 the cache holds the tables, `load.sql` and `dataset.json` (the tables'
-summary and keepset's provenance)."""
+summary and sha256, and keepset's provenance)."""
 
+import hashlib
 import json
 import shutil
 
@@ -17,6 +18,14 @@ class PinMismatch(RuntimeError):
 
 class NotEnoughMemory(RuntimeError):
     pass
+
+
+def _sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        while block := f.read(1 << 20):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def pin_of(provenance):
@@ -57,5 +66,6 @@ def fetch(dataset, keepset_, root, record, available_mb=None):
         shutil.rmtree(directory, ignore_errors=True)
         raise
     shutil.rmtree(raw.parent)
-    described.write_text(json.dumps({"tables": summary, "provenance": provenance}, indent=1) + "\n")
+    checksums = {name: _sha256(directory / name) for name in ("nodes.csv", "edges.csv")}
+    described.write_text(json.dumps({"tables": summary, "sha256": checksums, "provenance": provenance}, indent=1) + "\n")
     return directory

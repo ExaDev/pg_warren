@@ -1,6 +1,7 @@
 """bench/corpus/keepset.py and fetch.py: fetching a dataset through the
 pinned keepset CLI, checking it against its pin, and keeping only its tables."""
 
+import hashlib
 import json
 import subprocess
 
@@ -43,6 +44,10 @@ def test_a_first_fetch_records_its_pin_and_keeps_only_the_tables(tmp_path):
     described = json.loads((directory / "dataset.json").read_text())
     assert described["tables"] == {"nodes": 2, "edges": 1, "ids": "integer", "relations": 0, "self_loops": 0}
     assert described["provenance"]["sha256"] == SHA
+    # The tables' own checksums, so tables converted on a machine with the
+    # memory keepset needs can be carried to another and checked.
+    assert described["sha256"] == {"nodes.csv": hashlib.sha256(b"1\n2\n").hexdigest(),
+                                   "edges.csv": hashlib.sha256(b"1,2\n").hexdigest()}
 
 
 def test_a_pinned_fetch_whose_bytes_differ_is_refused_and_leaves_nothing(tmp_path):
