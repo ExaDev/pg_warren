@@ -63,11 +63,11 @@ fn csr(
     let csr = match width.ok_or(missing)? {
         4 => {
             let targets = region.view::<u32>(targets)?.ok_or(missing)?;
-            AnyCsr::U32(Csr::from_segments(id_space, offsets, targets, weights)?)
+            AnyCsr::U32(Csr::from_segments(id_space, None, offsets, targets, weights)?)
         }
         _ => {
             let targets = region.view::<u64>(targets)?.ok_or(missing)?;
-            AnyCsr::U64(Csr::from_segments(id_space, offsets, targets, weights)?)
+            AnyCsr::U64(Csr::from_segments(id_space, None, offsets, targets, weights)?)
         }
     };
     Ok(Some(csr))

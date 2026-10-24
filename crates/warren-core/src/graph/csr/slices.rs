@@ -10,6 +10,8 @@ use crate::graph::DenseId;
 /// The offsets, targets and weights of one CSR, borrowed.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CsrSlices<'a, T> {
+    /// The stored rows' ids, with sparse offsets.
+    rows: Option<&'a [T]>,
     offsets: &'a [u64],
     targets: &'a [T],
     weights: Option<&'a [f64]>,
@@ -18,7 +20,12 @@ pub(crate) struct CsrSlices<'a, T> {
 impl<T: Target> Csr<T> {
     /// Its arrays, borrowed once.
     pub(crate) fn slices(&self) -> CsrSlices<'_, T> {
-        CsrSlices { offsets: self.offsets(), targets: self.targets(), weights: self.weights() }
+        CsrSlices {
+            rows: self.rows(),
+            offsets: self.offsets(),
+            targets: self.targets(),
+            weights: self.weights(),
+        }
     }
 }
 
@@ -41,10 +48,15 @@ impl<'a, T: Target> CsrSlices<'a, T> {
     }
 
     /// The positions of `source`'s row in the targets; empty outside the
-    /// id space (whose size is one less than the offsets').
+    /// id space, and with sparse offsets for a row not stored (found by
+    /// binary search in the stored rows).
+    #[inline]
     fn row(&self, source: DenseId) -> Range<usize> {
-        let source = usize::try_from(source).ok();
-        match source.and_then(|s| self.offsets.get(s..s.checked_add(2)?)) {
+        let position = match self.rows {
+            None => usize::try_from(source).ok(),
+            Some(rows) => T::from_dense(source).and_then(|source| rows.binary_search(&source).ok()),
+        };
+        match position.and_then(|s| self.offsets.get(s..s.checked_add(2)?)) {
             Some(&[start, end]) => start as usize..end as usize,
             _ => 0..0,
         }
