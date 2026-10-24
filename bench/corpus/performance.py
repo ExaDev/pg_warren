@@ -52,9 +52,11 @@ def stages(dataset, source):
     return [
         Stage("cold load", "SELECT warren.evict('g'), warren.prewarm('g')"),
         Stage("bfs depth 6", f"SELECT count(*) FROM warren.bfs('g', ARRAY[{source}], {DEPTH})", 3, True),
+        Stage("bfs depth 6 rows", f"SELECT count(*) FROM warren.bfs('g', ARRAY[{source}], {DEPTH})"),
         Stage("bfs depth 6 recursive CTE", cte_sql(dataset, source)),
         Stage("neighbours", f"SELECT count(*) FROM warren.neighbours('g', {source})", 20, True),
         Stage("reachable_set", f"SELECT count(*) FROM warren.reachable_set('g', ARRAY[{source}])", 3, True),
+        Stage("reachable_set rows", f"SELECT count(*) FROM warren.reachable_set('g', ARRAY[{source}])"),
         Stage("components", f"SELECT count(DISTINCT component_id) FROM warren.components('g', NULL::{id_type})"),
         Stage("pagerank 20 iterations", "SELECT warren.pagerank('g', 'pr', tol := 0, max_iter := 20)"),
         Stage("eigen k=20", "SELECT count(*), max(residual) FROM warren.eigen('g', 20, 'normalized_laplacian', "
@@ -69,11 +71,13 @@ def stages(dataset, source):
     ]
 
 
-def _hub(database, dataset):
-    """The node with most edges (ties to the smallest id), as an SQL literal."""
-    ends = "SELECT src FROM edges UNION ALL SELECT dst FROM edges"
-    return database.query(f"SELECT quote_literal(n) || '::' || pg_typeof(n) FROM ({ends}) e (n) "
-                          "GROUP BY n ORDER BY count(*) DESC, n LIMIT 1")[0][0]
+def start_sql(dataset):
+    """The start of the traversals, as an SQL literal: the node with most
+    out-edges of a directed graph (its busiest node may only be cited), the
+    busiest node of an undirected one; ties to the smallest id."""
+    ends = "SELECT src FROM edges" + ("" if dataset.directed else " UNION ALL SELECT dst FROM edges")
+    return (f"SELECT quote_literal(n) || '::' || pg_typeof(n) FROM ({ends}) e (n) "
+            "GROUP BY n ORDER BY count(*) DESC, n LIMIT 1")
 
 
 def _version(database):
@@ -87,7 +91,7 @@ def run(cluster, name, database, dataset, threads, create_graph_sql):
     database.execute(TIMER)
     database.execute("CREATE INDEX ON edges (src); CREATE INDEX ON edges (dst); ANALYZE edges")
     database.execute(create_graph_sql)
-    source = _hub(database, dataset)
+    source = database.query(start_sql(dataset))[0][0]
     result = {"source": source, "stages": {}}
     with Session(cluster, name) as s:
         s.run(f"SET warren.threads = {threads}")

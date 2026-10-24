@@ -42,3 +42,17 @@ def test_short_reads_are_timed_in_the_server_and_repeated():
 
 def test_throughput_is_in_graph_edges_a_second():
     assert performance.edges_per_second(100_000_000, 4.0) == 25_000_000
+
+
+def test_a_directed_graph_starts_from_the_node_with_most_out_edges():
+    # The busiest node of a directed graph may have no out-edges (a hub
+    # that is only cited), so BFS from it would reach nothing.
+    assert "SELECT src FROM edges" in performance.start_sql(dataset(directed=True))
+    assert "UNION ALL SELECT dst FROM edges" not in performance.start_sql(dataset(directed=True))
+    assert "UNION ALL SELECT dst FROM edges" in performance.start_sql(dataset())
+
+
+def test_the_rows_bfs_reaches_are_counted_beside_the_ctes():
+    counted = {s.name: s for s in performance.stages(dataset(), "1::bigint")}
+    assert counted["bfs depth 6 rows"].sql == "SELECT count(*) FROM warren.bfs('g', ARRAY[1::bigint], 6)"
+    assert counted["reachable_set rows"].sql == "SELECT count(*) FROM warren.reachable_set('g', ARRAY[1::bigint])"
