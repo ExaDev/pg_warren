@@ -277,10 +277,9 @@ jobs:
   macos:
     # Apple silicon with Homebrew's PostgreSQL. macOS has no /dev/shm: DSM
     # segments are POSIX shared memory with no file system to measure, so
-    # the shared cache is expected to find no room and degrade to private
-    # copies (DESIGN.md §5.6), and tests that expect sharing to fail. It
-    # runs everything and reports; until macOS is supported it does not
-    # fail the workflow (continue-on-error), so read its result.
+    # the store is taken as unbounded, as for sysv (DESIGN.md §5.6, Size
+    # checks). It runs everything and reports; until macOS is supported it
+    # does not fail the workflow (continue-on-error), so read its result.
     name: macOS arm64 pgrx tests + SQL harness (Homebrew PG 18)
     runs-on: macos-15
     continue-on-error: true
@@ -312,15 +311,16 @@ jobs:
         run: cargo install cargo-pgrx --version "$PGRX_VERSION" --locked
       - name: cargo pgrx init
         run: cargo pgrx init --pg18 "$PG_CONFIG"
-      - name: cargo pgrx test pg18
-        working-directory: crates/pg_warren
-        run: cargo pgrx test pg18
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
           cache: pip
           cache-dependency-path: bench/requirements.txt
+      # Before the tests, so the harness steps still run if they fail.
       - run: pip install -r bench/requirements.txt
+      - name: cargo pgrx test pg18
+        working-directory: crates/pg_warren
+        run: cargo pgrx test pg18
       - name: SQL harness (test/run.py)
         if: ${{ !cancelled() }}
         run: python test/run.py --pg-config "$PG_CONFIG"
