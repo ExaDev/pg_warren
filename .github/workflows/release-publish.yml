@@ -11,6 +11,11 @@ name: Release (publish)
 # notes. A re-run succeeds once the tag is on the recorded commit, and fails
 # if a tag of that name is on any other. workflow_dispatch publishes a given
 # release (or the latest) again.
+#
+# Both jobs check out the same commit, github.sha: the push (or dispatch)
+# that started the run. What the approver sees, "vX.Y.Z → <commit>" and the
+# notes, is read from that commit, and the publish job tags from it; a
+# later push to main starts a run of its own.
 
 on:
   push:
@@ -90,10 +95,6 @@ jobs:
       - name: Tag ${{ env.COMMIT }} v${{ env.VERSION }}
         run: |
           set -euo pipefail
-          [[ "$(python3 release/publish.py commit "$VERSION")" == "$COMMIT" ]] || {
-            echo "::error::v$VERSION's recorded commit is no longer the approved $COMMIT"
-            exit 1
-          }
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           python3 release/publish.py tag "$VERSION"

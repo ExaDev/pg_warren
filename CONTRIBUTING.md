@@ -255,13 +255,21 @@ format. To benchmark a new function, add a workload with `requires` to
      and hands the two commits on as a git bundle; its second job, which
      runs no repository code, checks the bundle is exactly those two
      commits on the dispatched main commit, touching only the files a
-     release touches, pushes the branch and dispatches CI on it, Miri and
+     release touches and only as `release/prepare.py` does (CHANGELOG's
+     headings, README's install line, the workspace packages' version
+     lines, the frozen script's sha256, the commit to tag, the upgrade
+     script's header byte for byte), pushes the branch and dispatches CI
+     on it, Miri and
      `test/upgrade.py` included (a dispatch made with `GITHUB_TOKEN` starts
      a run, and its checks show on the PR).
   3. Open the release PR yourself from the compare link in the run's
      summary: title `release: X.Y.Z`, body CHANGELOG's section (also in
      the summary). The workflow does not open it: a token that may open
-     PRs could also approve them. Review the PR and its CI. To change it,
+     PRs could also approve them. Review the PR and its CI. The review
+     must cover `sql/pg_warren--NEXT.sql`, which pgrx generates and no
+     check can compare line by line (it should hold the same entities as
+     `sql/pg_warren--X.Y.Z.sql`, in pgrx's order; CI's drift check
+     regenerates it), and `Cargo.toml` and `Cargo.lock`. To change it,
      close it, delete the branch, fix main and run the workflow again: a
      commit pushed on top would not be in the tagged commit.
   4. **Merge it with a merge commit**, never a squash or a rebase: the
@@ -271,7 +279,10 @@ format. To benchmark a new function, add a workload with `requires` to
      that no version or commit is recorded twice, and shows
      `vX.Y.Z → <commit>` and the notes in its summary; the publish job,
      named after both, waits for a reviewer of the `release` environment.
-     Check the commit is the PR's `release: X.Y.Z` commit and approve. It
+     Check that the run was started by the release PR's merge commit and
+     that the commit shown is the PR's `release: X.Y.Z` commit, and
+     approve. Both jobs read the commit that started the run (`github.sha`),
+     so what is shown is what is tagged. It
      then pushes the annotated tag `vX.Y.Z` with the environment's deploy
      key and creates the GitHub Release with CHANGELOG's section as its
      notes. A re-run succeeds if the tag is already on the recorded commit
@@ -313,7 +324,10 @@ Set once in the repository's settings; the workflows assume them.
    `ssh-keygen -t ed25519 -N "" -C "pg_warren release tags" -f
    release_deploy_key`. In Settings → Deploy keys → Add deploy key, add
    `release_deploy_key.pub` with the title `release tags` and tick
-   **Allow write access**.
+   **Allow write access**. It must be the repository's **only deploy key
+   with write access**: the ruleset's *Deploy keys* bypass (step 3) covers
+   every write deploy key, so remove write access from any other, or
+   remove it.
 2. **Environment `release`** (Settings → Environments → New environment):
    *Required reviewers*: the people who may publish a release (with
    *Prevent self-review* if more than one); *Deployment branches and
@@ -321,7 +335,9 @@ Set once in the repository's settings; the workflows assume them.
    *Environment secrets*: add `RELEASE_DEPLOY_KEY` with the whole private
    key file `release_deploy_key`. Then delete both key files locally. The
    secret reaches a job only after a reviewer approves it, and only on
-   `main`.
+   `main`. Approve only a publish run whose triggering commit is the
+   release PR's merge commit (the run's page shows the commit, and the
+   verify job's summary `vX.Y.Z → <commit>`); reject any other.
 3. **Tag ruleset for `v*`** (Settings → Rules → Rulesets → New ruleset →
    New tag ruleset): enforcement *Active*; target tags matching the
    pattern `v*`; rules *Restrict creations*, *Restrict updates* and
@@ -339,14 +355,18 @@ Set once in the repository's settings; the workflows assume them.
    contents and packages permissions* (each job asks for what it needs),
    and leave **Allow GitHub Actions to create and approve pull requests**
    *unticked*: the release PR is opened by a person.
-5. **Branch protection for `main`** (a branch ruleset or classic
-   protection): require a pull request with at least one approval and
-   **Require approval of the most recent reviewable push**, so that no
-   one approves their own last push; if status checks are required, the
-   dispatched CI run's checks satisfy them on a release PR, as they have
-   the same names as a `pull_request` run's. Keep *Allow merge commits*
-   enabled (Settings → General → Pull requests): release PRs are merged
-   with one.
+5. **Protect `main`** (a branch ruleset or classic protection): require
+   a pull request (and status checks if wanted); block force-pushes and
+   deletions. This also keeps the deploy key, which can write, from
+   pushing to `main`: a direct push is refused. If anyone other than the
+   owner has write access or can merge, also require one approval and
+   **approval of the most recent reviewable push**. (While every PR is
+   opened and merged under the owner's account, a required approval
+   would block every merge, since GitHub does not let an author approve
+   their own PR.) A dispatched CI run's checks satisfy required status
+   checks on a release PR: they have the same names as a
+   `pull_request` run's. Keep *Allow merge commits* enabled (Settings →
+   General → Pull requests): release PRs are merged with one.
 
 ## Docker
 
