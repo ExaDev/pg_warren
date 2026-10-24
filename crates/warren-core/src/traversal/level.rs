@@ -147,16 +147,18 @@ impl LevelSearch {
     }
 
     /// Expands the current frontier by one level: pulled if `edges` allow
-    /// it and [`Self::pulls`] says so, pushed otherwise. The frontier is
-    /// sorted first, so its rows are read in ascending dense id order: a
-    /// row is then found in O(1) even where relations with sparse offsets
-    /// are merged on the fly ([`Adjacency::sweep`]).
+    /// it and [`Self::pulls`] says so, pushed otherwise. It polls for
+    /// interrupts, then sorts the frontier, so its rows are read in
+    /// ascending dense id order: a row is then found in O(1) even where
+    /// relations with sparse offsets are merged on the fly
+    /// ([`Adjacency::sweep`]).
     pub(crate) fn expand(
         &mut self,
         edges: Edges<'_, '_>,
         progress: &mut Progress<'_>,
         admit: &mut impl FnMut(Visit) -> Result<Admission, TraversalError>,
     ) -> Result<ControlFlow<()>, TraversalError> {
+        progress.poll()?;
         self.frontier.sort_unstable();
         let reverse = match edges.reverse {
             Some(reverse) if self.pulls(edges, reverse, progress)? => Some(reverse),
@@ -332,4 +334,33 @@ fn unvisited(visited: u64, index: usize, id_space: u64) -> impl Iterator<Item = 
         clear &= clear - 1;
         Some(first + u64::from(bit)).filter(|&node| node < id_space)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::{Direction, RelationSelection};
+    use crate::interrupts::{Cancellation, Uninterrupted};
+    use crate::traversal::example::directed;
+
+    #[test]
+    fn a_level_polls_for_interrupts_before_it_sorts_its_frontier() {
+        let graph = directed(4, &[(0, 1), (0, 2), (1, 3)]);
+        let adjacency = Adjacency::new(&graph, Direction::Out, RelationSelection::All).unwrap();
+        let edges = Edges::new(&adjacency, None).unwrap();
+        let mut admit = |_| Ok(Admission::Admit);
+        let mut search = LevelSearch::new(4);
+        let mut uninterrupted = Uninterrupted;
+        let mut progress = Progress::new(&mut uninterrupted);
+        let seeded = search.seed(edges, &[0], &mut progress, &mut admit).unwrap();
+        assert!(seeded.is_continue());
+        // The seed polled once, so its count is mid-interval: only a poll
+        // at the level itself sees the cancellation.
+        let tally = progress.suspend();
+        let mut cancellation = Cancellation::new();
+        cancellation.cancel();
+        let mut progress = Progress::resume(&mut cancellation, tally);
+        let expanded = search.expand(edges, &mut progress, &mut admit);
+        assert_eq!(expanded.unwrap_err(), TraversalError::Cancelled);
+    }
 }
