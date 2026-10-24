@@ -3,24 +3,24 @@
   "argv": [
    "bench/corpus/suite.py",
    "time",
-   "--tier",
-   "medium",
+   "ss-gleich-usroads-48",
+   "roadnet-tx",
    "--pg-config",
-   "/var/tmp/warren-corpus/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "/var/tmp/pgtree-eigen/usr/lib/postgresql/16/bin/pg_config",
    "--extension-revision",
-   "1ffdcd9",
+   "dcb9d2b",
    "--extension-profile",
    "release"
   ],
   "harness": {
-   "revision": "1ccaf3068d975dd471173d9ccc5ee60a940c9809",
+   "revision": "dcb9d2b69a85cbb820f05fa5ca76feffeeeb277f",
    "dirty": true
   },
   "extension": {
-   "revision": "1ffdcd9",
+   "revision": "dcb9d2b",
    "profile": "release",
-   "library": "/var/tmp/warren-corpus/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
-   "library_sha256": "5499e8bca4b5710e1b28f9addaf05fe9538a6100b34dcf8406c30e2ff4ac2174"
+   "library": "/var/tmp/pgtree-eigen/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "2e2c28e98a25df1bc9fe317d6d6268a39b05061531cfc637c4ec3f0f360431a2"
   }
  },
  "hardware": {
@@ -29,9 +29,9 @@
   "memory_bytes": 16872804352,
   "kernel": "6.18.44-fc-v153",
   "load_average": [
-   2.64306640625,
-   3.62646484375,
-   3.146484375
+   1.88818359375,
+   2.40625,
+   3.33447265625
   ]
  },
  "dataset": "roadnet-tx",
@@ -44,6 +44,10 @@
    "relations": 0,
    "self_loops": 0
   },
+  "sha256": {
+   "nodes.csv": "5be403bd662e47012fdfcfe5948004ea5153a18a4a213074089a0bf7dd3f7d44",
+   "edges.csv": "f3c08202e30653b17f6384d4c486f9f56042db61a800e3705dcfd6f036822b11"
+  },
   "provenance": {
    "entryId": "roadnet-tx",
    "catalogue": {
@@ -51,7 +55,7 @@
     "version": "1.33.0"
    },
    "category": "graph/v1",
-   "retrievedAt": "2026-10-24T13:50:00.002Z",
+   "retrievedAt": "2026-10-24T19:52:57.324Z",
    "source": {
     "url": "https://snap.stanford.edu/data/roadNet-TX.txt.gz",
     "status": "live"
@@ -66,9 +70,9 @@
   "refresh": {
    "sql": "SELECT warren.refresh('g')",
    "seconds": [
-    1.3348
+    1.355
    ],
-   "median_seconds": 1.3348,
+   "median_seconds": 1.355,
    "rows": [
     "1"
    ],
@@ -78,17 +82,17 @@
    "notices": [],
    "warnings": [],
    "rss_anon_before": 3207168,
-   "peak_rss_anon": 141037568,
-   "vm_hwm": 451194880,
-   "rss_anon_after": 49319936,
-   "rss_shmem_after": 334897152
+   "peak_rss_anon": 141041664,
+   "vm_hwm": 458514432,
+   "rss_anon_after": 49324032,
+   "rss_shmem_after": 340340736
   },
   "cold load": {
    "sql": "SELECT warren.evict('g'), warren.prewarm('g')",
    "seconds": [
-    0.0942
+    0.0994
    ],
-   "median_seconds": 0.0942,
+   "median_seconds": 0.0994,
    "rows": [
     "0|1"
    ],
@@ -97,41 +101,41 @@
    ],
    "notices": [],
    "warnings": [],
-   "rss_anon_before": 49319936,
-   "peak_rss_anon": 135462912,
-   "vm_hwm": 487878656,
-   "rss_anon_after": 135462912,
-   "rss_shmem_after": 334962688
+   "rss_anon_before": 49324032,
+   "peak_rss_anon": 135467008,
+   "vm_hwm": 495427584,
+   "rss_anon_after": 135467008,
+   "rss_shmem_after": 340537344
   },
   "bfs depth 6": {
    "sql": "SELECT bench_seconds($soak$SELECT count(*) FROM warren.bfs('g', ARRAY['126099'::bigint], 6)$soak$)",
    "seconds": [
-    0.0012,
+    0.0011,
     0.0004,
-    0.0004
+    0.0003
    ],
    "median_seconds": 0.0004,
    "rows": [
-    "0.000216"
+    "0.0002"
    ],
    "first_rows": [
-    "0.000653",
-    "0.000243",
-    "0.000216"
+    "0.000618",
+    "0.000239",
+    "0.0002"
    ],
    "notices": [],
    "warnings": [],
-   "rss_anon_before": 135462912,
-   "peak_rss_anon": 135483392,
-   "vm_hwm": 488480768,
-   "rss_anon_after": 135483392,
-   "rss_shmem_after": 335028224,
+   "rss_anon_before": 135467008,
+   "peak_rss_anon": 135487488,
+   "vm_hwm": 496107520,
+   "rss_anon_after": 135487488,
+   "rss_shmem_after": 340668416,
    "server_seconds": [
-    0.000653,
-    0.000243,
-    0.000216
+    0.000618,
+    0.000239,
+    0.0002
    ],
-   "server_median_seconds": 0.000243
+   "server_median_seconds": 0.000239
   },
   "bfs depth 6 rows": {
    "sql": "SELECT count(*) FROM warren.bfs('g', ARRAY['126099'::bigint], 6)",
@@ -147,18 +151,18 @@
    ],
    "notices": [],
    "warnings": [],
-   "rss_anon_before": 135483392,
-   "peak_rss_anon": 135483392,
-   "vm_hwm": 488480768,
-   "rss_anon_after": 135483392,
-   "rss_shmem_after": 335028224
+   "rss_anon_before": 135487488,
+   "peak_rss_anon": 135487488,
+   "vm_hwm": 496107520,
+   "rss_anon_after": 135487488,
+   "rss_shmem_after": 340668416
   },
   "bfs depth 6 recursive CTE": {
    "sql": "WITH RECURSIVE r (id, depth) AS (SELECT '126099'::bigint, 0 UNION SELECT n.id, r.depth + 1 FROM r CROSS JOIN LATERAL (SELECT dst FROM edges WHERE src = r.id UNION ALL SELECT src FROM edges WHERE dst = r.id) n (id) WHERE r.depth < 6) SELECT count(DISTINCT id) FROM r",
    "seconds": [
-    0.0013
+    0.0015
    ],
-   "median_seconds": 0.0013,
+   "median_seconds": 0.0015,
    "rows": [
     "144"
    ],
@@ -167,16 +171,25 @@
    ],
    "notices": [],
    "warnings": [],
-   "rss_anon_before": 135483392,
-   "peak_rss_anon": 135487488,
-   "vm_hwm": 488620032,
-   "rss_anon_after": 135487488,
-   "rss_shmem_after": 335159296
+   "rss_anon_before": 135487488,
+   "peak_rss_anon": 135491584,
+   "vm_hwm": 496349184,
+   "rss_anon_after": 135491584,
+   "rss_shmem_after": 340799488
   },
   "neighbours": {
    "sql": "SELECT bench_seconds($soak$SELECT count(*) FROM warren.neighbours('g', '126099'::bigint)$soak$)",
    "seconds": [
-    0.0003,
+    0.0004,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0001,
+    0.0001,
+    0.0001,
+    0.0001,
     0.0002,
     0.0002,
     0.0002,
@@ -184,105 +197,96 @@
     0.0001,
     0.0001,
     0.0001,
-    0.0001,
-    0.0001,
-    0.0001,
-    0.0001,
-    0.0001,
-    0.0001,
-    0.0001,
-    0.0001,
-    0.0001,
-    0.0001,
+    0.0002,
     0.0001,
     0.0001
    ],
-   "median_seconds": 0.0001,
+   "median_seconds": 0.0002,
    "rows": [
-    "4.2e-05"
+    "5.6e-05"
    ],
    "first_rows": [
-    "0.000171",
-    "6.7e-05",
-    "5.3e-05",
-    "6.6e-05",
-    "6e-05",
-    "4.7e-05",
-    "4.4e-05",
-    "4.3e-05",
-    "4.3e-05",
-    "4.2e-05",
-    "4.4e-05",
-    "4.2e-05",
-    "4.3e-05",
-    "4.2e-05",
-    "4.3e-05",
-    "4.2e-05",
-    "4.2e-05",
-    "4.2e-05",
-    "4.2e-05",
-    "4.2e-05"
+    "0.000161",
+    "9e-05",
+    "8.8e-05",
+    "7.2e-05",
+    "6.5e-05",
+    "6.1e-05",
+    "5.9e-05",
+    "5.7e-05",
+    "5.6e-05",
+    "5.6e-05",
+    "0.000106",
+    "7.4e-05",
+    "6.1e-05",
+    "5.7e-05",
+    "5.6e-05",
+    "5.6e-05",
+    "5.6e-05",
+    "5.7e-05",
+    "5.6e-05",
+    "5.6e-05"
    ],
    "notices": [],
    "warnings": [],
-   "rss_anon_before": 135487488,
-   "peak_rss_anon": 135487488,
-   "vm_hwm": 488751104,
-   "rss_anon_after": 135487488,
-   "rss_shmem_after": 335159296,
+   "rss_anon_before": 135491584,
+   "peak_rss_anon": 135491584,
+   "vm_hwm": 496480256,
+   "rss_anon_after": 135491584,
+   "rss_shmem_after": 340799488,
    "server_seconds": [
-    0.000171,
-    6.7e-05,
-    5.3e-05,
-    6.6e-05,
-    6e-05,
-    4.7e-05,
-    4.4e-05,
-    4.3e-05,
-    4.3e-05,
-    4.2e-05,
-    4.4e-05,
-    4.2e-05,
-    4.3e-05,
-    4.2e-05,
-    4.3e-05,
-    4.2e-05,
-    4.2e-05,
-    4.2e-05,
-    4.2e-05,
-    4.2e-05
+    0.000161,
+    9e-05,
+    8.8e-05,
+    7.2e-05,
+    6.5e-05,
+    6.1e-05,
+    5.9e-05,
+    5.7e-05,
+    5.6e-05,
+    5.6e-05,
+    0.000106,
+    7.4e-05,
+    6.1e-05,
+    5.7e-05,
+    5.6e-05,
+    5.6e-05,
+    5.6e-05,
+    5.7e-05,
+    5.6e-05,
+    5.6e-05
    ],
-   "server_median_seconds": 4.3e-05
+   "server_median_seconds": 5.8e-05
   },
   "reachable_set": {
    "sql": "SELECT bench_seconds($soak$SELECT count(*) FROM warren.reachable_set('g', ARRAY['126099'::bigint])$soak$)",
    "seconds": [
-    0.2387,
-    0.2226,
-    0.2301
+    0.2488,
+    0.2571,
+    0.2654
    ],
-   "median_seconds": 0.2301,
+   "median_seconds": 0.2571,
    "rows": [
-    "0.229647"
+    "0.264534"
    ],
    "first_rows": [
-    "0.238098",
-    "0.221917",
-    "0.229647"
+    "0.248313",
+    "0.256548",
+    "0.264534"
    ],
    "notices": [],
    "warnings": [],
-   "rss_anon_before": 135487488,
-   "peak_rss_anon": 171470848,
-   "vm_hwm": 524734464,
-   "rss_anon_after": 171470848,
-   "rss_shmem_after": 335159296,
+   "rss_anon_before": 135491584,
+   "peak_rss_anon": 171474944,
+   "vm_hwm": 532250624,
+   "rss_anon_after": 106266624,
+   "rss_shmem_after": 340799488,
    "server_seconds": [
-    0.238098,
-    0.221917,
-    0.229647
+    0.248313,
+    0.256548,
+    0.264534
    ],
-   "server_median_seconds": 0.229647
+   "server_median_seconds": 0.256548
   },
   "reachable_set stats": {
    "graph": "g",
@@ -295,9 +299,9 @@
   "reachable_set rows": {
    "sql": "SELECT count(*) FROM warren.reachable_set('g', ARRAY['126099'::bigint])",
    "seconds": [
-    0.226
+    0.2572
    ],
-   "median_seconds": 0.226,
+   "median_seconds": 0.2572,
    "rows": [
     "1351137"
    ],
@@ -306,18 +310,18 @@
    ],
    "notices": [],
    "warnings": [],
-   "rss_anon_before": 171470848,
-   "peak_rss_anon": 171470848,
-   "vm_hwm": 524734464,
-   "rss_anon_after": 171470848,
-   "rss_shmem_after": 335159296
+   "rss_anon_before": 106266624,
+   "peak_rss_anon": 171474944,
+   "vm_hwm": 532529152,
+   "rss_anon_after": 171474944,
+   "rss_shmem_after": 340799488
   },
   "components": {
    "sql": "SELECT count(DISTINCT component_id) FROM warren.components('g', NULL::bigint)",
    "seconds": [
-    0.2809
+    0.2788
    ],
-   "median_seconds": 0.2809,
+   "median_seconds": 0.2788,
    "rows": [
     "424"
    ],
@@ -326,18 +330,18 @@
    ],
    "notices": [],
    "warnings": [],
-   "rss_anon_before": 171470848,
-   "peak_rss_anon": 238383104,
-   "vm_hwm": 591400960,
-   "rss_anon_after": 144015360,
-   "rss_shmem_after": 335159296
+   "rss_anon_before": 171474944,
+   "peak_rss_anon": 232226816,
+   "vm_hwm": 593068032,
+   "rss_anon_after": 135630848,
+   "rss_shmem_after": 340799488
   },
   "pagerank 20 iterations": {
    "sql": "SELECT warren.pagerank('g', 'pr', tol := 0, max_iter := 20)",
    "seconds": [
-    1.1981
+    1.0961
    ],
-   "median_seconds": 1.1981,
+   "median_seconds": 1.0961,
    "rows": [
     "20"
    ],
@@ -346,39 +350,38 @@
    ],
    "notices": [],
    "warnings": [],
-   "rss_anon_before": 144015360,
-   "peak_rss_anon": 278495232,
-   "vm_hwm": 644509696,
-   "rss_anon_after": 192536576,
-   "rss_shmem_after": 347082752
+   "rss_anon_before": 135630848,
+   "peak_rss_anon": 272777216,
+   "vm_hwm": 646803456,
+   "rss_anon_after": 195203072,
+   "rss_shmem_after": 352788480
   },
   "eigen k=20": {
    "sql": "SELECT count(*), max(residual) FROM warren.eigen('g', 20, 'normalized_laplacian', 'smallest', tol := 1e-06)",
    "seconds": [
-    600.0178
+    0.3599
    ],
-   "median_seconds": 600.0178,
-   "rows": [],
+   "median_seconds": 0.3599,
+   "rows": [
+    "20|5.350603822637011e-08"
+   ],
    "first_rows": [
-    null
+    "20|5.350603822637011e-08"
    ],
    "notices": [],
    "warnings": [],
-   "rss_anon_before": 192536576,
-   "peak_rss_anon": 418979840,
-   "vm_hwm": 786452480,
-   "rss_anon_after": 192598016,
-   "rss_shmem_after": 347082752,
-   "errors": [
-    "ERROR:  canceling statement due to statement timeout"
-   ]
+   "rss_anon_before": 195203072,
+   "peak_rss_anon": 305479680,
+   "vm_hwm": 685215744,
+   "rss_anon_after": 195219456,
+   "rss_shmem_after": 352788480
   },
   "embedding d=64 load": {
    "sql": "SELECT warren.vector_from_query('g', 'emb', $q$SELECT id, (SELECT array_agg(sin(k * (hashtext(id::text) % 1000))::real ORDER BY k) FROM generate_series(1, 64) k) FROM nodes$q$, 'f32')",
    "seconds": [
-    14.8484
+    15.9629
    ],
-   "median_seconds": 14.8484,
+   "median_seconds": 15.9629,
    "rows": [
     "2"
    ],
@@ -387,18 +390,18 @@
    ],
    "notices": [],
    "warnings": [],
-   "rss_anon_before": 192598016,
-   "peak_rss_anon": 861200384,
-   "vm_hwm": 1650089984,
-   "rss_anon_after": 592896000,
-   "rss_shmem_after": 718725120
+   "rss_anon_before": 195219456,
+   "peak_rss_anon": 855433216,
+   "vm_hwm": 1652146176,
+   "rss_anon_after": 587128832,
+   "rss_shmem_after": 725573632
   },
   "aggregate_neighbours d=64": {
    "sql": "SELECT warren.aggregate_neighbours('g', 'emb', 'emb_nbr')",
    "seconds": [
-    2.306
+    8.426
    ],
-   "median_seconds": 2.306,
+   "median_seconds": 8.426,
    "rows": [
     ""
    ],
@@ -407,18 +410,18 @@
    ],
    "notices": [],
    "warnings": [],
-   "rss_anon_before": 592896000,
-   "peak_rss_anon": 1576132608,
-   "vm_hwm": 2710151168,
-   "rss_anon_after": 954568704,
-   "rss_shmem_after": 1063956480
+   "rss_anon_before": 587128832,
+   "peak_rss_anon": 1570369536,
+   "vm_hwm": 2708672512,
+   "rss_anon_after": 948805632,
+   "rss_shmem_after": 1066901504
   },
   "triangles": {
    "sql": "SELECT warren.triangles('g', 'tri')",
    "seconds": [
-    0.1871
+    0.1809
    ],
-   "median_seconds": 0.1871,
+   "median_seconds": 0.1809,
    "rows": [
     "4"
    ],
@@ -427,18 +430,18 @@
    ],
    "notices": [],
    "warnings": [],
-   "rss_anon_before": 954568704,
-   "peak_rss_anon": 1026215936,
-   "vm_hwm": 2160205824,
-   "rss_anon_after": 964722688,
-   "rss_shmem_after": 1065840640
+   "rss_anon_before": 948805632,
+   "peak_rss_anon": 1020297216,
+   "vm_hwm": 2158694400,
+   "rss_anon_after": 958803968,
+   "rss_shmem_after": 1066905600
   },
   "clustering": {
    "sql": "SELECT warren.clustering('g', 'cc')",
    "seconds": [
-    0.2832
+    0.2763
    ],
-   "median_seconds": 0.2832,
+   "median_seconds": 0.2763,
    "rows": [
     ""
    ],
@@ -447,18 +450,18 @@
    ],
    "notices": [],
    "warnings": [],
-   "rss_anon_before": 964722688,
-   "peak_rss_anon": 1026220032,
-   "vm_hwm": 2162274304,
-   "rss_anon_after": 964739072,
-   "rss_shmem_after": 1067003904
+   "rss_anon_before": 958803968,
+   "peak_rss_anon": 1020301312,
+   "vm_hwm": 2158723072,
+   "rss_anon_after": 958820352,
+   "rss_shmem_after": 1067012096
   },
   "core_number": {
    "sql": "SELECT warren.core_number('g', 'core')",
    "seconds": [
-    0.3352
+    0.2663
    ],
-   "median_seconds": 0.3352,
+   "median_seconds": 0.2663,
    "rows": [
     "3"
    ],
@@ -467,18 +470,18 @@
    ],
    "notices": [],
    "warnings": [],
-   "rss_anon_before": 964739072,
-   "peak_rss_anon": 1048289280,
-   "vm_hwm": 2185474048,
-   "rss_anon_after": 986796032,
-   "rss_shmem_after": 1067712512
+   "rss_anon_before": 958820352,
+   "peak_rss_anon": 1042391040,
+   "vm_hwm": 2180743168,
+   "rss_anon_after": 980897792,
+   "rss_shmem_after": 1067687936
   },
   "louvain": {
    "sql": "SELECT warren.louvain('g', 'louvain')",
    "seconds": [
-    3.9669
+    3.9939
    ],
-   "median_seconds": 3.9669,
+   "median_seconds": 3.9939,
    "rows": [
     "0.9913245636003413"
    ],
@@ -487,18 +490,18 @@
    ],
    "notices": [],
    "warnings": [],
-   "rss_anon_before": 986796032,
-   "peak_rss_anon": 1103527936,
-   "vm_hwm": 2241728512,
-   "rss_anon_after": 1033551872,
-   "rss_shmem_after": 1067806720
+   "rss_anon_before": 980897792,
+   "peak_rss_anon": 1108668416,
+   "vm_hwm": 2274680832,
+   "rss_anon_after": 1030299648,
+   "rss_shmem_after": 1111429120
   },
   "leiden": {
    "sql": "SELECT warren.leiden('g', 'leiden')",
    "seconds": [
-    8.4476
+    9.0834
    ],
-   "median_seconds": 8.4476,
+   "median_seconds": 9.0834,
    "rows": [
     "0.9920194447279792"
    ],
@@ -507,18 +510,18 @@
    ],
    "notices": [],
    "warnings": [],
-   "rss_anon_before": 1033551872,
-   "peak_rss_anon": 1202872320,
-   "vm_hwm": 2361839616,
-   "rss_anon_after": 1047064576,
-   "rss_shmem_after": 1111613440
+   "rss_anon_before": 1030299648,
+   "peak_rss_anon": 1203302400,
+   "vm_hwm": 2386518016,
+   "rss_anon_after": 1071394816,
+   "rss_shmem_after": 1111556096
   },
   "second refresh": {
    "sql": "SELECT warren.refresh('g')",
    "seconds": [
-    1.2156
+    1.5458
    ],
-   "median_seconds": 1.2156,
+   "median_seconds": 1.5458,
    "rows": [
     "29"
    ],
@@ -527,18 +530,18 @@
    ],
    "notices": [],
    "warnings": [],
-   "rss_anon_before": 1047072768,
-   "peak_rss_anon": 1183309824,
-   "vm_hwm": 2365771776,
-   "rss_anon_after": 1047072768,
-   "rss_shmem_after": 1111629824
+   "rss_anon_before": 1071403008,
+   "peak_rss_anon": 1180258304,
+   "vm_hwm": 2363555840,
+   "rss_anon_after": 1060364288,
+   "rss_shmem_after": 1111568384
   },
   "diff": {
    "sql": "SELECT warren.diff('g', 1, 29)",
    "seconds": [
-    0.3596
+    0.3585
    ],
-   "median_seconds": 0.3596,
+   "median_seconds": 0.3585,
    "rows": [
     "{\"to\": 29, \"from\": 1, \"nodes\": {\"added\": 0, \"after\": 1379917, \"before\": 1379917, \"removed\": 0}, \"in_degree\": {\"histogram\": [{\"after\": 251082, \"before\": 251082, \"degree\": 1}, {\"after\": 115643, \"before\": 115639, \"degree\": 2}, {\"after\": 699326, \"before\": 699330, \"degree\": 3}, {\"after\": 307341, \"before\": 307341, \"degree\": 4}, {\"after\": 5650, \"before\": 5650, \"degree\": 5}, {\"after\": 808, \"before\": 808, \"degree\": 6}, {\"after\": 48, \"before\": 48, \"degree\": 7}, {\"after\": 14, \"before\": 14, \"degree\": 8}, {\"after\": 5, \"before\": 5, \"degree\": 12}], \"mean_after\": 2.7851791085985607, \"mean_before\": 2.785182007323629, \"ks_statistic\": 0.000002898725068246858}, \"relations\": [{\"added\": 0, \"after\": 3843316, \"before\": 3843320, \"removed\": 4, \"relation\": \"\"}], \"out_degree\": {\"histogram\": [{\"after\": 251082, \"before\": 251082, \"degree\": 1}, {\"after\": 115643, \"before\": 115639, \"degree\": 2}, {\"after\": 699326, \"before\": 699330, \"degree\": 3}, {\"after\": 307341, \"before\": 307341, \"degree\": 4}, {\"after\": 5650, \"before\": 5650, \"degree\": 5}, {\"after\": 808, \"before\": 808, \"degree\": 6}, {\"after\": 48, \"before\": 48, \"degree\": 7}, {\"after\": 14, \"before\": 14, \"degree\": 8}, {\"after\": 5, \"before\": 5, \"degree\": 12}], \"mean_after\": 2.7851791085985607, \"mean_before\": 2.785182007323629, \"ks_statistic\": 0.000002898725068246858}, \"all_relations\": {\"added\": 0, \"after\": 3843316, \"before\": 3843320, \"removed\": 4}}"
    ],
@@ -547,11 +550,11 @@
    ],
    "notices": [],
    "warnings": [],
-   "rss_anon_before": 1047072768,
-   "peak_rss_anon": 1133191168,
-   "vm_hwm": 2316324864,
-   "rss_anon_after": 1133191168,
-   "rss_shmem_after": 1111629824
+   "rss_anon_before": 1060364288,
+   "peak_rss_anon": 1146486784,
+   "vm_hwm": 2330357760,
+   "rss_anon_after": 1146486784,
+   "rss_shmem_after": 1111568384
   }
  },
  "version": {
@@ -562,10 +565,10 @@
   "current": true,
   "vectors": 0,
   "version": 1,
-  "built_at": "2026-10-24T15:08:04.774176+00:00",
+  "built_at": "2026-10-24T21:32:26.137144+00:00",
   "id_space": 1379917,
-  "built_lsn": "0/6F9E29A0",
-  "staleness": "00:00:01.342568",
+  "built_lsn": "0/186F9758",
+  "staleness": "00:00:01.362749",
   "edge_count": 3843320,
   "node_count": 1379917,
   "label_vector": null,
@@ -595,5 +598,5 @@
   "warren.threads=4",
   "work_mem=64MB"
  ],
- "reachable_set_edges_per_second": 16735772.729449982
+ "reachable_set_edges_per_second": 14980900.260380125
 }

@@ -40,6 +40,23 @@
 - **Undirected weighted centralities refuse a pair whose weight is NaN in
   one direction** (22023), as they refuse a NaN anywhere else. They used
   the other direction's weight.
+- **`eigen` (and `distance('spectral')`) returns every copy of the
+  eigenvalue each connected component gives**: 0 of `laplacian` and
+  `normalized_laplacian` with `which := 'smallest'`, 1 of `random_walk`
+  with `which := 'largest'`, and each bipartite component's −1 of
+  `random_walk` and 2 of `normalized_laplacian` with `which :=
+  'largest'`. Each copy is one component's eigenvector,
+  found exactly and without Lanczos steps, components in the order of
+  their lowest node, and Lanczos computes the rest of the `k` orthogonal
+  to them. Before, Lanczos found one copy and mistook the next eigenvalues
+  for the rest: 30 disjoint 40-cycles' three smallest Laplacian
+  eigenvalues came back as 0, 0.025 and 0.098, and on roadNet-TX (424
+  components) the call ran past a 10-minute timeout; four paths' random
+  walk gave 1, 1, 1, 1, −1, 0.9709, −0.9709 for its 7 largest, against
+  four −1s. A call all of whose pairs are the components' no longer warns
+  of several components; one with pairs from Lanczos still does. Other
+  results change in the last digits; a connected graph's 0 is now exactly
+  0.
 - A graph's number of relations no longer refuses its build on its own.
   `warren.max_build_memory` used to be checked against 8 bytes per node
   for every relation's CSR (and the merged CSR), in each direction; it is

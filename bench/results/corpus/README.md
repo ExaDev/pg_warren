@@ -29,6 +29,12 @@ reached only itself) and records the rows each traversal reached. The two runs
 agree to within the machine's noise (the second, under more load, was 0–40%
 slower) except `eigen` on the road networks, below.
 
+† ss-gleich-usroads-48 and roadnet-tx were timed a third time, after `eigen`
+took the components' eigenvalue exactly (DESIGN.md §6.5, §12): a release
+build of dcb9d2b (that change merged with sparse per-relation offsets, 96df7d4),
+packaged the same way, `pg_warren.so` sha256 in each file. Their rows here are
+that run's; the other datasets' are the second run's.
+
 ## Correctness
 
 | Dataset | Tier | Nodes | Stored edges | Checks matched | Not matched | Q: louvain / leiden / NetworkX Louvain | Seconds |
@@ -86,22 +92,22 @@ undirected).
 | cit-hepth | 0.125 | 0.012 | 2.69 ms | 0.139 | 4.38 ms | 6.60 ms | 0.081 | 1.28 | 0.091 | 0.014 |
 | email-enron | 0.127 | 5.30 ms | 8.25 ms | 0.808 | 4.66 ms | 8.10 ms | 0.079 | 0.953 | 0.084 | 0.015 |
 | fb15k-237 | 0.379 | 0.135 | 8.10 ms | 0.801 | 2.86 ms | 4.50 ms | 0.058 | 0.192 | 0.053 | 0.443 |
-| ss-gleich-usroads-48 | 0.116 | 0.025 | 0.24 ms | 0.90 ms | 0.021 | 0.025 | 0.175 | 104.90 | 0.434 | 0.029 |
+| ss-gleich-usroads-48 † | 0.117 | 9.00 ms | 0.23 ms | 0.90 ms | 0.023 | 0.025 | 0.152 | 68.91 | 0.216 | 0.029 |
 | dblp | 0.435 | 0.036 | 0.104 | 4.15 | 0.060 | 0.072 | 0.380 | 21.35 | 0.657 | 0.119 |
 | yago3-10 | 0.827 | 0.123 | 3.91 ms | 0.249 | 3.58 ms | 0.030 | 0.161 | 1.59 | 0.240 | 0.245 |
 | hetionet | 1.19 | 0.090 | 0.014 | 4.90 | 7.70 ms | 0.019 | 0.121 | 0.628 | 0.163 | 0.120 |
-| roadnet-tx | 1.33 | 0.094 | 0.24 ms | 1.30 ms | 0.230 | 0.281 | 1.20 | timeout | 2.31 | 0.360 |
+| roadnet-tx † | 1.35 | 0.099 | 0.24 ms | 1.50 ms | 0.257 | 0.279 | 1.10 | 0.360 | 8.43 | 0.358 |
 
 | Dataset | neighbours | triangles | clustering | core_number | louvain | leiden |
 | --- | --- | --- | --- | --- | --- | --- |
 | cit-hepth | 0.10 ms | 0.225 | 0.260 | 0.015 | 0.256 | 0.498 |
 | email-enron | 0.13 ms | 0.190 | 0.187 | 0.012 | 0.137 | 0.362 |
 | fb15k-237 | 0.18 ms | 0.322 | 0.330 | 0.012 | 0.782 | 1.94 |
-| ss-gleich-usroads-48 | 0.03 ms | 0.024 | 0.043 | 0.024 | 0.390 | 0.867 |
+| ss-gleich-usroads-48 † | 0.05 ms | 0.015 | 0.024 | 0.016 | 0.280 | 0.644 |
 | dblp | 0.09 ms | 0.398 | 0.412 | 0.182 | 1.32 | 2.96 |
 | yago3-10 | 0.09 ms | 0.219 | 0.236 | 0.062 | 1.29 | 3.29 |
 | hetionet | 1.57 ms | 6.69 | 5.98 | 0.101 | 1.86 | 3.32 |
-| roadnet-tx | 0.04 ms | 0.187 | 0.283 | 0.335 | 3.97 | 8.45 |
+| roadnet-tx † | 0.06 ms | 0.181 | 0.276 | 0.266 | 3.99 | 9.08 |
 
 What each traversal reached, the version, and memory:
 
@@ -110,20 +116,37 @@ What each traversal reached, the version, and memory:
 | cit-hepth | 27770 | 352807 | 0 | 3.7 | 14 | 0.25 | 9732 | 16498 | 81M | 3.4 / 1.6 / 1.7 |
 | email-enron | 36692 | 367662 | 0 | 4.1 | 17 | 0.25 | 33678 | 33696 | 79M | 3.3 / 1.6 / 1.7 |
 | fb15k-237 | 14541 | 310116 | 237 | 60.5 | 38 | 0.46 | 12828 | 12830 | 108M | 3.6 / 1.7 / 1.8 |
-| ss-gleich-usroads-48 | 126146 | 323900 | 0 | 6.6 | 16 | 0.48 | 68 | 126146 | 15M | 6.1 / 3.2 / 2.3 |
+| ss-gleich-usroads-48 † | 126146 | 323900 | 0 | 6.6 | 17 | 0.48 | 68 | 126146 | 14M | 2.6 / 2.6 / 3.5 |
 | dblp | 317080 | 2099732 | 0 | 27.0 | 68 | 0.92 | 303357 | 317080 | 35M | 5.2 / 3.3 / 2.4 |
 | yago3-10 | 123182 | 1089040 | 37 | 93.5 | 70 | 0.99 | 7300 | 7690 | 304M | 4.4 / 3.2 / 2.4 |
 | hetionet | 45158 | 2250197 | 24 | 54.4 | 59 | 0.67 | 35496 | 35496 | 292M | 4.6 / 3.4 / 2.4 |
-| roadnet-tx | 1379917 | 3843320 | 0 | 75.1 | 141 | 2.71 | 144 | 1351137 | 17M | 2.6 / 3.6 / 3.1 |
+| roadnet-tx † | 1379917 | 3843320 | 0 | 75.1 | 141 | 2.71 | 144 | 1351137 | 15M | 1.9 / 2.4 / 3.3 |
 
 Findings:
 
 - **`eigen` on road networks.** `eigen(k = 20, normalized_laplacian,
-  smallest)` takes 65 s (run 1) and 105 s (run 2) on usroads-48's 126K
-  nodes and runs past the 10-minute `statement_timeout` on roadnet-tx in both
-  runs; on every other graph it is 0.2–21 s. The smallest eigenvalues of a
-  near-planar graph with large diameter are tightly clustered, which is
-  Lanczos's slow case (§6.5). Not a wrong answer; a performance finding.
+  smallest)` took 65 s (run 1) and 105 s (run 2) on usroads-48's 126K
+  nodes and ran past the 10-minute `statement_timeout` on roadnet-tx in both
+  runs; on every other graph it is 0.2–21 s. Diagnosed in DESIGN.md §12, two
+  causes:
+  - roadnet-tx has 424 connected components, so all 20 wanted eigenvalues
+    are 0. Lanczos found one copy and spent its steps on the largest
+    component's clustered eigenvalues; outside the database it reached
+    `max_iter` after 32 minutes with a wrong answer. `eigen` now returns
+    each component's eigenvalue exactly: 0.36 s (run 3), twenty zeros,
+    largest residual 5.4·10⁻⁸.
+  - usroads-48 is one component whose smallest eigenvalues are 10⁻⁶ apart:
+    Lanczos's slow case, correct but slow. 68.9 s (run 3; 20,466 steps).
+    A larger basis takes it to about 25 s (§14 item 50); not the default,
+    for its memory.
+- **`aggregate_neighbours` on roadnet-tx took 8.4 s in run 3** (9.0 s
+  repeated), against 2.3 s in run 2; usroads-48's went 0.43 → 0.22 s.
+  This is noise, not a regression. A controlled A/B on roadnet-tx in the
+  suite's session order took 2.15–2.40 s with 1ffdcd9 and 2.24–2.43 s with
+  96df7d4 (main after sparse per-relation offsets). The kernel itself
+  takes 0.05 s in both; the stage's time goes on its mean `vector_map` and
+  on persisting about 700 MB of vectors, which is disk-bound and varied
+  2.2× between runs on this shared disk.
 - **Versions of graphs with many relations are mostly per-relation offsets.**
   fb15k-237's version is 60.5 MB for 310K stored edges and 14.5K nodes,
   against dblp's 27 MB for 2.1M edges and 317K nodes: 237 relations × 14,542

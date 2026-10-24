@@ -7,6 +7,7 @@ use proptest::prelude::*;
 use super::*;
 use crate::compute::reference::{self, Edges};
 use crate::compute::{ComputeError, ComputeMemory, Element, Workers};
+use crate::graph::RelationSelection;
 use crate::interrupts::{Cancelled, Uninterrupted};
 use crate::progress::recorded::Recorded;
 use crate::spectral::reference::{self as dense_reference, Dense};
@@ -267,7 +268,10 @@ fn a_large_graph_restarts_and_still_converges() {
     let edges = random_graph(n, 600, 7);
     let graph = reference::graph(n, 2, &edges, true, true);
     for precision in [Precision::F64, Precision::F32] {
-        let options = EigenOptions { which: Which::Smallest, precision, ..EigenOptions::new(3) };
+        // The check's f64 accuracy of 1e-7 needs a tighter tolerance than
+        // the default.
+        let options =
+            EigenOptions { which: Which::Smallest, precision, tol: 1e-8, ..EigenOptions::new(3) };
         let eigen = solve(&graph, Operator::NormalizedLaplacian, &options);
         assert!(eigen.iterations > 20, "{} steps: no restart exercised", eigen.iterations);
         check(n, &edges, Operator::NormalizedLaplacian, &options, &eigen).unwrap();
@@ -340,10 +344,19 @@ fn the_lanczos_vectors_are_charged_to_the_budget() {
     assert_eq!(memory.in_use(), 0);
 }
 
-/// The working set of `k` eigenpairs of `operator` over [`path`]`(n)`,
-/// every node of which is active.
+/// The working set of the `k` largest eigenpairs of `operator` over
+/// [`path`]`(n)`, every node of which is active, in one bipartite
+/// component: the random walk's eigenvalues 1 and −1 and the normalised
+/// Laplacian's 2 are the component's, and Lanczos computes the rest.
 fn path_working_set(n: u64, operator: Operator, k: usize, precision: Precision) -> WorkingSet {
-    WorkingSet { id_space: n, dimension: n, operator, k, precision }
+    let vectors = match operator {
+        Operator::RandomWalk => 2,
+        Operator::NormalizedLaplacian => 1,
+        _ => 0,
+    };
+    let deflated = (vectors > 0).then_some(Deflated { components: 1, vectors });
+    let wanted = k.saturating_sub(vectors as usize);
+    WorkingSet { id_space: n, dimension: n, operator, k, precision, deflated, wanted }
 }
 
 #[test]
@@ -520,6 +533,192 @@ fn the_connected_components_of_the_active_subgraph_are_counted() {
     assert_eq!(solve(&one, Operator::Laplacian, &EigenOptions::new(1)).components, 1);
 }
 
+/// The unit vector over `n` rows that is `weight(node)` on `nodes`, 0 elsewhere.
+fn component_vector(n: u64, nodes: std::ops::Range<u64>, weight: impl Fn(u64) -> f64) -> Vec<f64> {
+    let norm = nodes.clone().map(|i| weight(i).powi(2)).sum::<f64>().sqrt();
+    (0..n).map(|i| if nodes.contains(&i) { weight(i) / norm } else { 0.0 }).collect()
+}
+
+#[test]
+fn every_copy_of_a_component_eigenvalue_is_found_exactly() {
+    // 30 disjoint 40-cycles: both Laplacians have eigenvalue 0 thirty times
+    // and the random walk 1. Lanczos from one start vector found one copy
+    // and returned [0, 0.025, 0.098] for the 3 smallest Laplacian
+    // eigenvalues; on roadNet-TX's 424 components it ground on past the
+    // statement timeout (DESIGN.md §12). Each copy is one component's
+    // vector, lowest dense id first, found without a Lanczos step.
+    let graph = reference::graph(1201, 1, &cycles(30, 40), false, true);
+    for (operator, which, value) in [
+        (Operator::Laplacian, Which::Smallest, 0.0),
+        (Operator::NormalizedLaplacian, Which::Smallest, 0.0),
+        (Operator::RandomWalk, Which::Largest, 1.0),
+    ] {
+        let eigen = solve(&graph, operator, &EigenOptions { which, ..EigenOptions::new(20) });
+        assert!(eigen.converged, "{operator:?}");
+        assert_eq!(eigen.iterations, 0, "{operator:?}");
+        assert_eq!(eigen.components, 30);
+        assert_eq!(eigen.pairs.len(), 20);
+        for (c, pair) in (0..).zip(&eigen.pairs) {
+            assert_eq!(pair.value, value, "{operator:?} pair {c}");
+            assert!(pair.residual < 1e-6, "{operator:?} pair {c}: residual {}", pair.residual);
+            let exact = component_vector(1201, 40 * c..40 * (c + 1), |_| 1.0);
+            for (got, want) in as_f64(&pair.vector).iter().zip(&exact) {
+                assert!((got - want).abs() < 1e-7, "{operator:?} pair {c}: {got} != {want}");
+            }
+        }
+    }
+}
+
+#[test]
+fn the_normalised_laplacian_s_zero_eigenvectors_weigh_each_node_by_its_root_degree() {
+    // Two stars: each component's vector is D^1/2 times its indicator.
+    let star = |centre: u64, leaves: u64| -> Edges {
+        (1..=leaves)
+            .flat_map(|l| [(0, centre, centre + l, 1.0), (0, centre + l, centre, 1.0)])
+            .collect()
+    };
+    let edges: Edges = star(0, 3).into_iter().chain(star(4, 5)).collect();
+    let graph = reference::graph(10, 1, &edges, false, true);
+    let options =
+        EigenOptions { which: Which::Smallest, precision: Precision::F64, ..EigenOptions::new(2) };
+    let eigen = solve(&graph, Operator::NormalizedLaplacian, &options);
+    let root_degree = |centre: u64, leaves: u64| {
+        move |i: u64| match i == centre {
+            true => (leaves as f64).sqrt(),
+            false => 1.0,
+        }
+    };
+    let expected = [
+        component_vector(10, 0..4, root_degree(0, 3)),
+        component_vector(10, 4..10, root_degree(4, 5)),
+    ];
+    for (pair, exact) in eigen.pairs.iter().zip(&expected) {
+        assert_eq!(pair.value, 0.0);
+        for (got, want) in as_f64(&pair.vector).iter().zip(exact) {
+            assert!((got - want).abs() < 1e-15, "{got} != {want}");
+        }
+    }
+}
+
+/// Disjoint random graphs of the given sizes (each connected, so each a
+/// component), numbered consecutively from 0; the id space and the edges.
+fn components_of(sizes: &[u64], seed: u64) -> (u64, Edges) {
+    let mut edges = Edges::new();
+    let mut first = 0;
+    for (c, &size) in (0..).zip(sizes) {
+        let component = random_graph(size, 2 * size as usize, seed.wrapping_add(c));
+        edges.extend(component.into_iter().map(|(r, s, t, w)| (r, first + s, first + t, w)));
+        first += size;
+    }
+    (first, edges)
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(24))]
+
+    #[test]
+    fn with_fewer_components_than_k_the_rest_come_from_lanczos(
+        sizes in prop::collection::vec(4u64..30, 2..5),
+        seed in any::<u64>(),
+        extra in 1usize..4,
+        case in 0usize..3,
+        f64_vectors in any::<bool>(),
+    ) {
+        let (operator, which) = [
+            (Operator::Laplacian, Which::Smallest),
+            (Operator::NormalizedLaplacian, Which::Smallest),
+            (Operator::RandomWalk, Which::Largest),
+        ][case];
+        let (n, edges) = components_of(&sizes, seed);
+        let graph = reference::graph(n, 2, &edges, true, seed % 2 == 0);
+        let options = EigenOptions {
+            which,
+            precision: if f64_vectors { Precision::F64 } else { Precision::F32 },
+            seed,
+            tol: 1e-8,
+            ..EigenOptions::new(sizes.len() + extra)
+        };
+        let eigen = solve(&graph, operator, &options);
+        prop_assert_eq!(eigen.components, sizes.len() as u64);
+        check(n, &edges, operator, &options, &eigen)?;
+    }
+}
+
+#[test]
+fn the_components_are_those_of_the_relations_selected() {
+    // Relation 0 is a path through all ten nodes; relation 1 links 0 – 1,
+    // 2 – 3 and 4 – 5 (and 0 – 1 again). Over relation 1 alone six nodes
+    // are active, in three components; over both, one component.
+    let mut edges = path(10);
+    edges.extend(
+        [(0, 1), (2, 3), (4, 5)].iter().flat_map(|&(s, t)| [(1, s, t, 1.0), (1, t, s, 1.0)]),
+    );
+    let graph = reference::graph(10, 2, &edges, false, true);
+    let relations = reference::relations(2);
+    let only = [relations[1]];
+    for per_relation in [false, true] {
+        let matrix = GraphMatrix {
+            relations: RelationSelection::Only(&only),
+            per_relation,
+            ..GraphMatrix::new(Operator::NormalizedLaplacian)
+        };
+        let options = EigenOptions { which: Which::Smallest, ..EigenOptions::new(3) };
+        let eigen = solve_on(2, &graph, &matrix, &options).unwrap();
+        assert_eq!((eigen.components, eigen.iterations), (3, 0));
+        for (c, pair) in (0..).zip(&eigen.pairs) {
+            assert_eq!(pair.value, 0.0);
+            let exact = component_vector(10, 2 * c..2 * c + 2, |_| 1.0);
+            for (got, want) in as_f64(&pair.vector).iter().zip(&exact) {
+                assert!((got - want).abs() < 1e-7, "pair {c}: {got} != {want}");
+            }
+        }
+        let all = GraphMatrix { per_relation, ..GraphMatrix::new(Operator::NormalizedLaplacian) };
+        let eigen = solve_on(2, &graph, &all, &options).unwrap();
+        assert_eq!(eigen.components, 1);
+        assert_eq!(eigen.pairs[0].value, 0.0);
+        assert!(eigen.pairs[1].value > 0.01, "{}", eigen.pairs[1].value);
+    }
+}
+
+#[test]
+fn a_negative_weight_puts_an_eigenvalue_below_the_components_zero() {
+    // Component 0 – 1 – 2, weights 1 and −3, has a negative Laplacian
+    // eigenvalue; component 3 – 4 has 0 and 2. Both zeros are still exact,
+    // after the negative eigenvalue.
+    let edges: Edges = [(0, 1, 1.0), (1, 2, -3.0), (3, 4, 1.0)]
+        .into_iter()
+        .flat_map(|(s, t, w)| [(0, s, t, w), (0, t, s, w)])
+        .collect();
+    let graph = reference::graph(5, 1, &edges, true, true);
+    let options = EigenOptions {
+        which: Which::Smallest,
+        precision: Precision::F64,
+        tol: 1e-10,
+        ..EigenOptions::new(3)
+    };
+    let eigen = solve(&graph, Operator::Laplacian, &options);
+    check(5, &edges, Operator::Laplacian, &options, &eigen).unwrap();
+    assert!(eigen.pairs[0].value < -1.0, "{}", eigen.pairs[0].value);
+    assert_eq!([eigen.pairs[1].value, eigen.pairs[2].value], [0.0, 0.0]);
+}
+
+#[test]
+fn results_with_components_are_identical_for_every_thread_count() {
+    let (n, edges) = components_of(&[40, 25, 60, 9], 13);
+    let graph = reference::graph(n, 2, &edges, true, false);
+    for (operator, which) in
+        [(Operator::NormalizedLaplacian, Which::Smallest), (Operator::RandomWalk, Which::Largest)]
+    {
+        let options = EigenOptions { which, seed: 5, ..EigenOptions::new(7) };
+        let matrix = GraphMatrix::new(operator);
+        let runs: Vec<Eigen> =
+            (1..=4).map(|t| solve_on(t, &graph, &matrix, &options).unwrap()).collect();
+        for run in &runs[1..] {
+            assert_eq!(run, &runs[0]);
+        }
+    }
+}
+
 #[test]
 fn a_loose_tolerance_does_not_reorder_distinct_magnitudes() {
     // S = [[−0.05, b], [b, −0.05]] with b = √(0.05² + 3.8): eigenvalues −2
@@ -581,7 +780,20 @@ proptest! {
         let options = EigenOptions { which: Which::Smallest, seed, max_iter, ..EigenOptions::new(k) };
         let (eigen, recorded) = solve_reported(&graph, operator, &options);
         prop_assert_eq!(&eigen, &solve_on(2, &graph, &GraphMatrix::new(operator), &options).unwrap());
-        let total = max_iter.unwrap_or(1000 * 20.max(2 * k + 1).min(n as usize)).max(k) as u64;
+        // The graph is connected, so the Laplacians' eigenvalue 0 is its one
+        // component's: Lanczos computes the other k − 1 pairs over n − 1
+        // dimensions, and does not run for k = 1.
+        let deflated = matches!(operator, Operator::Laplacian | Operator::NormalizedLaplacian);
+        let (wanted, dimension) = match deflated {
+            true => (k - 1, n as usize - 1),
+            false => (k, n as usize),
+        };
+        if wanted == 0 {
+            prop_assert!(recorded.phases().is_empty());
+            prop_assert_eq!(eigen.iterations, 0);
+            return Ok(());
+        }
+        let total = max_iter.unwrap_or(1000 * 20.max(2 * k + 1).min(dimension)).max(k) as u64;
         prop_assert_eq!(recorded.phases(), vec![("lanczos", Some(total))]);
         prop_assert_eq!(recorded.checked_done(), vec![eigen.iterations as u64]);
         let converged = recorded.last_detail("converged").unwrap();
@@ -603,4 +815,260 @@ fn a_restarting_solve_reports_its_restarts_and_largest_residual() {
     assert_eq!(recorded.last_detail("converged"), Some(3.0));
     let residual = recorded.last_detail("residual").unwrap();
     assert!(residual.is_finite() && residual >= 0.0);
+}
+
+/// Disjoint undirected paths of the given lengths, numbered consecutively
+/// from 0; the id space and the edges.
+fn paths(lengths: &[u64]) -> (u64, Edges) {
+    let mut edges = Edges::new();
+    let mut first = 0;
+    for &length in lengths {
+        edges.extend(path(length).into_iter().map(|(r, s, t, w)| (r, first + s, first + t, w)));
+        first += length;
+    }
+    (first, edges)
+}
+
+/// The unit vector over `n` rows alternating `+1, −1, …` on `nodes` from
+/// its first, times `weight(node)`, 0 elsewhere: a bipartite component's
+/// two colours.
+fn alternating_vector(
+    n: u64,
+    nodes: std::ops::Range<u64>,
+    weight: impl Fn(u64) -> f64,
+) -> Vec<f64> {
+    let first = nodes.start;
+    let unit = component_vector(n, nodes, weight);
+    (0..n).zip(unit).map(|(i, u)| if (i.wrapping_sub(first)) % 2 == 0 { u } else { -u }).collect()
+}
+
+#[test]
+fn every_bipartite_component_s_minus_one_is_found_exactly() {
+    // Paths and even cycles are bipartite: each gives the random walk the
+    // eigenvalue −1 once, as large in magnitude as its 1. Lanczos found one
+    // copy and returned [1, 1, 1, 1, −1, 0.9709, −0.9709] for four paths,
+    // without a warning. Each copy is one component's colouring, the
+    // positive first among equal magnitudes.
+    let (n, edges) = paths(&[5, 8, 11, 14]);
+    let graph = reference::graph(n, 1, &edges, false, true);
+    let options =
+        EigenOptions { which: Which::Largest, precision: Precision::F64, ..EigenOptions::new(7) };
+    let eigen = solve(&graph, Operator::RandomWalk, &options);
+    let values: Vec<f64> = eigen.pairs.iter().map(|p| p.value).collect();
+    assert_eq!(values, [1.0, 1.0, 1.0, 1.0, -1.0, -1.0, -1.0]);
+    assert_eq!((eigen.iterations, eigen.exact, eigen.components), (0, 7, 4));
+    for (pair, nodes) in eigen.pairs[4..].iter().zip([0..5, 5..13, 13..24]) {
+        let exact = alternating_vector(n, nodes, |_| 1.0);
+        for (got, want) in as_f64(&pair.vector).iter().zip(&exact) {
+            assert!((got - want).abs() < 1e-12, "{got} != {want}");
+        }
+        assert!(pair.residual < 1e-12, "{}", pair.residual);
+    }
+    let cycles = reference::graph(120, 1, &cycles(3, 40), false, true);
+    let six = solve(&cycles, Operator::RandomWalk, &EigenOptions { k: 6, ..options });
+    let values: Vec<f64> = six.pairs.iter().map(|p| p.value).collect();
+    assert_eq!(values, [1.0, 1.0, 1.0, -1.0, -1.0, -1.0]);
+    // Past them, Lanczos runs on the rest.
+    let eight = EigenOptions { k: 8, tol: 1e-10, ..options };
+    let rest = solve(&cycles, Operator::RandomWalk, &eight);
+    check(120, &self::cycles(3, 40), Operator::RandomWalk, &eight, &rest).unwrap();
+    assert_eq!(rest.exact, 6);
+}
+
+#[test]
+fn the_normalised_laplacian_s_two_is_found_once_per_bipartite_component() {
+    // Its largest eigenvalue is 2 once per bipartite component, with
+    // eigenvector D^1/2 times the colouring; a triangle has none.
+    let (n, mut edges) = paths(&[5, 8, 11]);
+    edges.extend(
+        [(24, 25), (25, 26), (26, 24)].iter().flat_map(|&(s, t)| [(0, s, t, 1.0), (0, t, s, 1.0)]),
+    );
+    let n = n + 3;
+    let graph = reference::graph(n, 1, &edges, false, true);
+    let options =
+        EigenOptions { which: Which::Largest, precision: Precision::F64, ..EigenOptions::new(3) };
+    let eigen = solve(&graph, Operator::NormalizedLaplacian, &options);
+    let values: Vec<f64> = eigen.pairs.iter().map(|p| p.value).collect();
+    assert_eq!(values, [2.0, 2.0, 2.0]);
+    assert_eq!((eigen.iterations, eigen.exact), (0, 3));
+    for (pair, (first, length)) in eigen.pairs.iter().zip([(0, 5), (5, 8), (13, 11)]) {
+        let root_degree =
+            |i: u64| if i == first || i == first + length - 1 { 1.0 } else { 2f64.sqrt() };
+        let exact = alternating_vector(n, first..first + length, root_degree);
+        let dot: f64 = as_f64(&pair.vector).iter().zip(&exact).map(|(a, b)| a * b).sum();
+        assert!((dot.abs() - 1.0).abs() < 1e-12, "{dot}");
+    }
+    let four = EigenOptions { k: 4, tol: 1e-10, ..options };
+    let rest = solve(&graph, Operator::NormalizedLaplacian, &four);
+    check(n, &edges, Operator::NormalizedLaplacian, &four, &rest).unwrap();
+}
+
+#[test]
+fn a_component_whose_lowest_node_is_inactive_is_still_counted() {
+    // Unsymmetrised, a node is active by its forward row: 1 → 0 of weight
+    // 0 leaves 0 inactive yet linked to 1, the lowest node of {0, 1, 2}.
+    // Its component was numbered by 0 and went uncounted, and the
+    // deflation indexed past its coefficients.
+    let laplacian = GraphMatrix { symmetrize: false, ..GraphMatrix::new(Operator::Laplacian) };
+    let options =
+        EigenOptions { which: Which::Smallest, precision: Precision::F64, ..EigenOptions::new(1) };
+    for weight in [0.0, 1e-12] {
+        let edges: Edges = vec![(0, 1, 2, 1.0), (0, 2, 1, 1.0), (0, 1, 0, weight)];
+        let graph = reference::graph(3, 1, &edges, true, true);
+        let eigen = solve_on(1, &graph, &laplacian, &options).unwrap();
+        assert_eq!((eigen.components, eigen.pairs[0].value), (1, 0.0), "weight {weight}");
+        let exact = component_vector(3, 1..3, |_| 1.0);
+        for (got, want) in as_f64(&eigen.pairs[0].vector).iter().zip(&exact) {
+            assert!((got - want).abs() < 1e-15, "{got} != {want}");
+        }
+    }
+    // Nor are two components joined through an inactive node: {0, 3} and
+    // {2, 4}, with 2 → 1 of weight 0.
+    let edges: Edges =
+        vec![(0, 0, 3, 1.0), (0, 3, 0, 1.0), (0, 2, 4, 1.0), (0, 4, 2, 1.0), (0, 2, 1, 0.0)];
+    let graph = reference::graph(5, 1, &edges, true, true);
+    let eigen = solve_on(1, &graph, &laplacian, &EigenOptions { k: 2, ..options }).unwrap();
+    assert_eq!(eigen.components, 2);
+    for (pair, nodes) in eigen.pairs.iter().zip([[0, 3], [2, 4]]) {
+        assert_eq!(pair.value, 0.0);
+        let exact: Vec<f64> =
+            (0..5).map(|i| if nodes.contains(&i) { 0.5f64.sqrt() } else { 0.0 }).collect();
+        for (got, want) in as_f64(&pair.vector).iter().zip(&exact) {
+            assert!((got - want).abs() < 1e-15, "{got} != {want}");
+        }
+    }
+}
+
+#[test]
+fn the_exact_pairs_come_first_among_values_equal_to_rounding() {
+    // Without a negative entry nothing lies below 0, so Lanczos's zeros
+    // rounded below it are copies of it: the components' exact zeros still
+    // come first, and a value distinct beyond rounding does not move. With
+    // a negative entry the true values are sorted.
+    let memory = ComputeMemory::new(1 << 20);
+    let pair = |value: f64| Eigenpair {
+        value,
+        residual: 0.0,
+        vector: Vector::<f64>::filled(&memory, 1, 1, value).unwrap().into(),
+    };
+    let values = |merged: &[Eigenpair]| merged.iter().map(|p| p.value).collect::<Vec<f64>>();
+    let known = || vec![pair(0.0), pair(0.0)];
+    let found = || vec![pair(-2.9e-17), pair(-2.0e-17), pair(-1e-3)];
+    let (merged, exact) = merge(known(), found(), 4, Which::Smallest, F64_TIE, true);
+    assert_eq!(exact, 2);
+    assert_eq!(values(&merged), [-1e-3, 0.0, 0.0, -2.9e-17]);
+    let (merged, exact) = merge(known(), found(), 4, Which::Smallest, F64_TIE, false);
+    assert_eq!(exact, 1);
+    assert_eq!(values(&merged), [-1e-3, -2.9e-17, -2.0e-17, 0.0]);
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(24))]
+
+    #[test]
+    fn bipartite_components_give_the_largest_end_and_lanczos_the_rest(
+        // A path of n nodes has random-walk eigenvalues cos(πj/(n − 1)):
+        // with n − 1 distinct primes, paths share only ±1, which Lanczos
+        // would otherwise have to find more than once.
+        lengths in prop::sample::subsequence(vec![3u64, 4, 6, 8, 12, 14], 1..5).prop_shuffle(),
+        extra in 1usize..4,
+        normalized in any::<bool>(),
+        f64_vectors in any::<bool>(),
+        seed in any::<u64>(),
+    ) {
+        let (n, edges) = paths(&lengths);
+        let operator = match normalized {
+            true => Operator::NormalizedLaplacian,
+            false => Operator::RandomWalk,
+        };
+        let known = if normalized { lengths.len() } else { 2 * lengths.len() };
+        let k = (known + extra).min(n as usize);
+        let graph = reference::graph(n, 1, &edges, false, seed % 2 == 0);
+        let options = EigenOptions {
+            precision: if f64_vectors { Precision::F64 } else { Precision::F32 },
+            seed,
+            tol: 1e-8,
+            ..EigenOptions::new(k)
+        };
+        let eigen = solve(&graph, operator, &options);
+        prop_assert_eq!(eigen.exact, known.min(k));
+        check(n, &edges, operator, &options, &eigen)?;
+        let runs: Vec<Eigen> =
+            (1..=4).map(|t| solve_on(t, &graph, &GraphMatrix::new(operator), &options).unwrap()).collect();
+        for run in &runs[1..] {
+            prop_assert_eq!(run, &runs[0]);
+        }
+    }
+}
+
+#[test]
+fn an_f32_residual_at_rounding_level_is_a_breakdown_not_a_direction() {
+    // Three paths' normalised Laplacian, its three 2s deflated: the
+    // complement holds 0 three times, so the Krylov space of one start
+    // vector is invariant after 13 of its 15 dimensions. In f32 the 13th
+    // residual was rounding (1.8·10⁻⁶ of what it came from), above the f64
+    // breakdown threshold: normalised, it took a basis vector, the basis
+    // "filled" the complement, and the solve stopped as converged with a
+    // Ritz value of 1.92 (residual 0.23) for 1.901.
+    let (n, edges) = paths(&[4, 6, 8]);
+    let graph = reference::graph(n, 1, &edges, false, true);
+    for seed in [1, 2, 3] {
+        let options = EigenOptions { precision: Precision::F32, seed, ..EigenOptions::new(4) };
+        let eigen = solve(&graph, Operator::NormalizedLaplacian, &options);
+        check(n, &edges, Operator::NormalizedLaplacian, &options, &eigen).unwrap();
+    }
+}
+
+#[test]
+fn a_genuine_eigenvalue_beside_the_exact_ones_is_not_cut() {
+    // 0 – 1 – 2 with weights 1 and −δ has a Laplacian eigenvalue near
+    // −1.5δ; 3 – 4 and 5 – 6 weigh 1000, so the tie width (rounding of the
+    // largest eigenvalue, 2000) spans it. It was ordered as a tie with the
+    // components' exact zeros, after them, and cut at k: [0, 0, 0].
+    let undirected = |list: &[(u64, u64, f64)]| -> Edges {
+        list.iter().flat_map(|&(s, t, w)| [(0, s, t, w), (0, t, s, w)]).collect()
+    };
+    for (precision, delta) in [(Precision::F64, 1e-10), (Precision::F32, 1e-4)] {
+        let edges = undirected(&[(0, 1, 1.0), (1, 2, -delta), (3, 4, 1000.0), (5, 6, 1000.0)]);
+        let graph = reference::graph(7, 1, &edges, true, true);
+        let options =
+            EigenOptions { which: Which::Smallest, precision, tol: 1e-12, ..EigenOptions::new(3) };
+        let eigen = solve(&graph, Operator::Laplacian, &options);
+        let dense: Dense =
+            dense_reference::operator(7, &edges, None, true, true, Operator::Laplacian);
+        let reference: Vec<f64> = dense.eigenpairs().iter().map(|p| p.0).take(3).collect();
+        let values: Vec<f64> = eigen.pairs.iter().map(|p| p.value).collect();
+        assert!(reference[0] < -delta, "{reference:?}");
+        assert!((values[0] - reference[0]).abs() < 1e-2 * delta, "{precision:?}: {values:?}");
+        assert_eq!(values[1..], [0.0, 0.0], "{precision:?}");
+        assert_eq!(eigen.exact, 2);
+    }
+}
+
+#[test]
+fn the_normalised_laplacian_s_largest_without_a_bipartite_component_is_not_deflated() {
+    // An odd cycle has no bipartite component: nothing to take exactly, so
+    // the solve holds and is admitted as before, without a deflation.
+    let graph = reference::graph(201, 1, &cycles(1, 201), false, true);
+    let matrix = GraphMatrix::new(Operator::NormalizedLaplacian);
+    let options = EigenOptions::new(4);
+    let set = WorkingSet {
+        id_space: 201,
+        dimension: 201,
+        operator: Operator::NormalizedLaplacian,
+        k: 4,
+        precision: Precision::F32,
+        deflated: None,
+        wanted: 4,
+    };
+    let needed = set.bytes();
+    for (limit, admitted) in [(needed - 1, false), (needed, true)] {
+        let memory = ComputeMemory::new(limit);
+        let mut resources =
+            Resources { workers: workers(1), memory: &memory, interrupts: &mut Uninterrupted };
+        let found = admit_eigen(&mut resources, &graph, &matrix, &options);
+        assert_eq!(found.is_ok(), admitted, "{limit}: {found:?}");
+    }
+    let eigen = solve(&graph, Operator::NormalizedLaplacian, &options);
+    assert_eq!((eigen.exact, eigen.components), (0, 1));
 }

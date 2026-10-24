@@ -19,7 +19,8 @@
 
 use std::str::FromStr;
 
-use super::{components, dense, Resources, SpectralError};
+use super::components::Components;
+use super::{dense, Resources, SpectralError};
 use crate::compute::random;
 use crate::compute::{
     spmv, AnyVector, ComputeError, Dtype, MemoryCharge, Product, Semiring, Vector,
@@ -187,8 +188,38 @@ impl<'g> LinearOperator<'g> {
     pub(super) fn components<I: Interrupts>(
         &self,
         resources: &mut Resources<'_, I>,
-    ) -> Result<u64, SpectralError> {
-        components::components(resources, self.graph, self.forward.relations, &self.active)
+    ) -> Result<Components, SpectralError> {
+        Components::of(resources, self.graph, self.forward.relations, &self.active)
+    }
+
+    /// The entry at `node` of the eigenvector its connected component
+    /// gives (eigenvalue 0 of the Laplacians, 1 of the random walk), before
+    /// normalising: `√d` for the operators that scale by `D^-1/2`, else 1;
+    /// 0 at inactive nodes.
+    pub(super) fn component_weight(&self, node: usize) -> f64 {
+        match (self.active[node], self.operator.normalized()) {
+            (false, _) => 0.0,
+            (true, true) => self.degrees[node].sqrt(),
+            (true, false) => 1.0,
+        }
+    }
+
+    /// Whether `A` has no negative (or NaN) entry, so that `S` has none: then
+    /// both Laplacians are positive semidefinite and the random walk's
+    /// eigenvalues are at most 1 in magnitude. A negative self-loop counts,
+    /// although the Laplacians cancel it.
+    pub(super) fn nonnegative<I: Interrupts>(
+        &mut self,
+        resources: &mut Resources<'_, I>,
+    ) -> Result<bool, SpectralError> {
+        let smallest = Product { semiring: Semiring::MinFirst, ..self.forward };
+        let (graph, buffers) = (self.graph, &mut self.buffers);
+        let Resources { workers, memory, interrupts } = &mut *resources;
+        spmv(workers, memory, *interrupts, graph, &smallest, &buffers.input, &mut buffers.output)?;
+        let y = values(&buffers.output)?;
+        let negative = |v: f64| v.is_nan() || v < 0.0;
+        let negatives = dense::max(resources, y.len(), |i| f64::from(u8::from(negative(y[i]))))?;
+        Ok(negatives == 0.0)
     }
 
     /// The vector [`Self::apply`] multiplies, to be filled by the caller.
