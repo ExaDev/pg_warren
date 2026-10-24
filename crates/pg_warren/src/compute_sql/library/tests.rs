@@ -285,6 +285,109 @@ mod tests {
         Ok(())
     }
 
+    /// The neighbours of each node in `<name>_edges` in `direction`: once
+    /// each, or with `per_relation` once in each relation linking them, as
+    /// rows `(id, degree, sum of the neighbours' ids)`.
+    fn expected_neighbours(name: &str, direction: &str, per_relation: bool) -> String {
+        let counted = if per_relation { "(h.rel, h.other)" } else { "h.other" };
+        let summed = if per_relation { "h.other" } else { "DISTINCT h.other" };
+        format!(
+            "SELECT n.id, count(DISTINCT {counted}) FILTER (WHERE h.node IS NOT NULL) AS degree,
+                    coalesce(sum({summed}), 0) AS ids
+             FROM {name}_nodes n
+             LEFT JOIN (SELECT src AS node, rel, dst AS other FROM {name}_edges
+                        WHERE '{direction}' IN ('out', 'both')
+                        UNION SELECT dst, rel, src FROM {name}_edges
+                        WHERE '{direction}' IN ('in', 'both')) h ON h.node = n.id
+             GROUP BY n.id"
+        )
+    }
+
+    /// `degree`, `vector_degree` and `degree_vector` count a neighbour once,
+    /// or with `per_relation` once in each relation that links it (both
+    /// directions of one relation still once), with or without a stored
+    /// merged CSR.
+    #[pg_test]
+    fn degrees_count_a_neighbour_once_or_in_each_of_its_relations() -> Result<(), Error> {
+        relation_expansions("dg")?;
+        for graph in ["dg_s", "dg_u"] {
+            for direction in ["out", "in", "both"] {
+                let mut totals = Vec::new();
+                for per_relation in [false, true] {
+                    let expected = expected_neighbours("dg", direction, per_relation);
+                    let wrong = Spi::get_one::<i64>(&format!(
+                        "SELECT warren.degree_vector('{graph}', 'dv', '{direction}',
+                                                     per_relation := {per_relation});
+                         SELECT warren.vector_degree('{graph}', 'vd', '{direction}', dtype := 'i64',
+                                                     per_relation := {per_relation});
+                         WITH e AS ({expected})
+                         SELECT count(*) FILTER (WHERE dv.value <> e.degree OR vd.value <> e.degree
+                                                    OR warren.degree('{graph}', e.id, '{direction}',
+                                                                     per_relation := {per_relation})
+                                                       <> e.degree)
+                         FROM e JOIN warren.vector_values('{graph}', 'dv', NULL::bigint) dv
+                                  ON dv.node_id = e.id
+                                JOIN warren.vector_values('{graph}', 'vd', NULL::bigint) vd
+                                  ON vd.node_id = e.id"
+                    ));
+                    assert_eq!(wrong?, Some(0), "{graph} {direction} {per_relation}");
+                    totals.push(Spi::get_one::<i64>(&format!(
+                        "SELECT sum(degree)::bigint FROM ({expected}) e"
+                    ))?);
+                }
+                assert_ne!(totals[0], totals[1], "{direction}: the readings differ");
+            }
+        }
+        for call in [
+            "warren.degree('dg_s', 1::bigint, per_relation := NULL)",
+            "warren.vector_degree('dg_s', 'n', per_relation := NULL)",
+        ] {
+            assert_eq!(
+                failure(call)?.as_deref(),
+                Some("22004: per_relation must not be NULL"),
+                "{call}"
+            );
+        }
+        Ok(())
+    }
+
+    /// With `per_relation`, `aggregate_neighbours` sums a neighbour's row
+    /// once in each relation linking it and divides the mean by that degree.
+    #[pg_test]
+    fn aggregate_neighbours_counts_a_neighbour_once_or_in_each_of_its_relations(
+    ) -> Result<(), Error> {
+        relation_expansions("ag")?;
+        for graph in ["ag_s", "ag_u"] {
+            Spi::run(&format!(
+                "SELECT warren.vector_from_query('{graph}', 'x',
+                                                 'SELECT id, ARRAY[id::float8, 1] FROM ag_nodes')"
+            ))?;
+            for direction in ["out", "in"] {
+                for per_relation in [false, true] {
+                    let expected = expected_neighbours("ag", direction, per_relation);
+                    let wrong = Spi::get_one::<i64>(&format!(
+                        "SELECT warren.aggregate_neighbours('{graph}', 'x', 'sum', 'sum',
+                                                            direction := '{direction}',
+                                                            per_relation := {per_relation});
+                         SELECT warren.aggregate_neighbours('{graph}', 'x', 'mean',
+                                                            direction := '{direction}',
+                                                            per_relation := {per_relation});
+                         WITH e AS ({expected})
+                         SELECT count(*) FILTER (
+                                  WHERE s.row[1] <> e.ids OR s.row[2] <> e.degree
+                                     OR e.degree > 0 AND abs(m.row[1] - e.ids::float8 / e.degree) > 1e-9)
+                         FROM e JOIN warren.matrix_rows('{graph}', 'sum', NULL::bigint) s
+                                  ON s.node_id = e.id
+                                JOIN warren.matrix_rows('{graph}', 'mean', NULL::bigint) m
+                                  ON m.node_id = e.id"
+                    ));
+                    assert_eq!(wrong?, Some(0), "{graph} {direction} {per_relation}");
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// With `per_relation`, a pair in several relations is an edge in each,
     /// so `sssp_vector`'s `min_plus` takes the cheapest, as `dijkstra`
     /// does; by default it is one edge, its weights summed.

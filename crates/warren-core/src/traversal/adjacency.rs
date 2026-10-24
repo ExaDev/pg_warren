@@ -155,6 +155,14 @@ impl<'g> Adjacency<'g> {
         self.neighbours(node).count() as u64
     }
 
+    /// The degree of `node` with a neighbour counted once in each selected
+    /// relation that links it: the number of its (relation, neighbour)
+    /// hops, so for [`Direction::Both`] a neighbour linked both ways by one
+    /// relation counts once there (DESIGN.md §5.3, `per_relation`).
+    pub fn degree_per_relation(&self, node: DenseId) -> u64 {
+        self.labelled_neighbours(node).count() as u64
+    }
+
     /// The row entries of `node` in every CSR read: a node reached through
     /// several CSRs (relations, or both directions) appears once per CSR.
     /// Traversals use this; their visited set absorbs the repeats.
@@ -378,6 +386,22 @@ mod tests {
     }
 
     #[test]
+    fn per_relation_a_neighbour_counts_once_in_each_of_its_relations() {
+        // 0 → 1 in relations 0 and 1, 1 → 0 in relation 0, 0 → 0 in relation 1
+        let graph =
+            graph(2, 2, &[(0, 0, 1, 1.0), (1, 0, 1, 1.0), (0, 1, 0, 1.0), (1, 0, 0, 1.0)], true);
+        let degrees = |direction| {
+            let adjacency = Adjacency::new(&graph, direction, RelationSelection::All).unwrap();
+            (adjacency.degree(0), adjacency.degree_per_relation(0))
+        };
+        assert_eq!(degrees(Direction::Out), (2, 3));
+        assert_eq!(degrees(Direction::In), (2, 2));
+        assert_eq!(degrees(Direction::Both), (2, 3), "both directions of one relation count once");
+        let out = Adjacency::new(&graph, Direction::Out, RelationSelection::All).unwrap();
+        assert_eq!(out.degree_per_relation(u64::MAX), 0);
+    }
+
+    #[test]
     fn collected_neighbours_are_the_distinct_neighbours_in_a_buffer_of_their_own() {
         // 0 → 1 and 0 → 2 in relations 0 and 1, 2 → 0 in relation 0
         let graph = graph(
@@ -529,6 +553,7 @@ mod properties {
                     .filter(|&&(from, _, _)| from == node)
                     .map(|&(_, relation, to)| (relation, to))
                     .collect();
+                prop_assert_eq!(adjacency.degree_per_relation(node), expected.len() as u64);
                 prop_assert_eq!(distinct, expected);
             }
         }

@@ -30,7 +30,7 @@ an undirected graph sees each edge in both directions.
 | Function | Returns |
 |---|---|
 | `neighbours(graph, node, direction := 'out', rels := NULL)` | each distinct neighbour once, in dense-id order |
-| `degree(graph, node, direction := 'out', rels := NULL)` | the number of distinct neighbours (`bigint`) |
+| `degree(graph, node, direction := 'out', rels := NULL, per_relation := false)` | the number of distinct neighbours (`bigint`); with `per_relation`, a neighbour once in each relation linking it |
 | `has_edge(graph, src, dst, rel := NULL)` | whether `src → dst` exists, in relation `rel` if given |
 | `reachable(graph, start, target, max_depth := NULL, rels := NULL, direction := 'out')` | whether `target` can be reached (an unknown node reaches nothing, not even itself) |
 

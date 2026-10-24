@@ -28,7 +28,11 @@ DECLARE
         'warren.katz_centrality(text, text, double precision, double precision, text, boolean, double precision, integer, text[], boolean, bigint)',
         'warren.eigenvector_centrality(text, text, double precision, integer, text[], boolean, bigint)',
         'warren.hits(text, text, text, double precision, integer, boolean, text[], boolean, bigint)',
-        'warren.sssp_vector(text, text, anyelement, text[], boolean, integer, bigint)'];
+        'warren.sssp_vector(text, text, anyelement, text[], boolean, integer, bigint)',
+        'warren.degree(text, anyelement, text, text[], bigint)',
+        'warren.vector_degree(text, text, text, text[], text, boolean, bigint)',
+        'warren.degree_vector(text, text, text, text[], bigint)',
+        'warren.aggregate_neighbours(text, text, text, text, integer, text[], text, bigint)'];
     news text[] := ARRAY[
         'warren.contract(text, text, text, boolean, boolean, boolean, bigint, boolean)',
         'warren.modularity(text, text, double precision, boolean, bigint, boolean)',
@@ -42,7 +46,11 @@ DECLARE
         'warren.katz_centrality(text, text, double precision, double precision, text, boolean, double precision, integer, text[], boolean, bigint, boolean)',
         'warren.eigenvector_centrality(text, text, double precision, integer, text[], boolean, bigint, boolean)',
         'warren.hits(text, text, text, double precision, integer, boolean, text[], boolean, bigint, boolean)',
-        'warren.sssp_vector(text, text, anyelement, text[], boolean, integer, bigint, boolean)'];
+        'warren.sssp_vector(text, text, anyelement, text[], boolean, integer, bigint, boolean)',
+        'warren.degree(text, anyelement, text, text[], bigint, boolean)',
+        'warren.vector_degree(text, text, text, text[], text, boolean, bigint, boolean)',
+        'warren.degree_vector(text, text, text, text[], bigint, boolean)',
+        'warren.aggregate_neighbours(text, text, text, text, integer, text[], text, bigint, boolean)'];
     acls text[] := ARRAY[]::text[];
     kept record;
 BEGIN
@@ -771,6 +779,89 @@ BEGIN
   END;
   PERFORM warren.drop_vector(graph, '_warren_sssp_vector_' || part, v, true) FROM unnest(parts) part;
   RETURN i;
+END $$;
+
+CREATE FUNCTION warren.degree(graph text, node anyelement, direction text DEFAULT 'out',
+                              rels text[] DEFAULT NULL, version bigint DEFAULT NULL,
+                              per_relation boolean DEFAULT false)
+RETURNS bigint
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'degree_wrapper';
+
+CREATE FUNCTION warren."vector_degree"(
+	"graph" TEXT,
+	"name" TEXT,
+	"direction" TEXT DEFAULT 'out',
+	"rels" TEXT[] DEFAULT NULL,
+	"dtype" TEXT DEFAULT 'f64',
+	"persist" bool DEFAULT true,
+	"version" bigint DEFAULT NULL,
+	"per_relation" bool DEFAULT false
+) RETURNS bigint
+VOLATILE PARALLEL UNSAFE
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'vector_degree_wrapper';
+
+CREATE FUNCTION warren.degree_vector(graph text, "out" text, direction text DEFAULT 'out',
+                                     rels text[] DEFAULT NULL, version bigint DEFAULT NULL,
+                                     per_relation boolean DEFAULT false)
+RETURNS bigint LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+  IF starts_with("out", '_warren_') THEN
+    RAISE EXCEPTION 'vector names beginning with _warren_ are reserved for the library''s intermediates'
+      USING ERRCODE = 'reserved_name';
+  END IF;
+  RETURN warren.vector_degree(graph, "out", direction, rels, 'f64', true, version, per_relation);
+END $$;
+
+CREATE FUNCTION warren.aggregate_neighbours(graph text, x text, "out" text, agg text DEFAULT 'mean',
+                                            hops int DEFAULT 1, rels text[] DEFAULT NULL,
+                                            direction text DEFAULT 'out', version bigint DEFAULT NULL,
+                                            per_relation boolean DEFAULT false)
+RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+  v bigint := coalesce(version, (warren.info(graph) ->> 'current_version')::bigint);
+  parts text[] := ARRAY['x', 'degree'];
+  semiring text := CASE agg WHEN 'mean' THEN 'plus_second' WHEN 'sum' THEN 'plus_second'
+                            WHEN 'max' THEN 'max_second' END;
+  dtype text;
+BEGIN
+  IF starts_with("out", '_warren_') OR starts_with(x, '_warren_') THEN
+    RAISE EXCEPTION 'vector names beginning with _warren_ are reserved for the library''s intermediates'
+      USING ERRCODE = 'reserved_name';
+  END IF;
+  IF semiring IS NULL THEN
+    RAISE EXCEPTION 'agg must be mean, sum or max, not %', agg USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+  IF direction NOT IN ('out', 'in') THEN
+    RAISE EXCEPTION 'direction must be ''out'' or ''in'', not %', direction USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+  dtype := warren.explain_map(graph, format('%I', x), v) ->> 'dtype';
+  IF agg = 'mean' AND dtype NOT IN ('f32', 'f64') THEN
+    RAISE EXCEPTION 'mean needs an f32 or f64 matrix, not %', dtype USING ERRCODE = 'datatype_mismatch';
+  END IF;
+  BEGIN
+    PERFORM warren.vector_map(graph, '_warren_aggregate_neighbours_x', format('%I', x), false, v);
+    IF agg = 'mean' THEN
+      PERFORM warren.vector_degree(graph, '_warren_aggregate_neighbours_degree', direction, rels, dtype, false, v,
+                                   per_relation);
+    END IF;
+    FOR hop IN 1..hops LOOP
+      PERFORM warren.report_progress('aggregate_neighbours', graph, 'hop', hop - 1, hops);
+      PERFORM warren.spmm(graph, '_warren_aggregate_neighbours_x', '_warren_aggregate_neighbours_x', semiring,
+                          transpose := direction = 'in', rels := rels, weighted := false, persist := false,
+                          version := v, per_relation := per_relation);
+      IF agg = 'mean' THEN
+        PERFORM warren.vector_map(graph, '_warren_aggregate_neighbours_x',
+          'CASE WHEN _warren_aggregate_neighbours_degree > 0
+                THEN _warren_aggregate_neighbours_x / _warren_aggregate_neighbours_degree END', false, v);
+      END IF;
+    END LOOP;
+    PERFORM warren.vector_map(graph, "out", '_warren_aggregate_neighbours_x', true, v);
+  EXCEPTION WHEN OTHERS OR query_canceled THEN
+    PERFORM warren.drop_vector(graph, '_warren_aggregate_neighbours_' || part, v, true) FROM unnest(parts) part;
+    RAISE;
+  END;
+  PERFORM warren.drop_vector(graph, '_warren_aggregate_neighbours_' || part, v, true) FROM unnest(parts) part;
 END $$;
 
     FOR i IN 1 .. pg_catalog.array_length(news, 1) LOOP

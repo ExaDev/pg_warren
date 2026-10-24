@@ -82,6 +82,8 @@ whole table.
 | `spmv`, `spmm` | yes: an entry in each relation, which `⊕` folds |
 | `pagerank`, `katz_centrality`, `eigenvector_centrality`, `hits` | yes: unweighted, the pair weighs k |
 | `sssp_vector` | yes: the cheapest of its relations, as `dijkstra` (by default their weights' sum) |
+| `degree`, `vector_degree`, `degree_vector` | yes: a neighbour once in each relation linking it (with `direction := 'both'`, once per relation even if linked both ways) |
+| `aggregate_neighbours` | yes: a neighbour's row once in each relation linking it |
 
 ## Versions
 

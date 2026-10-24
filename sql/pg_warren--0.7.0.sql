@@ -354,13 +354,16 @@ END $$;
 -- warren.aggregate_neighbours (DESIGN.md §6.7, A.5): each node's row of
 -- matrix `x` replaced by the mean, sum or max of its neighbours' rows
 -- (out-neighbours, or in-neighbours with direction := 'in'; distinct
--- neighbours over `rels`; weights are not read), `hops` times over. A node
--- with no neighbours gets NaN for mean (SQL's AVG of nothing), 0 for sum
--- and -Infinity (the least bigint) for max. mean needs an f32 or f64
--- matrix; the result keeps x's dtype. Writes matrix `out`.
+-- neighbours over `rels`, or with `per_relation` a neighbour once in each
+-- relation linking it (DESIGN.md §5.3); weights are not read), `hops`
+-- times over. A node with no neighbours gets NaN for mean (SQL's AVG of
+-- nothing), 0 for sum and -Infinity (the least bigint) for max. mean
+-- needs an f32 or f64 matrix; the result keeps x's dtype. Writes matrix
+-- `out`.
 CREATE FUNCTION warren.aggregate_neighbours(graph text, x text, "out" text, agg text DEFAULT 'mean',
                                             hops int DEFAULT 1, rels text[] DEFAULT NULL,
-                                            direction text DEFAULT 'out', version bigint DEFAULT NULL)
+                                            direction text DEFAULT 'out', version bigint DEFAULT NULL,
+                                            per_relation boolean DEFAULT false)
 RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   v bigint := coalesce(version, (warren.info(graph) ->> 'current_version')::bigint);
@@ -386,13 +389,14 @@ BEGIN
   BEGIN
     PERFORM warren.vector_map(graph, '_warren_aggregate_neighbours_x', format('%I', x), false, v);
     IF agg = 'mean' THEN
-      PERFORM warren.vector_degree(graph, '_warren_aggregate_neighbours_degree', direction, rels, dtype, false, v);
+      PERFORM warren.vector_degree(graph, '_warren_aggregate_neighbours_degree', direction, rels, dtype, false, v,
+                                   per_relation);
     END IF;
     FOR hop IN 1..hops LOOP
       PERFORM warren.report_progress('aggregate_neighbours', graph, 'hop', hop - 1, hops);
       PERFORM warren.spmm(graph, '_warren_aggregate_neighbours_x', '_warren_aggregate_neighbours_x', semiring,
                           transpose := direction = 'in', rels := rels, weighted := false, persist := false,
-                          version := v);
+                          version := v, per_relation := per_relation);
       IF agg = 'mean' THEN
         PERFORM warren.vector_map(graph, '_warren_aggregate_neighbours_x',
           'CASE WHEN _warren_aggregate_neighbours_degree > 0
@@ -957,16 +961,19 @@ END $$;
 --   extension::warren
 
 -- warren.degree_vector (DESIGN.md §6.7): each node's degree in `direction`
--- over `rels`, as vector `out` (f64); returns its vector id.
+-- over `rels`, as vector `out` (f64); returns its vector id. A neighbour
+-- counts once, or with `per_relation` once in each relation linking it
+-- (DESIGN.md §5.3).
 CREATE FUNCTION warren.degree_vector(graph text, "out" text, direction text DEFAULT 'out',
-                                     rels text[] DEFAULT NULL, version bigint DEFAULT NULL)
+                                     rels text[] DEFAULT NULL, version bigint DEFAULT NULL,
+                                     per_relation boolean DEFAULT false)
 RETURNS bigint LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
   IF starts_with("out", '_warren_') THEN
     RAISE EXCEPTION 'vector names beginning with _warren_ are reserved for the library''s intermediates'
       USING ERRCODE = 'reserved_name';
   END IF;
-  RETURN warren.vector_degree(graph, "out", direction, rels, 'f64', true, version);
+  RETURN warren.vector_degree(graph, "out", direction, rels, 'f64', true, version, per_relation);
 END $$;
 /* </end connected objects> */
 
@@ -1254,7 +1261,7 @@ AS 'MODULE_PATHNAME', 'drop_vector_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/compute_sql/constructors.rs:93
+-- crates/pg_warren/src/compute_sql/constructors.rs:95
 -- pg_warren::compute_sql::constructors::vector_degree
 CREATE  FUNCTION warren."vector_degree"(
 	"graph" TEXT, /* Option < & str > */
@@ -1263,7 +1270,8 @@ CREATE  FUNCTION warren."vector_degree"(
 	"rels" TEXT[] DEFAULT NULL, /* :: std :: option :: Option < Vec < Option < String > > > */
 	"dtype" TEXT DEFAULT 'f64', /* Option < & str > */
 	"persist" bool DEFAULT true, /* Option < bool > */
-	"version" bigint DEFAULT NULL /* Option < i64 > */
+	"version" bigint DEFAULT NULL, /* Option < i64 > */
+	"per_relation" bool DEFAULT false /* Option < bool > */
 ) RETURNS bigint /* Option < i64 > */
 VOLATILE PARALLEL UNSAFE 
 LANGUAGE c /* Rust */
@@ -1527,11 +1535,12 @@ AS 'MODULE_PATHNAME', 'topological_order_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/traversal_sql/neighbourhood.rs:54
+-- crates/pg_warren/src/traversal_sql/neighbourhood.rs:60
 -- pg_warren::traversal_sql::neighbourhood::degree
 
 CREATE FUNCTION warren.degree(graph text, node anyelement, direction text DEFAULT 'out',
-                              rels text[] DEFAULT NULL, version bigint DEFAULT NULL)
+                              rels text[] DEFAULT NULL, version bigint DEFAULT NULL,
+                              per_relation boolean DEFAULT false)
 RETURNS bigint
 STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'degree_wrapper';
 /* </end connected objects> */

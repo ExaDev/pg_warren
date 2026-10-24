@@ -35,7 +35,7 @@ d > 1 is an N × d **matrix**, for example embeddings.
 |---|---|
 | `vector_from_query(graph, name, query, dtype := 'f64', fill := 0)` | `vector_values(graph, name, NULL::<id type>)` → `(node_id, value)` |
 | `vector_const(graph, name, value, dtype := 'f64')` | `matrix_rows(graph, name, NULL::<id type>)` → `(node_id, row float8[])` |
-| `vector_degree(graph, name, direction := 'out', rels := NULL)` | `vector_topk(graph, name, k, NULL::<id type>, descending := true)` |
+| `vector_degree(graph, name, direction := 'out', rels := NULL, per_relation := false)` | `vector_topk(graph, name, k, NULL::<id type>, descending := true)` |
 | `vector_dense_id(graph, name)` (each node's own dense id, `i64`) | `vector_stats(graph, name)` → `{count, min, max, mean, sd, l2, nnz}` |
 | results of `spmv`, `spmm`, `vector_map`, the library, `eigen` | `vector_reduce(graph, x, op)`: `sum`, `max`, `min`, `l1`, `l2`, `nnz` |
 
@@ -314,8 +314,8 @@ intermediates transient, and persists only `out`.
 | `components_vector(graph, out, rels)` | each node's component, as the minimum dense id in it (min-label propagation, both directions) | iterations |
 | `label_propagation(graph, out, seed := NULL, max_iter := 100, mask := NULL, rels)` | min-label propagation from `seed` labels, restricted to `mask` | iterations |
 | `sssp_vector(graph, out, source, rels, weighted, max_iter, per_relation := false)` | distance from `source` (Bellman-Ford); unreachable is `Infinity`; a negative cycle reachable from `source` is an error (22023) | iterations |
-| `degree_vector(graph, out, direction := 'out', rels)` | distinct-neighbour degree | vector id |
-| `aggregate_neighbours(graph, x, out, agg := 'mean', hops := 1, rels, direction := 'out')` | `mean`, `sum` or `max` of neighbours' rows of matrix `x` (a "one-layer GNN") | void |
+| `degree_vector(graph, out, direction := 'out', rels, per_relation := false)` | distinct-neighbour degree; with `per_relation`, a neighbour once in each relation linking it | vector id |
+| `aggregate_neighbours(graph, x, out, agg := 'mean', hops := 1, rels, direction := 'out', per_relation := false)` | `mean`, `sum` or `max` of neighbours' rows of matrix `x` (a "one-layer GNN"); with `per_relation`, a neighbour's row once in each relation linking it | void |
 | `triangles(graph, out, rels := NULL, persist := true)` | per-node triangle count in the undirected simple graph | vector id |
 | `eigenvector_centrality(graph, out, tol := 1e-6, max_iter := 100, rels, weighted, per_relation := false)` | eigenvector centrality as NetworkX computes it (in-edges, unit L2 norm) | iterations |
 | `katz_centrality(graph, out, alpha := 0.1, beta := 1.0, seed := NULL, normalized := true, tol := 1e-6, max_iter := 1000, rels, weighted, per_relation := false)` | Katz centrality as NetworkX computes it; `seed` (a vector) makes β per node: `beta × seed` | iterations |
