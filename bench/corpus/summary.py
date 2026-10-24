@@ -34,6 +34,8 @@ def seconds(stage):
     if errors:
         return "error"
     value = stage.get("server_median_seconds", stage["median_seconds"])
+    if value < 0.01:
+        return f"{value * 1000:.2f} ms"
     return f"{value:.3f}" if value < 1 else f"{value:.2f}"
 
 

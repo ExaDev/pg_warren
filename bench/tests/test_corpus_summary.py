@@ -23,3 +23,7 @@ def test_timings_take_the_server_time_where_there_is_one():
     assert summary.seconds(stages["refresh"]) == "2.00"
     assert summary.seconds(stages["bfs depth 6"]) == "0.250"
     assert summary.seconds(stages["eigen k=20"]) == "timeout"
+
+
+def test_reads_under_ten_milliseconds_are_shown_in_milliseconds():
+    assert summary.seconds({"median_seconds": 1.0, "server_median_seconds": 0.00012}) == "0.12 ms"
