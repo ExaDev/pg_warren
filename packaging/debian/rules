@@ -1,0 +1,27 @@
+#!/usr/bin/make -f
+# Builds postgresql-NN-pg-warren for each major `pg_buildext
+# supported-versions` names (debian/pgversions, narrowed by
+# PG_SUPPORTED_VERSIONS), with cargo-pgrx, into PGDG's paths. The Rust
+# toolchain and cargo-pgrx come from rustup and cargo, not from the
+# archive (packaging/build-deb.sh); CONTRIBUTING.md, "Packages".
+
+%:
+	dh $@
+
+override_dh_auto_configure override_dh_auto_build override_dh_auto_test override_dh_auto_clean:
+
+override_dh_auto_install:
+	set -e; for v in $$(pg_buildext supported-versions); do \
+	  PGRX_PG_CONFIG_PATH=/usr/lib/postgresql/$$v/bin/pg_config \
+	    cargo pgrx package --manifest-path crates/pg_warren/Cargo.toml \
+	      --pg-config /usr/lib/postgresql/$$v/bin/pg_config \
+	      --no-default-features --features pg$$v \
+	      --out-dir debian/postgresql-$$v-pg-warren; \
+	  sed "s/PGVERSION/$$v/g" debian/pg-warren.postinst.in > debian/postgresql-$$v-pg-warren.postinst; \
+	done
+
+override_dh_installdocs:
+	dh_installdocs README.md NOTICE
+
+override_dh_strip:
+	dh_strip --no-automatic-dbgsym
