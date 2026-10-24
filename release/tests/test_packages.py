@@ -1,7 +1,8 @@
 """Tests of release/packages.py, which builds the .deb packages of the apt
 repository and the tarballs (CONTRIBUTING.md, "Packages"): Debian
 versions per distribution, the generated debian/changelog, the pgrx a
-source pins, and the tarball laid out from a built package."""
+source pins, the tarball laid out from a built package, and the Docker
+image built from one."""
 
 import re
 import shutil
@@ -11,8 +12,9 @@ from pathlib import Path
 
 import pytest
 
-from packages import (DISTRIBUTIONS, MAJORS, PackagingError, changelog, debian_version, distribution,
-                      pgrx_version, postgres_image, tarball, tarball_name)
+import packages
+from packages import (DISTRIBUTIONS, MAJORS, PACKAGING, PackagingError, changelog, debian_version, distribution,
+                      image, pgrx_version, postgres_image, tarball, tarball_name)
 
 needs_dpkg = pytest.mark.skipif(shutil.which("dpkg-deb") is None or shutil.which("dpkg-parsechangelog") is None,
                                 reason="needs dpkg-deb and dpkg-parsechangelog (dpkg-dev)")
@@ -181,3 +183,52 @@ def test_tarball_entries_are_ordered(tmp_path):
         names = archive.getnames()
     assert names == sorted(names)
     assert Path(made).name == "pg_warren-0.7.0-pg15-linux-aarch64.tar.gz"
+
+
+def instructions(dockerfile):
+    """The Dockerfile's instructions, without comments and continuations."""
+    lines = [line for line in dockerfile.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    return [line.split()[0].upper() for line in lines if not line.startswith(" ")]
+
+
+def test_the_image_build_runs_nothing():
+    """No RUN: the publish job builds the image from the package it checked,
+    and so for either arch on its own (amd64) runner, without emulation."""
+    assert set(instructions((PACKAGING / "docker" / "Dockerfile").read_text())) == {"ARG", "FROM", "COPY", "CMD"}
+
+
+def test_the_image_names_no_source_repository():
+    """A label org.opencontainers.image.source would link the GHCR package
+    to this repository on its first push, and a linked package inherits the
+    repository's access: any workflow given packages: write could then push
+    the images (CONTRIBUTING.md, "Release settings")."""
+    assert "LABEL" not in instructions((PACKAGING / "docker" / "Dockerfile").read_text())
+
+
+@needs_dpkg
+@pytest.mark.parametrize("arch", ["amd64", "arm64"])
+@pytest.mark.parametrize("smoke", [True, False])
+def test_the_image_is_the_package_s_files_on_its_postgres_image(tmp_path, monkeypatch, arch, smoke):
+    deb = fake_deb(tmp_path, "16", version="0.7.0-1~deb13", arch=arch)
+    built, checked = [], []
+
+    def docker(*args):
+        context = Path(args[-1])
+        built.append((args, sorted(str(p.relative_to(context)) for p in context.rglob("*") if p.is_file())))
+
+    def run(command, run=subprocess.run, **options):
+        return checked.append(command) if "check-image.sh" in str(command) else run(command, **options)
+
+    monkeypatch.setattr(packages, "docker", docker)
+    monkeypatch.setattr(packages.subprocess, "run", run)
+    image(deb, "pg_warren:test", smoke=smoke)
+    (args, files), = built
+    assert args[0] == "build"
+    assert args[args.index("--platform") + 1] == f"linux/{arch}"
+    assert args[args.index("--build-arg") + 1] == f"BASE={postgres_image('16', 'trixie')}"
+    assert files == ["usr/lib/postgresql/16/lib/pg_warren.so",
+                     "usr/share/doc/postgresql-16-pg-warren/copyright",
+                     "usr/share/postgresql/16/extension/pg_warren--0.6.0--0.7.0.sql",
+                     "usr/share/postgresql/16/extension/pg_warren--0.7.0.sql",
+                     "usr/share/postgresql/16/extension/pg_warren.control"]
+    assert len(checked) == (1 if smoke else 0)

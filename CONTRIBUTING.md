@@ -357,7 +357,9 @@ Every release is published as (README.md, "Install"):
   jammy packages' files laid out as `pkglibdir/` and `sharedir/extension/`.
 - **Docker images** `ghcr.io/exadev/pg_warren:X.Y.Z-pgNN` (and `pgNN` for
   the latest release), amd64 and arm64: `postgres:NN-trixie` with the
-  trixie package and pg_warren preloaded (`packaging/docker/Dockerfile`).
+  trixie package's files (unpacked, not installed with apt: the build runs
+  nothing, so either arch builds on any host) and pg_warren preloaded
+  (`packaging/docker/Dockerfile`).
 - **A Homebrew formula** in the tap `exadev/homebrew-tap`
   (`brew install exadev/tap/pg_warren`), rendered from
   `packaging/homebrew/pg_warren.rb.in` by `release/homebrew.py`, modelled
@@ -372,8 +374,8 @@ and no secrets, from the recorded release commit's source with the
 tooling (`release/`, `packaging/`) of the commit that started the run:
 `debs` (one job per distribution and arch, the four majors each, every
 package installed with apt into a clean container with PGDG's PostgreSQL,
-preloaded, restarted and smoke-tested; the tarballs on jammy, the images on
-trixie, each smoke-tested) and `homebrew` (`brew style`, `brew audit
+preloaded, restarted and smoke-tested; on trixie, the images made from
+them, each smoke-tested on its own arch) and `homebrew` (`brew style`, `brew audit
 --strict`, `brew install --build-bottle`, `brew test`, `brew bottle`). The
 Docker Hub images they build in and on (`debian`, `ubuntu`, `postgres`)
 are pinned by digest in `release/packages.py`, and rustup-init by version
@@ -399,6 +401,11 @@ runs no build code, take what they built, **as data**:
   root:root by name and id (dpkg takes the owner by name where the host
   knows it); its Version is `X.Y.Z-1~<distribution>` and its file name its
   own;
+- it makes the tarballs (`release/packages.py tarball`: `dpkg-deb -x`
+  and Python) from the checked jammy packages, and the Docker images
+  (`release/packages.py image --no-smoke`, both arches, the build running
+  nothing) from the checked trixie packages on the digest-pinned
+  `postgres` images, rather than taking either from the build jobs;
 - it renders the formula again from the source tarball
   (`release/homebrew.py`), taking from the bottle job only a bottle block
   of this release's `root_url` and sha256 lines;
@@ -417,8 +424,9 @@ runs no build code, take what they built, **as data**:
   contribute nothing: the first packaged release starts the repository);
   and signs it;
 - it pushes the images to GHCR with the environment's `GHCR_TOKEN` (the job
-  has no `packages: write`) and commits the formula to the tap with
-  `HOMEBREW_TAP_DEPLOY_KEY`;
+  has no `packages: write`), after checking with GitHub's API that the
+  package is linked to no repository, and commits the formula to the tap
+  with `HOMEBREW_TAP_DEPLOY_KEY`;
 - the `pages` job then deploys the repository to GitHub Pages.
 
 Republishing an older release attaches and rebuilds the same way, but moves
@@ -428,6 +436,7 @@ that a second, independent build could confirm the published packages
 
 CI keeps the path from rotting: `packages` builds `postgresql-16-pg-warren`
 for bookworm on every pull request with the same `release/packages.py`,
+checks it as the publish job does (`release/assets.py check-deb`),
 installs it with apt into a clean container, preloads, restarts and runs
 `packaging/smoke.sql`, makes the tarball, and builds and checks the Docker
 image; `packages-arm64` does the same for noble on arm64 off the
@@ -527,12 +536,19 @@ Set once in the repository's settings; the workflows assume them.
    may publish packages for the org (a dedicated machine account if you
    have one), with an expiry you will renew. In the `release` environment,
    add it as the secret `GHCR_TOKEN`, and that account's login as the
-   environment *variable* `GHCR_USERNAME`. After the first release, in the
-   org's package `pg_warren` (Packages → pg_warren → Package settings):
-   *Change visibility* → **Public**; under *Manage Actions access*, give
-   this repository **Read** or remove it; and untick **Inherit access from
-   source repository**. The token can write to every package that account
-   can: keep the account's package rights to this one.
+   environment *variable* `GHCR_USERNAME`. The images carry no
+   `org.opencontainers.image.source` label, so the first push creates the
+   org's package `pg_warren` linked to no repository: a linked package
+   inherits the repository's access by default, which would let any
+   workflow here that asks for `packages: write` push the images. Keep it
+   unlinked: the publish job refuses to push to a package linked to a
+   repository (GitHub's API shows the link, not the inheritance setting,
+   so the link is what it checks). After the first release, in Packages →
+   pg_warren → Package settings: *Change visibility* → **Public**; do not
+   *Connect repository*; under *Manage Actions access*, add no repository
+   (or this one with **Read** at most). The token can write to every
+   package that account can: keep the account's package rights to this
+   one.
 8. **The Homebrew tap**: create the public repository
    `ExaDev/homebrew-tap` (with a README, so that `main` exists), and protect
    its `main` against force-pushes and deletion (a branch ruleset). Generate

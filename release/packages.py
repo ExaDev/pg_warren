@@ -4,17 +4,17 @@ the .deb packages of the apt repository, one per PostgreSQL major
 (`postgresql-NN-pg-warren`, PGDG's naming), built from packaging/debian in
 each distribution's own container against PGDG's server headers; the
 tarballs, laid out for `pg_config`, made from a built package; and the
-Docker image, PGDG's `postgres` image with the package installed.
+Docker image, PGDG's `postgres` image with the package's files.
 
     release/packages.py deb CODENAME SOURCE OUT [--majors 15 16 17 18]
     release/packages.py check DEB              # installs it with apt in a clean container
     release/packages.py tarball DEB OUT
-    release/packages.py image DEB TAG          # builds the image and checks it
+    release/packages.py image DEB TAG [--no-smoke]  # builds the image (and smoke-tests it)
 
 SOURCE is a checkout of the release (its Cargo.lock pins the cargo-pgrx to
 build with); the tooling, packaging/ and this script, is the checkout this
 runs from. Run from the repository root; each command needs Docker but
-`tarball`, which needs dpkg-deb.
+`tarball`, which needs dpkg-deb, as `image` does too.
 """
 
 import argparse
@@ -24,7 +24,6 @@ import gzip
 import io
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tarfile
@@ -235,15 +234,17 @@ def check(deb):
            distribution(codename).image, "bash", "/packaging/check-deb.sh", f"/pkg/{deb.name}")
 
 
-def image(deb, tag):
-    """PGDG's postgres:NN-CODENAME image (by digest) with the package, and its check."""
-    major, codename, _ = major_and_codename(deb)
-    deb = Path(deb).resolve()
+def image(deb, tag, smoke=True):
+    """PGDG's postgres:NN-CODENAME image (by digest) for the package's
+    architecture, with the package's files, and (if `smoke`, which needs
+    a host of that architecture) its smoke test. The build runs nothing."""
+    major, codename, control = major_and_codename(deb)
     with tempfile.TemporaryDirectory() as context:
-        shutil.copy(deb, Path(context) / "pg_warren.deb")
-        docker("build", "-f", PACKAGING / "docker" / "Dockerfile",
+        subprocess.run(["dpkg-deb", "-x", str(deb), context], check=True)
+        docker("build", "--platform", f"linux/{control['Architecture']}", "-f", PACKAGING / "docker" / "Dockerfile",
                "--build-arg", f"BASE={postgres_image(major, codename)}", "-t", tag, context)
-    subprocess.run(["bash", str(PACKAGING / "check-image.sh"), tag], check=True)
+    if smoke:
+        subprocess.run(["bash", str(PACKAGING / "check-image.sh"), tag], check=True)
 
 
 def main(argv):
@@ -261,6 +262,8 @@ def main(argv):
     built = commands.add_parser("image")
     built.add_argument("deb", type=Path)
     built.add_argument("tag")
+    built.add_argument("--no-smoke", dest="smoke", action="store_false",
+                       help="build only (the publish job: the image's arch need not be the host's)")
     args = parser.parse_args(argv)
     try:
         if args.command == "deb":
@@ -270,7 +273,7 @@ def main(argv):
         elif args.command == "tarball":
             print(tarball(args.deb, args.out, commit_time(ROOT)))
         else:
-            image(args.deb, args.tag)
+            image(args.deb, args.tag, args.smoke)
     except (PackagingError, subprocess.CalledProcessError, OSError) as error:
         print(f"release/packages.py: {error}", file=sys.stderr)
         return 1
