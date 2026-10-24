@@ -3,6 +3,7 @@
 //! relations' rows on the fly (DESIGN.md §5.3, §5.4 step 4).
 
 use super::build::{stores_merged, BuildPlan, BuiltCsr, CsrDirection, CsrScope, CsrSink};
+use super::sparse::{dense_bytes, offsets_bound};
 use super::TargetWidth;
 use super::{transpose::transpose, AllRelations, AnyCsr, CsrRows};
 #[cfg(test)]
@@ -26,7 +27,7 @@ impl RelationCsr {
             if reverse.edge_count() != forward.edge_count() {
                 return Err(GraphError::ReverseNotTranspose);
             }
-            if cfg!(debug_assertions) && transposed(&forward)? != *reverse {
+            if cfg!(debug_assertions) && transposed(&forward)? != densified(reverse) {
                 return Err(GraphError::ReverseNotTranspose);
             }
         }
@@ -77,6 +78,14 @@ fn check_alike(expected: &AnyCsr, found: &AnyCsr) -> Result<(), GraphError> {
         return Err(GraphError::WeightednessMismatch);
     }
     Ok(())
+}
+
+/// `csr` with dense offsets, to compare it with a transposition's.
+fn densified(csr: &AnyCsr) -> AnyCsr {
+    match csr {
+        AnyCsr::U32(csr) => csr.densified().into(),
+        AnyCsr::U64(csr) => csr.densified().into(),
+    }
 }
 
 fn transposed(csr: &AnyCsr) -> Result<AnyCsr, GraphError> {
@@ -144,33 +153,37 @@ pub struct GraphCsr {
 }
 
 impl GraphCsr {
-    /// The bytes of every offsets array a build allocates: `8·(id_space + 1)`
-    /// per CSR, for each relation plus the merged CSR (when there are no
-    /// relations, or several and `layout` stores it), twice with reverse
-    /// CSRs. This term grows with relations × nodes, independently of the
-    /// edge count (DESIGN.md §5.3). Saturates at `u64::MAX`.
+    /// The least bytes the offsets of a version hold, whatever its edges:
+    /// the all-relations CSR's dense `8·(id_space + 1)` (the merged CSR,
+    /// when there are no relations or several and `layout` stores it, or
+    /// the only relation's), and one offset per relation's CSR among
+    /// several, whose offsets are sparse until its edges fill enough rows
+    /// (DESIGN.md §5.3), twice with reverse CSRs. Saturates at `u64::MAX`.
     pub fn offsets_bytes(relation_count: usize, id_space: u64, layout: CsrLayout) -> u64 {
-        let merged = usize::from(stores_merged(relation_count, layout));
+        let only = relation_count == 1;
+        let all = stores_merged(relation_count, layout) || only;
+        let all_relations = if all { dense_bytes(id_space) } else { 0 };
         let directions: u64 = if layout.build_reverse { 2 } else { 1 };
-        (relation_count as u64)
-            .saturating_add(merged as u64)
-            .saturating_mul(directions)
-            .saturating_mul(id_space.saturating_add(1))
-            .saturating_mul(8)
+        let several = if only { 0 } else { relation_count as u64 };
+        let relations = offsets_bound(0, id_space).saturating_mul(several);
+        relations.saturating_add(all_relations).saturating_mul(directions)
     }
 
     /// Refuses with [`GraphError::OffsetsOverBudget`] a version whose
-    /// [`Self::offsets_bytes`] exceed `budget`: a build streams its CSRs and
-    /// holds at most a group of relations' offsets at once, but a version
-    /// whose offsets alone exceed the build budget is refused before
-    /// anything is built (DESIGN.md §14 item 17).
+    /// [`Self::offsets_bytes`], with the `8·id_space` bytes of row cursors
+    /// a build of several relations holds (DESIGN.md §5.4), exceed
+    /// `budget`, before its edges are read: what the edges add is
+    /// estimated once they are ([`BuildPlan`]), before anything is built
+    /// (DESIGN.md §14 item 17).
     pub fn check_offsets(
         relation_count: usize,
         id_space: u64,
         layout: CsrLayout,
         budget: u64,
     ) -> Result<(), GraphError> {
-        let required = Self::offsets_bytes(relation_count, id_space, layout);
+        let cursors = if relation_count > 1 { id_space.saturating_mul(8) } else { 0 };
+        let offsets = Self::offsets_bytes(relation_count, id_space, layout);
+        let required = offsets.saturating_add(cursors);
         match required <= budget {
             true => Ok(()),
             false => Err(GraphError::OffsetsOverBudget { required, budget }),
@@ -269,6 +282,20 @@ impl GraphCsr {
     #[cfg(test)]
     pub(crate) fn shared_views(&self) -> Self {
         Self { layout: self.layout.shared_views(), deduplicated_edges: self.deduplicated_edges }
+    }
+
+    /// The same graph with every CSR's offsets dense, so that tests read
+    /// both layouts.
+    #[cfg(test)]
+    pub(crate) fn densified(&self) -> Self {
+        let each = |relation: &RelationCsr| RelationCsr {
+            forward: densified(&relation.forward),
+            reverse: relation.reverse.as_ref().map(densified),
+        };
+        let relations = self.relations().iter().map(each).collect();
+        let merged = self.merged().map(each);
+        let layout = Layout::new(relations, merged).unwrap_or_else(|_| self.layout.clone());
+        Self { layout, deduplicated_edges: self.deduplicated_edges }
     }
 
     /// The CSRs of each relation, in relation-index order.
@@ -407,7 +434,7 @@ mod tests {
         DenseId, EdgeIntake, IdMap, RelationDictionary, RelationSelection, TargetWidth,
     };
     use proptest::prelude::*;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     type Naive = BTreeMap<(DenseId, DenseId), f64>;
 
@@ -421,6 +448,14 @@ mod tests {
             }
         }
         edges
+    }
+
+    /// The ids of the rows `csr` stores, if its offsets are sparse.
+    fn stored_rows(csr: &AnyCsr) -> Option<Vec<DenseId>> {
+        match csr {
+            AnyCsr::U32(csr) => csr.rows().map(|rows| rows.iter().map(|&r| r.into()).collect()),
+            AnyCsr::U64(csr) => csr.rows().map(<[u64]>::to_vec),
+        }
     }
 
     fn pairs(rows: CsrRows<'_>) -> Vec<(DenseId, DenseId)> {
@@ -687,49 +722,118 @@ mod tests {
     }
 
     #[test]
-    fn offsets_bytes_counts_every_offsets_array() {
+    fn offsets_bytes_counts_the_merged_csr_and_an_offset_per_relation() {
         let stored = |build_reverse| CsrLayout { build_reverse, store_merged: true };
-        // 1 relation, no merged CSR: 1 forward + 1 reverse array of 4 offsets.
-        assert_eq!(GraphCsr::offsets_bytes(1, 3, stored(true)), 2 * 4 * 8);
-        assert_eq!(GraphCsr::offsets_bytes(1, 3, unmerged(true)), 2 * 4 * 8);
+        // 1 relation, no merged CSR: its own dense offsets, as the
+        // all-relations CSR, forward and reverse.
+        assert_eq!(GraphCsr::offsets_bytes(1, 1000, stored(true)), 2 * 1001 * 8);
+        assert_eq!(GraphCsr::offsets_bytes(1, 1000, unmerged(true)), 2 * 1001 * 8);
         // 3 relations + merged, forward only; without the merged CSR.
-        assert_eq!(GraphCsr::offsets_bytes(3, 3, stored(false)), 4 * 4 * 8);
-        assert_eq!(GraphCsr::offsets_bytes(3, 3, unmerged(false)), 3 * 4 * 8);
+        assert_eq!(GraphCsr::offsets_bytes(3, 1000, stored(false)), 3 * 8 + 1001 * 8);
+        assert_eq!(GraphCsr::offsets_bytes(3, 1000, unmerged(false)), 3 * 8);
         // No relations: the empty merged CSR alone.
         assert_eq!(GraphCsr::offsets_bytes(0, 3, unmerged(false)), 4 * 8);
         assert_eq!(GraphCsr::offsets_bytes(usize::MAX, u64::MAX - 1, stored(true)), u64::MAX);
     }
 
     #[test]
-    fn a_version_over_its_offsets_budget_is_refused() {
+    fn a_version_over_its_offsets_budget_is_refused_but_not_for_its_relations() {
         let layout = CsrLayout { build_reverse: true, store_merged: true };
-        let required = GraphCsr::offsets_bytes(1000, 1 << 40, layout);
+        let required = GraphCsr::offsets_bytes(1000, 1 << 40, layout) + 8 * (1 << 40);
         assert_eq!(
             GraphCsr::check_offsets(1000, 1 << 40, layout, 1 << 30),
             Err(GraphError::OffsetsOverBudget { required, budget: 1 << 30 })
         );
-        let budget = GraphCsr::offsets_bytes(2, 3, layout);
-        assert_eq!(GraphCsr::check_offsets(2, 3, layout, budget), Ok(()));
-        // Without the merged CSR the same budget leaves room for a third relation.
-        assert_eq!(GraphCsr::check_offsets(3, 3, unmerged(true), budget), Ok(()));
+        // 1,000 relations over 10M nodes: 160 MB of offsets for the merged
+        // CSR, and 16 kB for the relations (it was 160 GB).
+        assert_eq!(GraphCsr::check_offsets(1000, 10_000_000, layout, 300 << 20), Ok(()));
+        assert_eq!(GraphCsr::check_offsets(1000, 10_000_000, unmerged(true), 100 << 20), Ok(()));
     }
 
     #[test]
-    fn a_plan_needs_at_most_every_offsets_array() {
+    fn several_relations_are_refused_for_their_row_cursors_before_their_edges_are_read() {
+        // Without the merged CSR, 1,000 relations over 10M nodes hold 16 kB
+        // of offsets, but their build holds 80 MB of row cursors.
+        let required = GraphCsr::offsets_bytes(1000, 10_000_000, unmerged(true)) + 80_000_000;
+        assert_eq!(
+            GraphCsr::check_offsets(1000, 10_000_000, unmerged(true), 1 << 20),
+            Err(GraphError::OffsetsOverBudget { required, budget: 1 << 20 })
+        );
+        // One relation is built without them.
+        let one = GraphCsr::offsets_bytes(1, 10_000_000, unmerged(true));
+        assert_eq!(GraphCsr::check_offsets(1, 10_000_000, unmerged(true), one), Ok(()));
+    }
+
+    #[test]
+    fn a_relation_stores_sparse_offsets_where_they_pay() {
+        // 1,000 nodes: relation a has rows 3 and 500; b a row from every node.
+        let (_, a, b) = two_relations();
+        let mut edges = EdgeList::new(true);
+        edges.push(a, 500, 9, 1.0).unwrap();
+        edges.push(a, 3, 7, 2.0).unwrap();
+        edges.push(a, 500, 7, 3.0).unwrap();
+        edges.push(a, 500, 9, 4.0).unwrap();
+        for node in 0..1000 {
+            edges.push(b, node, (node + 1) % 1000, 1.0).unwrap();
+        }
+        let graph = GraphCsr::build(edges, 2, 1000, true).unwrap();
+        let narrow = |csr: &AnyCsr| match csr {
+            AnyCsr::U32(csr) => csr.clone(),
+            AnyCsr::U64(_) => panic!("u64 targets"),
+        };
+        let a_csrs = graph.relation(a).unwrap();
+        let forward = narrow(a_csrs.forward());
+        assert_eq!(forward.rows(), Some(&[3, 500][..]));
+        assert_eq!(forward.offsets(), &[0, 1, 3]);
+        assert_eq!(forward.targets(), &[7, 7, 9]);
+        assert_eq!(forward.weights(), Some(&[2.0, 3.0, 5.0][..]));
+        let reverse = narrow(a_csrs.reverse().unwrap());
+        assert_eq!(reverse.rows(), Some(&[7, 9][..]));
+        assert_eq!(reverse.offsets(), &[0, 2, 3]);
+        assert_eq!(reverse.targets(), &[3, 500, 500]);
+        assert_eq!(graph.deduplicated_edges(), 1);
+        let b_csrs = graph.relation(b).unwrap();
+        for csr in [b_csrs.forward(), b_csrs.reverse().unwrap()] {
+            assert!(!narrow(csr).is_sparse());
+        }
+        let merged = graph.merged().unwrap();
+        for csr in [merged.forward(), merged.reverse().unwrap()] {
+            assert!(!narrow(csr).is_sparse(), "the merged CSR's offsets stay dense");
+        }
+        // Relation a's four CSRs hold 3 rows and offsets, not 1,001 offsets.
+        assert!(graph.relation(a).unwrap().bytes() < 200, "{}", a_csrs.bytes());
+    }
+
+    #[test]
+    fn a_graph_of_one_relation_stores_dense_offsets_as_its_all_relations_csr() {
+        let (_, a, _) = two_relations();
+        let mut edges = EdgeList::new(true);
+        edges.push(a, 500, 9, 1.0).unwrap();
+        edges.push(a, 3, 7, 2.0).unwrap();
+        let graph = GraphCsr::build(edges, 1, 1000, true).unwrap();
+        let relation = graph.relation(a).unwrap();
+        assert_eq!(stored_rows(relation.forward()), None);
+        assert_eq!(stored_rows(relation.reverse().unwrap()), None);
+        let layout = CsrLayout { build_reverse: true, store_merged: true };
+        assert_eq!(GraphCsr::offsets_bytes(1, 1000, layout), 2 * 8008);
+    }
+
+    #[test]
+    fn a_plan_of_relations_without_edges_needs_no_dense_offsets_for_them() {
         let memory = BuildMemory::unlimited();
         for layout in [unmerged(true), CsrLayout { build_reverse: true, store_merged: true }] {
-            for relations in [0, 1, 3] {
-                let plan = BuildPlan::new(&EdgeList::new(false), relations, 50, layout, &memory, 0)
-                    .unwrap();
-                let offsets = GraphCsr::offsets_bytes(relations, 50, layout);
-                // At least one relation's forward and reverse CSRs, at most
-                // every relation's.
-                assert!(plan.bytes_needed() >= 2 * 51 * 8, "{relations}: {}", plan.bytes_needed());
-                // Besides the offsets, a header of a few hundred bytes for
-                // each relation's rows.
-                let headers = 256 * relations.max(1) as u64;
+            for relations in [0, 1, 3, 1000] {
+                let plan =
+                    BuildPlan::new(&EdgeList::new(false), relations, 50_000, layout, &memory, 0)
+                        .unwrap();
+                // The cursors and the merged CSR's offsets, if stored, in
+                // both directions; a few hundred bytes for each relation.
+                let merged = GraphCsr::offsets_bytes(relations, 50_000, layout);
                 let needed = plan.bytes_needed();
-                assert!(needed <= offsets + headers, "{relations}: {needed}");
+                assert!(
+                    needed <= 50_000 * 8 + merged + 256 * relations.max(1) as u64,
+                    "{relations}: {needed}"
+                );
             }
         }
     }
@@ -739,8 +843,8 @@ mod tests {
         let memory = BuildMemory::new(100);
         let edges = EdgeList::within(3, false, &memory);
         let plan = BuildPlan::new(&edges, 1, 3, unmerged(false), &memory, 0).unwrap();
-        // One relation's offsets and targets, and the header of its rows.
-        assert!(plan.bytes_needed() > 32, "{}", plan.bytes_needed());
+        // One relation's dense offsets.
+        assert!(plan.bytes_needed() >= 32, "{}", plan.bytes_needed());
         let small = BuildMemory::new(plan.bytes_needed() - 1);
         let edges = EdgeList::within(3, false, &small);
         let refused = plan.build(edges, &mut Built::default());
@@ -852,12 +956,25 @@ mod tests {
 
             prop_assert_eq!(graph.deduplicated_edges(), (scenario.edges.len() - distinct) as u64);
             for (relation, naive) in graph.relations().iter().zip(&per_relation) {
+                // Sparse offsets exactly where the policy picks them.
+                let reversed_naive = reversed(naive);
+                for (csr, naive) in [(relation.forward(), naive), (relation.reverse().unwrap(), &reversed_naive)] {
+                    let stored: BTreeSet<DenseId> = naive.keys().map(|&(source, _)| source).collect();
+                    // A graph's only relation is its all-relations CSR: dense.
+                    let sparse = count > 1
+                        && super::super::sparse::stores_sparse(stored.len() as u64, id_space, width);
+                    prop_assert_eq!(stored_rows(csr), sparse.then(|| stored.into_iter().collect()));
+                }
                 prop_assert_eq!(relation.forward().id_space(), scenario.id_space);
                 prop_assert_eq!(relation.forward().is_weighted(), scenario.weighted);
                 prop_assert_eq!(&rows(relation.forward()), naive);
                 prop_assert_eq!(rows(relation.reverse().unwrap()), reversed(naive));
             }
             // The weights of the stored all-relations CSR, if there is one.
+            if let Some(merged) = graph.merged() {
+                prop_assert_eq!(stored_rows(merged.forward()), None);
+                prop_assert_eq!(stored_rows(merged.reverse().unwrap()), None);
+            }
             if let Some(stored) = graph.merged().or((count == 1).then(|| &graph.relations()[0])) {
                 prop_assert_eq!(&rows(stored.forward()), &merged);
                 prop_assert_eq!(rows(stored.reverse().unwrap()), reversed(&merged));

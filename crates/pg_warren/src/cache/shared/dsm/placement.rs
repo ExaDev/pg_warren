@@ -23,11 +23,11 @@ pub(super) const SLOTS: usize = 128;
 /// The registry's format, changed whenever its layout or a version
 /// segment's does; backends of builds with different formats use
 /// different registries.
-pub(in crate::cache::shared) const FORMAT: u32 = 3;
+pub(in crate::cache::shared) const FORMAT: u32 = 4;
 
 /// The name of the registry: its named DSM segment on PG 17 and 18, its
 /// `ShmemInitStruct` entry on PG 15 and 16. It ends with [`FORMAT`].
-pub(super) const NAME: &std::ffi::CStr = c"pg_warren.cache.3";
+pub(super) const NAME: &std::ffi::CStr = c"pg_warren.cache.4";
 
 /// The LWLock tranche's name, which each backend registers.
 const TRANCHE: &std::ffi::CStr = c"pg_warren";

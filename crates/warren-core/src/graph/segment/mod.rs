@@ -6,7 +6,7 @@
 //! | Bytes | Field |
 //! |---|---|
 //! | 0..4 | magic `WRSG` |
-//! | 4 | format, currently 1 |
+//! | 4 | format: 2 for a CSR's segments (sparse offsets, 0.7.0), 1 for every other kind |
 //! | 5 | [`SegmentKind`] |
 //! | 6 | element width in bytes (0 for variable-width elements) |
 //! | 7 | for `id_bytes`, the database encoding (`pg_database.encoding`); for every other kind reserved, 0 |
@@ -31,7 +31,17 @@ use super::{memory, BuildMemory, DenseId, ExternalId, GraphError, IdPair};
 /// The length of a segment header in bytes.
 pub const SEGMENT_HEADER_LEN: usize = 16;
 const MAGIC: [u8; 4] = *b"WRSG";
-const FORMAT: u8 = 1;
+
+/// The format of segments of `kind`. A CSR's segments are format 2 since
+/// sparse offsets (0.7.0); format 1 CSR segments, from an earlier build,
+/// are refused rather than read. Every other kind is still format 1, so a
+/// refresh can build on such a version's id map (DESIGN.md §5.3).
+const fn format(kind: SegmentKind) -> u8 {
+    match kind {
+        SegmentKind::Offsets | SegmentKind::Targets | SegmentKind::Weights | SegmentKind::Rows => 2,
+        _ => 1,
+    }
+}
 
 /// What a segment holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +70,9 @@ pub enum SegmentKind {
     IdBytes = 9,
     /// `id_order`: the dense ids sorted by text id (`u32` or `u64`).
     IdOrder = 10,
+    /// CSR `rows`: with sparse offsets, the ids of the rows stored (`u32`
+    /// or `u64`, the target width).
+    Rows = 11,
 }
 
 impl SegmentKind {
@@ -185,7 +198,7 @@ pub(crate) fn with_header(
 ) -> Result<Vec<u8>, GraphError> {
     let mut out = memory::with_capacity(SEGMENT_HEADER_LEN + payload_len)?;
     out.extend_from_slice(&MAGIC);
-    out.extend_from_slice(&[FORMAT, kind as u8, width as u8, encoding]);
+    out.extend_from_slice(&[format(kind), kind as u8, width as u8, encoding]);
     out.extend_from_slice(&count.to_le_bytes());
     Ok(out)
 }
@@ -266,7 +279,7 @@ pub(crate) fn read_header(bytes: &[u8], kind: SegmentKind) -> Result<(Header, &[
     if header[..4] != MAGIC {
         return Err(GraphError::SegmentMagic);
     }
-    if header[4] != FORMAT {
+    if header[4] != format(kind) {
         return Err(GraphError::SegmentFormat { found: header[4] });
     }
     if header[5] != kind as u8 {
@@ -318,7 +331,7 @@ pub(crate) fn decode<E: Element>(kind: SegmentKind, bytes: &[u8]) -> Result<Vec<
 mod tests {
     use super::*;
     use crate::graph::{
-        AnyCsr, Csr, EdgeList, FixedKeys, GraphCsr, IdMap, RelationDictionary, Tombstones,
+        AnyCsr, Csr, EdgeList, FixedKeys, GraphCsr, IdMap, RelationDictionary, Target, Tombstones,
     };
     use proptest::prelude::*;
 
@@ -335,9 +348,10 @@ mod tests {
     #[test]
     fn a_segment_starts_with_its_header() {
         let segments = csr_example().encode().unwrap();
-        assert_eq!(&segments.offsets()[..8], b"WRSG\x01\x01\x08\x00");
+        assert_eq!(&segments.offsets()[..8], b"WRSG\x02\x01\x08\x00");
         assert_eq!(&segments.offsets()[8..16], &4u64.to_le_bytes());
-        assert_eq!(&segments.targets()[4..8], b"\x01\x02\x04\x00");
+        assert_eq!(&segments.targets()[4..8], b"\x02\x02\x04\x00");
+        assert_eq!(segments.rows(), None, "dense offsets");
         assert_eq!(segments.offsets().len(), SEGMENT_HEADER_LEN + 4 * 8);
     }
 
@@ -345,15 +359,98 @@ mod tests {
     fn a_csr_round_trips() {
         let csr = csr_example();
         let segments = csr.encode().unwrap();
-        let decoded =
-            AnyCsr::decode(3, segments.offsets(), segments.targets(), segments.weights()).unwrap();
+        let decoded = AnyCsr::decode(
+            3,
+            segments.rows(),
+            segments.offsets(),
+            segments.targets(),
+            segments.weights(),
+        )
+        .unwrap();
         assert_eq!(decoded, csr);
+    }
+
+    /// A sparse CSR over 1,000 rows: rows 3 and 900, `u32` or `u64` wide.
+    fn sparse_example<T: Target>() -> Csr<T> {
+        let (rows, targets) = (vec![3, 900].into_iter(), vec![1, 999, 3].into_iter());
+        let (rows, targets) = (rows.filter_map(T::from_dense), targets.filter_map(T::from_dense));
+        let weights = Some(vec![0.5, 1.5, 2.5]);
+        Csr::from_sparse_parts(1000, rows.collect(), vec![0, 2, 3], targets.collect(), weights)
+            .unwrap()
+    }
+
+    #[test]
+    fn a_sparse_csr_round_trips_with_its_rows_segment() {
+        let narrow = AnyCsr::U32(sparse_example());
+        let segments = narrow.encode().unwrap();
+        let rows = segments.rows().unwrap();
+        assert_eq!(&rows[..8], b"WRSG\x02\x0b\x04\x00");
+        assert_eq!(&rows[8..16], &2u64.to_le_bytes());
+        assert_eq!(rows.len(), SEGMENT_HEADER_LEN + 2 * 4);
+        assert_eq!(segments.offsets().len(), SEGMENT_HEADER_LEN + 3 * 8);
+        let decode = |segments: &CsrSegments, id_space| {
+            let (offsets, targets) = (segments.offsets(), segments.targets());
+            AnyCsr::decode(id_space, segments.rows(), offsets, targets, segments.weights())
+        };
+        assert_eq!(decode(&segments, 1000), Ok(narrow));
+        // Rows at the target width of the id space, as targets are.
+        let wide = AnyCsr::U64(sparse_example());
+        assert_eq!(
+            decode(&wide.encode().unwrap(), 1000),
+            Err(GraphError::SegmentWidth { expected: 4, found: 8 })
+        );
+        let wide = AnyCsr::U64(
+            Csr::from_sparse_parts(1 << 32, vec![1 << 31], vec![0, 1], vec![2], None).unwrap(),
+        );
+        assert_eq!(decode(&wide.encode().unwrap(), 1 << 32), Ok(wide));
+    }
+
+    #[test]
+    fn decoding_checks_the_rows_segment() {
+        let segments = AnyCsr::U32(sparse_example()).encode().unwrap();
+        let decode = |rows: Option<&[u8]>| {
+            AnyCsr::decode(1000, rows, segments.offsets(), segments.targets(), segments.weights())
+        };
+        assert_eq!(
+            decode(Some(segments.targets())),
+            Err(GraphError::SegmentKind {
+                expected: SegmentKind::Rows as u8,
+                found: SegmentKind::Targets as u8
+            })
+        );
+        // Without its rows, sparse offsets are too short to be dense.
+        assert_eq!(decode(None), Err(GraphError::OffsetsLength { expected: 1001, found: 3 }));
+        let mut descending = segments.rows().unwrap().to_vec();
+        descending[SEGMENT_HEADER_LEN..SEGMENT_HEADER_LEN + 4]
+            .copy_from_slice(&901u32.to_le_bytes());
+        assert_eq!(decode(Some(&descending)), Err(GraphError::StoredRowsNotAscending { index: 1 }));
+    }
+
+    #[test]
+    fn csr_segments_of_the_format_before_sparse_offsets_are_refused() {
+        let segments = csr_example().encode().unwrap();
+        for part in [segments.offsets(), segments.targets()] {
+            let mut old = part.to_vec();
+            old[4] = 1;
+            let error = match part == segments.offsets() {
+                true => AnyCsr::decode(3, None, &old, segments.targets(), None),
+                false => AnyCsr::decode(3, None, segments.offsets(), &old, None),
+            };
+            assert_eq!(error, Err(GraphError::SegmentFormat { found: 1 }));
+            assert!(GraphError::SegmentFormat { found: 1 }.to_string().contains("warren.refresh"));
+        }
+        // The id map, tombstones and relation dictionary keep format 1, so
+        // a refresh can build on a version of the format before.
+        let tombstones = Tombstones::new(3).unwrap().encode().unwrap();
+        assert_eq!(tombstones[4], 1);
+        assert!(Tombstones::decode(&tombstones).is_ok());
     }
 
     #[test]
     fn decoding_checks_the_header() {
         let segments = csr_example().encode().unwrap();
-        let decode_offsets = |bytes: &[u8]| AnyCsr::decode(3, bytes, segments.targets(), None);
+        let decode_offsets =
+            |bytes: &[u8]| AnyCsr::decode(3, None, bytes, segments.targets(), None);
         assert_eq!(decode_offsets(&segments.offsets()[..10]), Err(GraphError::SegmentTruncated));
         let mut bad = segments.offsets().to_vec();
         bad[0] = b'X';
@@ -425,7 +522,7 @@ mod tests {
         let wide = AnyCsr::U64(Csr::from_parts(3, vec![0, 1, 1, 1], vec![2u64], None).unwrap());
         let segments = wide.encode().unwrap();
         assert_eq!(
-            AnyCsr::decode(3, segments.offsets(), segments.targets(), None),
+            AnyCsr::decode(3, None, segments.offsets(), segments.targets(), None),
             Err(GraphError::SegmentWidth { expected: 4, found: 8 })
         );
     }
@@ -436,7 +533,7 @@ mod tests {
         let mut bad = segments.offsets().to_vec();
         bad[SEGMENT_HEADER_LEN + 8..SEGMENT_HEADER_LEN + 16].copy_from_slice(&5u64.to_le_bytes());
         assert_eq!(
-            AnyCsr::decode(3, &bad, segments.targets(), None),
+            AnyCsr::decode(3, None, &bad, segments.targets(), None),
             Err(GraphError::OffsetsNotMonotone { row: 1 })
         );
     }
@@ -551,7 +648,7 @@ mod tests {
             let graph = GraphCsr::build(edges, relations.len(), id_space, true).unwrap();
             for csr in [graph.relations()[0].forward(), graph.relation(r).unwrap().reverse().unwrap()] {
                 let segments = csr.encode().unwrap();
-                let decoded = AnyCsr::decode(id_space, segments.offsets(), segments.targets(), segments.weights());
+                let decoded = AnyCsr::decode(id_space, segments.rows(), segments.offsets(), segments.targets(), segments.weights());
                 prop_assert_eq!(decoded.as_ref(), Ok(csr));
             }
 
@@ -574,13 +671,14 @@ mod tests {
         ) {
             // A plausible header followed by arbitrary bytes reaches the
             // structural checks, not just the header checks.
-            let mut framed = b"WRSG\x01".to_vec();
+            let mut framed = vec![b'W', b'R', b'S', b'G', 1 + u8::from(count % 2 == 0)];
             framed.extend_from_slice(&header[..3]);
             framed.extend_from_slice(&count.to_le_bytes());
             framed.extend_from_slice(&payload);
             for input in [&bytes, &framed] {
-                let _ = AnyCsr::decode(id_space, input, input, Some(input));
-                let _ = AnyCsr::decode(id_space, csr_example().encode().unwrap().offsets(), input, None);
+                let _ = AnyCsr::decode(id_space, None, input, input, Some(input));
+                let _ = AnyCsr::decode(id_space, Some(input), input, input, None);
+                let _ = AnyCsr::decode(id_space, None, csr_example().encode().unwrap().offsets(), input, None);
                 let tombstones = Tombstones::decode(input);
                 let _ = IdMap::<FixedKeys<i32>>::decode(input, tombstones.clone().unwrap_or_default());
                 let _ = IdMap::<FixedKeys<i64>>::decode(input, tombstones.clone().unwrap_or_default());
@@ -632,6 +730,12 @@ mod tests {
                 prop_assert_eq!(length, bytes.len() as u64);
                 prop_assert_eq!(chunks, split(bytes.to_vec()));
             }
+            let sparse = AnyCsr::U32(sparse_example());
+            let whole = sparse.encode().unwrap();
+            let (chunks, length) = chunks_of(&mut |each| Ok(sparse.encode_part(CsrPart::Rows, chunk_size, &memory, each)?.unwrap_or(0)));
+            prop_assert_eq!(length, whole.rows().unwrap().len() as u64);
+            prop_assert_eq!(chunks, split(whole.rows().unwrap().to_vec()));
+            prop_assert_eq!(csr.encode_part::<GraphError>(CsrPart::Rows, chunk_size, &memory, &mut |_| Ok(())), Ok(None));
             prop_assert_eq!(memory.in_use(), 0);
         }
     }

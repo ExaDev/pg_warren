@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 0246accd30d3f74651beefb1f7dd313175645ee71c1bdc7e8944f090d9a769e7 # shrinks to (graph, relations) = (GraphCsr { layout: Unmerged { relations: [RelationCsr { forward: U32(Csr { id_space: 4, rows: None, offsets: [0, 1, 2, 2, 2], targets: [3, 0], weights: Some([1.0, 0.25]) }), reverse: None }, RelationCsr { forward: U32(Csr { id_space: 4, rows: None, offsets: [0, 1, 2, 2, 2], targets: [2, 1], weights: Some([1.0, 1.0]) }), reverse: None }] }, deduplicated_edges: 0 }, [RelationIndex(0), RelationIndex(1)])

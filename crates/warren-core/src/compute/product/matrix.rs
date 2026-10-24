@@ -42,12 +42,32 @@ pub(crate) struct Matrix<'g> {
     memory: ComputeMemory,
 }
 
+/// What a reader of rows reuses across rows: the entries of one row of
+/// several CSRs, and where each CSR's last row was found, so rows read in
+/// ascending order find sparse offsets' rows without a binary search each
+/// (DESIGN.md §5.3).
+#[derive(Debug)]
+pub(crate) struct RowScratch {
+    entries: RowEntries,
+    hints: RowHints,
+}
+
 /// The entries of one row of several CSRs, sorted and folded: a buffer
 /// reused across rows, its capacity charged to the compute budget before
 /// it is reserved.
 #[derive(Debug)]
-pub(crate) struct RowScratch {
+struct RowEntries {
     entries: Vec<(DenseId, f64)>,
+    charge: MemoryCharge,
+}
+
+/// Where each CSR's last row was found: one CSR's hint inline, or, for
+/// several CSRs, a buffer of a hint per CSR, its capacity charged to the
+/// compute budget before it is reserved.
+#[derive(Debug)]
+struct RowHints {
+    one: usize,
+    hints: Vec<usize>,
     charge: MemoryCharge,
 }
 
@@ -55,9 +75,34 @@ impl RowScratch {
     /// An empty scratch, its capacity charged to `memory` as it grows: on
     /// the pool, beyond any bound reclaimed for ahead (DESIGN.md §5.5).
     pub(crate) fn new(memory: &ComputeMemory) -> Result<Self, ComputeError> {
-        Ok(Self { entries: Vec::new(), charge: memory.charge(0)?.unbounded() })
+        let entries = RowEntries { entries: Vec::new(), charge: memory.charge(0)?.unbounded() };
+        let charge = memory.charge(0)?.unbounded();
+        let hints = RowHints { one: 0, hints: Vec::new(), charge };
+        Ok(Self { entries, hints })
     }
+}
 
+impl RowHints {
+    /// A hint for each of `csrs` CSRs: those kept from earlier rows, and 0
+    /// for each CSR more than the buffer held. One CSR's needs no buffer.
+    fn for_csrs(&mut self, csrs: usize) -> Result<&mut [usize], ComputeError> {
+        if csrs == 1 {
+            return Ok(std::slice::from_mut(&mut self.one));
+        }
+        if let Some(more) = csrs.checked_sub(self.hints.len()).filter(|&more| more > 0) {
+            let bytes = (more * size_of::<usize>()) as u64;
+            self.charge.grow(bytes)?;
+            self.hints.try_reserve_exact(more).map_err(|_| {
+                self.charge.shrink(bytes);
+                ComputeError::OutOfMemory { bytes }
+            })?;
+            self.hints.resize(csrs, 0);
+        }
+        Ok(&mut self.hints[..csrs])
+    }
+}
+
+impl RowEntries {
     /// Empties the buffer and makes room for `len` entries.
     fn clear_for(&mut self, len: usize) -> Result<&mut Vec<(DenseId, f64)>, ComputeError> {
         self.entries.clear();
@@ -143,15 +188,24 @@ impl<'g> Matrix<'g> {
         scratch: &mut RowScratch,
         mut entry: impl FnMut(DenseId, f64) -> Result<(), ComputeError>,
     ) -> Result<(), ComputeError> {
-        match self.csrs.as_slice() {
-            [AnyCsrSlices::U32(csr)] => entries(csr, row, self.weighted, entry),
-            [AnyCsrSlices::U64(csr)] => entries(csr, row, self.weighted, entry),
-            many => {
-                let len = many.iter().map(|csr| csr.degree(row) as usize).sum();
+        // A hint per CSR, kept across rows; a scratch read with another
+        // matrix starts them again.
+        let RowScratch { entries: scratch, hints } = scratch;
+        match (self.csrs.as_slice(), hints.for_csrs(self.csrs.len())?) {
+            ([AnyCsrSlices::U32(csr)], [hint]) => entries(csr, row, hint, self.weighted, entry),
+            ([AnyCsrSlices::U64(csr)], [hint]) => entries(csr, row, hint, self.weighted, entry),
+            (many, hints) => {
+                // Each row is sought twice, the second time at its hint.
+                let len = many
+                    .iter()
+                    .zip(hints.iter_mut())
+                    .map(|(csr, hint)| csr.seek(row, hint).len())
+                    .sum();
                 let scratch = scratch.clear_for(len)?;
-                for csr in many {
-                    let weights = csr.neighbour_weights(row).filter(|_| self.weighted);
-                    scratch.extend(csr.neighbours(row).enumerate().map(|(i, column)| {
+                for (csr, hint) in many.iter().zip(hints.iter_mut()) {
+                    let positions = csr.seek(row, hint);
+                    let weights = csr.weights_at(positions.clone()).filter(|_| self.weighted);
+                    scratch.extend(csr.neighbours_at(positions).enumerate().map(|(i, column)| {
                         (column, weights.and_then(|w| w.get(i)).copied().unwrap_or(1.0))
                     }));
                 }
@@ -172,15 +226,18 @@ impl<'g> Matrix<'g> {
     }
 }
 
-/// The CSRs of one relation's row, weighted or with unit weights.
+/// The CSRs of one relation's row, weighted or with unit weights, sought
+/// from `hint`.
 fn entries<T: Target>(
     csr: &CsrSlices<'_, T>,
     row: DenseId,
+    hint: &mut usize,
     weighted: bool,
     mut entry: impl FnMut(DenseId, f64) -> Result<(), ComputeError>,
 ) -> Result<(), ComputeError> {
-    let columns = csr.neighbours(row);
-    match csr.neighbour_weights(row).filter(|_| weighted) {
+    let positions = csr.seek(row, hint);
+    let columns = csr.targets_at(positions.clone());
+    match csr.weights_at(positions).filter(|_| weighted) {
         Some(weights) => {
             for (&column, &weight) in columns.iter().zip(weights) {
                 entry(column.dense(), weight)?;
