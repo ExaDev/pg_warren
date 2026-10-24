@@ -10,8 +10,10 @@
 -- level raises modularity by no more than `tolerance` (NetworkX's
 -- `threshold`), or after `max_levels`. The graph is undirected for this
 -- (an edge and its reverse add up; edges weighted if `weighted`, NULL: if
--- the graph has weights). Communities are labelled by the smallest dense
--- id of their members: a level's nodes are keyed by those dense ids. Writes
+-- the graph has weights; an edge in several relations one edge, or with
+-- `per_relation` an edge in each, as warren.modularity counts them).
+-- Communities are labelled by the smallest dense id of their members: a
+-- level's nodes are keyed by those dense ids. Writes
 -- vector `out` (i64, on version `version`, NULL: the current one), with
 -- each level's partition as `<levels_prefix>_<level>` if `levels_prefix`
 -- is given, and returns the partition's modularity. The level's graph, a
@@ -20,7 +22,7 @@
 CREATE FUNCTION warren.louvain(graph text, "out" text, resolution float8 DEFAULT 1.0,
                                seed bigint DEFAULT 0, max_levels int DEFAULT 100,
                                tolerance float8 DEFAULT 1e-7, weighted boolean DEFAULT NULL,
-                               levels_prefix text DEFAULT NULL, version bigint DEFAULT NULL)
+                               levels_prefix text DEFAULT NULL, version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
 RETURNS float8 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   v bigint := coalesce(version, (warren.info(graph) ->> 'current_version')::bigint);
@@ -54,7 +56,7 @@ BEGIN
   END IF;
   BEGIN
     PERFORM warren.vector_dense_id(graph, '_warren_louvain_single', persist := false, version := v);
-    q := warren.modularity(graph, '_warren_louvain_single', resolution, weighted, v);
+    q := warren.modularity(graph, '_warren_louvain_single', resolution, weighted, v, per_relation);
     LOOP
       level := level + 1;
       PERFORM warren.report_progress('louvain', graph, format('level %s', level), level - 1, max_levels);
@@ -71,10 +73,11 @@ BEGIN
                                    keys := CASE WHEN level > 1 THEN '_warren_louvain_keys' END,
                                    resolution := resolution, seed := seed, tolerance := 0,
                                    weighted := CASE WHEN level = 1 THEN weighted ELSE true END,
+                                   per_relation := level = 1 AND per_relation,
                                    persist := false, version := gv);
       EXIT WHEN level > 1 AND found = nodes;
       q_next := warren.modularity(g, '_warren_louvain_labels', resolution,
-                                  CASE WHEN level = 1 THEN weighted ELSE true END, gv);
+                                  CASE WHEN level = 1 THEN weighted ELSE true END, gv, level = 1 AND per_relation);
       -- This level's partition, on `graph`.
       IF level = 1 THEN
         PERFORM warren.vector_map(graph, '_warren_louvain_down', '_warren_louvain_labels', false, v);
@@ -90,7 +93,8 @@ BEGIN
       -- A level graph of its own, named after its version, a name no
       -- graph can have had.
       next_v := warren.contract(graph, '_warren_louvain_down', NULL,
-                                weighted := coalesce(weighted, true), version := v);
+                                weighted := coalesce(weighted, true), version := v,
+                                per_relation := per_relation);
       next_g := '_warren_level_' || next_v;
       IF g <> graph THEN
         PERFORM warren.drop_vector(g, '_warren_louvain_' || part, gv, true) FROM unnest(parts) part;
@@ -100,7 +104,7 @@ BEGIN
       gv := next_v;
     END LOOP;
     PERFORM warren.vector_map(graph, "out", '_warren_louvain_down', true, v);
-    q := warren.modularity(graph, "out", resolution, weighted, v);
+    q := warren.modularity(graph, "out", resolution, weighted, v, per_relation);
   EXCEPTION WHEN OTHERS OR query_canceled THEN
     PERFORM warren.drop_vector(graph, '_warren_louvain_' || part, v, true) FROM unnest(parts) part;
     RAISE;

@@ -13,6 +13,7 @@ use crate::access::entry;
 use crate::activity::Running;
 use crate::cache::{resolve, CachedIds};
 use crate::compute_sql::{drop_named, vector_bytes, Vectors};
+use crate::extension::added_flag;
 use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
 use crate::source::with_id_type;
@@ -88,9 +89,24 @@ fn index(prefix: &str, name: &str) -> Option<usize> {
 /// normalized_laplacian, random_walk) of graph `graph` at the `which` end
 /// (largest magnitude, or smallest), as `(i, eigenvalue, residual)` rows.
 /// With `vectors_prefix`, eigenvector `i` is stored as vector
-/// `<vectors_prefix>_<i>` (transient if not `persist`).
+/// `<vectors_prefix>_<i>` (transient if not `persist`). With
+/// `per_relation`, a pair in several relations is an edge in each
+/// (DESIGN.md §5.3).
 #[allow(clippy::too_many_arguments)] // The SQL signature's arguments.
-#[pg_extern(schema = "warren", volatile, parallel_unsafe)]
+#[pg_extern(
+    schema = "warren",
+    sql = r#"
+CREATE FUNCTION warren.eigen(graph text, k integer, matrix text DEFAULT 'adjacency',
+                             which text DEFAULT 'largest', rels text[] DEFAULT NULL,
+                             weighted boolean DEFAULT NULL, symmetrize boolean DEFAULT true,
+                             tol double precision DEFAULT 1e-6, max_iter integer DEFAULT NULL,
+                             vectors_prefix text DEFAULT NULL, version bigint DEFAULT NULL,
+                             dtype text DEFAULT 'f32', persist boolean DEFAULT true,
+                             per_relation boolean DEFAULT false)
+RETURNS TABLE (i integer, eigenvalue double precision, residual double precision)
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'eigen_wrapper';
+"#
+)]
 fn eigen(
     graph: Option<&str>,
     k: Option<i32>,
@@ -105,7 +121,9 @@ fn eigen(
     version: default!(Option<i64>, "NULL"),
     dtype: default!(Option<&str>, "'f32'"),
     persist: default!(Option<bool>, "true"),
+    fcinfo: pg_sys::FunctionCallInfo,
 ) -> TableIterator<'static, (name!(i, i32), name!(eigenvalue, f64), name!(residual, f64))> {
+    let per_relation = added_flag(fcinfo, 13);
     entry(|_| {
         let graph = graph.ok_or(SpectralSqlError::NullArgument("graph"))?;
         let operator = OperatorArguments {
@@ -113,6 +131,7 @@ fn eigen(
             rels,
             weighted,
             symmetrize: symmetrize.ok_or(SpectralSqlError::NullArgument("symmetrize"))?,
+            per_relation: per_relation.ok_or(SpectralSqlError::NullArgument("per_relation"))?,
         };
         let options = solver_options(
             k,
@@ -185,7 +204,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{failure, rows};
+    use crate::fixture::{failure, relation_expansions, rows};
 
     /// Graph `p` over `p_nodes`/`p_edges`: the undirected path 1 – 2 – … – 6
     /// with unit weights.
@@ -202,6 +221,28 @@ mod tests {
 
     fn eigenvalues(call: &str) -> Result<Option<String>, Error> {
         rows(&format!("SELECT i || ':' || round(eigenvalue::numeric, 6) FROM {call} ORDER BY i"))
+    }
+
+    /// With `per_relation`, an unweighted pair in k relations weighs k:
+    /// the spectrum is the weighted expansion's; by default the
+    /// deduplicated graph's.
+    #[pg_test]
+    fn per_relation_a_pair_weighs_each_of_its_relations() -> Result<(), Error> {
+        relation_expansions("ei")?;
+        for matrix in ["adjacency", "normalized_laplacian"] {
+            let spectrum = |graph: &str, per: &str| {
+                eigenvalues(&format!(
+                    "warren.eigen('ei_{graph}', 4, '{matrix}', dtype := 'f64', tol := 1e-12{per})"
+                ))
+            };
+            let (each, once) = (spectrum("each", "")?, spectrum("once", "")?);
+            for graph in ["s", "u"] {
+                assert_eq!(spectrum(graph, ", per_relation := true")?, each, "{graph} {matrix}");
+                assert_eq!(spectrum(graph, "")?, once, "{graph} {matrix}");
+            }
+            assert_ne!(each, once, "{matrix}");
+        }
+        Ok(())
     }
 
     #[pg_test]

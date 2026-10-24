@@ -295,6 +295,49 @@ fn relations_select_the_edges_messages_travel_along() {
 }
 
 #[test]
+fn per_relation_a_sender_sends_once_in_each_of_its_relations() {
+    let r = reference::relations(2);
+    for reverse in [true, false] {
+        let graph = example(reverse);
+        let each = |direction, relations| {
+            let gather = Gather {
+                direction,
+                relations,
+                per_relation: true,
+                ..Gather::new(Combiner::Collect)
+            };
+            run::<f64>(&graph, &gather, &SENT).unwrap()
+        };
+        assert_eq!(
+            each(Direction::In, RelationSelection::All),
+            [(0, many(&[3.0, 4.0])), (1, many(&[1.0, 1.0])), (2, many(&[1.0, 2.0]))]
+        );
+        assert_eq!(
+            each(Direction::Out, RelationSelection::All),
+            [(0, many(&[2.0, 2.0, 3.0, 4.0])), (1, many(&[3.0, 4.0])), (2, many(&[1.0]))]
+        );
+        // Both directions of one relation make a sender once in it.
+        assert_eq!(
+            each(Direction::Both, RelationSelection::All),
+            [
+                (0, many(&[2.0, 2.0, 3.0, 4.0])),
+                (1, many(&[1.0, 1.0, 3.0, 4.0])),
+                (2, many(&[1.0, 2.0]))
+            ]
+        );
+        assert_eq!(
+            each(Direction::In, RelationSelection::Only(&[r[1], r[0], r[1]])),
+            each(Direction::In, RelationSelection::All)
+        );
+        let counted = Gather { per_relation: true, ..Gather::new(Combiner::Count) };
+        assert_eq!(
+            run::<f64>(&graph, &counted, &SENT).unwrap(),
+            [(0, Owned::Count(2)), (1, Owned::Count(2)), (2, Owned::Count(2))]
+        );
+    }
+}
+
+#[test]
 fn senders_and_masks_must_fit_the_graph() {
     let graph = example(true);
     let collect = Gather::new(Combiner::Collect);
@@ -412,6 +455,7 @@ struct Scenario {
     mask: Option<(Vec<f64>, bool)>,
     combiner: Combiner,
     include_self: bool,
+    per_relation: bool,
 }
 
 impl Scenario {
@@ -450,6 +494,7 @@ impl Scenario {
             direction: self.direction,
             selects,
             include_self: self.include_self,
+            per_relation: self.per_relation,
             sent,
         }
     }
@@ -465,7 +510,7 @@ fn scenarios() -> impl Strategy<Value = Scenario> {
             prop_oneof![Just(Direction::In), Just(Direction::Out), Just(Direction::Both)],
             prop::option::of(prop::collection::vec(0..relation_count, 0..3)),
             prop::option::of((prop::collection::vec(mask_value, id_space as usize), any::<bool>())),
-            (prop::sample::select(Combiner::all().collect::<Vec<_>>()), any::<bool>()),
+            (prop::sample::select(Combiner::all().collect::<Vec<_>>()), any::<(bool, bool)>()),
         )
             .prop_map(
                 move |(
@@ -474,7 +519,7 @@ fn scenarios() -> impl Strategy<Value = Scenario> {
                     direction,
                     selected,
                     mask,
-                    (combiner, include_self),
+                    (combiner, (include_self, per_relation)),
                 )| Scenario {
                     id_space,
                     relation_count,
@@ -488,6 +533,7 @@ fn scenarios() -> impl Strategy<Value = Scenario> {
                     mask,
                     combiner,
                     include_self,
+                    per_relation,
                 },
             )
     })
@@ -525,6 +571,7 @@ fn check<M: Own>(
             .zip(s.mask.as_ref())
             .map(|(vector, &(_, complement))| Mask { vector, complement }),
         include_self: s.include_self,
+        per_relation: s.per_relation,
     };
     let memory = memory();
     let mut messages = Messages::<M>::new(&memory).unwrap();

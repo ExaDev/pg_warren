@@ -387,3 +387,102 @@ pub(crate) fn iri_star(name: &str, leaves: i64) -> Result<(), Error> {
          SELECT warren.refresh('{name}')"
     ))
 }
+
+/// Unweighted directed graphs over one edge list in three relations, its
+/// pairs (self-loops aside) linked in one, two or three of them (about
+/// 110, 185 and 25 pairs; DESIGN.md §5.3): `<name>_s`
+/// stores the merged CSR and `<name>_u` does not; `<name>_each` is their
+/// per-relation expansion, one weighted edge per pair weighing the number
+/// of its relations; `<name>_once` is their deduplicated graph, one
+/// unweighted edge per pair. Over 60 nodes, with self-loops, refreshed.
+pub(crate) fn relation_expansions(name: &str) -> Result<(), Error> {
+    Spi::run(&format!(
+        "CREATE TABLE {name}_nodes AS SELECT generate_series(1, 60)::bigint AS id;
+         CREATE TABLE {name}_edges AS
+             SELECT s::bigint AS src, d::bigint AS dst, 'r' || r AS rel
+             FROM generate_series(1, 60) s, generate_series(1, 60) d, generate_series(0, 2) r
+             WHERE (s * 13 + d * 7) % 11 = 0 AND (s + d + r) % 4 <> 0 AND (s * d + r) % 5 <> 0
+                OR s = d AND s % 7 = r;
+         SELECT warren.create_graph('{name}_s', 'SELECT id FROM {name}_nodes',
+                                    'SELECT src, dst, rel FROM {name}_edges', has_relations := true);
+         SELECT warren.create_graph('{name}_u', 'SELECT id FROM {name}_nodes',
+                                    'SELECT src, dst, rel FROM {name}_edges', has_relations := true,
+                                    store_merged := false);
+         SELECT warren.create_graph('{name}_each', 'SELECT id FROM {name}_nodes',
+                                    'SELECT src, dst, count(*)::float8 FROM {name}_edges GROUP BY 1, 2',
+                                    weighted := true);
+         SELECT warren.create_graph('{name}_once', 'SELECT id FROM {name}_nodes',
+                                    'SELECT DISTINCT src, dst FROM {name}_edges')"
+    ))?;
+    for graph in ["s", "u", "each", "once"] {
+        refresh(&format!("{name}_{graph}"), true)?;
+    }
+    Ok(())
+}
+
+/// Weighted directed acyclic graphs over one edge list in three relations,
+/// a pair's weight differing between its relations, its pairs linked in
+/// one, two or three of them, as [`relation_expansions`]: `<name>_s` and
+/// `<name>_u` (no merged CSR); `<name>_each`, one edge per pair weighing
+/// `fold` (an SQL aggregate) of its relations' weights; `<name>_once`, one
+/// edge per pair weighing their sum (DESIGN.md §5.3). Edges run from lower
+/// ids to higher, over 60 nodes, refreshed.
+pub(crate) fn weighted_relation_expansions(name: &str, fold: &str) -> Result<(), Error> {
+    Spi::run(&format!(
+        "CREATE TABLE {name}_nodes AS SELECT generate_series(1, 60)::bigint AS id;
+         CREATE TABLE {name}_edges AS
+             SELECT s::bigint AS src, d::bigint AS dst, 'r' || r AS rel,
+                    (1 + (s * 3 + d + r * 2) % 5)::float8 AS w
+             FROM generate_series(1, 60) s, generate_series(1, 60) d, generate_series(0, 2) r
+             WHERE s < d AND (s * 13 + d * 7) % 11 = 0 AND (s + d + r) % 4 <> 0 AND (s * d + r) % 5 <> 0;
+         SELECT warren.create_graph('{name}_s', 'SELECT id FROM {name}_nodes',
+                                    'SELECT src, dst, rel, w FROM {name}_edges',
+                                    weighted := true, has_relations := true);
+         SELECT warren.create_graph('{name}_u', 'SELECT id FROM {name}_nodes',
+                                    'SELECT src, dst, rel, w FROM {name}_edges',
+                                    weighted := true, has_relations := true, store_merged := false);
+         SELECT warren.create_graph('{name}_each', 'SELECT id FROM {name}_nodes',
+                                    'SELECT src, dst, {fold}(w) FROM {name}_edges GROUP BY 1, 2',
+                                    weighted := true);
+         SELECT warren.create_graph('{name}_once', 'SELECT id FROM {name}_nodes',
+                                    'SELECT src, dst, sum(w) FROM {name}_edges GROUP BY 1, 2',
+                                    weighted := true)"
+    ))?;
+    for graph in ["s", "u", "each", "once"] {
+        refresh(&format!("{name}_{graph}"), true)?;
+    }
+    Ok(())
+}
+
+/// Runs `statement` on the graphs of [`relation_expansions`] (or
+/// [`weighted_relation_expansions`]) `name`, with
+/// `{g}` replaced by the graph's name and `{per}` by `, per_relation :=
+/// true` on `<name>_s` and `<name>_u` and by nothing on `<name>_each`, then
+/// without it on all three and `<name>_once`, and asserts that vector `out`
+/// (rounded to 9 significant digits) is the same per relation as on the
+/// expansion, and by default as on the deduplicated graph; returns the two
+/// readings' values, which must differ.
+pub(crate) fn same_as_expanded(
+    name: &str,
+    statement: &str,
+    out: &str,
+) -> Result<(String, String), Error> {
+    let on = |graph: &str, per: &str| -> Result<String, Error> {
+        let graph = format!("{name}_{graph}");
+        Spi::run(&statement.replace("{g}", &graph).replace("{per}", per))?;
+        rows(&format!(
+            "SELECT node_id || ':' || CASE WHEN value = 0 THEN '0'
+                                           ELSE to_char(value::float8, '9.99999999EEEE') END
+             FROM warren.vector_values('{graph}', '{out}', NULL::bigint) ORDER BY node_id"
+        ))?
+        .ok_or(Error::InvalidPosition)
+    };
+    let each = on("each", "")?;
+    let once = on("once", "")?;
+    for graph in ["s", "u"] {
+        assert_eq!(on(graph, ", per_relation := true")?, each, "{graph}: {statement}");
+        assert_eq!(on(graph, "")?, once, "{graph}: {statement}");
+    }
+    assert_ne!(each, once, "{statement}: the readings differ on this graph");
+    Ok((each, once))
+}

@@ -432,7 +432,19 @@ payloads), in about 44% less memory for five weighted relations and a
 faster `refresh`, but more slowly, and more so with more relations: at 2–5
 relations BFS 2–3× and SpMV 5–8× slower, at 10 relations 6× and 11×
 (DESIGN.md §5.3). Reads with `rels`
-are unaffected. Without the merged CSR, a product over all relations
+are unaffected.
+
+Since 0.7.0 a relation whose rows fill little of the id space stores
+sparse offsets, so on a graph of many sparse relations (a knowledge
+graph) leaving out the merged CSR saves less than it did, and costs
+more: the merged CSR is now cheap beside the relations (FB15k-237: 2.5
+of its 8.0 MB). Without it, BFS and `components` find each relation's
+rows in order and stay within 1.3× of what they cost with dense offsets,
+but an all-relations product (`spmv`, `spmm`, and so `pagerank`,
+`eigen` and `distance`) seeks every node's row in every
+relation: on FB15k-237 (237 relations, 14.5K nodes) `spmv` takes about
+18 ms where 0.6.0's dense offsets took 11, 1.6–2×. The default, with the
+merged CSR stored, is unaffected. Without the merged CSR, a product over all relations
 (`spmv`, `spmm`, and so `eigen` and `distance`) also needs a row scratch on
 each worker thread, charged to `warren.max_compute_memory`: 16 bytes per
 entry of the longest row, at most 16 B × the relation count × the largest

@@ -102,16 +102,17 @@ mod tests {
 mod readers {
     use proptest::prelude::*;
 
-    use crate::community::{contract, Contraction};
+    use crate::community::{contract, modularity, Contraction, Undirected, Weighting};
     use crate::compute::{
-        gather, spmv, triangles, AnyVector, Combiner, ComputeMemory, Gather, Messages, Product,
-        Semiring, Vector, Workers,
+        betweenness_centrality, gather, spmv, triangles, AnyVector, BetweennessScale, Combiner,
+        ComputeMemory, Gather, Messages, Product, Sampling, Semiring, ShortestPaths, Vector,
+        Workers,
     };
     use crate::graph::{
         CsrLayout, DenseId, Direction, EdgeList, GraphCsr, Membership, RelationDictionary,
-        RelationIndex, RelationSelection,
+        RelationIndex, RelationSelection, Tombstones,
     };
-    use crate::interrupts::Uninterrupted;
+    use crate::interrupts::{Cancellation, Uninterrupted};
     use crate::traversal::{bfs, components, dijkstra, Adjacency, Limits};
 
     /// A graph of up to 30 relations over up to 80 nodes, whose relations
@@ -151,30 +152,61 @@ mod readers {
                 let Ok(adjacency) = Adjacency::new(graph, direction, selection) else { continue };
                 let visits = bfs(&adjacency, &[0], None, Limits::default(), &mut never);
                 results.push(format!("bfs {direction:?} {visits:?}"));
-                let path = dijkstra(&adjacency, 0, id_space - 1, &mut never);
-                results.push(format!("dijkstra {direction:?} {path:?}"));
+                for per_relation in [false, true] {
+                    let path = dijkstra(&adjacency, 0, id_space - 1, per_relation, &mut never);
+                    results.push(format!("dijkstra {direction:?} {per_relation} {path:?}"));
+                }
+                let degrees: Vec<_> =
+                    (0..id_space).map(|node| adjacency.degree_per_relation(node)).collect();
+                results.push(format!("degree per relation {direction:?} {degrees:?}"));
             }
             let values = (0..id_space).map(|node| node as f64 + 0.5).collect();
             let x = AnyVector::from(Vector::from_values(&memory, id_space, 1, values).unwrap());
-            for transpose in [false, true] {
+            for (transpose, per_relation) in
+                [(false, false), (true, false), (false, true), (true, true)]
+            {
                 let product = Product {
                     transpose,
                     relations: selection,
+                    per_relation,
                     ..Product::new(Semiring::PlusTimes)
                 };
                 let mut y = AnyVector::from(Vector::filled(&memory, id_space, 1, 0.0f64).unwrap());
                 let done = spmv(&workers, &memory, &mut never, graph, &product, &x, &mut y);
-                results.push(format!("spmv {transpose} {done:?} {y:?}"));
+                results.push(format!("spmv {transpose} {per_relation} {done:?} {y:?}"));
             }
             let mut messages = Messages::<f64>::new(&memory).unwrap();
             (0..id_space).for_each(|node| messages.push(node, node as f64).unwrap());
             for direction in [Direction::Out, Direction::In, Direction::Both] {
-                let sum = Gather { direction, relations: selection, ..Gather::new(Combiner::Sum) };
-                let gathered =
-                    gather(&workers, &memory, &mut never, graph, &sum, &messages).map(|gathered| {
-                        gathered.iter().map(|row| format!("{row:?}")).collect::<Vec<_>>()
-                    });
-                results.push(format!("gather {direction:?} {gathered:?}"));
+                for per_relation in [false, true] {
+                    let sum = Gather {
+                        direction,
+                        relations: selection,
+                        per_relation,
+                        ..Gather::new(Combiner::Sum)
+                    };
+                    let gathered = gather(&workers, &memory, &mut never, graph, &sum, &messages)
+                        .map(|gathered| {
+                            gathered.iter().map(|row| format!("{row:?}")).collect::<Vec<_>>()
+                        });
+                    results.push(format!("gather {direction:?} {per_relation} {gathered:?}"));
+                }
+            }
+            let tombstones = Tombstones::new(id_space).unwrap();
+            for (directed, per_relation) in [(true, false), (true, true), (false, true)] {
+                let paths = ShortestPaths {
+                    graph,
+                    relations: selection,
+                    tombstones: &tombstones,
+                    directed,
+                    weighted: Some(true),
+                    per_relation,
+                };
+                let sampling = Sampling { k: None, seed: 0, population: None };
+                let scale = BetweennessScale { normalized: false, endpoints: false };
+                let found =
+                    betweenness_centrality(&workers, &memory, &mut never, &paths, &sampling, scale);
+                results.push(format!("betweenness {directed} {per_relation} {found:?}"));
             }
             let counted = triangles(&workers, &memory, &mut never, graph, selection);
             results.push(format!("triangles {counted:?}"));
@@ -187,10 +219,33 @@ mod readers {
             .zip(graph.relations())
             .map(|(&relation, csrs)| (relation, csrs.forward()))
             .collect();
-        let contraction = Contraction { weighted: true, drop_self_loops: false, undirected: false };
-        let memory = crate::graph::BuildMemory::unlimited();
-        let quotient = contract(&workers, &mut never, &forward, &membership, contraction, &memory);
-        results.push(format!("contract {quotient:?}"));
+        let labels: Vec<i64> = (0..id_space).map(|node| (node % 3) as i64).collect();
+        for weighted in [false, true] {
+            for per_relation in [false, true] {
+                for directed in [false, true] {
+                    let weighting = Weighting { weighted, per_relation };
+                    let b =
+                        Undirected::new(&memory, &Cancellation::new(), graph, weighting, directed);
+                    let rows = b.as_ref().map(|b| {
+                        let q = modularity(&memory, b, &labels, 1.0);
+                        let rows: Vec<_> = (0..id_space).map(|node| b.row(node).to_vec()).collect();
+                        format!("{rows:?} {:?} {q:?}", b.degrees())
+                    });
+                    results
+                        .push(format!("undirected {weighted} {per_relation} {directed} {rows:?}"));
+                }
+                let contraction = Contraction {
+                    weighted,
+                    drop_self_loops: false,
+                    undirected: false,
+                    per_relation,
+                };
+                let memory = crate::graph::BuildMemory::unlimited();
+                let quotient =
+                    contract(&workers, &mut never, &forward, &membership, contraction, &memory);
+                results.push(format!("contract {weighted} {per_relation} {quotient:?}"));
+            }
+        }
         results
     }
 

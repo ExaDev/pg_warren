@@ -2,7 +2,7 @@
 //! applied matrix-free through SpMV (DESIGN.md §6.5, `matrix`).
 //!
 //! `S` is the adjacency matrix of the selected relations (weights summed
-//! over relations, or 1 when unweighted), symmetrised as `(A + Aᵀ)/2` from
+//! over relations, or 1 when unweighted; per relation, 1 in each), symmetrised as `(A + Aᵀ)/2` from
 //! the forward and reverse CSRs, or taken as is when the caller says it is
 //! already symmetric (checked). When every selected relation's reverse CSR
 //! equals its forward CSR (an undirected graph's do), `A = Aᵀ` exactly and
@@ -85,12 +85,22 @@ pub struct GraphMatrix<'a> {
     /// Use `(A + Aᵀ)/2`. Without it, `A` must already be symmetric (an
     /// undirected graph), which saves an SpMV per step.
     pub symmetrize: bool,
+    /// Read a pair linked in several relations as an edge in each, so an
+    /// unweighted one weighs the number of its relations in `A` (DESIGN.md
+    /// §5.3); by default it is one edge.
+    pub per_relation: bool,
 }
 
 impl GraphMatrix<'_> {
     /// `operator` over every relation, weighted if the graph is, symmetrised.
     pub fn new(operator: Operator) -> Self {
-        Self { operator, relations: RelationSelection::All, weighted: None, symmetrize: true }
+        Self {
+            operator,
+            relations: RelationSelection::All,
+            weighted: None,
+            symmetrize: true,
+            per_relation: false,
+        }
     }
 }
 
@@ -140,13 +150,15 @@ impl<'g> LinearOperator<'g> {
         let forward = Product {
             relations: matrix.relations,
             weighted: matrix.weighted,
+            per_relation: matrix.per_relation,
             ..Product::new(Semiring::PlusTimes)
         };
         let mut operator = Self {
             graph,
             operator: matrix.operator,
             forward,
-            transpose: matrix.symmetrize && !reverses_are_forward(graph, matrix.relations),
+            transpose: matrix.symmetrize
+                && !reverses_are_forward(graph, matrix.relations, matrix.per_relation),
             active,
             dimension: 0,
             degrees,
@@ -357,9 +369,19 @@ impl<'g> LinearOperator<'g> {
 /// `(A·x + Aᵀ·x)/2` is `A·x` to the bit (where `A·x + A·x` is finite: the two
 /// products overflow to infinity above `f64::MAX / 2`, the one product does not). Without reverse CSRs this is not
 /// known without a transpose, so it answers false. An unknown relation
-/// also answers false (the product reports it).
-fn reverses_are_forward(graph: &GraphCsr, relations: RelationSelection<'_>) -> bool {
-    graph.selected(relations).is_ok_and(|selected| {
+/// also answers false (the product reports it). `per_relation`, the CSRs
+/// are every selected relation's own, which the product reads: the merged
+/// CSR can be symmetric where their sum is not.
+fn reverses_are_forward(
+    graph: &GraphCsr,
+    relations: RelationSelection<'_>,
+    per_relation: bool,
+) -> bool {
+    let selected = match (per_relation, relations) {
+        (true, RelationSelection::All) => Ok(graph.relations().iter().collect()),
+        _ => graph.selected(relations),
+    };
+    selected.is_ok_and(|selected| {
         selected.iter().all(|csrs| csrs.reverse().is_some_and(|reverse| reverse == csrs.forward()))
     })
 }

@@ -41,8 +41,12 @@ fn change_json(change: &EdgeSetChange) -> Value {
     })
 }
 
-/// `degree`: Wasserstein-1 and KS between the out-degree distributions.
-pub(super) fn degree<E: CachedIds>(pair: &Pair<E>) -> Result<Value, SpectralSqlError> {
+/// `degree`: Wasserstein-1 and KS between the out-degree distributions,
+/// a neighbour counted once or, `per_relation`, once in each relation.
+pub(super) fn degree<E: CachedIds>(
+    pair: &Pair<E>,
+    per_relation: bool,
+) -> Result<Value, SpectralSqlError> {
     let (before, after) = (&pair.before, &pair.after);
     let pool = workers()?;
     let mut resources =
@@ -51,6 +55,7 @@ pub(super) fn degree<E: CachedIds>(pair: &Pair<E>) -> Result<Value, SpectralSqlE
         &mut resources,
         (&before.loaded.graph, before.tombstones()),
         (&after.loaded.graph, after.tombstones()),
+        per_relation,
     )?;
     Ok(json!({ "wasserstein": distance.wasserstein, "ks": distance.ks }))
 }

@@ -8,6 +8,7 @@ use warren_core::graph::RelationSelection;
 use super::vectors::Vectors;
 use super::{entry, ComputeSqlError};
 use crate::cache::{resolve, CachedIds};
+use crate::extension::added_flag;
 use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
 use crate::selection::{adjacency, direction, relations};
@@ -88,9 +89,21 @@ fn cast<E: CachedIds>(
 
 /// `warren.vector_degree`: vector `name` of `dtype` holding each node's
 /// degree in `direction` (`out`, `in` or `both`) over the relations `rels`
-/// (all if NULL): its distinct neighbours, as `warren.degree` counts them.
-/// Returns its vector id (NULL if not `persist`: a transient vector).
-#[pg_extern(schema = "warren", volatile, parallel_unsafe)]
+/// (all if NULL): its distinct neighbours, or with `per_relation` its
+/// (relation, neighbour) pairs, as `warren.degree` counts them. Returns its
+/// vector id (NULL if not `persist`: a transient vector).
+#[allow(clippy::too_many_arguments)] // The SQL signature's arguments.
+#[pg_extern(
+    schema = "warren",
+    sql = r#"
+CREATE FUNCTION warren.vector_degree(graph text, name text, direction text DEFAULT 'out',
+                                     rels text[] DEFAULT NULL, dtype text DEFAULT 'f64',
+                                     persist boolean DEFAULT true, version bigint DEFAULT NULL,
+                                     per_relation boolean DEFAULT false)
+RETURNS bigint
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'vector_degree_wrapper';
+"#
+)]
 fn vector_degree(
     graph: Option<&str>,
     name: Option<&str>,
@@ -99,11 +112,14 @@ fn vector_degree(
     dtype: default!(Option<&str>, "'f64'"),
     persist: default!(Option<bool>, "true"),
     version: default!(Option<i64>, "NULL"),
+    fcinfo: pg_sys::FunctionCallInfo,
 ) -> Option<i64> {
+    let per_relation = added_flag(fcinfo, 7);
     entry(|_| {
         let graph = graph.ok_or(ComputeSqlError::NullArgument("graph"))?;
         let name = name.ok_or(ComputeSqlError::NullArgument("name"))?;
         let persist = persist.ok_or(ComputeSqlError::NullArgument("persist"))?;
+        let per_relation = per_relation.ok_or(ComputeSqlError::NullArgument("per_relation"))?;
         let direction = self::direction(direction)?;
         let dtype = self::dtype(dtype)?;
         let resolved = resolve(graph, version, "write vectors of")?;
@@ -118,7 +134,12 @@ fn vector_degree(
                 if node % POLL_NODES == 0 {
                     check_for_interrupts!();
                 }
-                *degree = i64::try_from(adjacency.degree(node)).unwrap_or(i64::MAX);
+                let counted = if per_relation {
+                    adjacency.degree_per_relation(node)
+                } else {
+                    adjacency.degree(node)
+                };
+                *degree = i64::try_from(counted).unwrap_or(i64::MAX);
             }
             let degrees = cast(&vectors, degrees.into(), dtype)?;
             vectors.save(name, degrees, persist)

@@ -16,6 +16,7 @@ use warren_core::graph::RelationSelection;
 use super::vectors::Vectors;
 use super::{entry, ComputeSqlError};
 use crate::cache::{resolve, CachedIds};
+use crate::extension::added_flag;
 use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
 use crate::selection::relations;
@@ -38,6 +39,7 @@ struct Arguments<'a> {
     transpose: bool,
     rels: Option<Vec<Option<String>>>,
     weighted: Option<bool>,
+    per_relation: bool,
     mask: Option<&'a str>,
     complement: bool,
     replace: bool,
@@ -112,6 +114,7 @@ impl Arguments<'_> {
             transpose: self.transpose,
             relations: selected.as_deref().map_or(RelationSelection::All, RelationSelection::Only),
             weighted: self.weighted,
+            per_relation: self.per_relation,
             mask: mask.as_deref().map(|vector| Mask { vector, complement: self.complement }),
             replace: self.replace,
             accumulate: self.accumulate,
@@ -145,6 +148,7 @@ fn product(
     accumulate: Option<&str>,
     persist: Option<bool>,
     version: Option<i64>,
+    per_relation: Option<bool>,
 ) {
     entry(|_| {
         let graph = graph.ok_or(ComputeSqlError::NullArgument("graph"))?;
@@ -155,6 +159,7 @@ fn product(
             transpose: transpose.ok_or(ComputeSqlError::NullArgument("transpose"))?,
             rels,
             weighted,
+            per_relation: per_relation.ok_or(ComputeSqlError::NullArgument("per_relation"))?,
             mask,
             complement: mask_complement.ok_or(ComputeSqlError::NullArgument("mask_complement"))?,
             replace: replace.ok_or(ComputeSqlError::NullArgument("replace"))?,
@@ -168,8 +173,22 @@ fn product(
 
 /// `warren.spmv`: `y = A ⊗ x` (`Aᵀ ⊗ x` if `transpose`) over `semiring`,
 /// for width-1 vectors, written to vector `y` (transient if not `persist`).
+/// A pair linked in several of `rels` is one entry, its weights summed, or
+/// with `per_relation` an entry in each (DESIGN.md §5.3).
 #[allow(clippy::too_many_arguments)] // The SQL signature's arguments.
-#[pg_extern(schema = "warren", volatile, parallel_unsafe)]
+#[pg_extern(
+    schema = "warren",
+    sql = r#"
+CREATE FUNCTION warren.spmv(graph text, x text, y text, semiring text DEFAULT 'plus_times',
+                            transpose boolean DEFAULT false, rels text[] DEFAULT NULL,
+                            weighted boolean DEFAULT NULL, mask text DEFAULT NULL,
+                            mask_complement boolean DEFAULT false, replace boolean DEFAULT false,
+                            accumulate text DEFAULT NULL, persist boolean DEFAULT true,
+                            version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
+RETURNS void
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'spmv_wrapper';
+"#
+)]
 fn spmv(
     graph: Option<&str>,
     x: Option<&str>,
@@ -184,7 +203,9 @@ fn spmv(
     accumulate: default!(Option<&str>, "NULL"),
     persist: default!(Option<bool>, "true"),
     version: default!(Option<i64>, "NULL"),
+    fcinfo: pg_sys::FunctionCallInfo,
 ) {
+    let per_relation = added_flag(fcinfo, 13);
     product(
         Shape::Vector,
         graph,
@@ -200,14 +221,27 @@ fn spmv(
         accumulate,
         persist,
         version,
+        per_relation,
     );
 }
 
 /// `warren.spmm`: `Y = A ⊗ X` (`Aᵀ ⊗ X` if `transpose`) over `semiring`,
 /// for matrices of one width, written to matrix `y` (transient if not
-/// `persist`); a mask selects rows.
+/// `persist`); a mask selects rows. `per_relation` as for `spmv`.
 #[allow(clippy::too_many_arguments)] // The SQL signature's arguments.
-#[pg_extern(schema = "warren", volatile, parallel_unsafe)]
+#[pg_extern(
+    schema = "warren",
+    sql = r#"
+CREATE FUNCTION warren.spmm(graph text, x text, y text, semiring text DEFAULT 'plus_times',
+                            transpose boolean DEFAULT false, rels text[] DEFAULT NULL,
+                            weighted boolean DEFAULT NULL, mask text DEFAULT NULL,
+                            mask_complement boolean DEFAULT false, replace boolean DEFAULT false,
+                            accumulate text DEFAULT NULL, persist boolean DEFAULT true,
+                            version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
+RETURNS void
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'spmm_wrapper';
+"#
+)]
 fn spmm(
     graph: Option<&str>,
     x: Option<&str>,
@@ -222,7 +256,9 @@ fn spmm(
     accumulate: default!(Option<&str>, "NULL"),
     persist: default!(Option<bool>, "true"),
     version: default!(Option<i64>, "NULL"),
+    fcinfo: pg_sys::FunctionCallInfo,
 ) {
+    let per_relation = added_flag(fcinfo, 13);
     product(
         Shape::Matrix,
         graph,
@@ -238,6 +274,7 @@ fn spmm(
         accumulate,
         persist,
         version,
+        per_relation,
     );
 }
 
@@ -248,7 +285,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{failure, rows, small};
+    use crate::fixture::{failure, relation_expansions, rows, same_as_expanded, small};
 
     fn values(name: &str) -> Result<Option<String>, Error> {
         rows(&format!(
@@ -274,6 +311,50 @@ mod tests {
         assert_eq!(values("y")?.as_deref(), Some("1:3 2:4 3:5 4:2 5:6 6:Infinity"));
         Spi::run("SELECT warren.spmv('t', 'x', 'y', rels := ARRAY['a'])")?;
         assert_eq!(values("y")?.as_deref(), Some("1:2 2:3 3:0 4:1 5:0 6:0"));
+        Ok(())
+    }
+
+    /// A pair in several relations is one entry, or with `per_relation`
+    /// an entry in each (DESIGN.md §5.3): `plus_times` is the product of the
+    /// expansion, whose edges weigh their number of relations, and every
+    /// semiring folds each relation's product with its `⊕`.
+    #[pg_test]
+    fn per_relation_reads_an_entry_in_each_relation() -> Result<(), Error> {
+        relation_expansions("p")?;
+        let x = "SELECT warren.vector_from_query('{g}', 'x', 'SELECT id, id % 5 FROM p_nodes');";
+        for transpose in [false, true] {
+            let spmv = format!(
+                "{x} SELECT warren.spmv('{{g}}', 'x', 'y', transpose := {transpose}{{per}})"
+            );
+            same_as_expanded("p", &spmv, "y")?;
+        }
+        same_as_expanded("p", &format!("{x} SELECT warren.spmm('{{g}}', 'x', 'y'{{per}})"), "y")?;
+        for (semiring, add) in [("plus_pair", "sum"), ("min_plus", "min"), ("max_times", "max")] {
+            for graph in ["p_s", "p_u"] {
+                Spi::run(&format!(
+                    "SELECT warren.vector_from_query('{graph}', 'x', 'SELECT id, id % 5 FROM p_nodes');
+                     SELECT warren.spmv('{graph}', 'x', 'y', '{semiring}', per_relation := true);
+                     SELECT warren.spmv('{graph}', 'x', 'y_' || r, '{semiring}', rels := ARRAY['r' || r])
+                     FROM generate_series(0, 2) r"
+                ))?;
+                let found = rows(&format!(
+                    "SELECT node_id || ':' || value FROM warren.vector_values('{graph}', 'y', NULL::bigint)
+                     ORDER BY node_id"
+                ))?;
+                let identity = match add {
+                    "min" => "'Infinity'",
+                    "max" => "'-Infinity'",
+                    _ => "0",
+                };
+                let folded = rows(&format!(
+                    "SELECT node_id || ':' || coalesce({add}(value) FILTER (WHERE abs(value) <> 'Infinity'),
+                                                      {identity})
+                     FROM generate_series(0, 2) r, warren.vector_values('{graph}', 'y_' || r, NULL::bigint)
+                     GROUP BY node_id ORDER BY node_id"
+                ))?;
+                assert_eq!(found, folded, "{graph}: {semiring}");
+            }
+        }
         Ok(())
     }
 

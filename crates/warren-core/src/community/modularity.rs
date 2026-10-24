@@ -112,7 +112,10 @@ impl Communities {
 #[cfg(test)]
 #[cfg(not(miri))]
 mod tests {
+    use proptest::prelude::Strategy;
+
     use super::*;
+    use crate::community::Weighting;
     use crate::compute::reference::{self, Edges};
     use crate::interrupts::Cancellation;
 
@@ -120,8 +123,14 @@ mod tests {
         let mut both = edges.clone();
         both.extend(edges.iter().filter(|e| e.1 != e.2).map(|&(r, s, t, w)| (r, t, s, w)));
         let graph = reference::graph(n, 1, &both, true, false);
-        Undirected::new(&ComputeMemory::new(u64::MAX), &Cancellation::new(), &graph, true, false)
-            .unwrap()
+        Undirected::new(
+            &ComputeMemory::new(u64::MAX),
+            &Cancellation::new(),
+            &graph,
+            Weighting { weighted: true, per_relation: false },
+            false,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -156,6 +165,82 @@ mod tests {
                 .unwrap(),
             0.0
         );
+    }
+
+    /// Modularity the dense way, from the edge list: `A` with one entry
+    /// per pair (its weights summed over relations, else 1, or its number
+    /// of relations if `per_relation`), `B = A + Aᵀ` if `directed`.
+    fn naive(
+        n: usize,
+        edges: &Edges,
+        weighting: Weighting,
+        directed: bool,
+        labels: &[i64],
+        resolution: f64,
+    ) -> f64 {
+        let mut relations = vec![vec![std::collections::BTreeSet::new(); n]; n];
+        let mut weights = vec![vec![0.0; n]; n];
+        for &(r, s, t, w) in edges {
+            relations[s as usize][t as usize].insert(r);
+            weights[s as usize][t as usize] += w;
+        }
+        let mut b = vec![vec![0.0; n]; n];
+        for u in 0..n {
+            for v in 0..n {
+                let a = match (weighting.weighted, weighting.per_relation) {
+                    _ if relations[u][v].is_empty() => continue,
+                    (true, _) => weights[u][v],
+                    (false, true) => relations[u][v].len() as f64,
+                    (false, false) => 1.0,
+                };
+                b[u][v] += a;
+                if directed {
+                    b[v][u] += a;
+                }
+            }
+        }
+        let k: Vec<f64> = b.iter().map(|row| row.iter().sum()).collect();
+        let total: f64 = k.iter().sum();
+        if total == 0.0 {
+            return 0.0;
+        }
+        let mut q = 0.0;
+        for u in 0..n {
+            for v in 0..n {
+                if labels[u] == labels[v] {
+                    q += b[u][v] - resolution * k[u] * k[v] / total;
+                }
+            }
+        }
+        q / total
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn it_is_modularity_of_the_pairs(
+            (n, edges, labels) in (1u64..10).prop_flat_map(|n| (
+                proptest::strategy::Just(n),
+                proptest::collection::vec((0usize..3, 0..n, 0..n, 1..5u32), 0..40),
+                proptest::collection::vec(0i64..3, n as usize),
+            )),
+            weighted in proptest::bool::ANY,
+            per_relation in proptest::bool::ANY,
+            directed in proptest::bool::ANY,
+            store_merged in proptest::bool::ANY,
+            resolution in proptest::sample::select(vec![0.5, 1.0, 2.0]),
+        ) {
+            let edges: Edges =
+                edges.into_iter().map(|(r, s, t, w)| (r, s, t, f64::from(w))).collect();
+            let layout = crate::graph::CsrLayout { build_reverse: false, store_merged };
+            let graph = reference::graph_as(n, 3, &edges, true, layout);
+            let memory = ComputeMemory::new(u64::MAX);
+            let weighting = Weighting { weighted, per_relation };
+            let view =
+                Undirected::new(&memory, &Cancellation::new(), &graph, weighting, directed).unwrap();
+            let q = modularity(&memory, &view, &labels, resolution).unwrap();
+            let expected = naive(n as usize, &edges, weighting, directed, &labels, resolution);
+            proptest::prop_assert!((q - expected).abs() <= 1e-12, "{} != {}", q, expected);
+        }
     }
 
     #[test]

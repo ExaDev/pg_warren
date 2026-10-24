@@ -42,7 +42,18 @@ stored adjacency, so an undirected edge inside a community counts twice
 in its self-loop (both its stored directions) and a self-loop once, as
 each counts in its nodes' degrees: a community's weighted degree is the
 sum of its members', and the total edge weight is kept. Relations are
-kept, each contracted on its own.
+kept, each contracted on its own, except that a count counts an edge in
+several relations once, in the first of them: the quotient's relations
+then add up to the counts of distinct edges, as `spmv` counts such an
+edge once. With `per_relation := true` it counts in each of its
+relations ([semantics.md](semantics.md#a-pair-in-several-relations)).
+
+So a relation-filtered read of a counting quotient sees a shared pair
+only in the first of its relations: if every edge of `b` is also in `a`,
+the quotient's relation `b` has no edges, and `has_edge(q, c, d, 'b')`,
+`spmv(..., rels := ARRAY['b'])` and the traversals over `b` find none.
+To keep each relation's own edges, contract with `per_relation := true`,
+or weighted (weights are summed in each relation either way).
 
 ```sql
 SELECT warren.vector_const('regions', 'one', 1);
@@ -104,9 +115,9 @@ random graph with the same degrees would. Each writes a label vector, so
 
 | Call | What it does |
 |---|---|
-| `louvain(graph, out, resolution := 1, seed := 0, max_levels := 100, tolerance := 1e-7, weighted, levels_prefix, version)` | Louvain (Blondel et al. 2008); returns the partition's modularity |
-| `leiden(graph, out, resolution := 1, seed := 0, max_levels := 100, tolerance := 1e-7, randomness := 0.01, iterations := 2, weighted, levels_prefix, version)` | Leiden (Traag et al. 2019): every community it finds is connected |
-| `modularity(graph, labels, resolution := 1, weighted, version)` | the modularity of any label vector's partition |
+| `louvain(graph, out, resolution := 1, seed := 0, max_levels := 100, tolerance := 1e-7, weighted, levels_prefix, version, per_relation := false)` | Louvain (Blondel et al. 2008); returns the partition's modularity |
+| `leiden(graph, out, resolution := 1, seed := 0, max_levels := 100, tolerance := 1e-7, randomness := 0.01, iterations := 2, weighted, levels_prefix, version, per_relation := false)` | Leiden (Traag et al. 2019): every community it finds is connected |
+| `modularity(graph, labels, resolution := 1, weighted, version, per_relation := false)` | the modularity of any label vector's partition |
 
 ```sql
 SELECT warren.louvain('roads', 'community');            -- 0.0397: the modularity
@@ -155,14 +166,19 @@ as singletons, on its quotient. NetworkX counts it twice, so on an
 undirected graph pg_warren's is NetworkX's with each self-loop's weight
 halved, and the two agree without self-loops. On a directed graph it is
 the modularity of the undirected view, not NetworkX's directed (Leicht and
-Newman) one.
+Newman) one. The view's edges are those `spmv` multiplies by: a pair linked
+in several relations is one edge, its weights summed, or weighing 1 when
+unweighted. With `per_relation := true` (on `modularity`, `louvain`,
+`leiden`, `local_moving`, `leiden_refine` and `contract`) it is an edge in
+each of its relations instead, so an unweighted pair in three relations
+weighs 3 ([semantics.md](semantics.md#a-pair-in-several-relations)).
 
 The steps are SQL functions too, for programs of your own:
 `local_moving(graph, out, initial, keys, resolution, seed, max_sweeps,
-tolerance, weighted, persist, version)` (one level's moving, from the
+tolerance, weighted, persist, version, per_relation)` (one level's moving, from the
 partition `initial` or from each node alone; returns the number of
 communities) and `leiden_refine(graph, communities, out, keys, resolution,
-seed, randomness, weighted, persist, version)`. `louvain` and `leiden` are
+seed, randomness, weighted, persist, version, per_relation)`. `louvain` and `leiden` are
 PL/pgSQL over them, `contract`, `project` and `lift`
 (`crates/pg_warren/src/community_sql/library/`). Graph names beginning
 with `_warren_` are reserved for their levels (42939): `contract(graph,

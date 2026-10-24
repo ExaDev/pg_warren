@@ -14,9 +14,9 @@ use crate::graph::{
 /// Unweighted traversals read the all-relations rows when every relation
 /// is selected (the stored merged CSR, or the relations' rows merged on
 /// the fly, which read the same). Weighted traversals read each relation's
-/// CSR instead, because the merged CSR sums the weights of an edge present
-/// in several relations, whereas a shortest path takes the cheapest of
-/// them.
+/// CSR instead: per relation, a shortest path takes the cheapest of an
+/// edge's relations, and over any selection, read once, it sums them
+/// (DESIGN.md §5.3).
 #[derive(Debug, Clone)]
 pub struct Adjacency<'g> {
     direction: Direction,
@@ -25,6 +25,8 @@ pub struct Adjacency<'g> {
     weighted_relations: Vec<&'g RelationCsr>,
     rows: Vec<CsrRows<'g>>,
     weighted_rows: Vec<&'g AnyCsr>,
+    summed_relation: Option<&'g RelationCsr>,
+    summed_rows: Vec<&'g AnyCsr>,
     labelled: Vec<(RelationIndex, &'g RelationCsr)>,
     labelled_rows: Vec<LabelledRows<'g>>,
 }
@@ -72,6 +74,12 @@ impl<'g> Adjacency<'g> {
         direction: Direction,
         relations: RelationSelection<'_>,
     ) -> Result<Self, TraversalError> {
+        // One CSR holds the selection's summed weights: the stored merged
+        // CSR, or the only relation selected.
+        let summed_relation = match graph.selected(relations) {
+            Ok(selected) if selected.len() == 1 => selected.first().copied(),
+            _ => None,
+        };
         let (relations, weighted_relations, labelled) = match relations {
             RelationSelection::All => {
                 let each = graph.relations().iter().collect();
@@ -101,39 +109,57 @@ impl<'g> Adjacency<'g> {
             }
         };
         let id_space = graph.all_relations().forward().id_space();
-        Self::read(direction, id_space, relations, weighted_relations, labelled)
+        let read = Read { direction, id_space, summed_relation };
+        read.adjacency(relations, weighted_relations, labelled)
     }
+}
 
-    fn read(
-        direction: Direction,
-        id_space: u64,
+/// What an [`Adjacency`] is read from besides its relations.
+struct Read<'g> {
+    direction: Direction,
+    id_space: u64,
+    summed_relation: Option<&'g RelationCsr>,
+}
+
+impl<'g> Read<'g> {
+    fn adjacency(
+        self,
         relations: Selected<'g>,
         weighted_relations: Vec<&'g RelationCsr>,
         labelled: Vec<(RelationIndex, &'g RelationCsr)>,
-    ) -> Result<Self, TraversalError> {
+    ) -> Result<Adjacency<'g>, TraversalError> {
+        let Self { direction, id_space, summed_relation } = self;
         let rows = relations.rows(direction)?;
         let weighted_rows = scanned(&weighted_relations, direction)?;
+        let summed_rows = scanned(summed_relation.as_slice(), direction)?;
         let labelled_rows = labelled
             .iter()
             .map(|&(relation, csr)| LabelledRows::read(relation, csr, direction))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self {
+        Ok(Adjacency {
             direction,
             id_space,
             relations,
             weighted_relations,
             rows,
             weighted_rows,
+            summed_relation,
+            summed_rows,
             labelled,
             labelled_rows,
         })
     }
+}
 
+impl<'g> Adjacency<'g> {
     /// The same relations read in the opposite direction.
     pub fn reversed(&self) -> Result<Self, TraversalError> {
-        Self::read(
-            self.direction.reversed(),
-            self.id_space,
+        let read = Read {
+            direction: self.direction.reversed(),
+            id_space: self.id_space,
+            summed_relation: self.summed_relation,
+        };
+        read.adjacency(
             self.relations.clone(),
             self.weighted_relations.clone(),
             self.labelled.clone(),
@@ -175,6 +201,14 @@ impl<'g> Adjacency<'g> {
         self.neighbours(node).count() as u64
     }
 
+    /// The degree of `node` with a neighbour counted once in each selected
+    /// relation that links it: the number of its (relation, neighbour)
+    /// hops, so for [`Direction::Both`] a neighbour linked both ways by one
+    /// relation counts once there (DESIGN.md §5.3, `per_relation`).
+    pub fn degree_per_relation(&self, node: DenseId) -> u64 {
+        self.labelled_neighbours(node).count() as u64
+    }
+
     /// The row entries of `node` in every CSR read: a node reached through
     /// several CSRs (relations, or both directions) appears once per CSR.
     /// Traversals use this; their visited set absorbs the repeats.
@@ -213,6 +247,23 @@ impl<'g> Adjacency<'g> {
             let first = rows.first.neighbours(node).peekable();
             let second = rows.second.map(|csr| csr.neighbours(node).peekable());
             UnitedRow { first, second }.map(move |neighbour| (rows.relation, neighbour))
+        })
+    }
+
+    /// The CSRs, one per direction read, whose rows hold each pair once
+    /// with the selected relations' weights summed in relation order (the
+    /// stored merged CSR, or the only relation selected); empty if the
+    /// relations' rows must be summed as they are read
+    /// ([`Self::relation_rows`]).
+    pub(crate) fn summed_rows(&self) -> &[&'g AnyCsr] {
+        &self.summed_rows
+    }
+
+    /// Each selected relation's CSRs, in relation order, each with whether
+    /// it is read in the second direction of [`Direction::Both`].
+    pub(crate) fn relation_rows(&self) -> impl Iterator<Item = (bool, &'g AnyCsr)> + '_ {
+        self.labelled_rows.iter().flat_map(|rows| {
+            std::iter::once((false, rows.first)).chain(rows.second.map(|csr| (true, csr)))
         })
     }
 
@@ -409,6 +460,22 @@ mod tests {
     }
 
     #[test]
+    fn per_relation_a_neighbour_counts_once_in_each_of_its_relations() {
+        // 0 → 1 in relations 0 and 1, 1 → 0 in relation 0, 0 → 0 in relation 1
+        let graph =
+            graph(2, 2, &[(0, 0, 1, 1.0), (1, 0, 1, 1.0), (0, 1, 0, 1.0), (1, 0, 0, 1.0)], true);
+        let degrees = |direction| {
+            let adjacency = Adjacency::new(&graph, direction, RelationSelection::All).unwrap();
+            (adjacency.degree(0), adjacency.degree_per_relation(0))
+        };
+        assert_eq!(degrees(Direction::Out), (2, 3));
+        assert_eq!(degrees(Direction::In), (2, 2));
+        assert_eq!(degrees(Direction::Both), (2, 3), "both directions of one relation count once");
+        let out = Adjacency::new(&graph, Direction::Out, RelationSelection::All).unwrap();
+        assert_eq!(out.degree_per_relation(u64::MAX), 0);
+    }
+
+    #[test]
     fn collected_neighbours_are_the_distinct_neighbours_in_a_buffer_of_their_own() {
         // 0 → 1 and 0 → 2 in relations 0 and 1, 2 → 0 in relation 0
         let graph = graph(
@@ -560,6 +627,7 @@ mod properties {
                     .filter(|&&(from, _, _)| from == node)
                     .map(|&(_, relation, to)| (relation, to))
                     .collect();
+                prop_assert_eq!(adjacency.degree_per_relation(node), expected.len() as u64);
                 prop_assert_eq!(distinct, expected);
             }
         }

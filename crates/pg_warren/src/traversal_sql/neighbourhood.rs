@@ -16,6 +16,7 @@ use warren_core::traversal::{Adjacency, TraversalError};
 
 use super::{entry, TraversalSqlError};
 use crate::cache::{cached, resolve, CachedIds, LoadedVersion, Resolved};
+use crate::extension::added_flag;
 use crate::external_ids::{element, element_widened, external};
 use crate::selection::{adjacency, direction};
 use crate::source::with_id_type;
@@ -53,13 +54,16 @@ fn neighbours(
     })
 }
 
-/// `warren.degree`: the number of `warren.neighbours` of `node`; 0 if it is
-/// not a node of the version, NULL if it is NULL.
+/// `warren.degree`: the number of `warren.neighbours` of `node`, or with
+/// `per_relation` of (relation, neighbour) pairs: a neighbour once in each
+/// relation linking it (DESIGN.md §5.3); 0 if it is not a node of the
+/// version, NULL if it is NULL.
 #[pg_extern(
     schema = "warren",
     sql = r#"
 CREATE FUNCTION warren.degree(graph text, node anyelement, direction text DEFAULT 'out',
-                              rels text[] DEFAULT NULL, version bigint DEFAULT NULL)
+                              rels text[] DEFAULT NULL, version bigint DEFAULT NULL,
+                              per_relation boolean DEFAULT false)
 RETURNS bigint
 STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'degree_wrapper';
 "#
@@ -70,12 +74,17 @@ fn degree(
     direction: Option<&str>,
     rels: Option<Vec<Option<String>>>,
     version: Option<i64>,
+    fcinfo: pg_sys::FunctionCallInfo,
 ) -> Option<i64> {
+    let per_relation = added_flag(fcinfo, 5);
     entry(|| {
+        let per_relation = per_relation.ok_or(TraversalSqlError::NullArgument("per_relation"))?;
         let query =
             NodeQuery { widen: true, ..NodeQuery::new(graph, node, direction, rels, version)? };
         let degree = with_id_type!(query.resolved.graph.id_type, E => {
-            query.adjacent::<E, _>(|_, adjacency, node| adjacency.degree(node))?
+            query.adjacent::<E, _>(|_, adjacency, node| {
+                if per_relation { adjacency.degree_per_relation(node) } else { adjacency.degree(node) }
+            })?
         });
         Ok(node.map(|_| i64::try_from(degree.unwrap_or(0)).unwrap_or(i64::MAX)))
     })

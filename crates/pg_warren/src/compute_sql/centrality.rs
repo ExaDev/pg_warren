@@ -15,6 +15,7 @@ use pgrx::prelude::*;
 use super::vectors::Vectors;
 use super::{entry, selection, ComputeSqlError};
 use crate::cache::resolve;
+use crate::extension::added_flag;
 use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
 use crate::selection::relations;
@@ -29,6 +30,7 @@ struct Arguments<'a> {
     directed: Option<bool>,
     rels: Option<Vec<Option<String>>>,
     weighted: Option<bool>,
+    per_relation: Option<bool>,
 }
 
 /// Runs `kernel` on graph `graph` as `arguments` ask and saves its vector
@@ -51,6 +53,8 @@ fn centrality(
     let persist = persist.ok_or(ComputeSqlError::NullArgument("persist"))?;
     let seed = arguments.seed.ok_or(ComputeSqlError::NullArgument("seed"))?;
     let directed = arguments.directed.ok_or(ComputeSqlError::NullArgument("directed"))?;
+    let per_relation =
+        arguments.per_relation.ok_or(ComputeSqlError::NullArgument("per_relation"))?;
     let k = match arguments.k {
         Some(k) if k < 1 => {
             return Err(ComputeSqlError::InvalidArgument(format!("k must be at least 1, not {k}")))
@@ -69,6 +73,7 @@ fn centrality(
             tombstones: loaded.id_map.tombstones(),
             directed,
             weighted: arguments.weighted,
+            per_relation,
         };
         let population = population.as_deref().map(|vector| Mask { vector, complement: false });
         let sampling = Sampling { k, seed: seed as u64, population };
@@ -85,28 +90,46 @@ fn centrality(
 /// NetworkX's `betweenness_centrality(G, k, normalized, weight,
 /// endpoints)`: from every live node if `k` is NULL, else from `k` sampled
 /// with `seed` (among the nodes vector `sources` selects, if given).
-/// Returns the number of sources.
-#[pg_extern(schema = "warren", volatile, parallel_unsafe)]
+/// Weighted, a pair in several relations weighs their sum, or with
+/// `per_relation` is a parallel edge in each, so paths take the lightest
+/// (DESIGN.md §5.3); unweighted, `per_relation` changes nothing. Returns
+/// the number of sources.
+#[pg_extern(
+    schema = "warren",
+    sql = r#"
+CREATE FUNCTION warren.betweenness_centrality(graph text, "out" text, k bigint DEFAULT NULL,
+                                              seed bigint DEFAULT 0, normalized boolean DEFAULT true,
+                                              endpoints boolean DEFAULT false,
+                                              directed boolean DEFAULT true, sources text DEFAULT NULL,
+                                              rels text[] DEFAULT NULL, weighted boolean DEFAULT NULL,
+                                              persist boolean DEFAULT true, version bigint DEFAULT NULL,
+                                              per_relation boolean DEFAULT false)
+RETURNS bigint
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'betweenness_centrality_wrapper';
+"#
+)]
 #[allow(clippy::too_many_arguments)] // The SQL function's arguments.
 fn betweenness_centrality(
     graph: Option<&str>,
     out: Option<&str>,
-    k: default!(Option<i64>, "NULL"),
-    seed: default!(Option<i64>, "0"),
-    normalized: default!(Option<bool>, "true"),
-    endpoints: default!(Option<bool>, "false"),
-    directed: default!(Option<bool>, "true"),
-    sources: default!(Option<&str>, "NULL"),
-    rels: default!(Option<Vec<Option<String>>>, "NULL"),
-    weighted: default!(Option<bool>, "NULL"),
-    persist: default!(Option<bool>, "true"),
-    version: default!(Option<i64>, "NULL"),
+    k: Option<i64>,
+    seed: Option<i64>,
+    normalized: Option<bool>,
+    endpoints: Option<bool>,
+    directed: Option<bool>,
+    sources: Option<&str>,
+    rels: Option<Vec<Option<String>>>,
+    weighted: Option<bool>,
+    persist: Option<bool>,
+    version: Option<i64>,
+    fcinfo: pg_sys::FunctionCallInfo,
 ) -> Option<i64> {
+    let per_relation = added_flag(fcinfo, 12);
     entry(|_| {
         let normalized = normalized.ok_or(ComputeSqlError::NullArgument("normalized"))?;
         let endpoints = endpoints.ok_or(ComputeSqlError::NullArgument("endpoints"))?;
         let scale = compute::BetweennessScale { normalized, endpoints };
-        let arguments = Arguments { k, seed, sources, directed, rels, weighted };
+        let arguments = Arguments { k, seed, sources, directed, rels, weighted, per_relation };
         centrality(graph, out, persist, version, arguments, |workers, memory, paths, sampling| {
             let interrupts = &mut PostgresInterrupts;
             compute::betweenness_centrality(workers, memory, interrupts, paths, sampling, scale)
@@ -120,26 +143,41 @@ fn betweenness_centrality(
 /// graph), scaled by the fraction of nodes that reach it if `wf_improved`,
 /// as NetworkX's `closeness_centrality(G, distance, wf_improved)`: exact if
 /// `k` is NULL, else estimated from `k` sources sampled with `seed` (among
-/// the nodes vector `sources` selects, if given). `rels`, `weighted` as
-/// `betweenness_centrality`'s. Returns the number of sources.
-#[pg_extern(schema = "warren", volatile, parallel_unsafe)]
+/// the nodes vector `sources` selects, if given). `rels`, `weighted` and
+/// `per_relation` as `betweenness_centrality`'s. Returns the number of
+/// sources.
+#[pg_extern(
+    schema = "warren",
+    sql = r#"
+CREATE FUNCTION warren.closeness_centrality(graph text, "out" text, k bigint DEFAULT NULL,
+                                            seed bigint DEFAULT 0, wf_improved boolean DEFAULT true,
+                                            directed boolean DEFAULT true, sources text DEFAULT NULL,
+                                            rels text[] DEFAULT NULL, weighted boolean DEFAULT NULL,
+                                            persist boolean DEFAULT true, version bigint DEFAULT NULL,
+                                            per_relation boolean DEFAULT false)
+RETURNS bigint
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'closeness_centrality_wrapper';
+"#
+)]
 #[allow(clippy::too_many_arguments)] // The SQL function's arguments.
 fn closeness_centrality(
     graph: Option<&str>,
     out: Option<&str>,
-    k: default!(Option<i64>, "NULL"),
-    seed: default!(Option<i64>, "0"),
-    wf_improved: default!(Option<bool>, "true"),
-    directed: default!(Option<bool>, "true"),
-    sources: default!(Option<&str>, "NULL"),
-    rels: default!(Option<Vec<Option<String>>>, "NULL"),
-    weighted: default!(Option<bool>, "NULL"),
-    persist: default!(Option<bool>, "true"),
-    version: default!(Option<i64>, "NULL"),
+    k: Option<i64>,
+    seed: Option<i64>,
+    wf_improved: Option<bool>,
+    directed: Option<bool>,
+    sources: Option<&str>,
+    rels: Option<Vec<Option<String>>>,
+    weighted: Option<bool>,
+    persist: Option<bool>,
+    version: Option<i64>,
+    fcinfo: pg_sys::FunctionCallInfo,
 ) -> Option<i64> {
+    let per_relation = added_flag(fcinfo, 11);
     entry(|_| {
         let wf_improved = wf_improved.ok_or(ComputeSqlError::NullArgument("wf_improved"))?;
-        let arguments = Arguments { k, seed, sources, directed, rels, weighted };
+        let arguments = Arguments { k, seed, sources, directed, rels, weighted, per_relation };
         centrality(graph, out, persist, version, arguments, |workers, memory, paths, sampling| {
             let interrupts = &mut PostgresInterrupts;
             compute::closeness_centrality(workers, memory, interrupts, paths, sampling, wf_improved)
@@ -154,22 +192,36 @@ fn closeness_centrality(
 /// vector `sources` selects, if given), scaled by `(n − 1) / k_u`. The
 /// other arguments as `closeness_centrality`'s. Returns the number of
 /// sources.
-#[pg_extern(schema = "warren", volatile, parallel_unsafe)]
+#[pg_extern(
+    schema = "warren",
+    sql = r#"
+CREATE FUNCTION warren.harmonic_centrality(graph text, "out" text, k bigint DEFAULT NULL,
+                                           seed bigint DEFAULT 0, directed boolean DEFAULT true,
+                                           sources text DEFAULT NULL, rels text[] DEFAULT NULL,
+                                           weighted boolean DEFAULT NULL, persist boolean DEFAULT true,
+                                           version bigint DEFAULT NULL,
+                                           per_relation boolean DEFAULT false)
+RETURNS bigint
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'harmonic_centrality_wrapper';
+"#
+)]
 #[allow(clippy::too_many_arguments)] // The SQL function's arguments.
 fn harmonic_centrality(
     graph: Option<&str>,
     out: Option<&str>,
-    k: default!(Option<i64>, "NULL"),
-    seed: default!(Option<i64>, "0"),
-    directed: default!(Option<bool>, "true"),
-    sources: default!(Option<&str>, "NULL"),
-    rels: default!(Option<Vec<Option<String>>>, "NULL"),
-    weighted: default!(Option<bool>, "NULL"),
-    persist: default!(Option<bool>, "true"),
-    version: default!(Option<i64>, "NULL"),
+    k: Option<i64>,
+    seed: Option<i64>,
+    directed: Option<bool>,
+    sources: Option<&str>,
+    rels: Option<Vec<Option<String>>>,
+    weighted: Option<bool>,
+    persist: Option<bool>,
+    version: Option<i64>,
+    fcinfo: pg_sys::FunctionCallInfo,
 ) -> Option<i64> {
+    let per_relation = added_flag(fcinfo, 10);
     entry(|_| {
-        let arguments = Arguments { k, seed, sources, directed, rels, weighted };
+        let arguments = Arguments { k, seed, sources, directed, rels, weighted, per_relation };
         centrality(graph, out, persist, version, arguments, |workers, memory, paths, sampling| {
             let interrupts = &mut PostgresInterrupts;
             compute::harmonic_centrality(workers, memory, interrupts, paths, sampling)
@@ -184,7 +236,9 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{failure, refresh, rows, small};
+    use crate::fixture::{
+        failure, refresh, rows, same_as_expanded, small, weighted_relation_expansions,
+    };
 
     /// The live rows of vector `name` of graph `t`, as `id:value`.
     fn values(name: &str) -> Result<Option<String>, Error> {
@@ -252,6 +306,31 @@ mod tests {
         let harmonic = "1:1.8333333333333333 2:1.8333333333333333 3:1.8333333333333333 \
                         4:1.8333333333333333 5:0 6:0";
         assert_eq!(values("h")?.as_deref(), Some(harmonic));
+        Ok(())
+    }
+
+    /// Weighted, `per_relation` reads a pair in k relations as k parallel
+    /// edges, so paths take its lightest relation (the min-folded
+    /// expansion); by default the pair weighs their sum. Unweighted, it
+    /// changes nothing.
+    #[pg_test]
+    fn per_relation_paths_take_a_pair_s_lightest_relation() -> Result<(), Error> {
+        weighted_relation_expansions("ce", "min")?;
+        for call in ["betweenness_centrality", "closeness_centrality", "harmonic_centrality"] {
+            for directed in [true, false] {
+                let call = format!("warren.{call}('{{g}}', 'out', directed := {directed}");
+                same_as_expanded("ce", &format!("SELECT {call}{{per}})"), "out")?;
+                let unweighted = |per: &str| {
+                    Spi::run(
+                        &format!("SELECT {call}, weighted := false{per})").replace("{g}", "ce_u"),
+                    )?;
+                    rows("SELECT node_id || ':' || value FROM warren.vector_values('ce_u', 'out', NULL::bigint)")
+                };
+                assert_eq!(unweighted(", per_relation := true")?, unweighted("")?, "{call}");
+            }
+            let null = failure(&format!("warren.{call}('ce_s', 'out', per_relation := NULL)"))?;
+            assert_eq!(null.as_deref(), Some("22004: per_relation must not be NULL"), "{call}");
+        }
         Ok(())
     }
 

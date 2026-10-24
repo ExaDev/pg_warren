@@ -562,6 +562,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::community::Weighting;
     use crate::compute::reference::{self, Edges};
     use crate::interrupts::Uninterrupted;
     use crate::progress::recorded::Recorded;
@@ -575,8 +576,14 @@ mod tests {
         let mut both = edges.clone();
         both.extend(edges.iter().filter(|e| e.1 != e.2).map(|&(r, s, t, w)| (r, t, s, w)));
         let graph = reference::graph(n, 1, &both, true, false);
-        Undirected::new(&ComputeMemory::new(u64::MAX), &Cancellation::new(), &graph, true, false)
-            .unwrap()
+        Undirected::new(
+            &ComputeMemory::new(u64::MAX),
+            &Cancellation::new(),
+            &graph,
+            Weighting { weighted: true, per_relation: false },
+            false,
+        )
+        .unwrap()
     }
 
     const OPTIONS: LocalMoving =

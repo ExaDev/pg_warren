@@ -15,6 +15,7 @@ pub(super) struct OperatorArguments {
     pub(super) rels: Option<Vec<Option<String>>>,
     pub(super) weighted: Option<bool>,
     pub(super) symmetrize: bool,
+    pub(super) per_relation: bool,
 }
 
 impl OperatorArguments {
@@ -33,6 +34,7 @@ impl OperatorArguments {
             relations: selected.map_or(RelationSelection::All, RelationSelection::Only),
             weighted: self.weighted,
             symmetrize: self.symmetrize,
+            per_relation: self.per_relation,
         })
     }
 }

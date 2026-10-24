@@ -10,27 +10,41 @@ use super::CommunitySqlError;
 use crate::access::entry;
 use crate::cache::resolve;
 use crate::compute_sql::Vectors;
+use crate::extension::added_flag;
 use crate::source::with_id_type;
 
 /// `warren.modularity`: the modularity, at resolution `resolution`, of the
 /// partition that vector `labels` (integers, one per node) gives `graph`'s
 /// version `version` (NULL: the current one): directions ignored (an
 /// edge and its reverse add up), edges weighted if `weighted` (NULL: if
-/// the graph has weights), an undirected self-loop counted once in its
+/// the graph has weights), an edge in several relations one edge, its
+/// weights summed, or with `per_relation` an edge in each (`spmv`'s `A`,
+/// DESIGN.md §6.3), an undirected self-loop counted once in its
 /// node's degree, as `contract` counts it, so a partition scores as the
 /// singletons of its quotient; 0 for a graph without edges. On an
 /// undirected graph it is NetworkX's `community.modularity` with each
 /// self-loop's weight halved (equal without self-loops); on a directed
 /// graph, NetworkX's of `nx.MultiGraph(G)`, not of `G`, which NetworkX
 /// scores with Leicht and Newman's directed formula.
-#[pg_extern(schema = "warren", stable, parallel_restricted)]
+#[pg_extern(
+    schema = "warren",
+    sql = r#"
+CREATE FUNCTION warren.modularity(graph text, labels text, resolution double precision DEFAULT 1.0,
+                                  weighted boolean DEFAULT NULL, version bigint DEFAULT NULL,
+                                  per_relation boolean DEFAULT false)
+RETURNS double precision
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'modularity_wrapper';
+"#
+)]
 fn modularity(
     graph: Option<&str>,
     labels: Option<&str>,
     resolution: default!(Option<f64>, "1.0"),
     weighted: default!(Option<bool>, "NULL"),
     version: default!(Option<i64>, "NULL"),
+    fcinfo: pg_sys::FunctionCallInfo,
 ) -> Option<f64> {
+    let per_relation = added_flag(fcinfo, 5);
     entry(|_| -> Result<Option<f64>, CommunitySqlError> {
         let graph = graph.ok_or(CommunitySqlError::NullArgument("graph"))?;
         let labels = labels.ok_or(CommunitySqlError::NullArgument("labels"))?;
@@ -40,7 +54,7 @@ fn modularity(
         with_id_type!(resolved.graph.id_type, E => {
             let mut vectors = Vectors::<E>::open(resolved)?;
             let (labels, _charge) = integers(&mut vectors, labels, "labels")?;
-            let view = undirected(&vectors, weighted)?;
+            let view = undirected(&vectors, weighted, per_relation)?;
             Ok(Some(score(&vectors.memory, &view, labels.values(), resolution)?))
         })
     })
@@ -110,6 +124,63 @@ pub(super) mod tests {
         Ok(())
     }
 
+    /// Graph `<name>`, undirected and unweighted: 1 – 2 in relations `x`
+    /// and `y`, 3 – 4 in `x`, with labels `p`: {1, 2} and {3, 4}.
+    pub(crate) fn a_pair_in_two_relations(name: &str, store_merged: bool) -> Result<(), Error> {
+        Spi::run(&format!(
+            "CREATE TABLE {name}_n (id bigint); INSERT INTO {name}_n VALUES (1), (2), (3), (4);
+             CREATE TABLE {name}_e (src bigint, dst bigint, rel text);
+             INSERT INTO {name}_e VALUES (1, 2, 'x'), (1, 2, 'y'), (3, 4, 'x');
+             SELECT warren.create_graph('{name}', 'SELECT id FROM {name}_n',
+                                        'SELECT src, dst, rel FROM {name}_e', directed := false,
+                                        has_relations := true, store_merged := {store_merged});
+             SELECT warren.refresh('{name}');
+             SELECT warren.vector_from_query('{name}', 'p', 'SELECT id, CASE WHEN id <= 2 THEN 0 ELSE 1 END
+                                                             FROM {name}_n', 'i64')"
+        ))
+    }
+
+    #[pg_test]
+    fn a_pair_in_several_relations_counts_once() -> Result<(), Error> {
+        for (name, store_merged) in [("merged", true), ("unmerged", false)] {
+            a_pair_in_two_relations(name, store_merged)?;
+            // m = 2, each community one edge inside: 2 · (1/2 − (2/4)²).
+            let q = Spi::get_one::<f64>(&format!("SELECT warren.modularity('{name}', 'p')"))?;
+            assert_eq!(q, Some(0.5), "{name}");
+            // Its quotient's singletons score the same.
+            Spi::run(&format!(
+                "SELECT warren.contract('{name}', 'p', '{name}_q');
+                 SELECT warren.vector_dense_id('{name}_q', 'alone')"
+            ))?;
+            let q = Spi::get_one::<f64>(&format!("SELECT warren.modularity('{name}_q', 'alone')"))?;
+            assert_eq!(q, Some(0.5), "{name}_q");
+        }
+        Ok(())
+    }
+
+    #[pg_test]
+    fn per_relation_a_pair_counts_once_in_each_of_its_relations() -> Result<(), Error> {
+        for (name, store_merged) in [("merged", true), ("unmerged", false)] {
+            a_pair_in_two_relations(name, store_merged)?;
+            // m = 3: 1 – 2 weighs 2. (4 − 4²/6) / 6 + (2 − 2²/6) / 6 = 4/9.
+            let q = Spi::get_one::<f64>(&format!(
+                "SELECT warren.modularity('{name}', 'p', per_relation := true)"
+            ))?
+            .unwrap_or_default();
+            assert!((q - 4.0 / 9.0).abs() < 1e-15, "{name}: {q}");
+            // Its quotient, contracted per relation, sums the relations' counts.
+            Spi::run(&format!(
+                "SELECT warren.contract('{name}', 'p', '{name}_q', per_relation := true);
+                 SELECT warren.vector_dense_id('{name}_q', 'alone')"
+            ))?;
+            let quotient =
+                Spi::get_one::<f64>(&format!("SELECT warren.modularity('{name}_q', 'alone')"))?
+                    .unwrap_or_default();
+            assert!((quotient - q).abs() < 1e-15, "{name}_q: {quotient}");
+        }
+        Ok(())
+    }
+
     #[pg_test]
     fn modularity_refuses_bad_arguments() -> Result<(), Error> {
         two_triangles()?;
@@ -127,6 +198,10 @@ pub(super) mod tests {
         assert_eq!(
             failure("warren.modularity('tt', NULL)")?.as_deref(),
             Some("22004: labels must not be NULL")
+        );
+        assert_eq!(
+            failure("warren.modularity('tt', 'halves', per_relation := NULL)")?.as_deref(),
+            Some("22004: per_relation must not be NULL")
         );
         Ok(())
     }

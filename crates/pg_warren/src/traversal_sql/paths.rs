@@ -17,6 +17,7 @@ use super::args::bound;
 use super::stats::Recorder;
 use super::{entry, TraversalSqlError};
 use crate::cache::{cached, resolve, CachedIds, LoadedVersion, Resolved};
+use crate::extension::added_flag;
 use crate::external_ids::{element, element_widened, external_array};
 use crate::interrupts::PostgresInterrupts;
 use crate::selection::{adjacency, direction};
@@ -111,14 +112,15 @@ fn shortest_path(
 
 /// `warren.dijkstra`: a cheapest path from `start` to `target` and its
 /// cost (edge weights; 1 per edge if the graph is unweighted); no row if
-/// there is none. An edge in several selected relations costs its cheapest
-/// weight.
+/// there is none. An edge in several selected relations costs their
+/// weights' sum, as `spmv`'s `A` holds it, or with `per_relation` its
+/// cheapest relation's weight (DESIGN.md §5.3).
 #[pg_extern(
     schema = "warren",
     sql = r#"
 CREATE FUNCTION warren.dijkstra(graph text, start anyelement, target anyelement,
                                 rels text[] DEFAULT NULL, direction text DEFAULT 'out',
-                                version bigint DEFAULT NULL)
+                                version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
 RETURNS TABLE (path anyarray, cost float8)
 STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'dijkstra_wrapper';
 "#
@@ -130,7 +132,9 @@ fn dijkstra(
     rels: Option<Vec<Option<String>>>,
     direction: Option<&str>,
     version: Option<i64>,
+    fcinfo: pg_sys::FunctionCallInfo,
 ) -> TableIterator<'static, (name!(path, AnyArray), name!(cost, f64))> {
+    let per_relation = added_flag(fcinfo, 6);
     let call = Endpoints {
         function: "dijkstra",
         graph,
@@ -142,9 +146,10 @@ fn dijkstra(
         widen: false,
     };
     entry(|| {
+        let per_relation = per_relation.ok_or(TraversalSqlError::NullArgument("per_relation"))?;
         let opened = call.open()?;
         let row = with_id_type!(opened.id_type(), E => opened.run::<E, _>(|loaded, adjacency, start, target| {
-            let found = cheapest_path(adjacency, start, target, &mut PostgresInterrupts)?;
+            let found = cheapest_path(adjacency, start, target, per_relation, &mut PostgresInterrupts)?;
             let row = found.result.and_then(|weighted| {
                 Some((external_array(&loaded.id_map, &weighted.path)?, weighted.cost))
             });
@@ -233,7 +238,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::small;
+    use crate::fixture::{failure, small, weighted_relation_expansions};
 
     fn one(query: &str) -> Result<Option<String>, Error> {
         Spi::get_one::<String>(query)
@@ -282,6 +287,33 @@ mod tests {
         let none =
             Spi::get_one::<i64>("SELECT count(*) FROM warren.dijkstra('t', 1::bigint, 6::bigint)")?;
         assert_eq!(none, Some(0));
+        Ok(())
+    }
+
+    /// A pair in several relations costs their weights' sum (the
+    /// deduplicated graph's edge), or with `per_relation` its cheapest
+    /// relation's weight (the min-folded expansion's), in every direction.
+    #[pg_test]
+    fn dijkstra_reads_a_pair_once_or_per_relation() -> Result<(), Error> {
+        weighted_relation_expansions("dj", "min")?;
+        for direction in ["out", "in", "both"] {
+            let costs = |graph: &str, per: &str| {
+                one(&format!(
+                    "SELECT string_agg(s || '-' || t || ':' || cost, ' ' ORDER BY s, t)
+                     FROM generate_series(1, 60, 4) s, generate_series(1, 60) t,
+                          warren.dijkstra('dj_{graph}', s::bigint, t::bigint,
+                                          direction := '{direction}'{per})"
+                ))
+            };
+            let (each, once) = (costs("each", "")?, costs("once", "")?);
+            for graph in ["s", "u"] {
+                assert_eq!(costs(graph, ", per_relation := true")?, each, "{graph} {direction}");
+                assert_eq!(costs(graph, "")?, once, "{graph} {direction}");
+            }
+            assert_ne!(each, once, "{direction}");
+        }
+        let null = failure("warren.dijkstra('dj_s', 1::bigint, 2::bigint, per_relation := NULL)")?;
+        assert_eq!(null.as_deref(), Some("22004: per_relation must not be NULL"));
         Ok(())
     }
 

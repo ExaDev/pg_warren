@@ -12,11 +12,13 @@
 -- the iterations run. Constants enter expressions as constant vectors; a
 -- constant vector is 0 at tombstoned rows, where vector_map evaluates too,
 -- so a division by one is guarded.
+-- A pair linked in several relations is one edge, or with `per_relation`
+-- an edge in each (DESIGN.md §5.3).
 CREATE FUNCTION warren.katz_centrality(graph text, "out" text, alpha float8 DEFAULT 0.1,
                                        beta float8 DEFAULT 1.0, seed text DEFAULT NULL,
                                        normalized boolean DEFAULT true, tol float8 DEFAULT 1e-6,
                                        max_iter int DEFAULT 1000, rels text[] DEFAULT NULL,
-                                       weighted boolean DEFAULT NULL, version bigint DEFAULT NULL)
+                                       weighted boolean DEFAULT NULL, version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
 RETURNS int LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   v bigint := coalesce(version, (warren.info(graph) ->> 'current_version')::bigint);
@@ -65,7 +67,7 @@ BEGIN
       i := i + 1;
       PERFORM warren.report_progress('katz_centrality', graph, 'iterating', i - 1, max_iter);
       PERFORM warren.spmv(graph, '_warren_katz_centrality_x', '_warren_katz_centrality_y',
-                          transpose := true, rels := rels, weighted := weighted, persist := false, version := v);
+                          transpose := true, rels := rels, weighted := weighted, per_relation := per_relation, persist := false, version := v);
       PERFORM warren.vector_map(graph, '_warren_katz_centrality_next',
         '_warren_katz_centrality_alpha * _warren_katz_centrality_y + _warren_katz_centrality_b', false, v);
       delta := warren.vector_norm_diff(graph, '_warren_katz_centrality_next', '_warren_katz_centrality_x',

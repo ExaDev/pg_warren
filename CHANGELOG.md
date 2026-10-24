@@ -15,14 +15,55 @@
   registry is now `pg_warren.cache.4`, so backends of the old and the new
   build never share a version; the old registry's segments are freed by a
   restart.
+- `ALTER EXTENSION pg_warren UPDATE` drops and recreates the functions
+  that gain `per_relation`, keeping their privileges. Until the update,
+  0.6.0's definitions still work with the new library, counting a pair
+  once.
+- The update drops those functions without `CASCADE`, so it fails if a
+  view, or a function with a `BEGIN ATOMIC` body, calls one of them
+  ("cannot drop function ... because other objects depend on it"). Drop
+  the dependent objects, run `ALTER EXTENSION pg_warren UPDATE`, then
+  create them again.
 
 ### Behaviour changes
 
+- **An unweighted pair of nodes linked in several relations now counts
+  once in `modularity`, `contract`, `local_moving`, `leiden_refine`,
+  `louvain` and `leiden`**, as it already did in `spmv`, `degree` and
+  `pagerank`. They counted it once per relation, so on graphs with such
+  pairs their results differ from 0.6.0's. A counting `contract` counts
+  the pair in the first of its relations. Weighted pairs are unchanged:
+  their weights are summed across relations.
+- **`dijkstra` now costs a weighted pair linked in several relations the
+  sum of their weights**, as `sssp_vector` and the centralities do. It
+  took the cheapest relation's weight; `per_relation := true` still does.
+- **Undirected weighted centralities refuse a pair whose weight is NaN in
+  one direction** (22023), as they refuse a NaN anywhere else. They used
+  the other direction's weight.
 - A graph's number of relations no longer refuses its build on its own.
   `warren.max_build_memory` used to be checked against 8 bytes per node
   for every relation's CSR (and the merged CSR), in each direction; it is
   now checked against the merged CSR's offsets and 8 bytes per relation,
   and each relation's offsets count in the build's estimate by its edges.
+
+- **`bfs` expands each depth's nodes in ascending dense id order** (the
+  graph's internal node order), so within a depth its rows can come in a
+  different order than in 0.6.0, and a node reachable from several nodes
+  of the previous depth reports as `via` the one of smallest dense id.
+  Nodes and depths are unchanged.
+
+### Added
+
+- **`per_relation boolean DEFAULT false`** on `modularity`, `contract`,
+  `local_moving`, `leiden_refine`, `louvain`, `leiden`, `spmv`, `spmm`,
+  `pagerank`, `katz_centrality`, `eigenvector_centrality`, `hits`,
+  `sssp_vector`, `dijkstra`, `betweenness_centrality`,
+  `closeness_centrality`, `harmonic_centrality`, `dag_longest_path`,
+  `minimum_spanning_forest`, `degree`, `vector_degree`, `degree_vector`,
+  `aggregate_neighbours`, `gather`, `label_propagation_majority`, `eigen`
+  and `distance`: `true` reads a pair linked in several relations as an
+  edge in each (one per relation, as parallel edges), for when that
+  multiplicity is the signal.
 
 ### Performance
 
@@ -36,6 +77,10 @@
   pay a binary search per row looked up: on FB15k-237, a BFS over its 10
   largest relations takes 1.1× as long and an SpMV over them 1.2–1.4×;
   reads over all relations are unchanged.
+- Without the merged CSR (`store_merged := false`), BFS and `components`
+  read the relations' rows in ascending order; on FB15k-237 they are
+  1.5–2.2× faster than in 0.6.0, and the version ten times smaller, but
+  an all-relations `spmv` takes 1.6–2× as long (docs/limits.md).
 
 ## 0.6.0 — identity, lifecycle and visibility (2026-10-24)
 
