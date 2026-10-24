@@ -33,7 +33,7 @@ pub(crate) const fn named_segment_room(size: usize) -> u64 {
 pub(crate) fn store_space() -> Option<(u64, u64)> {
     // SAFETY: reads a setting on the main thread.
     let kind = unsafe { pg_sys::dynamic_shared_memory_type } as u32;
-    space_of(kind, POSIX_STORE)
+    space_of(kind, POSIX_STORE, space)
 }
 
 /// Where `posix` segments are files that can be measured: `/dev/shm` on
@@ -42,12 +42,17 @@ pub(crate) fn store_space() -> Option<(u64, u64)> {
 /// so a short store is no ERROR at creation to guard against.
 const POSIX_STORE: Option<&CStr> = if cfg!(target_os = "linux") { Some(c"/dev/shm") } else { None };
 
-/// [`store_space`] for segments of `kind`, `posix` ones measured in
-/// `posix_store`, or unbounded where there is none.
-fn space_of(kind: u32, posix_store: Option<&CStr>) -> Option<(u64, u64)> {
+/// [`store_space`] for segments of `kind`, `posix` ones in `posix_store`,
+/// each store read with `measure` ([`space`]), or unbounded where there
+/// is none.
+fn space_of(
+    kind: u32,
+    posix_store: Option<&CStr>,
+    measure: impl Fn(&CStr) -> Option<(u64, u64)>,
+) -> Option<(u64, u64)> {
     match (kind, posix_store) {
-        (pg_sys::DSM_IMPL_POSIX, Some(store)) => space(store),
-        (pg_sys::DSM_IMPL_MMAP, _) => space(c"pg_dynshmem"),
+        (pg_sys::DSM_IMPL_POSIX, Some(store)) => measure(store),
+        (pg_sys::DSM_IMPL_MMAP, _) => measure(c"pg_dynshmem"),
         _ => Some((u64::MAX, u64::MAX)),
     }
 }
@@ -97,12 +102,32 @@ mod tests {
         assert_eq!(space(c"/no/such/directory"), None);
     }
 
+    /// A measurement that names the store it was asked to measure, so a
+    /// test sees which store was read without two live readings of a disk
+    /// that other processes write to.
+    fn measured(store: &CStr) -> Option<(u64, u64)> {
+        let size = store.to_bytes().len() as u64;
+        Some((size, size))
+    }
+
     #[test]
     fn posix_segments_created_where_none_can_measure_are_unbounded() {
         let unbounded = Some((u64::MAX, u64::MAX));
-        assert_eq!(space_of(pg_sys::DSM_IMPL_POSIX, None), unbounded);
-        assert_eq!(space_of(pg_sys::DSM_IMPL_POSIX, Some(c"/")), space(c"/"));
-        assert_eq!(space_of(pg_sys::DSM_IMPL_SYSV, Some(c"/")), unbounded);
+        assert_eq!(space_of(pg_sys::DSM_IMPL_POSIX, None, measured), unbounded);
+        assert_eq!(space_of(pg_sys::DSM_IMPL_SYSV, Some(c"/dev/shm"), measured), unbounded);
+    }
+
+    #[test]
+    fn segments_are_measured_where_they_are_created() {
+        assert_eq!(
+            space_of(pg_sys::DSM_IMPL_POSIX, Some(c"/dev/shm"), measured),
+            measured(c"/dev/shm")
+        );
+        assert_eq!(space_of(pg_sys::DSM_IMPL_MMAP, None, measured), measured(c"pg_dynshmem"));
+        assert_eq!(
+            space_of(pg_sys::DSM_IMPL_MMAP, Some(c"/dev/shm"), measured),
+            measured(c"pg_dynshmem")
+        );
     }
 
     #[test]
