@@ -25,8 +25,10 @@
 //! From one start vector, Lanczos finds one direction of each eigenspace,
 //! so the copies of a repeated eigenvalue are found only when rounding or a
 //! restart from a fresh vector (after an exact invariant subspace) brings
-//! them in; graphs with several connected components have a repeated
-//! Laplacian eigenvalue 0.
+//! them in. Graphs with several connected components have a repeated
+//! Laplacian eigenvalue 0; where it is at the wanted end, its copies are
+//! taken exactly from the components and Lanczos runs on the rest
+//! ([`Deflation`]).
 //!
 //! Every vector is a seeded function of the graph, and every reduction is
 //! order-deterministic, so the result is the same for any thread count.
@@ -37,8 +39,9 @@ use std::str::FromStr;
 use nalgebra::DMatrix;
 
 use super::basis::{Basis, Orthogonalized, Stored};
+use super::deflation::Deflation;
 use super::operator::LinearOperator;
-use super::ritz::Ritz;
+use super::ritz::{self, Ritz};
 use super::working_set::WorkingSet;
 use super::{dense, GraphMatrix, Resources, SpectralError};
 use crate::compute::{AnyVector, ComputeError, ComputeMemory, MemoryCharge, Vector};
@@ -187,6 +190,11 @@ pub struct Eigen {
     /// per component), and single-vector Lanczos may find fewer copies than
     /// there are.
     pub components: u64,
+    /// Whether the eigenvalue each component gives once (0 of the
+    /// Laplacians at the smallest end, 1 of the random walk at the largest)
+    /// was taken exactly, an eigenvector per component, so that none of its
+    /// copies is missed.
+    pub deflated: bool,
 }
 
 /// The `options.k` eigenpairs of `matrix` over `graph` at the `which` end.
@@ -200,13 +208,16 @@ pub fn eigen<I: Interrupts>(
     options: &EigenOptions,
 ) -> Result<Eigen, SpectralError> {
     let mut operator = LinearOperator::new(resources, graph, matrix)?;
-    let size = admit(resources, &operator, matrix, options)?;
+    check_count(&operator, options)?;
+    let mut deflation = deflate(resources, &mut operator, matrix, options)?;
+    let working_set = admit(resources, &operator, deflation.as_ref(), matrix, options)?;
+    let deflation = deflation.as_mut();
     match options.precision {
         Precision::F32 => {
-            Lanczos::<f32>::new(resources, &mut operator, options, size)?.run(resources)
+            solve::<f32, I>(resources, &mut operator, deflation, options, &working_set)
         }
         Precision::F64 => {
-            Lanczos::<f64>::new(resources, &mut operator, options, size)?.run(resources)
+            solve::<f64, I>(resources, &mut operator, deflation, options, &working_set)
         }
     }
 }
@@ -221,38 +232,138 @@ pub fn admit_eigen<I: Interrupts>(
     matrix: &GraphMatrix<'_>,
     options: &EigenOptions,
 ) -> Result<(), SpectralError> {
-    let operator = LinearOperator::new(resources, graph, matrix)?;
-    admit(resources, &operator, matrix, options).map(drop)
+    let mut operator = LinearOperator::new(resources, graph, matrix)?;
+    check_count(&operator, options)?;
+    let deflation = deflate(resources, &mut operator, matrix, options)?;
+    admit(resources, &operator, deflation.as_ref(), matrix, options).map(drop)
 }
 
-/// Checks the eigenpair count against the dimension and the working set
-/// against the compute memory; returns the basis size.
-fn admit<I>(
-    resources: &Resources<'_, I>,
-    operator: &LinearOperator<'_>,
-    matrix: &GraphMatrix<'_>,
-    options: &EigenOptions,
-) -> Result<usize, SpectralError> {
+/// Refuses an eigenpair count of 0 or past the dimension.
+fn check_count(operator: &LinearOperator<'_>, options: &EigenOptions) -> Result<(), SpectralError> {
     let dimension = operator.dimension();
     if options.k == 0 || options.k as u64 > dimension {
         return Err(SpectralError::EigenpairCount { k: options.k, dimension });
     }
+    Ok(())
+}
+
+/// The components' eigenpairs, if their eigenvalue is at the wanted end.
+fn deflate<I: Interrupts>(
+    resources: &mut Resources<'_, I>,
+    operator: &mut LinearOperator<'_>,
+    matrix: &GraphMatrix<'_>,
+    options: &EigenOptions,
+) -> Result<Option<Deflation>, SpectralError> {
+    Deflation::eigenvalue(matrix.operator, options.which)
+        .map(|value| Deflation::new(resources, operator, value))
+        .transpose()
+}
+
+/// Checks the working set against the compute memory and returns it.
+fn admit<I>(
+    resources: &Resources<'_, I>,
+    operator: &LinearOperator<'_>,
+    deflation: Option<&Deflation>,
+    matrix: &GraphMatrix<'_>,
+    options: &EigenOptions,
+) -> Result<WorkingSet, SpectralError> {
+    let dimension = operator.dimension();
     let working_set = WorkingSet {
         id_space: operator.id_space(),
         dimension,
         operator: matrix.operator,
         k: options.k,
         precision: options.precision,
+        deflated: deflation.map(Deflation::count),
+        wanted: deflation.map_or(options.k, |deflation| deflation.wanted(options.k, dimension)),
     };
     working_set.admit(resources.memory)?;
-    Ok(working_set.basis_size())
+    Ok(working_set)
+}
+
+/// The eigenpairs: the components' (if deflated) and the rest from
+/// Lanczos, in `which` order.
+fn solve<E: Stored, I: Interrupts>(
+    resources: &mut Resources<'_, I>,
+    operator: &mut LinearOperator<'_>,
+    mut deflation: Option<&mut Deflation>,
+    options: &EigenOptions,
+    working_set: &WorkingSet,
+) -> Result<Eigen, SpectralError>
+where
+    AnyVector: From<Vector<E>>,
+{
+    let found = match working_set.wanted {
+        0 => Found { pairs: Vec::new(), iterations: 0, converged: true },
+        _ => {
+            Lanczos::<E>::new(resources, operator, deflation.as_deref_mut(), options, working_set)?
+                .run(resources)?
+        }
+    };
+    let (known, components) = match &deflation {
+        Some(deflation) => {
+            let mut known = Vec::new();
+            for c in 0..deflation.count().min(options.k as u64) {
+                deflation.vector(resources, c, operator.input_mut()?)?;
+                known.push(eigenpair::<E, I>(resources, operator, deflation.value())?);
+            }
+            (known, deflation.count())
+        }
+        None => (Vec::new(), operator.components(resources)?.count()),
+    };
+    Ok(Eigen {
+        pairs: merge(known, found.pairs, options.k, options.which, tie(options.precision)),
+        iterations: found.iterations,
+        converged: found.converged,
+        components,
+        deflated: deflation.is_some(),
+    })
+}
+
+/// The first `k` of the components' pairs and Lanczos's, in `which` order,
+/// the components' first among equal values.
+fn merge(
+    known: Vec<Eigenpair>,
+    found: Vec<Eigenpair>,
+    k: usize,
+    which: Which,
+    tie: f64,
+) -> Vec<Eigenpair> {
+    let mut pairs: Vec<Option<Eigenpair>> = known.into_iter().chain(found).map(Some).collect();
+    let values: Vec<f64> = pairs.iter().flatten().map(|pair| pair.value).collect();
+    ritz::order(&values, which, tie).into_iter().take(k).filter_map(|i| pairs[i].take()).collect()
+}
+
+/// How close two magnitudes may be, relative to the largest, for
+/// `Largest` to treat them as tied: the precision's rounding, never the
+/// tolerance, which would let a loose `tol` reorder distinct values.
+fn tie(precision: Precision) -> f64 {
+    match precision {
+        Precision::F32 => F32_TIE,
+        Precision::F64 => F64_TIE,
+    }
+}
+
+/// What Lanczos found.
+#[derive(Debug)]
+struct Found {
+    pairs: Vec<Eigenpair>,
+    iterations: usize,
+    converged: bool,
 }
 
 /// One Lanczos iteration in progress.
 #[derive(Debug)]
 struct Lanczos<'o, 'g, E> {
     operator: &'o mut LinearOperator<'g>,
+    /// The components' eigenvectors, which every vector is kept orthogonal
+    /// to.
+    deflation: Option<&'o mut Deflation>,
     options: EigenOptions,
+    /// The pairs it computes, the first `wanted` at the `which` end.
+    wanted: usize,
+    /// The dimension of the space it runs over: the active nodes, less the
+    /// components' eigenvectors.
     dimension: usize,
     max_iter: usize,
     basis: Basis<E>,
@@ -295,16 +406,21 @@ where
     fn new<I: Interrupts>(
         resources: &mut Resources<'_, I>,
         operator: &'o mut LinearOperator<'g>,
+        deflation: Option<&'o mut Deflation>,
         options: &EigenOptions,
-        size: usize,
+        working_set: &WorkingSet,
     ) -> Result<Self, SpectralError> {
-        let dimension = operator.dimension() as usize;
+        let size = working_set.basis_size();
+        let deflated = deflation.as_ref().map_or(0, |deflation| deflation.count());
+        let dimension = (operator.dimension() - deflated) as usize;
         let max_iter = options.max_iter.unwrap_or(STEPS_PER_BASIS_VECTOR * size).max(options.k);
         let basis = Basis::new(resources, operator.id_space() as usize, size)?;
         let h_charge = resources.memory.charge_elements::<f64>(size * size)?;
         Ok(Self {
             operator,
+            deflation,
             options: *options,
+            wanted: working_set.wanted,
             dimension,
             max_iter,
             basis,
@@ -317,20 +433,11 @@ where
         })
     }
 
-    /// How close two magnitudes may be, relative to the largest, for
-    /// `Largest` to treat them as tied: the precision's rounding, never the
-    /// tolerance, which would let a loose `tol` reorder distinct values.
-    fn tie(&self) -> f64 {
-        match self.options.precision {
-            Precision::F32 => F32_TIE,
-            Precision::F64 => F64_TIE,
-        }
-    }
-
     /// The Rayleigh–Ritz pairs of the basis.
     fn ritz(&self, memory: &ComputeMemory) -> Result<Ritz, SpectralError> {
         let len = self.basis.len();
-        Ritz::of(memory, &self.h.view((0, 0), (len, len)), self.options.which, self.tie())
+        let tie = tie(self.options.precision);
+        Ritz::of(memory, &self.h.view((0, 0), (len, len)), self.options.which, tie)
     }
 
     fn size(&self) -> usize {
@@ -340,7 +447,7 @@ where
     fn run<I: Interrupts>(
         mut self,
         resources: &mut Resources<'_, I>,
-    ) -> Result<Eigen, SpectralError> {
+    ) -> Result<Found, SpectralError> {
         if let Some(progress) = resources.interrupts.progress() {
             progress.phase("lanczos", Some(self.max_iter as u64));
         }
@@ -383,7 +490,11 @@ where
     }
 
     /// Multiplies the newest basis vector, makes the result orthogonal to
-    /// the basis, and records its coefficients in `H`. Returns the norm of
+    /// the basis and then to the components' eigenvectors, and records its
+    /// coefficients in `H`. The components' come last: the Gram–Schmidt
+    /// pass leaves rounding along them, which dividing by a small `β` near
+    /// convergence would amplify, restart after restart, until Lanczos
+    /// found their eigenvalue again. Returns the norm of
     /// what is left, `None` on breakdown.
     fn step<I: Interrupts>(
         &mut self,
@@ -393,8 +504,12 @@ where
         self.basis.column(resources, j, self.operator.input_mut()?)?;
         let w = self.operator.apply(resources)?;
         self.iterations += 1;
-        let Orthogonalized { coefficients, norm: beta } =
+        let Orthogonalized { coefficients, norm } =
             self.basis.orthogonalize(resources, w, self.previous)?;
+        let beta = match self.deflation.as_deref_mut() {
+            Some(deflation) => deflation.project(resources, w)?,
+            None => norm,
+        };
         for (i, &c) in coefficients.iter().enumerate() {
             self.h[(i, j)] = c;
             self.h[(j, i)] = c;
@@ -433,6 +548,10 @@ where
         let v = self.operator.random_input(resources, self.options.seed, self.streams - 1)?;
         let before = dense::sum(resources, v.len(), |i| v[i] * v[i])?.sqrt();
         let norm = self.basis.orthogonalize(resources, v, None)?.norm;
+        let norm = match self.deflation.as_deref_mut() {
+            Some(deflation) => deflation.project(resources, v)?,
+            None => norm,
+        };
         if norm <= BREAKDOWN * before {
             return Ok(false);
         }
@@ -441,29 +560,31 @@ where
         Ok(true)
     }
 
-    /// Reports the steps taken and the last estimates.
+    /// Reports the steps taken and the last estimates; the pairs converged
+    /// count the components' pairs that come first.
     fn report<I: Interrupts>(&self, resources: &mut Resources<'_, I>) {
         let Some(progress) = resources.interrupts.progress() else { return };
         progress.done(self.iterations as u64);
-        progress.detail("converged", self.estimates.converged as f64);
+        let known = self.options.k - self.wanted;
+        progress.detail("converged", (known + self.estimates.converged) as f64);
         progress.detail("restarts", self.estimates.restarts as f64);
         if let Some(residual) = self.estimates.residual {
             progress.detail("residual", residual);
         }
     }
 
-    /// Whether the `k` wanted Ritz pairs have converged, given the norm of
+    /// Whether the wanted Ritz pairs have converged, given the norm of
     /// the residual left after the last basis vector; records the estimates.
     fn outcome(&mut self, ritz: &Ritz, beta: f64) -> Outcome {
         let len = self.basis.len();
         let scale = ritz.values.iter().fold(0.0f64, |m, v| m.max(v.abs()));
         let estimate = |l: usize| (beta * ritz.vectors[(len - 1, l)]).abs();
         let converged =
-            (0..self.options.k).filter(|&l| estimate(l) <= self.options.tol * scale).count();
-        let largest = (0..self.options.k).map(estimate).fold(0.0f64, f64::max);
+            (0..self.wanted).filter(|&l| estimate(l) <= self.options.tol * scale).count();
+        let largest = (0..self.wanted).map(estimate).fold(0.0f64, f64::max);
         self.estimates.converged = converged;
         self.estimates.residual = Some(if scale > 0.0 { largest / scale } else { largest });
-        let done = len == self.dimension || converged == self.options.k;
+        let done = len == self.dimension || converged == self.wanted;
         match (done, self.iterations >= self.max_iter) {
             (true, _) => Outcome::Converged,
             (false, true) => Outcome::OutOfSteps,
@@ -472,7 +593,7 @@ where
     }
 
     /// Compresses the basis to its most wanted Ritz vectors, on which `H` is
-    /// diagonal: the `k` wanted ones plus one more for each that has
+    /// diagonal: the wanted ones plus one more for each that has
     /// converged (ARPACK's adjustment, so converged pairs do not crowd out
     /// the ones still converging), at least a quarter and at most half of
     /// the rest of the basis (so a clustered spectrum keeps enough of its
@@ -483,9 +604,9 @@ where
         ritz: &Ritz,
         converged: usize,
     ) -> Result<(), SpectralError> {
-        let k = self.options.k;
-        let free = self.size() - k;
-        let kept = (k + converged.clamp(free / 4, free / 2)).min(self.size() - 1);
+        let wanted = self.wanted;
+        let free = self.size() - wanted;
+        let kept = (wanted + converged.clamp(free / 4, free / 2)).min(self.size() - 1);
         self.basis.rotate(resources, &ritz.vectors.columns(0, kept).into_owned())?;
         self.h.fill(0.0);
         for (l, &value) in ritz.values[..kept].iter().enumerate() {
@@ -499,46 +620,55 @@ where
         self,
         resources: &mut Resources<'_, I>,
         outcome: Outcome,
-    ) -> Result<Eigen, SpectralError> {
+    ) -> Result<Found, SpectralError> {
         let ritz = self.ritz(resources.memory)?;
         self.finish_with(resources, ritz, outcome)
     }
 
-    /// The `k` wanted eigenpairs from `ritz`.
+    /// The wanted eigenpairs from `ritz`.
     fn finish_with<I: Interrupts>(
         mut self,
         resources: &mut Resources<'_, I>,
         ritz: Ritz,
         outcome: Outcome,
-    ) -> Result<Eigen, SpectralError> {
+    ) -> Result<Found, SpectralError> {
         if outcome == Outcome::Converged {
-            self.estimates.converged = self.options.k;
+            self.estimates.converged = self.wanted;
             self.report(resources);
         }
         let mut pairs = Vec::new();
-        for l in 0..self.options.k {
+        for l in 0..self.wanted {
             let coordinates: Vec<f64> = ritz.vectors.column(l).iter().copied().collect();
             self.basis.combine(resources, &coordinates, self.operator.input_mut()?)?;
-            settle::<E, I>(resources, self.operator.input_mut()?)?;
-            let value = ritz.values[l];
-            let residual = self.operator.residual(resources, value)?;
-            if self.operator.map_eigenvector(resources)? {
-                settle::<E, I>(resources, self.operator.input_mut()?)?;
-            }
-            let x = self.operator.input_mut()?;
-            let mut vector = Vector::filled(resources.memory, x.len() as u64, 1, E::default())?;
-            for (stored, &value) in vector.values_mut()?.iter_mut().zip(x.iter()) {
-                *stored = E::from_f64(value);
-            }
-            pairs.push(Eigenpair { value, residual, vector: vector.into() });
+            pairs.push(eigenpair::<E, I>(resources, self.operator, ritz.values[l])?);
         }
-        Ok(Eigen {
-            pairs,
-            iterations: self.iterations,
-            converged: outcome == Outcome::Converged,
-            components: self.operator.components(resources)?,
-        })
+        Ok(Found { pairs, iterations: self.iterations, converged: outcome == Outcome::Converged })
     }
+}
+
+/// The eigenpair of `value` and the eigenvector in the operator's input:
+/// normalised, signed and rounded to the stored precision, its residual
+/// computed explicitly, and mapped to the eigenvector of the matrix the
+/// operator stands for.
+fn eigenpair<E: Stored, I: Interrupts>(
+    resources: &mut Resources<'_, I>,
+    operator: &mut LinearOperator<'_>,
+    value: f64,
+) -> Result<Eigenpair, SpectralError>
+where
+    AnyVector: From<Vector<E>>,
+{
+    settle::<E, I>(resources, operator.input_mut()?)?;
+    let residual = operator.residual(resources, value)?;
+    if operator.map_eigenvector(resources)? {
+        settle::<E, I>(resources, operator.input_mut()?)?;
+    }
+    let x = operator.input_mut()?;
+    let mut vector = Vector::filled(resources.memory, x.len() as u64, 1, E::default())?;
+    for (stored, &value) in vector.values_mut()?.iter_mut().zip(x.iter()) {
+        *stored = E::from_f64(value);
+    }
+    Ok(Eigenpair { value, residual, vector: vector.into() })
 }
 
 /// Normalises `x`, flips it so that its entry of largest magnitude (the

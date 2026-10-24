@@ -639,10 +639,23 @@ Top-k eigenpairs by Lanczos with full reorthogonalisation and thick restart.
 - **Not converging is a warning, not an error.** If `max_iter` runs out,
   `eigen` returns the pairs it has, with a `WARNING` naming the steps taken
   and the largest residual; each row's `residual` says which pairs are
-  unconverged. Raise `max_iter` or `tol`.
-- When the active nodes form several connected components, `eigen` warns
-  too: their repeated eigenvalues may not all be found (see
-  [limits.md](limits.md#known-limitations)).
+  unconverged. Raise `max_iter` or `tol`. A `statement_timeout` that comes
+  first returns nothing: watch a long solve with `warren.progress()`, whose
+  `lanczos` phase shows the steps of `max_iter`, the eigenpairs converged
+  of `k`, the restarts and the largest residual.
+- **Each connected component's eigenvalue comes back once per component.**
+  The active nodes' connected components each give `laplacian` and
+  `normalized_laplacian` the eigenvalue 0 and `random_walk` the eigenvalue
+  1. With `which := 'smallest'` for the Laplacians and `'largest'` for the
+  random walk, those pairs are returned exactly, without Lanczos steps: the
+  component's indicator vector (`D^1/2` times it for
+  `normalized_laplacian`), normalised, components in the order of their
+  lowest node; Lanczos computes the rest of `k` orthogonal to them. On a
+  graph of 424 components, `k = 20` returns 20 zeros at once.
+- Other eigenvalues can repeat too (identical components, symmetric
+  structure), and Lanczos may return fewer copies of them than there are;
+  `eigen` warns when the active nodes form several components and the call
+  is not one of the above (see [limits.md](limits.md#known-limitations)).
 - `residual` is ‖Mx − λx‖₂ for the eigenvector as stored. With `f32` vectors
   (the default) it floors near 10⁻⁷ · ‖M‖; `dtype := 'f64'` doubles the
   memory and goes further.

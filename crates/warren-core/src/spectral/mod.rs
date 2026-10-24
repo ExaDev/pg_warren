@@ -4,6 +4,7 @@
 
 mod basis;
 mod components;
+mod deflation;
 mod dense;
 mod distance;
 mod error;

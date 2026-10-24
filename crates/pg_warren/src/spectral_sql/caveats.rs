@@ -1,7 +1,8 @@
 //! What an eigensolve's caller should be warned of (DESIGN.md §6.5): that
 //! it stopped before converging, and that the matrix has several connected
 //! components, whose repeated eigenvalues single-vector Lanczos may not all
-//! find.
+//! find, unless the eigenvalue each component gives was taken exactly from
+//! the components.
 
 use warren_core::spectral::Eigen;
 
@@ -16,7 +17,7 @@ pub(super) fn caveats(solved: &Eigen) -> Vec<String> {
             solved.iterations
         ));
     }
-    if solved.components > 1 {
+    if solved.components > 1 && !solved.deflated {
         warnings.push(format!(
             "the matrix has {} connected components: eigenvalues repeat (each Laplacian has 0 \
              once per component), and single-vector Lanczos may return fewer copies of a \
@@ -32,7 +33,7 @@ mod unit {
     use super::*;
 
     fn solved(converged: bool, components: u64) -> Eigen {
-        Eigen { pairs: Vec::new(), iterations: 25, converged, components }
+        Eigen { pairs: Vec::new(), iterations: 25, converged, components, deflated: false }
     }
 
     #[test]
@@ -49,5 +50,13 @@ mod unit {
         assert!(warnings[0].starts_with("the matrix has 30 connected components"), "{warnings:?}");
         assert!(caveats(&solved(true, 1)).is_empty());
         assert_eq!(caveats(&solved(false, 2)).len(), 2);
+    }
+
+    #[test]
+    fn components_whose_eigenvalue_was_taken_exactly_are_no_caveat() {
+        // Every copy of the Laplacians' 0 (the random walk's 1) is one
+        // component's eigenvector, found without Lanczos.
+        let deflated = Eigen { deflated: true, ..solved(true, 424) };
+        assert!(caveats(&deflated).is_empty());
     }
 }

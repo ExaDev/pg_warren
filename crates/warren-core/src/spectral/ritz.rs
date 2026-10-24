@@ -45,15 +45,24 @@ impl Ritz {
         let h = h.into_owned();
         let eigen = SymmetricEigen::try_new(h, f64::EPSILON, SWEEPS_PER_DIMENSION * n.max(1))
             .ok_or(SpectralError::NotFinite)?;
-        let mut order: Vec<usize> = (0..n).collect();
         let values = eigen.eigenvalues.as_slice();
-        order.sort_by(|&a, &b| compare(which, values[a], values[b]).then(a.cmp(&b)));
-        if which == Which::Largest {
-            positives_first(&mut order, values, tie);
-        }
+        let order = order(values, which, tie);
         let vectors = DMatrix::from_fn(n, n, |i, l| eigen.eigenvectors[(i, order[l])]);
         Ok(Self { values: order.iter().map(|&l| values[l]).collect(), vectors, _charge: charge })
     }
+}
+
+/// The indexes of `values` in `which` order, the earlier index first among
+/// equal values. For `Largest`, magnitudes that differ by at most
+/// `tie · max|θ|` count as equal, and each run of them lists its positive
+/// values first.
+pub(super) fn order(values: &[f64], which: Which, tie: f64) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..values.len()).collect();
+    order.sort_by(|&a, &b| compare(which, values[a], values[b]).then(a.cmp(&b)));
+    if which == Which::Largest {
+        positives_first(&mut order, values, tie);
+    }
+    order
 }
 
 /// Within each run of tied magnitudes in `order` (sorted by descending

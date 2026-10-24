@@ -3,11 +3,15 @@
 //! (DESIGN.md §6.5).
 //!
 //! The peak comes at the end of a solve: the operator's `f64` work vectors
-//! and degrees, the basis, `H` and its Rayleigh–Ritz decomposition, the `k`
-//! eigenvectors and the parents of the connected-components pass, all held
-//! at once. Any transient buffer of a step (the push-form scratch of a
-//! transposed product without reverse CSRs, `9` bytes a row) is smaller
-//! than what the end adds. Not counted: a product's row scratch when the
+//! and degrees, the deflation's components and unit vectors when the
+//! components' eigenpairs are taken exactly, the basis, `H` and its
+//! Rayleigh–Ritz decomposition, and the eigenvectors, all held at once.
+//! Without a deflation, the parents of the connected-components pass come
+//! last, beside all `k` eigenvectors, and outweigh any transient buffer of
+//! a product (the push-form scratch of a transposed product without
+//! reverse CSRs, `9` bytes a row), which comes beside one eigenvector
+//! fewer. With one, that scratch, for the last eigenvector's residual, is
+//! the end's. Not counted: a product's row scratch when the
 //! relations are merged on the fly (`store_merged := false`), which
 //! depends on the longest row, and per-block partial sums.
 
@@ -24,6 +28,10 @@ const MIN_BASIS: usize = 20;
 /// The `f64` vectors an operator application uses: input, output and the
 /// transposed product's scratch, and `D^-1/2 · input` when normalised.
 const WORK_VECTORS: u64 = 3;
+
+/// The push-form scratch of a transposed product, per row: an `f64` sum
+/// and whether it is present.
+const PUSH_SCRATCH: u64 = (size_of::<f64>() + size_of::<bool>()) as u64;
 
 /// The `size × size` matrices a Rayleigh–Ritz decomposition holds: the
 /// copy of `H` it decomposes, the eigenvectors, and them reordered.
@@ -42,13 +50,24 @@ pub(super) struct WorkingSet {
     pub(super) k: usize,
     /// The element type of the basis and the eigenvectors.
     pub(super) precision: Precision,
+    /// The connected components whose eigenpairs are taken exactly, if
+    /// they are (DESIGN.md §6.5).
+    pub(super) deflated: Option<u64>,
+    /// The pairs Lanczos computes: `k`, or with a deflation those it does
+    /// not give.
+    pub(super) wanted: usize,
 }
 
 impl WorkingSet {
     /// The number of basis vectors: `max(2k + 1, 20)`, at most the
-    /// dimension.
+    /// dimension Lanczos runs over (the deflated components' eigenvectors
+    /// excluded); none when Lanczos is not needed.
     pub(super) fn basis_size(&self) -> usize {
-        let dimension = usize::try_from(self.dimension).unwrap_or(usize::MAX);
+        if self.wanted == 0 {
+            return 0;
+        }
+        let dimension = self.dimension.saturating_sub(self.deflated.unwrap_or(0));
+        let dimension = usize::try_from(dimension).unwrap_or(usize::MAX);
         dimension.min(self.k.saturating_mul(2).saturating_add(1).max(MIN_BASIS))
     }
 
@@ -64,7 +83,22 @@ impl WorkingSet {
         self.id_space.saturating_mul(row)
     }
 
-    /// The bytes the solve charges beyond the operator's, at its peak.
+    /// The bytes the deflation charges when it is prepared: each node's
+    /// component and unit vector entry, and a coefficient per component.
+    pub(super) fn deflation_bytes(&self) -> u64 {
+        let Some(components) = self.deflated else { return 0 };
+        let row = (size_of::<DenseId>() + size_of::<f64>()) as u64;
+        let coefficients = components.saturating_mul(size_of::<f64>() as u64);
+        self.id_space.saturating_mul(row).saturating_add(coefficients)
+    }
+
+    /// The bytes held before the solve starts: the operator's and the
+    /// deflation's.
+    pub(super) fn prepared_bytes(&self) -> u64 {
+        self.operator_bytes().saturating_add(self.deflation_bytes())
+    }
+
+    /// The bytes the solve charges beyond the prepared ones, at its peak.
     pub(super) fn solve_bytes(&self) -> u64 {
         let element = self.precision.element_bytes();
         let size = self.basis_size() as u64;
@@ -75,18 +109,25 @@ impl WorkingSet {
             .saturating_mul(1 + RITZ_MATRICES)
             .saturating_add(size)
             .saturating_mul(size_of::<f64>() as u64);
-        let eigenvectors = self.id_space.saturating_mul(self.k as u64).saturating_mul(element);
-        let parents = self.id_space.saturating_mul(size_of::<DenseId>() as u64);
-        [basis, matrices, eigenvectors, parents].into_iter().fold(0, u64::saturating_add)
+        let eigenvectors =
+            |count: usize| self.id_space.saturating_mul(count as u64).saturating_mul(element);
+        let end = match self.deflated {
+            None => eigenvectors(self.k)
+                .saturating_add(self.id_space.saturating_mul(size_of::<DenseId>() as u64)),
+            Some(_) => {
+                eigenvectors(self.k - 1).saturating_add(self.id_space.saturating_mul(PUSH_SCRATCH))
+            }
+        };
+        [basis, matrices, end].into_iter().fold(0, u64::saturating_add)
     }
 
     /// The bytes the eigenproblem holds at its peak.
     pub(super) fn bytes(&self) -> u64 {
-        self.operator_bytes().saturating_add(self.solve_bytes())
+        self.prepared_bytes().saturating_add(self.solve_bytes())
     }
 
     /// Makes sure the solve's bytes fit `memory` beside what it holds now
-    /// (the operator's included), reclaiming held memory as a charge
+    /// (the prepared bytes included), reclaiming held memory as a charge
     /// would, and refuses the eigenproblem if they cannot. Nothing stays
     /// charged: the solve charges its buffers as it allocates them, into
     /// the room this found.
@@ -96,7 +137,7 @@ impl WorkingSet {
             Err(ComputeError::MemoryLimit { in_use, limit, .. }) => {
                 Err(SpectralError::WorkingSet {
                     needed: self.bytes(),
-                    in_use: in_use.saturating_sub(self.operator_bytes()),
+                    in_use: in_use.saturating_sub(self.prepared_bytes()),
                     limit,
                 })
             }
@@ -110,7 +151,15 @@ mod tests {
     use super::*;
 
     fn working_set(operator: Operator, k: usize, precision: Precision) -> WorkingSet {
-        WorkingSet { id_space: 1000, dimension: 900, operator, k, precision }
+        WorkingSet {
+            id_space: 1000,
+            dimension: 900,
+            operator,
+            k,
+            precision,
+            deflated: None,
+            wanted: k,
+        }
     }
 
     #[test]
@@ -138,6 +187,30 @@ mod tests {
         let f64s = WorkingSet { precision: Precision::F64, ..f32s };
         assert_eq!(f64s.solve_bytes(), 2 * basis + matrices + 3 * 1000 * 8 + 1000 * 8);
         assert_eq!(f64s.bytes(), f64s.operator_bytes() + f64s.solve_bytes());
+    }
+
+    #[test]
+    fn a_deflated_solve_holds_the_components_and_unit_vectors_and_no_parents() {
+        // 900 active nodes in 30 components, k = 40 of which Lanczos
+        // computes 10: the basis still has 2k + 1 vectors.
+        let set = WorkingSet {
+            deflated: Some(30),
+            wanted: 10,
+            ..working_set(Operator::NormalizedLaplacian, 40, Precision::F32)
+        };
+        assert_eq!(set.basis_size(), 81);
+        assert_eq!(set.deflation_bytes(), 1000 * (8 + 8) + 30 * 8);
+        assert_eq!(set.prepared_bytes(), set.operator_bytes() + set.deflation_bytes());
+        let (basis, matrices) = (1001 * 81 * 4, (4 * 81 * 81 + 81) * 8);
+        // One eigenvector fewer and a transposed product's push scratch.
+        assert_eq!(set.solve_bytes(), basis + matrices + 39 * 1000 * 4 + 1000 * 9);
+        // Over 870 + 30 active nodes, at most 870 basis vectors.
+        let narrow = WorkingSet { k: 500, wanted: 470, ..set };
+        assert_eq!(narrow.basis_size(), 870);
+        // When the components give every pair, there is no basis.
+        let none = WorkingSet { k: 20, wanted: 0, ..set };
+        assert_eq!(none.basis_size(), 0);
+        assert_eq!(none.solve_bytes(), 19 * 1000 * 4 + 1000 * 9);
     }
 
     #[test]

@@ -204,7 +204,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{failure, relation_expansions, rows};
+    use crate::fixture::{failure, relation_expansions, rows, warnings};
 
     /// Graph `p` over `p_nodes`/`p_edges`: the undirected path 1 – 2 – … – 6
     /// with unit weights.
@@ -398,6 +398,50 @@ mod tests {
         let three = (Spi::get_one::<String>(call)?, values("rw_1")?);
         assert_eq!(one, three);
         assert!(one.0.is_some());
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_solve_stopped_by_max_iter_warns_and_returns_its_pairs() -> Result<(), Error> {
+        long_path()?;
+        let call = "SELECT count(*) FROM warren.eigen('q', 3, tol := 0, max_iter := 50)";
+        let warned = warnings(call)?;
+        assert_eq!(warned.len(), 1, "{warned:?}");
+        assert!(warned[0].starts_with("eigen did not converge in 50 steps"), "{warned:?}");
+        assert_eq!(Spi::get_one::<i64>(call)?, Some(3));
+        Ok(())
+    }
+
+    /// Graph `c` over `c_nodes`/`c_edges`: 30 disjoint triangles, whose
+    /// normalised Laplacian has eigenvalue 0 thirty times and 1.5 sixty.
+    fn triangles() -> Result<(), Error> {
+        Spi::run(
+            "CREATE TABLE c_nodes (id bigint); CREATE TABLE c_edges (src bigint, dst bigint);
+             INSERT INTO c_nodes SELECT generate_series(1, 90);
+             INSERT INTO c_edges SELECT 3 * t + a, 3 * t + b
+                 FROM generate_series(0, 29) t, (VALUES (1, 2), (2, 3), (3, 1)) e (a, b);
+             SELECT warren.create_graph('c', 'SELECT id FROM c_nodes',
+                                        'SELECT src, dst FROM c_edges', directed := false);
+             SELECT warren.refresh('c')",
+        )
+    }
+
+    #[pg_test]
+    fn every_component_s_zero_eigenvalue_comes_back_exactly() -> Result<(), Error> {
+        triangles()?;
+        let call = "SELECT string_agg(eigenvalue::text, ' ' ORDER BY i), max(residual)
+                    FROM warren.eigen('c', 31, 'normalized_laplacian', 'smallest', dtype := 'f64')";
+        assert_eq!(warnings(call)?, Vec::<String>::new());
+        let (values, residual) = Spi::get_two::<String, f64>(call)?;
+        let values = values.unwrap_or_default();
+        let values: Vec<&str> = values.split(' ').collect();
+        assert_eq!(values[..30], ["0"; 30]);
+        assert!(values[30].parse::<f64>().is_ok_and(|v| (v - 1.5).abs() < 1e-9), "{values:?}");
+        assert!(residual.is_some_and(|r| r < 1e-9), "{residual:?}");
+        // The adjacency's repeated eigenvalues are left to Lanczos.
+        let adjacency = warnings("SELECT count(*) FROM warren.eigen('c', 3)")?;
+        assert_eq!(adjacency.len(), 1, "{adjacency:?}");
+        assert!(adjacency[0].starts_with("the matrix has 30 connected components"));
         Ok(())
     }
 
