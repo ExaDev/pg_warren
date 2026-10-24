@@ -40,16 +40,9 @@ from changelog import ChangelogError, finalise, open_next
 VERSION = re.compile(r"\d+\.\d+\.\d+")
 INSTALL = re.compile(r"^(git checkout v)\S+(   # the latest release)", re.M)
 
-UPGRADE_HEADER = """\
--- pg_warren {start} -> {end} (DESIGN.md §13; CONTRIBUTING.md "Releases and
--- upgrades"). Hand-maintained: every schema change made after {start} is
--- mirrored here in the same commit, and test/upgrade.py checks that
--- ALTER EXTENSION pg_warren UPDATE from {start} yields the catalog of a fresh
--- {end} install. In a trusted install it runs as the bootstrap superuser
--- (DESIGN.md §7): create only in schema warren, schema-qualify, and use only
--- exact-match pg_catalog operators and functions in what runs here.
-\\echo Use "ALTER EXTENSION pg_warren UPDATE TO '{end}'" to load this file. \\quit
-"""
+# The header-only upgrade script, @START@ -> @END@; release-prepare.yml checks
+# a release branch's against it too.
+UPGRADE_HEADER = Path(__file__).with_name("upgrade-header.sql.in")
 
 
 class Refused(Exception):
@@ -158,7 +151,8 @@ def freeze_commit(root, version, nxt, drift):
     with (sql / "released.commits").open("a") as commits:
         commits.write(f"{tagged}  {version}\n")
     bump(root, version, nxt)
-    (sql / f"pg_warren--{version}--{nxt}.sql").write_text(UPGRADE_HEADER.format(start=version, end=nxt))
+    (sql / f"pg_warren--{version}--{nxt}.sql").write_text(
+        UPGRADE_HEADER.read_text().replace("@START@", version).replace("@END@", nxt))
     changelog = root / "CHANGELOG.md"
     changelog.write_text(open_next(changelog.read_text(), nxt))
     run(root, drift, "--update")
