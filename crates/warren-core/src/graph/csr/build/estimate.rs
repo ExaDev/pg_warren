@@ -2,7 +2,7 @@
 //! build's own allocations in order (see `columns` and `deduplication`),
 //! with every relation at its edge count before deduplication, and its
 //! offsets at the most its edges allow (a relation's stored rows are at
-//! most its edges, DESIGN.md §5.3). It is an upper bound: deduplication
+//! most its edges, DESIGN.md §5.3; a graph's only relation's are dense). It is an upper bound: deduplication
 //! only shrinks what follows it.
 
 use std::mem::size_of;
@@ -48,23 +48,31 @@ impl BuildPlan {
         let relation_column = edges.saturating_mul(size_of::<RelationIndex>() as u64);
         let weight_column = edges.saturating_mul(weight);
         let entries = |edges: u64| edges.saturating_mul(target + weight);
-        // A relation's CSR, with the offsets its edges allow at most.
-        let relation_csr =
-            |edges: u64| offsets_bound(edges, id_space).saturating_add(entries(edges));
+        let several = self.relation_edges.len() > 1;
+        // A relation's offsets: at most what its edges allow among several
+        // relations; a graph's only relation's are dense, as the merged
+        // CSR's, and it needs no row cursors.
+        let relation_offsets = |edges: u64| match several {
+            true => offsets_bound(edges, id_space),
+            false => offsets,
+        };
+        let relation_csr = |edges: u64| relation_offsets(edges).saturating_add(entries(edges));
         let merged_csr = |edges: u64| offsets.saturating_add(entries(edges));
         let order_index = if edges <= u64::from(u32::MAX) { 4 } else { 8 };
         let mut ledger = Ledger { held: self.edge_bytes, peak: self.edge_bytes };
-        let several = self.relation_edges.len() > 1;
         if !several {
             ledger.free(relation_column);
         }
-        let cursors = if self.groups.is_empty() { 0 } else { id_space.saturating_mul(8) };
+        let cursors = if several { id_space.saturating_mul(8) } else { 0 };
         ledger.hold(cursors);
         for (index, group) in self.groups.iter().enumerate() {
             let release = !self.store_merged && index + 1 == self.groups.len();
             let together = self.weighted && !release;
             let group_edges = &self.relation_edges[group.clone()];
-            ledger.hold(rows_headers(group_edges.len()));
+            // A graph's only relation is built as the merged CSR is, with
+            // no headers.
+            let headers = if several { rows_headers(group_edges.len()) } else { 0 };
+            ledger.hold(headers);
             let order = match group_edges.len() {
                 0 | 1 => 0,
                 relations => {
@@ -81,9 +89,7 @@ impl BuildPlan {
             ledger.hold(order);
             for &edges in group_edges {
                 let entry = target + if together { weight } else { 0 };
-                ledger.hold(
-                    offsets_bound(edges, id_space).saturating_add(edges.saturating_mul(entry)),
-                );
+                ledger.hold(relation_offsets(edges).saturating_add(edges.saturating_mul(entry)));
             }
             if release {
                 ledger.free(endpoint_column);
@@ -108,7 +114,7 @@ impl BuildPlan {
                 }
                 ledger.free(relation_csr(edges));
             }
-            ledger.free(rows_headers(group_edges.len()));
+            ledger.free(headers);
         }
         ledger.free(cursors);
         if self.store_merged {

@@ -2,7 +2,8 @@
 //! sort into rows, with no comparison sort of the edges. A relation's rows
 //! are placed through the build's [`RowCursors`], one relation at a time
 //! (a group's edges first ordered by relation), so its offsets can be
-//! sparse. The merged CSR's dense rows use their offsets as the cursors:
+//! sparse. The dense rows of the merged CSR and of a graph's only relation
+//! use their offsets as the cursors:
 //! counts go to `offsets[source + 2]`, so after the prefix sum
 //! `offsets[source + 1]` is where `source`'s row starts; scattering
 //! advances it to where the row ends, which leaves `offsets` exactly the
@@ -237,10 +238,11 @@ impl<S: Target> Iterator for Edges<'_, S> {
     }
 }
 
-/// The rows of every edge, for the merged CSR, scattered from `columns`,
-/// which are freed one by one as they are scattered. Each entry keeps its
+/// The rows of every edge with dense offsets, for the merged CSR or a
+/// graph's only relation, scattered from `columns`, which are freed one by
+/// one as they are scattered. With several relations, each entry keeps its
 /// relation when weighted, to sum weights per relation first.
-pub(super) fn merged_rows<T: Target, S: Target>(
+pub(super) fn dense_rows<T: Target, S: Target>(
     mut columns: Columns<S>,
     id_space: u64,
 ) -> Result<Rows<T>, GraphError> {

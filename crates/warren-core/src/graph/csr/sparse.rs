@@ -1,7 +1,8 @@
 //! When a CSR's offsets are sparse (DESIGN.md §5.3, §14 item 17): a
 //! relation's CSR stores sparse offsets, its rows' ids and one offset per
 //! stored row, when they take at most [`SPARSE_SHARE`] of dense offsets'
-//! bytes; the merged CSR's offsets are always dense. The choice is made
+//! bytes; the merged CSR's offsets are always dense, and so are a graph's
+//! only relation's, which is its all-relations CSR. The choice is made
 //! from the number of stored rows alone, so a CSR's layout is a function
 //! of its edges.
 

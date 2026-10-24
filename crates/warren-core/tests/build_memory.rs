@@ -230,6 +230,8 @@ fn a_build_charges_at_least_its_peak_allocation_and_plans_for_it() -> Outcome<()
         Case { reserve: false, ..unmerged },
         Case { undirected: true, reserve: false, ..one },
         Case { base: true, ..merged },
+        // One weighted relation, built as the merged CSR is.
+        Case::new(20_000, 200_000, 1, true, true),
         // A relation per row, as a mistaken relation column gives.
         Case::new(10, 20_000, 20_000, true, false),
         // Many relations of few rows each, whose offsets are sparse.

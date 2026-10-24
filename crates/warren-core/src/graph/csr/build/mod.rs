@@ -17,7 +17,7 @@ mod sink;
 
 use std::ops::Range;
 
-use columns::{group_rows, merged_rows, Columns};
+use columns::{dense_rows, group_rows, Columns};
 pub use sink::{BuiltCsr, CsrDirection, CsrScope, CsrSink};
 
 use super::cursors::RowCursors;
@@ -196,6 +196,16 @@ impl BuildPlan {
         AnyCsr: From<Csr<T>>,
     {
         let mut summary = BuildSummary::default();
+        if self.relation_edges.len() == 1 {
+            // The only relation is the all-relations CSR: dense, as the
+            // merged CSR is, and built as it is, without row cursors.
+            let rows = dense_rows::<T, E>(columns, self.id_space)?;
+            let (forward, charge, folded) = rows.into_relation_csr(self.id_space)?;
+            summary.edge_count = forward.edge_count();
+            summary.deduplicated_edges = folded;
+            self.emit(CsrScope::Relation(0), forward, charge, None, sink)?;
+            return Ok(summary);
+        }
         let memory = columns.sources.memory().clone();
         let mut cursors = match self.groups.is_empty() {
             true => None,
@@ -219,7 +229,7 @@ impl BuildPlan {
         drop(cursors);
         if self.store_merged {
             let (forward, charge) =
-                merged_rows::<T, E>(columns, self.id_space)?.into_merged_csr(self.id_space)?;
+                dense_rows::<T, E>(columns, self.id_space)?.into_merged_csr(self.id_space)?;
             self.emit(CsrScope::Merged, forward, charge, None, sink)?;
         }
         Ok(summary)
@@ -331,6 +341,23 @@ mod tests {
         assert_eq!(split.groups.len(), 5);
         assert_eq!(split.bytes_needed(), finest_needed);
         drop(held);
+    }
+
+    /// A graph of one relation builds its dense CSR with its offsets as
+    /// the scatter cursors, so it holds no row cursors over the id space.
+    #[test]
+    fn a_graph_of_one_relation_holds_no_row_cursors() {
+        let memory = BuildMemory::unlimited();
+        let mut relations = RelationDictionary::new();
+        let relation = relations.intern("only").unwrap();
+        let nodes = 1_000_000u64;
+        let mut edges = EdgeList::within(nodes, false, &memory);
+        (0..nodes).for_each(|node| edges.push(relation, node, (node + 1) % nodes, 1.0).unwrap());
+        let layout = CsrLayout { build_reverse: false, store_merged: false };
+        let plan = BuildPlan::new(&edges, 1, nodes, layout, &memory, 0).unwrap();
+        // Dense offsets and a target per edge, beyond the edge list.
+        let csr = (nodes + 1) * 8 + nodes * 4;
+        assert!(plan.bytes_needed() <= csr, "{} > {csr}", plan.bytes_needed());
     }
 
     /// Counts the CSRs a build passes to it.
