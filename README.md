@@ -306,16 +306,18 @@ Every SQL example in the README and `docs/` runs in CI, in
   in `warren.backends()` and `warren.progress()` need
   `shared_preload_libraries` ([docs/limits.md](docs/limits.md)).
 
-- **0.7.0** (in development, M11): proof at scale and in deployment:
-  benchmarks on real graphs, robustness behind connection poolers, on
-  replicas and through crashes, and packages (DESIGN.md §13).
+- **0.7.0** (in development, M11): proof at scale and in deployment: a
+  benchmark and test suite on a range of real graph datasets sourced
+  through [keepset](https://mearman.github.io/keepset/) (`bench/corpus`),
+  robustness behind connection poolers, on replicas and through crashes,
+  and packages (DESIGN.md §13).
 
 See [CHANGELOG.md](CHANGELOG.md). This is pre-1.0 software: the SQL surface
 may still change between minor versions, with an upgrade script each time.
 
-Not there yet: the rest of the road to 1.0 (DESIGN.md §13) is
-benchmarks and robustness on real graphs and deployments, and packages
-(M11); and a reviewed, frozen SQL surface (M12, 1.0.0). Incremental
+Not there yet: the rest of the road to 1.0 (DESIGN.md §13) is a
+benchmark and test suite on real graph datasets, robustness in real
+deployments, and packages (M11); and a reviewed, frozen SQL surface (M12, 1.0.0). Incremental
 maintenance, general sparse matrix algebra (contraction's `PᵀAP` is the
 one sparse product) and a GPU backend are left to 1.x
 ([docs/limits.md](docs/limits.md)).
