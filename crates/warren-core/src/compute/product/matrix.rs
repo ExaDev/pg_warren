@@ -49,7 +49,7 @@ pub(crate) struct Matrix<'g> {
 #[derive(Debug)]
 pub(crate) struct RowScratch {
     entries: RowEntries,
-    hints: Vec<usize>,
+    hints: RowHints,
 }
 
 /// The entries of one row of several CSRs, sorted and folded: a buffer
@@ -61,12 +61,44 @@ struct RowEntries {
     charge: MemoryCharge,
 }
 
+/// Where each CSR's last row was found: one CSR's hint inline, or, for
+/// several CSRs, a buffer of a hint per CSR, its capacity charged to the
+/// compute budget before it is reserved.
+#[derive(Debug)]
+struct RowHints {
+    one: usize,
+    hints: Vec<usize>,
+    charge: MemoryCharge,
+}
+
 impl RowScratch {
     /// An empty scratch, its capacity charged to `memory` as it grows: on
     /// the pool, beyond any bound reclaimed for ahead (DESIGN.md §5.5).
     pub(crate) fn new(memory: &ComputeMemory) -> Result<Self, ComputeError> {
         let entries = RowEntries { entries: Vec::new(), charge: memory.charge(0)?.unbounded() };
-        Ok(Self { entries, hints: Vec::new() })
+        let charge = memory.charge(0)?.unbounded();
+        let hints = RowHints { one: 0, hints: Vec::new(), charge };
+        Ok(Self { entries, hints })
+    }
+}
+
+impl RowHints {
+    /// A hint for each of `csrs` CSRs: those kept from earlier rows, and 0
+    /// for each CSR more than the buffer held. One CSR's needs no buffer.
+    fn for_csrs(&mut self, csrs: usize) -> Result<&mut [usize], ComputeError> {
+        if csrs == 1 {
+            return Ok(std::slice::from_mut(&mut self.one));
+        }
+        if let Some(more) = csrs.checked_sub(self.hints.len()).filter(|&more| more > 0) {
+            let bytes = (more * size_of::<usize>()) as u64;
+            self.charge.grow(bytes)?;
+            self.hints.try_reserve_exact(more).map_err(|_| {
+                self.charge.shrink(bytes);
+                ComputeError::OutOfMemory { bytes }
+            })?;
+            self.hints.resize(csrs, 0);
+        }
+        Ok(&mut self.hints[..csrs])
     }
 }
 
@@ -159,8 +191,7 @@ impl<'g> Matrix<'g> {
         // A hint per CSR, kept across rows; a scratch read with another
         // matrix starts them again.
         let RowScratch { entries: scratch, hints } = scratch;
-        hints.resize(self.csrs.len(), 0);
-        match (self.csrs.as_slice(), hints.as_mut_slice()) {
+        match (self.csrs.as_slice(), hints.for_csrs(self.csrs.len())?) {
             ([AnyCsrSlices::U32(csr)], [hint]) => entries(csr, row, hint, self.weighted, entry),
             ([AnyCsrSlices::U64(csr)], [hint]) => entries(csr, row, hint, self.weighted, entry),
             (many, hints) => {

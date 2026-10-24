@@ -432,7 +432,15 @@ payloads), in about 44% less memory for five weighted relations and a
 faster `refresh`, but more slowly, and more so with more relations: at 2–5
 relations BFS 2–3× and SpMV 5–8× slower, at 10 relations 6× and 11×
 (DESIGN.md §5.3). Reads with `rels`
-are unaffected.
+are unaffected. Without the merged CSR, a product over all relations
+(`spmv`, `spmm`, and so `eigen` and `distance`) also needs a row scratch on
+each worker thread, charged to `warren.max_compute_memory`: 16 bytes per
+entry of the longest row, at most 16 B × the relation count × the largest
+degree in one relation, and 8 bytes a relation for where it last found
+each relation's row. Keep the default unless the merged CSR would not fit
+your memory limits. The choice is per graph, kept by `compact`, and shown
+by `warren.info(name) -> 'store_merged'`; it cannot be changed after
+`create_graph`.
 
 Since 0.7.0 a relation whose rows fill little of the id space stores
 sparse offsets, so on a graph of many sparse relations (a knowledge
@@ -444,14 +452,7 @@ but an all-relations product (`spmv`, `spmm`, and so `pagerank`,
 `eigen` and `distance`) seeks every node's row in every
 relation: on FB15k-237 (237 relations, 14.5K nodes) `spmv` takes about
 18 ms where 0.6.0's dense offsets took 11, 1.6–2×. The default, with the
-merged CSR stored, is unaffected. Without the merged CSR, a product over all relations
-(`spmv`, `spmm`, and so `eigen` and `distance`) also needs a row scratch on
-each worker thread, charged to `warren.max_compute_memory`: 16 bytes per
-entry of the longest row, at most 16 B × the relation count × the largest
-degree in one relation. Keep the default unless the merged CSR would not fit your
-memory limits. The choice is per graph, kept by `compact`, and shown by
-`warren.info(name) -> 'store_merged'`; it cannot be changed after
-`create_graph`.
+merged CSR stored, is unaffected.
 
 ### Node order (locality)
 
