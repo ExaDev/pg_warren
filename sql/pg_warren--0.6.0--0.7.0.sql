@@ -36,7 +36,13 @@ DECLARE
         'warren.gather(text, text, anyelement, anycompatible, text, text, text[], text, boolean, bigint, boolean)',
         'warren.label_propagation_majority(text, text, text, integer, text[], bigint)',
         'warren.eigen(text, integer, text, text, text[], boolean, boolean, double precision, integer, text, bigint, text, boolean)',
-        'warren.distance(text, bigint, bigint, text, text, integer, text, text, text, text, text, text[], boolean, boolean, double precision, integer, text, text)'];
+        'warren.distance(text, bigint, bigint, text, text, integer, text, text, text, text, text, text[], boolean, boolean, double precision, integer, text, text)',
+        'warren.dag_longest_path(text, text, text[], boolean, boolean, bigint)',
+        'warren.minimum_spanning_forest(text, anyelement, text[], boolean, bigint)',
+        'warren.betweenness_centrality(text, text, bigint, bigint, boolean, boolean, boolean, text, text[], boolean, boolean, bigint)',
+        'warren.closeness_centrality(text, text, bigint, bigint, boolean, boolean, text, text[], boolean, boolean, bigint)',
+        'warren.harmonic_centrality(text, text, bigint, bigint, boolean, text, text[], boolean, boolean, bigint)',
+        'warren.dijkstra(text, anyelement, anyelement, text[], text, bigint)'];
     news text[] := ARRAY[
         'warren.contract(text, text, text, boolean, boolean, boolean, bigint, boolean)',
         'warren.modularity(text, text, double precision, boolean, bigint, boolean)',
@@ -58,7 +64,13 @@ DECLARE
         'warren.gather(text, text, anyelement, anycompatible, text, text, text[], text, boolean, bigint, boolean, boolean)',
         'warren.label_propagation_majority(text, text, text, integer, text[], bigint, boolean)',
         'warren.eigen(text, integer, text, text, text[], boolean, boolean, double precision, integer, text, bigint, text, boolean, boolean)',
-        'warren.distance(text, bigint, bigint, text, text, integer, text, text, text, text, text, text[], boolean, boolean, double precision, integer, text, text, boolean)'];
+        'warren.distance(text, bigint, bigint, text, text, integer, text, text, text, text, text, text[], boolean, boolean, double precision, integer, text, text, boolean)',
+        'warren.dag_longest_path(text, text, text[], boolean, boolean, bigint, boolean)',
+        'warren.minimum_spanning_forest(text, anyelement, text[], boolean, bigint, boolean)',
+        'warren.betweenness_centrality(text, text, bigint, bigint, boolean, boolean, boolean, text, text[], boolean, boolean, bigint, boolean)',
+        'warren.closeness_centrality(text, text, bigint, bigint, boolean, boolean, text, text[], boolean, boolean, bigint, boolean)',
+        'warren.harmonic_centrality(text, text, bigint, bigint, boolean, text, text[], boolean, boolean, bigint, boolean)',
+        'warren.dijkstra(text, anyelement, anyelement, text[], text, bigint, boolean)'];
     acls text[] := ARRAY[]::text[];
     kept record;
 BEGIN
@@ -909,6 +921,53 @@ CREATE FUNCTION warren.distance(graph text, v1 bigint, v2 bigint, method text,
                                 per_relation boolean DEFAULT false)
 RETURNS jsonb
 STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'distance_wrapper';
+
+CREATE FUNCTION warren.dag_longest_path(graph text, "out" text, rels text[] DEFAULT NULL,
+                                        weighted boolean DEFAULT NULL, persist boolean DEFAULT true,
+                                        version bigint DEFAULT NULL,
+                                        per_relation boolean DEFAULT false)
+RETURNS double precision
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'dag_longest_path_wrapper';
+
+CREATE FUNCTION warren.minimum_spanning_forest(graph text, id_type anyelement, rels text[] DEFAULT NULL,
+                                               weighted bool DEFAULT NULL, version bigint DEFAULT NULL,
+                                               per_relation boolean DEFAULT false)
+RETURNS TABLE (source anyelement, target anyelement, weight float8)
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'minimum_spanning_forest_wrapper';
+
+CREATE FUNCTION warren.betweenness_centrality(graph text, "out" text, k bigint DEFAULT NULL,
+                                              seed bigint DEFAULT 0, normalized boolean DEFAULT true,
+                                              endpoints boolean DEFAULT false,
+                                              directed boolean DEFAULT true, sources text DEFAULT NULL,
+                                              rels text[] DEFAULT NULL, weighted boolean DEFAULT NULL,
+                                              persist boolean DEFAULT true, version bigint DEFAULT NULL,
+                                              per_relation boolean DEFAULT false)
+RETURNS bigint
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'betweenness_centrality_wrapper';
+
+CREATE FUNCTION warren.closeness_centrality(graph text, "out" text, k bigint DEFAULT NULL,
+                                            seed bigint DEFAULT 0, wf_improved boolean DEFAULT true,
+                                            directed boolean DEFAULT true, sources text DEFAULT NULL,
+                                            rels text[] DEFAULT NULL, weighted boolean DEFAULT NULL,
+                                            persist boolean DEFAULT true, version bigint DEFAULT NULL,
+                                            per_relation boolean DEFAULT false)
+RETURNS bigint
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'closeness_centrality_wrapper';
+
+CREATE FUNCTION warren.harmonic_centrality(graph text, "out" text, k bigint DEFAULT NULL,
+                                           seed bigint DEFAULT 0, directed boolean DEFAULT true,
+                                           sources text DEFAULT NULL, rels text[] DEFAULT NULL,
+                                           weighted boolean DEFAULT NULL, persist boolean DEFAULT true,
+                                           version bigint DEFAULT NULL,
+                                           per_relation boolean DEFAULT false)
+RETURNS bigint
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'harmonic_centrality_wrapper';
+
+CREATE FUNCTION warren.dijkstra(graph text, start anyelement, target anyelement,
+                                rels text[] DEFAULT NULL, direction text DEFAULT 'out',
+                                version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
+RETURNS TABLE (path anyarray, cost float8)
+STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'dijkstra_wrapper';
 
     FOR i IN 1 .. pg_catalog.array_length(news, 1) LOOP
         -- An explicit ACL: start from no grants, then grant each entry again.

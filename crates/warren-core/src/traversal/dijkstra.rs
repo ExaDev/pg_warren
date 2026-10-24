@@ -2,8 +2,9 @@
 //! §9.3, `warren.dijkstra`).
 //!
 //! Edge weights come from each selected relation's own CSR (1 when the
-//! graph is unweighted), so an edge present in several relations costs its
-//! cheapest weight. Weights are checked as edges are scanned: a negative or
+//! graph is unweighted). An edge present in several relations costs their
+//! weights' sum, as `spmv`'s `A` holds it, or per relation its cheapest
+//! weight (DESIGN.md §5.3); read both ways, the lighter direction. Weights are checked as edges are scanned: a negative or
 //! NaN weight stops the search with [`TraversalError::InvalidWeight`]. An
 //! edge whose cost would be infinite (an infinite weight, or finite weights
 //! whose sum overflows) is never followed, so a target reachable only at
@@ -27,13 +28,14 @@ pub struct WeightedPath {
     pub cost: f64,
 }
 
-/// The cheapest path from `start` to `target` along `adjacency`; `None` if
-/// there is none. Ties go to the path settled first, preferring smaller
+/// The cheapest path from `start` to `target` along `adjacency`, a pair in
+/// several relations read once or `per_relation`; `None` if there is none. Ties go to the path settled first, preferring smaller
 /// dense ids.
 pub fn dijkstra(
     adjacency: &Adjacency<'_>,
     start: DenseId,
     target: DenseId,
+    per_relation: bool,
     interrupts: &mut dyn Interrupts,
 ) -> Result<Traversed<Option<WeightedPath>>, TraversalError> {
     for node in [start, target] {
@@ -57,7 +59,11 @@ pub fn dijkstra(
             path.reverse();
             return Ok(progress.traversed(Some(WeightedPath { path, cost })));
         }
-        for (next, weight) in adjacency.weighted_neighbours(node) {
+        let neighbours: Box<dyn Iterator<Item = (DenseId, f64)>> = match per_relation {
+            true => Box::new(adjacency.weighted_neighbours(node)),
+            false => Box::new(adjacency.summed_neighbours(node)),
+        };
+        for (next, weight) in neighbours {
             progress.edge_traversed()?;
             if weight.is_nan() || weight < 0.0 {
                 return Err(TraversalError::InvalidWeight { from: node, to: next, weight });
@@ -131,8 +137,18 @@ mod tests {
         start: DenseId,
         target: DenseId,
     ) -> Result<Option<WeightedPath>, TraversalError> {
+        reading(graph, direction, start, target, false)
+    }
+
+    fn reading(
+        graph: &GraphCsr,
+        direction: Direction,
+        start: DenseId,
+        target: DenseId,
+        per_relation: bool,
+    ) -> Result<Option<WeightedPath>, TraversalError> {
         let adjacency = Adjacency::new(graph, direction, RelationSelection::All)?;
-        Ok(dijkstra(&adjacency, start, target, &mut Uninterrupted)?.result)
+        Ok(dijkstra(&adjacency, start, target, per_relation, &mut Uninterrupted)?.result)
     }
 
     fn weighted_path(path: &[DenseId], cost: f64) -> Option<WeightedPath> {
@@ -160,9 +176,20 @@ mod tests {
     }
 
     #[test]
-    fn an_edge_in_several_relations_costs_its_cheapest_weight() {
-        let graph = graph(2, 2, &[(0, 0, 1, 2.0), (1, 0, 1, 3.0)], true);
-        assert_eq!(cheapest(&graph, Direction::Out, 0, 1), Ok(weighted_path(&[0, 1], 2.0)));
+    fn an_edge_in_several_relations_costs_their_sum_or_per_relation_the_cheapest() {
+        // 0 → 1 in two relations, 1 → 0 in one: read both ways, a pair
+        // costs the lighter direction's.
+        let graph = graph(2, 2, &[(0, 0, 1, 2.0), (1, 0, 1, 3.0), (1, 1, 0, 4.0)], true);
+        for (direction, once, each) in
+            [(Direction::Out, 5.0, 2.0), (Direction::In, 4.0, 4.0), (Direction::Both, 4.0, 2.0)]
+        {
+            let found = |per_relation| reading(&graph, direction, 0, 1, per_relation);
+            assert_eq!(found(false), Ok(weighted_path(&[0, 1], once)), "{direction:?}");
+            assert_eq!(found(true), Ok(weighted_path(&[0, 1], each)), "{direction:?}");
+        }
+        let unweighted =
+            crate::traversal::example::graph(2, 2, &[(0, 0, 1, 1.0), (1, 0, 1, 1.0)], false);
+        assert_eq!(cheapest(&unweighted, Direction::Out, 0, 1), Ok(weighted_path(&[0, 1], 1.0)));
     }
 
     #[test]
@@ -211,7 +238,10 @@ mod tests {
         let adjacency = Adjacency::new(&graph, Direction::Out, RelationSelection::All).unwrap();
         let mut cancellation = Cancellation::new();
         cancellation.cancel();
-        assert_eq!(dijkstra(&adjacency, 0, 3, &mut cancellation), Err(TraversalError::Cancelled));
+        assert_eq!(
+            dijkstra(&adjacency, 0, 3, false, &mut cancellation),
+            Err(TraversalError::Cancelled)
+        );
     }
 }
 
@@ -259,13 +289,18 @@ mod properties {
                 (Just(scenario), selections(relation_count), 0..n, 0..n)
             }),
             direction in directions(),
+            per_relation in any::<bool>(),
         ) {
             let graph = scenario.graph();
             let indexes = scenario.indexes(&selection);
             let adjacency = Adjacency::new(&graph, direction, Scenario::selection(&indexes)).unwrap();
-            let found = dijkstra(&adjacency, start, target, &mut Uninterrupted).unwrap().result;
+            let found =
+                dijkstra(&adjacency, start, target, per_relation, &mut Uninterrupted).unwrap().result;
 
-            let steps = scenario.steps(direction, &selection);
+            let steps = match per_relation {
+                true => scenario.steps(direction, &selection),
+                false => scenario.steps_once(direction, &selection),
+            };
             let expected = distances(scenario.id_space, &steps, start)[target as usize];
             let expected_cost = expected.is_finite().then_some(expected);
             prop_assert_eq!(found.as_ref().map(|found| found.cost), expected_cost);

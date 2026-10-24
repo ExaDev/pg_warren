@@ -15,7 +15,7 @@ use super::super::product::{Matrix, RowScratch};
 use super::super::symmetric::{distinct, selected_rows, Symmetric};
 use super::super::{ComputeError, ComputeMemory, MemoryCharge};
 use super::ShortestPaths;
-use crate::graph::DenseId;
+use crate::graph::{CsrRows, DenseId, GraphCsr, RelationSelection};
 use crate::interrupts::{Cancellation, Cancelled, Work};
 
 /// The rows a search reads.
@@ -29,12 +29,20 @@ pub(super) enum Adjacency<'g> {
 }
 
 impl<'g> Adjacency<'g> {
-    /// The matrix the adjacency reads (whose weightedness it takes).
+    /// The matrix the adjacency reads (whose weightedness it takes): per
+    /// relation only when weighted, since unweighted it changes nothing.
     pub(super) fn matrix(
         paths: &ShortestPaths<'_, 'g>,
         memory: &ComputeMemory,
     ) -> Result<Matrix<'g>, ComputeError> {
-        Matrix::new(paths.graph, paths.relations, false, paths.weighted, false, memory)
+        let read = |per_relation| {
+            Matrix::new(paths.graph, paths.relations, false, paths.weighted, per_relation, memory)
+        };
+        let matrix = read(false)?;
+        match paths.per_relation && matrix.is_weighted() {
+            true => read(true),
+            false => Ok(matrix),
+        }
     }
 
     /// At most the bytes [`Self::new`] charges, beyond the row scratch a
@@ -43,7 +51,10 @@ impl<'g> Adjacency<'g> {
         if paths.directed {
             return 0;
         }
-        let forward = selected_rows(paths.graph, paths.relations).unwrap_or_default();
+        let forward = match matrix.is_per_relation() {
+            true => each_relation_rows(paths.graph, paths.relations),
+            false => selected_rows(paths.graph, paths.relations).unwrap_or_default(),
+        };
         let id_space = paths.tombstones.id_space();
         let symmetric = Symmetric::bytes(&forward, id_space);
         match matrix.is_weighted() {
@@ -96,6 +107,26 @@ impl<'g> Adjacency<'g> {
         mut edge: impl FnMut(DenseId, f64) -> Result<(), ComputeError>,
     ) -> Result<(), ComputeError> {
         match self {
+            Self::Directed(matrix) if matrix.is_per_relation() => {
+                // A pair's entries are adjacent, in relation order: keep
+                // the lightest, as `WeightedSymmetric` does.
+                let mut pending: Option<(DenseId, f64)> = None;
+                matrix.for_each_entry(node, scratch, |target, weight| {
+                    work.spend(1)?;
+                    match pending {
+                        Some((held, lightest)) if held == target => {
+                            pending = Some((held, lighter(lightest, weight)));
+                        }
+                        Some((held, lightest)) => {
+                            edge(held, lightest)?;
+                            pending = Some((target, weight));
+                        }
+                        None => pending = Some((target, weight)),
+                    }
+                    Ok(())
+                })?;
+                pending.map_or(Ok(()), |(target, weight)| edge(target, weight))
+            }
             Self::Directed(matrix) => matrix.for_each_entry(node, scratch, |target, weight| {
                 work.spend(1)?;
                 edge(target, weight)
@@ -115,6 +146,26 @@ impl<'g> Adjacency<'g> {
                 Ok(())
             }
         }
+    }
+}
+
+/// The lighter of two weights, in the order `WeightedSymmetric` sorts by.
+fn lighter(a: f64, b: f64) -> f64 {
+    match b.total_cmp(&a) {
+        std::cmp::Ordering::Less => b,
+        _ => a,
+    }
+}
+
+/// The forward rows of each selected relation, every relation's own rather
+/// than the merged CSR, as a per-relation matrix reads them.
+fn each_relation_rows<'g>(
+    graph: &'g GraphCsr,
+    relations: RelationSelection<'_>,
+) -> Vec<CsrRows<'g>> {
+    match relations {
+        RelationSelection::All => graph.relations().iter().map(|r| r.forward().into()).collect(),
+        RelationSelection::Only(_) => selected_rows(graph, relations).unwrap_or_default(),
     }
 }
 

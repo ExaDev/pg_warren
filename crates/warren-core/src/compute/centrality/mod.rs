@@ -59,6 +59,11 @@ pub struct ShortestPaths<'a, 'g> {
     /// Weigh edges (if `None`, when the graph has weights): shortest paths
     /// are then the lightest, else the fewest edges.
     pub weighted: Option<bool>,
+    /// Weighted, read a pair in several relations as a parallel edge in
+    /// each, so paths take the lightest (DESIGN.md §5.3). Unweighted,
+    /// parallel edges change no path's length and no count of shortest
+    /// paths (as NetworkX's multigraphs), so it changes nothing.
+    pub per_relation: bool,
 }
 
 /// A centrality vector, and how many sources it was computed from.

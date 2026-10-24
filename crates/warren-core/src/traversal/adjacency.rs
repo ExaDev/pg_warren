@@ -14,9 +14,9 @@ use crate::graph::{
 /// Unweighted traversals read the all-relations rows when every relation
 /// is selected (the stored merged CSR, or the relations' rows merged on
 /// the fly, which read the same). Weighted traversals read each relation's
-/// CSR instead, because the merged CSR sums the weights of an edge present
-/// in several relations, whereas a shortest path takes the cheapest of
-/// them.
+/// CSR instead: per relation, a shortest path takes the cheapest of an
+/// edge's relations, and over any selection, read once, it sums them
+/// (DESIGN.md §5.3).
 #[derive(Debug, Clone)]
 pub struct Adjacency<'g> {
     direction: Direction,
@@ -205,6 +205,81 @@ impl<'g> Adjacency<'g> {
                 (target, weights.and_then(|w| w.get(i)).map_or(1.0, |&w| w))
             })
         })
+    }
+}
+
+impl<'g> Adjacency<'g> {
+    /// The distinct nodes one edge away from `node`, ascending, each with
+    /// its pair's weight read once (DESIGN.md §5.3): the sum of its
+    /// relations' weights in relation order (1 when the graph is
+    /// unweighted); for [`Direction::Both`], the lighter of the two
+    /// directions' sums (NaN if either is).
+    pub(crate) fn summed_neighbours(&self, node: DenseId) -> SummedNeighbours<'g> {
+        let row = |csr: &'g AnyCsr| WeightedRow::new(csr, node);
+        SummedNeighbours {
+            first: self.labelled_rows.iter().map(|rows| row(rows.first)).collect(),
+            second: self.labelled_rows.iter().filter_map(|rows| rows.second.map(row)).collect(),
+        }
+    }
+}
+
+/// A node's neighbours with their summed weights; see
+/// [`Adjacency::summed_neighbours`].
+pub(crate) struct SummedNeighbours<'g> {
+    first: Vec<WeightedRow<'g>>,
+    second: Vec<WeightedRow<'g>>,
+}
+
+impl Iterator for SummedNeighbours<'_> {
+    type Item = (DenseId, f64);
+
+    fn next(&mut self) -> Option<(DenseId, f64)> {
+        let smallest =
+            self.first.iter_mut().chain(&mut self.second).filter_map(WeightedRow::peek).min()?;
+        let first = sum_at(&mut self.first, smallest);
+        let second = sum_at(&mut self.second, smallest);
+        let weight = match (first, second) {
+            (Some(a), Some(b)) if a.is_nan() || b.is_nan() => f64::NAN,
+            (Some(a), Some(b)) => a.min(b),
+            (one, other) => one.or(other)?,
+        };
+        Some((smallest, weight))
+    }
+}
+
+/// The sum of the weights of the entries for `target` that start `rows`,
+/// consumed in relation order; `None` if none does. An unweighted entry
+/// weighs 1 however many relations hold it.
+fn sum_at(rows: &mut [WeightedRow<'_>], target: DenseId) -> Option<f64> {
+    let mut entries = rows.iter_mut().filter_map(|row| row.next_if(target));
+    let first = entries.next()?;
+    let sum = entries.fold(first, |sum, weight| sum.zip(weight).map(|(sum, weight)| sum + weight));
+    Some(sum.unwrap_or(1.0))
+}
+
+/// One CSR row's entries with their weights (`None` when unweighted).
+struct WeightedRow<'g> {
+    targets: Peekable<std::iter::Enumerate<crate::graph::Neighbours<'g>>>,
+    weights: Option<&'g [f64]>,
+}
+
+impl<'g> WeightedRow<'g> {
+    fn new(csr: &'g AnyCsr, node: DenseId) -> Self {
+        Self {
+            targets: csr.neighbours(node).enumerate().peekable(),
+            weights: csr.neighbour_weights(node),
+        }
+    }
+
+    /// The next entry's target.
+    fn peek(&mut self) -> Option<DenseId> {
+        self.targets.peek().map(|&(_, target)| target)
+    }
+
+    /// The next entry's weight, consumed, if its target is `target`.
+    fn next_if(&mut self, target: DenseId) -> Option<Option<f64>> {
+        let (i, _) = self.targets.next_if(|&(_, next)| next == target)?;
+        Some(self.weights.and_then(|weights| weights.get(i)).copied())
     }
 }
 

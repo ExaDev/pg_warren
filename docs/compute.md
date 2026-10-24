@@ -333,8 +333,8 @@ intermediates transient, and persists only `out`.
 | `core_number(graph, out, rels := NULL, persist := true)` | each node's k-core number in the undirected simple graph | the degeneracy |
 | `strong_components_vector(graph, out, rels := NULL, persist := true)` | each node's strongly connected component, as the smallest dense id in it | the component count |
 | `topological_order(graph, out, rels := NULL, persist := true)` | each node's position, from 0, in the topological order (smallest dense id first among ready nodes) | vector id |
-| `dag_longest_path(graph, out, rels := NULL, weighted := NULL, persist := true)` | the length of the longest path ending at each node | the longest length |
-| `minimum_spanning_forest(graph, id_type, rels := NULL, weighted := NULL)` | rows `(source, target, weight)`: a minimum spanning tree of each component | rows |
+| `dag_longest_path(graph, out, rels := NULL, weighted := NULL, persist := true, per_relation := false)` | the length of the longest path ending at each node | the longest length |
+| `minimum_spanning_forest(graph, id_type, rels := NULL, weighted := NULL, per_relation := false)` | rows `(source, target, weight)`: a minimum spanning tree of each component | rows |
 
 All take `version := …`. `label_propagation` is deterministic min-label
 propagation; `label_propagation_majority` is the majority vote. `triangles`
@@ -438,7 +438,10 @@ for `topological_order` and `dag_longest_path`, and 40 for
 three when they read several relations' CSRs, a row scratch of 16 bytes per
 entry of the longest row (DESIGN.md §6.7).
 Edges are read under `rels` as the products read them: an edge in several
-selected relations is one edge, its weights summed.
+selected relations is one edge, its weights summed. With `per_relation :=
+true` (both functions) it is an edge in each relation, so, weighted, a
+longest path takes the heaviest and the forest the lightest
+([semantics.md](semantics.md#a-pair-in-several-relations)).
 
 - `core_number` and `minimum_spanning_forest` ignore direction and
   self-loops. `core_number` returns the graph's degeneracy (its largest core
@@ -490,7 +493,11 @@ its two), weighted if `weighted` (NULL: if the graph has weights; paths are
 then the lightest, by Dijkstra: every edge a search follows must weigh more
 than 0 and every distance must stay finite, else 22023; a self-loop's
 weight is never read), else by edge count. An edge in several selected
-relations is one edge, its weights summed. Closeness and harmonic
+relations is one edge, its weights summed; weighted, `per_relation := true`
+makes it an edge in each relation, so paths take the lightest
+([semantics.md](semantics.md#a-pair-in-several-relations)). Unweighted,
+`per_relation` changes nothing: parallel edges change no path's length and
+no count of shortest paths. Closeness and harmonic
 centrality use the distances *to* each node, as NetworkX does on a directed
 graph.
 

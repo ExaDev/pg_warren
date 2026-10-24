@@ -16,6 +16,7 @@ mod matrix;
 
 use kernel::{PushScratch, Write};
 use matrix::Form;
+pub use matrix::Reading;
 pub(crate) use matrix::{Matrix, RowScratch};
 
 use super::{

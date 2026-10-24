@@ -24,7 +24,7 @@ use std::cmp::Ordering;
 use std::mem::size_of;
 
 use super::memory::MemoryCharge;
-use super::product::Matrix;
+use super::product::{Matrix, Reading};
 use super::{ComputeError, ComputeMemory, Workers};
 use crate::graph::{DenseId, GraphCsr, RelationSelection};
 use crate::interrupts::{Cancellation, Interrupts, Work};
@@ -42,17 +42,19 @@ pub struct SpanningForest {
 }
 
 /// The minimum spanning forest of the undirected graph under the selected
-/// relations: weighted if `weighted` (if `None`, when the graph has
-/// weights), else every edge weighs 1.
+/// relations: weighted if `reading` is (if `None`, when the graph has
+/// weights), else every edge weighs 1. Per relation, a pair in several
+/// relations is a parallel edge in each, so the lightest is the candidate.
 pub fn minimum_spanning_forest<I: Interrupts>(
     workers: &Workers,
     memory: &ComputeMemory,
     interrupts: &mut I,
     graph: &GraphCsr,
     relations: RelationSelection<'_>,
-    weighted: Option<bool>,
+    reading: Reading,
 ) -> Result<SpanningForest, ComputeError> {
-    let matrix = Matrix::new(graph, relations, false, weighted, false, memory)?;
+    let matrix =
+        Matrix::new(graph, relations, false, reading.weighted, reading.per_relation, memory)?;
     let id_space = graph.all_relations().forward().id_space();
     // A parent and a candidate per node, and the forest's buffer, which
     // grows by doubling to at most twice its N − 1 edges.
@@ -198,6 +200,14 @@ mod tests {
         relations: RelationSelection<'_>,
         weighted: Option<bool>,
     ) -> Result<Vec<ForestEdge>, ComputeError> {
+        forest_reading(graph, relations, Reading { weighted, per_relation: false })
+    }
+
+    fn forest_reading(
+        graph: &GraphCsr,
+        relations: RelationSelection<'_>,
+        reading: Reading,
+    ) -> Result<Vec<ForestEdge>, ComputeError> {
         let memory = ComputeMemory::new(1 << 28);
         let found = minimum_spanning_forest(
             workers(),
@@ -205,7 +215,7 @@ mod tests {
             &mut Uninterrupted,
             graph,
             relations,
-            weighted,
+            reading,
         )?;
         Ok(found.edges)
     }
@@ -256,7 +266,14 @@ mod tests {
         let graph = reference::graph(3, 1, &vec![(0, 0, 1, 1.0)], false, false);
         let memory = ComputeMemory::new(1 << 20);
         let all = RelationSelection::All;
-        let result = minimum_spanning_forest(workers(), &memory, &mut Stop, &graph, all, None);
+        let result = minimum_spanning_forest(
+            workers(),
+            &memory,
+            &mut Stop,
+            &graph,
+            all,
+            Reading { weighted: None, per_relation: false },
+        );
         assert_eq!(result.map(|_| ()), Err(ComputeError::Cancelled));
     }
 
@@ -281,8 +298,14 @@ mod tests {
         let fits = |limit| {
             let memory = ComputeMemory::new(limit);
             let all = RelationSelection::All;
-            let found =
-                minimum_spanning_forest(workers(), &memory, &mut Uninterrupted, &graph, all, None);
+            let found = minimum_spanning_forest(
+                workers(),
+                &memory,
+                &mut Uninterrupted,
+                &graph,
+                all,
+                Reading { weighted: None, per_relation: false },
+            );
             let fitted = found.is_ok();
             drop(found);
             assert_eq!(memory.in_use(), 0, "every charge is released");
@@ -301,8 +324,14 @@ mod tests {
         let held = 1 << 20;
         let memory = ComputeMemory::reclaiming(held, held, held, Box::new(Exact));
         let all = RelationSelection::All;
-        let found =
-            minimum_spanning_forest(workers(), &memory, &mut Uninterrupted, &graph, all, None);
+        let found = minimum_spanning_forest(
+            workers(),
+            &memory,
+            &mut Uninterrupted,
+            &graph,
+            all,
+            Reading { weighted: None, per_relation: false },
+        );
         assert_eq!(found.map(|found| found.edges), Ok(vec![(2, 0, 1.0)]));
     }
 
@@ -353,7 +382,10 @@ mod tests {
 
     proptest! {
         #[test]
-        fn the_forest_is_kruskals((id_space, relations, edges, selected, (wide, store_merged)) in scenarios()) {
+        fn the_forest_is_kruskals(
+            (id_space, relations, edges, selected, (wide, store_merged)) in scenarios(),
+            per_relation in any::<bool>(),
+        ) {
             let indexes = reference::relations(relations);
             let mut list = EdgeList::new(true);
             for &(r, s, t, w) in &edges {
@@ -366,8 +398,13 @@ mod tests {
             }.unwrap();
             let chosen: Option<Vec<_>> = selected.as_ref().map(|s| s.iter().map(|&r| indexes[r]).collect());
             let selection = chosen.as_deref().map_or(RelationSelection::All, RelationSelection::Only);
-            let adjacency = reference::adjacency(id_space, &edges, selected.as_deref(), true);
-            let found = forest(&graph, selection, None).unwrap();
+            // Per relation, a pair's lightest relation is the candidate.
+            let adjacency = match per_relation {
+                true => reference::adjacency_per_relation(id_space, &edges, selected.as_deref(), true, f64::min),
+                false => reference::adjacency(id_space, &edges, selected.as_deref(), true),
+            };
+            let reading = Reading { weighted: None, per_relation };
+            let found = forest_reading(&graph, selection, reading).unwrap();
             let mut pairs: Vec<_> = found.iter().map(|&(s, t, w)| (s.min(t), s.max(t), w)).collect();
             pairs.sort_by_key(|&(u, v, _)| (u, v));
             prop_assert_eq!(pairs, kruskal(id_space, &adjacency));

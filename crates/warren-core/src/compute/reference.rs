@@ -70,6 +70,37 @@ pub(crate) fn adjacency(
     a
 }
 
+/// The dense adjacency matrix of the edges in `selected` relations read
+/// per relation (DESIGN.md §5.3): each relation's own entry (its edges'
+/// summed weight, or 1 when not `weighted`), the relations' entries for a
+/// pair folded by `fold` in relation order.
+pub(crate) fn adjacency_per_relation(
+    id_space: u64,
+    edges: &Edges,
+    selected: Option<&[usize]>,
+    weighted: bool,
+    fold: impl Fn(f64, f64) -> f64,
+) -> Vec<Vec<Option<f64>>> {
+    let mut relations: Vec<usize> = edges.iter().map(|&(relation, ..)| relation).collect();
+    relations.sort_unstable();
+    relations.dedup();
+    relations.retain(|relation| selected.is_none_or(|selected| selected.contains(relation)));
+    let n = id_space as usize;
+    let mut a: Vec<Vec<Option<f64>>> = vec![vec![None; n]; n];
+    for relation in relations {
+        let each = adjacency(id_space, edges, Some(&[relation]), weighted);
+        for (row, each) in a.iter_mut().zip(each) {
+            for (entry, each) in row.iter_mut().zip(each) {
+                *entry = match (*entry, each) {
+                    (Some(sum), Some(each)) => Some(fold(sum, each)),
+                    (entry, each) => entry.or(each),
+                };
+            }
+        }
+    }
+    a
+}
+
 /// How a product's result is written to `y` (DESIGN.md §6.3).
 #[derive(Debug, Clone)]
 pub(crate) struct Write {

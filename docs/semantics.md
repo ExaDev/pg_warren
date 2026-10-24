@@ -81,12 +81,25 @@ whole table.
 | `contract` | yes: counting (`weighted := false`, or an unweighted graph), the default counts the pair once, in the first of its relations; per relation in each. Weights are summed either way |
 | `spmv`, `spmm` | yes: an entry in each relation, which `⊕` folds |
 | `pagerank`, `katz_centrality`, `eigenvector_centrality`, `hits` | yes: unweighted, the pair weighs k |
-| `sssp_vector` | yes: the cheapest of its relations, as `dijkstra` (by default their weights' sum) |
+| `sssp_vector`, `dijkstra` | yes: the cheapest of its relations (by default their weights' sum) |
+| `betweenness_centrality`, `closeness_centrality`, `harmonic_centrality` | yes: weighted, paths take the cheapest of its relations (by default their weights' sum); unweighted it changes nothing |
+| `dag_longest_path` | yes: weighted, the heaviest of its relations (by default their weights' sum) |
+| `minimum_spanning_forest` | yes: weighted, the lightest of its relations (by default their weights' sum) |
 | `degree`, `vector_degree`, `degree_vector` | yes: a neighbour once in each relation linking it (with `direction := 'both'`, once per relation even if linked both ways) |
 | `aggregate_neighbours` | yes: a neighbour's row once in each relation linking it |
 | `eigen`, `distance` (`spectral`, `degree`) | yes: unweighted, a pair weighs the number of its relations; `distance('edit')` and `diff` already count (relation, source, target) |
 | `gather` | yes: a sender once in each relation linking it, so its messages arrive once per relation ([compute.md](compute.md#gather)) |
 | `label_propagation_majority` | yes: a neighbour votes once in each relation linking it |
+
+The rest take no `per_relation`, because the count cannot change what
+they return: reachability and hop counts (`bfs`, `reachable`,
+`reachable_set`, `shortest_path`, `neighbours`, `has_edge`), components
+and orders (`components`, `components_vector`, `strong_components_vector`,
+`topological_order`), `label_propagation` (a minimum), and the functions
+defined on the simple graph of distinct neighbours, as NetworkX defines
+them (`triangles`, `clustering`, `core_number`, `similarity`,
+`most_similar`, `similar_pairs`). `walk` already names each hop's
+relation, so a pair in k relations is k walks.
 
 ## Versions
 

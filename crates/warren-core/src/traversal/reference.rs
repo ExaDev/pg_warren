@@ -167,6 +167,38 @@ impl Scenario {
         steps
     }
 
+    /// [`Self::steps`] with a pair in several selected relations one edge
+    /// (DESIGN.md §5.3): its relations' weights summed in relation order
+    /// if weighted, else 1.
+    pub(crate) fn steps_once(
+        &self,
+        direction: Direction,
+        selection: &Option<Vec<usize>>,
+    ) -> Vec<(DenseId, DenseId, f64)> {
+        let mut each: BTreeMap<(usize, DenseId, DenseId), f64> = BTreeMap::new();
+        for (r, s, t, w) in self.live_edges() {
+            if selection.as_ref().is_none_or(|chosen| chosen.contains(&r)) {
+                let weight = each.entry((r, s, t)).or_insert(0.0);
+                *weight = if self.weighted { *weight + w } else { 1.0 };
+            }
+        }
+        let mut once: BTreeMap<(DenseId, DenseId), f64> = BTreeMap::new();
+        for (&(_, s, t), &w) in &each {
+            once.entry((s, t)).and_modify(|sum| *sum += w).or_insert(w);
+        }
+        let mut steps = Vec::new();
+        for (&(s, t), &w) in &once {
+            let w = if self.weighted { w } else { 1.0 };
+            if direction != Direction::In {
+                steps.push((s, t, w));
+            }
+            if direction != Direction::Out {
+                steps.push((t, s, w));
+            }
+        }
+        steps
+    }
+
     /// Each `(from, relation, to)` hop along a live edge of the selected
     /// relations, as traversed in `direction`, once: an edge read both ways
     /// by one relation, or a self-loop, is one hop.

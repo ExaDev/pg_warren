@@ -1267,19 +1267,15 @@ VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'vector_degree_wrapper
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/compute_sql/structure.rs:137
+-- crates/pg_warren/src/compute_sql/structure.rs:140
 -- pg_warren::compute_sql::structure::dag_longest_path
-CREATE  FUNCTION warren."dag_longest_path"(
-	"graph" TEXT, /* Option < & str > */
-	"out" TEXT, /* Option < & str > */
-	"rels" TEXT[] DEFAULT NULL, /* :: std :: option :: Option < Vec < Option < String > > > */
-	"weighted" bool DEFAULT NULL, /* Option < bool > */
-	"persist" bool DEFAULT true, /* Option < bool > */
-	"version" bigint DEFAULT NULL /* Option < i64 > */
-) RETURNS double precision /* Option < f64 > */
-VOLATILE PARALLEL UNSAFE 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'dag_longest_path_wrapper';
+
+CREATE FUNCTION warren.dag_longest_path(graph text, "out" text, rels text[] DEFAULT NULL,
+                                        weighted boolean DEFAULT NULL, persist boolean DEFAULT true,
+                                        version bigint DEFAULT NULL,
+                                        per_relation boolean DEFAULT false)
+RETURNS double precision
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'dag_longest_path_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -1328,12 +1324,12 @@ AS 'MODULE_PATHNAME', 'project_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/traversal_sql/paths.rs:116
+-- crates/pg_warren/src/traversal_sql/paths.rs:118
 -- pg_warren::traversal_sql::paths::dijkstra
 
 CREATE FUNCTION warren.dijkstra(graph text, start anyelement, target anyelement,
                                 rels text[] DEFAULT NULL, direction text DEFAULT 'out',
-                                version bigint DEFAULT NULL)
+                                version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
 RETURNS TABLE (path anyarray, cost float8)
 STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'dijkstra_wrapper';
 /* </end connected objects> */
@@ -1350,25 +1346,18 @@ STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'similar_pairs_wrapp
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/compute_sql/centrality.rs:89
+-- crates/pg_warren/src/compute_sql/centrality.rs:97
 -- pg_warren::compute_sql::centrality::betweenness_centrality
-CREATE  FUNCTION warren."betweenness_centrality"(
-	"graph" TEXT, /* Option < & str > */
-	"out" TEXT, /* Option < & str > */
-	"k" bigint DEFAULT NULL, /* Option < i64 > */
-	"seed" bigint DEFAULT 0, /* Option < i64 > */
-	"normalized" bool DEFAULT true, /* Option < bool > */
-	"endpoints" bool DEFAULT false, /* Option < bool > */
-	"directed" bool DEFAULT true, /* Option < bool > */
-	"sources" TEXT DEFAULT NULL, /* Option < & str > */
-	"rels" TEXT[] DEFAULT NULL, /* :: std :: option :: Option < Vec < Option < String > > > */
-	"weighted" bool DEFAULT NULL, /* Option < bool > */
-	"persist" bool DEFAULT true, /* Option < bool > */
-	"version" bigint DEFAULT NULL /* Option < i64 > */
-) RETURNS bigint /* Option < i64 > */
-VOLATILE PARALLEL UNSAFE 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'betweenness_centrality_wrapper';
+
+CREATE FUNCTION warren.betweenness_centrality(graph text, "out" text, k bigint DEFAULT NULL,
+                                              seed bigint DEFAULT 0, normalized boolean DEFAULT true,
+                                              endpoints boolean DEFAULT false,
+                                              directed boolean DEFAULT true, sources text DEFAULT NULL,
+                                              rels text[] DEFAULT NULL, weighted boolean DEFAULT NULL,
+                                              persist boolean DEFAULT true, version bigint DEFAULT NULL,
+                                              per_relation boolean DEFAULT false)
+RETURNS bigint
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'betweenness_centrality_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -1438,11 +1427,12 @@ AS 'MODULE_PATHNAME', 'core_number_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/compute_sql/structure.rs:176
+-- crates/pg_warren/src/compute_sql/structure.rs:194
 -- pg_warren::compute_sql::structure::minimum_spanning_forest
 
 CREATE FUNCTION warren.minimum_spanning_forest(graph text, id_type anyelement, rels text[] DEFAULT NULL,
-                                               weighted bool DEFAULT NULL, version bigint DEFAULT NULL)
+                                               weighted bool DEFAULT NULL, version bigint DEFAULT NULL,
+                                               per_relation boolean DEFAULT false)
 RETURNS TABLE (source anyelement, target anyelement, weight float8)
 STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'minimum_spanning_forest_wrapper';
 /* </end connected objects> */
@@ -1994,23 +1984,17 @@ VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'spmm_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/compute_sql/centrality.rs:157
+-- crates/pg_warren/src/compute_sql/centrality.rs:195
 -- pg_warren::compute_sql::centrality::harmonic_centrality
-CREATE  FUNCTION warren."harmonic_centrality"(
-	"graph" TEXT, /* Option < & str > */
-	"out" TEXT, /* Option < & str > */
-	"k" bigint DEFAULT NULL, /* Option < i64 > */
-	"seed" bigint DEFAULT 0, /* Option < i64 > */
-	"directed" bool DEFAULT true, /* Option < bool > */
-	"sources" TEXT DEFAULT NULL, /* Option < & str > */
-	"rels" TEXT[] DEFAULT NULL, /* :: std :: option :: Option < Vec < Option < String > > > */
-	"weighted" bool DEFAULT NULL, /* Option < bool > */
-	"persist" bool DEFAULT true, /* Option < bool > */
-	"version" bigint DEFAULT NULL /* Option < i64 > */
-) RETURNS bigint /* Option < i64 > */
-VOLATILE PARALLEL UNSAFE 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'harmonic_centrality_wrapper';
+
+CREATE FUNCTION warren.harmonic_centrality(graph text, "out" text, k bigint DEFAULT NULL,
+                                           seed bigint DEFAULT 0, directed boolean DEFAULT true,
+                                           sources text DEFAULT NULL, rels text[] DEFAULT NULL,
+                                           weighted boolean DEFAULT NULL, persist boolean DEFAULT true,
+                                           version bigint DEFAULT NULL,
+                                           per_relation boolean DEFAULT false)
+RETURNS bigint
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'harmonic_centrality_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -2116,24 +2100,17 @@ STRICT VOLATILE LANGUAGE c AS 'MODULE_PATHNAME', 'set_owner_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/compute_sql/centrality.rs:125
+-- crates/pg_warren/src/compute_sql/centrality.rs:149
 -- pg_warren::compute_sql::centrality::closeness_centrality
-CREATE  FUNCTION warren."closeness_centrality"(
-	"graph" TEXT, /* Option < & str > */
-	"out" TEXT, /* Option < & str > */
-	"k" bigint DEFAULT NULL, /* Option < i64 > */
-	"seed" bigint DEFAULT 0, /* Option < i64 > */
-	"wf_improved" bool DEFAULT true, /* Option < bool > */
-	"directed" bool DEFAULT true, /* Option < bool > */
-	"sources" TEXT DEFAULT NULL, /* Option < & str > */
-	"rels" TEXT[] DEFAULT NULL, /* :: std :: option :: Option < Vec < Option < String > > > */
-	"weighted" bool DEFAULT NULL, /* Option < bool > */
-	"persist" bool DEFAULT true, /* Option < bool > */
-	"version" bigint DEFAULT NULL /* Option < i64 > */
-) RETURNS bigint /* Option < i64 > */
-VOLATILE PARALLEL UNSAFE 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'closeness_centrality_wrapper';
+
+CREATE FUNCTION warren.closeness_centrality(graph text, "out" text, k bigint DEFAULT NULL,
+                                            seed bigint DEFAULT 0, wf_improved boolean DEFAULT true,
+                                            directed boolean DEFAULT true, sources text DEFAULT NULL,
+                                            rels text[] DEFAULT NULL, weighted boolean DEFAULT NULL,
+                                            persist boolean DEFAULT true, version bigint DEFAULT NULL,
+                                            per_relation boolean DEFAULT false)
+RETURNS bigint
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'closeness_centrality_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */

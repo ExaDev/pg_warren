@@ -431,8 +431,8 @@ mod tests {
     }
 
     /// With `per_relation`, a pair in several relations is an edge in each,
-    /// so `sssp_vector`'s `min_plus` takes the cheapest, as `dijkstra`
-    /// does; by default it is one edge, its weights summed.
+    /// so `sssp_vector`'s `min_plus` takes the cheapest; by default it is
+    /// one edge, its weights summed: either way, as `dijkstra` reads it.
     #[pg_test]
     fn sssp_vector_per_relation_takes_the_cheapest_relation() -> Result<(), Error> {
         Spi::run(
@@ -448,11 +448,14 @@ mod tests {
         )?;
         assert_eq!(values("two", "once", 0)?.as_deref(), Some("1:0 2:7 3:8"));
         assert_eq!(values("two", "each", 0)?.as_deref(), Some("1:0 2:2 3:3"));
-        let dijkstra = rows(
-            "SELECT n || ':' || cost FROM generate_series(1, 3) n,
-                    warren.dijkstra('two', 1::bigint, n::bigint) ORDER BY n",
-        )?;
-        assert_eq!(dijkstra.as_deref(), Some("1:0 2:2 3:3"));
+        let dijkstra = |per: &str| {
+            rows(&format!(
+                "SELECT n || ':' || cost FROM generate_series(1, 3) n,
+                        warren.dijkstra('two', 1::bigint, n::bigint{per}) ORDER BY n"
+            ))
+        };
+        assert_eq!(dijkstra("")?.as_deref(), Some("1:0 2:7 3:8"));
+        assert_eq!(dijkstra(", per_relation := true")?.as_deref(), Some("1:0 2:2 3:3"));
         Ok(())
     }
 

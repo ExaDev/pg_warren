@@ -150,6 +150,16 @@ mod tests {
             "(SELECT string_agg(node_id || ':' || value, ' ' ORDER BY node_id)
               FROM {s}.gather('t', 'SELECT id, id FROM t_nodes', NULL::bigint, NULL::bigint, 'sum'))",
         ),
+        ("dag_longest_path", "{s}.dag_longest_path('t', 'dl_{s}', ARRAY['a'], persist := false)"),
+        (
+            "minimum_spanning_forest",
+            "(SELECT string_agg(source || '-' || target || ':' || weight, ' ')
+              FROM {s}.minimum_spanning_forest('t', NULL::bigint))",
+        ),
+        ("betweenness_centrality", "{s}.betweenness_centrality('t', 'bc_{s}', persist := false)"),
+        ("closeness_centrality", "{s}.closeness_centrality('t', 'cc_{s}', persist := false)"),
+        ("harmonic_centrality", "{s}.harmonic_centrality('t', 'hc_{s}', persist := false)"),
+        ("dijkstra", "(SELECT cost FROM {s}.dijkstra('t', 1::bigint, 4::bigint))"),
     ];
 
     /// `function`'s definition in the 0.6.0 install script, in schema

@@ -11,18 +11,22 @@
   pairs their results differ from 0.6.0's. A counting `contract` counts
   the pair in the first of its relations. Weighted pairs are unchanged:
   their weights are summed across relations.
+- **`dijkstra` now costs a weighted pair linked in several relations the
+  sum of their weights**, as `sssp_vector` and the centralities do. It
+  took the cheapest relation's weight; `per_relation := true` still does.
 
 ### Added
 
 - **`per_relation boolean DEFAULT false`** on `modularity`, `contract`,
   `local_moving`, `leiden_refine`, `louvain`, `leiden`, `spmv`, `spmm`,
   `pagerank`, `katz_centrality`, `eigenvector_centrality`, `hits`,
-  `sssp_vector`, `degree`, `vector_degree`, `degree_vector`,
+  `sssp_vector`, `dijkstra`, `betweenness_centrality`,
+  `closeness_centrality`, `harmonic_centrality`, `dag_longest_path`,
+  `minimum_spanning_forest`, `degree`, `vector_degree`, `degree_vector`,
   `aggregate_neighbours`, `gather`, `label_propagation_majority`, `eigen`
-  and `distance`:
-  `true` reads a
-  pair linked in several relations as an edge in each (one per relation,
-  as parallel edges), for when that multiplicity is the signal.
+  and `distance`: `true` reads a pair linked in several relations as an
+  edge in each (one per relation, as parallel edges), for when that
+  multiplicity is the signal.
 
 ### Upgrading
 

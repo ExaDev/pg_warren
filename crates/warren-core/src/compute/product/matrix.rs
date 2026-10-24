@@ -9,6 +9,17 @@ use super::super::{ComputeError, ComputeMemory, MemoryCharge};
 use crate::graph::RelationSelection;
 use crate::graph::{AnyCsr, AnyCsrSlices, CsrSlices, DenseId, GraphCsr, Target};
 
+/// How a kernel reads the selected relations' edges: with their weights or
+/// not, and a pair linked in several relations as one edge or as an edge
+/// in each (DESIGN.md §5.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Reading {
+    /// Use edge weights (`None`: if the graph has them).
+    pub weighted: Option<bool>,
+    /// Read a pair in several relations as an edge in each.
+    pub per_relation: bool,
+}
+
 /// How a product walks the matrix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Form {
@@ -109,6 +120,11 @@ impl<'g> Matrix<'g> {
     /// Whether entries carry the edges' weights (else every weight is 1).
     pub(crate) fn is_weighted(&self) -> bool {
         self.weighted
+    }
+
+    /// Whether an edge in several relations is an entry in each.
+    pub(crate) fn is_per_relation(&self) -> bool {
+        self.per_relation
     }
 
     /// How the product walks the CSRs.
