@@ -446,13 +446,24 @@ jobs:
     # built in Debian 12's container against PGDG, installed with apt into a
     # clean container with PGDG's PostgreSQL, preloaded, restarted and
     # smoke-tested (superuser and trusted), then the Docker image built from
-    # it and the same test run in it. CONTRIBUTING.md, "Packages".
+    # it and the same test run in it. The publish job's check of a package
+    # (release/assets.py) must pass on it. CONTRIBUTING.md, "Packages".
     name: Debian package and image (PG 16, bookworm, amd64)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Build postgresql-16-pg-warren (release/packages.py deb)
         run: python3 release/packages.py deb bookworm . dist --majors 16
+      - name: The publish job's check passes on it (release/assets.py check-deb)
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          mkdir -p "$RUNNER_TEMP/assets"
+          for deb in dist/*.deb; do
+            name="$(basename "$deb")"
+            cp -- "$deb" "$RUNNER_TEMP/assets/${name//\~/.}"
+            python3 release/assets.py check-deb "$RUNNER_TEMP/assets/${name//\~/.}" "$version"
+          done
       - name: Install it with apt, preload, restart, smoke test
         run: python3 release/packages.py check dist/postgresql-16-pg-warren_*.deb
       - name: Tarball from it
@@ -471,6 +482,16 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Build postgresql-18-pg-warren (release/packages.py deb)
         run: python3 release/packages.py deb noble . dist --majors 18
+      - name: The publish job's check passes on it (release/assets.py check-deb)
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          mkdir -p "$RUNNER_TEMP/assets"
+          for deb in dist/*.deb; do
+            name="$(basename "$deb")"
+            cp -- "$deb" "$RUNNER_TEMP/assets/${name//\~/.}"
+            python3 release/assets.py check-deb "$RUNNER_TEMP/assets/${name//\~/.}" "$version"
+          done
       - name: Install it with apt, preload, restart, smoke test
         run: python3 release/packages.py check dist/postgresql-18-pg-warren_*.deb
 
