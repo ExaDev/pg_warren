@@ -607,7 +607,8 @@ SELECT * FROM warren.similarity('roads', 'VALUES (2, 4), (1, 5)', NULL::int, 'ad
 ```
 warren.eigen(graph, k, matrix := 'adjacency', which := 'largest', rels := NULL,
              weighted := NULL, symmetrize := true, tol := 1e-6, max_iter := NULL,
-             vectors_prefix := NULL, version := NULL, dtype := 'f32', persist := true)
+             vectors_prefix := NULL, version := NULL, dtype := 'f32', persist := true,
+             per_relation := false)
   RETURNS TABLE (i int, eigenvalue float8, residual float8)
 ```
 
@@ -660,7 +661,7 @@ SELECT * FROM warren.eigen('roads', 2, 'laplacian', 'smallest', vectors_prefix :
 warren.distance(graph, v1, v2, method, vectors_prefix := NULL, k := NULL, x := NULL, y := NULL,
                 compared_rows := 'shared', matrix := NULL, which := 'largest', rels := NULL,
                 weighted := NULL, symmetrize := true, tol := 1e-6, max_iter := NULL, dtype := 'f32',
-                graph2 := NULL)
+                graph2 := NULL, per_relation := false)
   RETURNS jsonb   -- {"method", "from", "to", ["graph2"], …the method's scalars}
 ```
 
@@ -670,7 +671,7 @@ are aligned by dense id; across graphs, by external id.
 | Method | Needs | Returns |
 |---|---|---|
 | `edit` | nothing | per relation and `overall`: `added`, `removed`, `union`, `distance` (Jaccard, `(added + removed) / union`); weights ignored |
-| `degree` | nothing | `wasserstein` (W₁, in degrees), `ks`, over live nodes' out-degrees |
+| `degree` | nothing | `wasserstein` (W₁, in degrees), `ks`, over live nodes' out-degrees (with `per_relation`, a neighbour once in each relation linking it) |
 | `spectral` | `k`; optionally `vectors_prefix` | `l2`, `relative`, `max` of the eigenvalue difference, and `before`, `after`. With a prefix it uses the stored `<prefix>_1..k` (their Rayleigh quotients under `matrix`, which you must then name, since a stored vector does not record its operator); without, it solves `k` eigenpairs of `matrix` (default `adjacency`) on each side and adds `converged` (true when both solves converged) |
 | `subspace` | `vectors_prefix`, `k` (run `eigen` on both versions first) | `projection` (‖P₁ − P₂‖_F), `max_angle`, `angles`: principal angles between the two eigenvector spans; the most sensitive to restructuring, the least to volume |
 | `embedding` | `x` (matrix of `v1`), `y` (of `v2`, default `x`) | `mean_l2`, `max_l2`, `mean_cosine`, `max_cosine` (1 − cos), `rows` compared |

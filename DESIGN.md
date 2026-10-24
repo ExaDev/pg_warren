@@ -318,6 +318,9 @@ What each function does with such a pair (0.6.0: how it read one; *n/a*: the cou
 | `sssp_vector` | once, its weights summed | yes: the cheapest relation, as `dijkstra` |
 | `degree`, `vector_degree`, `degree_vector` | once (distinct neighbours) | yes: (relation, neighbour) pairs; `both` counts a neighbour linked both ways in one relation once |
 | `aggregate_neighbours` | once (`spmm` and `vector_degree`) | yes: a neighbour's row once in each relation, the mean divided by that degree |
+| `eigen`, `distance('spectral')` | once (through `Product`) | yes: unweighted, the pair weighs k in `A` (and in `D`); weighted, the same |
+| `distance('degree')` | once (distinct out-neighbours) | yes: the sum of each relation's out-degree |
+| `distance('edit')`, `diff` | per relation by design: (relation, source, target) triples | n/a: already per relation |
 | `gather` | once (a sender once, whatever its relations and directions) | yes: a sender once in each relation, its messages delivered once per relation (§6.4) |
 | `label_propagation_majority` | once (through `gather`) | yes: a neighbour votes once in each relation |
 
@@ -947,7 +950,8 @@ warren.eigen(graph text, k int,
              vectors_prefix text DEFAULT NULL,  -- store eigenvectors as <prefix>_1..k
              version bigint DEFAULT NULL,
              dtype text DEFAULT 'f32',          -- f32 | f64: the Lanczos and eigenvector element type (§14 item 8)
-             persist bool DEFAULT true)         -- false: the eigenvectors are transient vectors
+             persist bool DEFAULT true,         -- false: the eigenvectors are transient vectors
+             per_relation bool DEFAULT false)   -- a pair in k relations weighs k when unweighted (§5.3)
   RETURNS TABLE (i int, eigenvalue float8, residual float8);
 ```
 
@@ -1264,14 +1268,15 @@ warren.distance(graph text, v1 bigint, v2 bigint, method text,  -- edit | degree
                 which text DEFAULT 'largest', rels text[] DEFAULT NULL,
                 weighted bool DEFAULT NULL, symmetrize bool DEFAULT true, tol float8 DEFAULT 1e-6,
                 max_iter int DEFAULT NULL, dtype text DEFAULT 'f32',  -- spectral: the operator, and a fresh solve
-                graph2 text DEFAULT NULL)                      -- v2 is a version of graph2, aligned by external id
+                graph2 text DEFAULT NULL,                      -- v2 is a version of graph2, aligned by external id
+                per_relation bool DEFAULT false)               -- degree, spectral: a pair once in each relation (§5.3)
   RETURNS jsonb;   -- {"method", "from", "to", ["graph2"], ...the method's scalars}
 ```
 
 **Implemented (M6, `warren_core::spectral`, bound by `pg_warren::spectral_sql`).** Each method returns a small struct of scalars, which the binding returns as `jsonb` (§14 item 11); `edit` names each relation. Versions of one graph are aligned by dense id, which is sound only where both versions' shared dense ids name the same nodes: `version::shared_dense_ids` checks that, as `diff` does, and `distance` (and, *0.3.0*, `vector_norm_diff`) refuses otherwise (22023). It fails across a compaction and between sibling staged versions whose new nodes diverge (two `refresh(promote := false)` from one current version can hand the same new dense ids to different nodes). Relations never cause a refusal: they are matched by name, so siblings that differ only in their relations compare. Past a version's id space everything is absent.
 
 - `edit_distance` → per relation (matched by name, through `version::relation_deltas`, the pairing `diff` uses) and overall over (relation, source, target) triples: `added`, `removed`, `union`, and the Jaccard distance `(added + removed)/union`. Weights are ignored. The row-wise merge of the two forward CSRs is `warren.diff`'s (`EdgeDelta::between`), O(N + M).
-- `degree_distance` → `wasserstein` (W₁, in degrees) and `ks` between the distributions of distinct out-neighbour counts in the all-relations forward CSR, over live (not tombstoned) nodes; an empty version is a point mass at 0.
+- `degree_distance` → `wasserstein` (W₁, in degrees) and `ks` between the distributions of distinct out-neighbour counts in the all-relations forward CSR, over live (not tombstoned) nodes; an empty version is a point mass at 0. *0.7.0:* with `per_relation`, a node's degree is the sum of its out-degrees in each relation (§5.3).
 - `spectral_distance` → `l2`, `relative` (over the larger norm) and `max` of the in-order difference of two eigenvalue sequences, missing as 0.
 - `subspace_distance` → `projection` (`‖P_X − P_Y‖_F = √(k₁ + k₂ − 2Σcos²θ)`), `max_angle` and the principal `angles`, from one block-ordered Gram pass over both vector sets, Cholesky and an SVD of `L_X⁻¹XᵀY L_Y⁻ᵀ` (inputs need only be independent; cosines within 8Kε of 1 count as 1, so identical inputs give exactly 0).
 - `embedding_distance` → `mean_l2`, `max_l2`, `mean_cosine`, `max_cosine` (1 − cos, from normalised rows) and `rows` compared, skipping rows zero on both sides.

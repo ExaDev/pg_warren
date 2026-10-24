@@ -84,6 +84,7 @@ whole table.
 | `sssp_vector` | yes: the cheapest of its relations, as `dijkstra` (by default their weights' sum) |
 | `degree`, `vector_degree`, `degree_vector` | yes: a neighbour once in each relation linking it (with `direction := 'both'`, once per relation even if linked both ways) |
 | `aggregate_neighbours` | yes: a neighbour's row once in each relation linking it |
+| `eigen`, `distance` (`spectral`, `degree`) | yes: unweighted, a pair weighs the number of its relations; `distance('edit')` and `diff` already count (relation, source, target) |
 | `gather` | yes: a sender once in each relation linking it, so its messages arrive once per relation ([compute.md](compute.md#gather)) |
 | `label_propagation_majority` | yes: a neighbour votes once in each relation linking it |
 

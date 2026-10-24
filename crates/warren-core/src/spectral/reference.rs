@@ -28,6 +28,42 @@ pub(crate) fn operator(
     let n = id_space as usize;
     let a = reference::adjacency(id_space, edges, selected, weighted);
     let a = DMatrix::from_fn(n, n, |i, j| a[i][j].unwrap_or(0.0));
+    dense(id_space, edges, selected, a, symmetrize, operator)
+}
+
+/// The dense matrix of `operator` over `edges` read per relation (DESIGN.md
+/// §5.3): `A` is the sum of each selected relation's own adjacency matrix,
+/// so an unweighted pair counts once in each relation linking it.
+pub(crate) fn per_relation_operator(
+    id_space: u64,
+    edges: &Edges,
+    selected: Option<&[usize]>,
+    weighted: bool,
+    symmetrize: bool,
+    operator: Operator,
+) -> Dense {
+    let n = id_space as usize;
+    let mut relations: Vec<usize> = edges.iter().map(|&(relation, ..)| relation).collect();
+    relations.sort_unstable();
+    relations.dedup();
+    relations.retain(|relation| selected.is_none_or(|selected| selected.contains(relation)));
+    let a = relations.iter().fold(DMatrix::zeros(n, n), |sum, &relation| {
+        let a = reference::adjacency(id_space, edges, Some(&[relation]), weighted);
+        sum + DMatrix::from_fn(n, n, |i, j| a[i][j].unwrap_or(0.0))
+    });
+    dense(id_space, edges, selected, a, symmetrize, operator)
+}
+
+/// The dense matrix of `operator` for adjacency matrix `a` of `edges`.
+fn dense(
+    id_space: u64,
+    edges: &Edges,
+    selected: Option<&[usize]>,
+    a: DMatrix<f64>,
+    symmetrize: bool,
+    operator: Operator,
+) -> Dense {
+    let n = id_space as usize;
     let present = |i: usize, j: usize| {
         edges.iter().any(|&(relation, s, t, _)| {
             selected.is_none_or(|selected| selected.contains(&relation))

@@ -18,7 +18,8 @@
   `local_moving`, `leiden_refine`, `louvain`, `leiden`, `spmv`, `spmm`,
   `pagerank`, `katz_centrality`, `eigenvector_centrality`, `hits`,
   `sssp_vector`, `degree`, `vector_degree`, `degree_vector`,
-  `aggregate_neighbours`, `gather` and `label_propagation_majority`:
+  `aggregate_neighbours`, `gather`, `label_propagation_majority`, `eigen`
+  and `distance`:
   `true` reads a
   pair linked in several relations as an edge in each (one per relation,
   as parallel edges), for when that multiplicity is the signal.

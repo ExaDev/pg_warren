@@ -1534,31 +1534,20 @@ STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'degree_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/spectral_sql/distance/mod.rs:97
+-- crates/pg_warren/src/spectral_sql/distance/mod.rs:100
 -- pg_warren::spectral_sql::distance::distance
-CREATE  FUNCTION warren."distance"(
-	"graph" TEXT, /* Option < & str > */
-	"v1" bigint, /* Option < i64 > */
-	"v2" bigint, /* Option < i64 > */
-	"method" TEXT, /* Option < & str > */
-	"vectors_prefix" TEXT DEFAULT NULL, /* Option < & str > */
-	"k" INT DEFAULT NULL, /* Option < i32 > */
-	"x" TEXT DEFAULT NULL, /* Option < & str > */
-	"y" TEXT DEFAULT NULL, /* Option < & str > */
-	"compared_rows" TEXT DEFAULT 'shared', /* Option < & str > */
-	"matrix" TEXT DEFAULT NULL, /* Option < & str > */
-	"which" TEXT DEFAULT 'largest', /* Option < & str > */
-	"rels" TEXT[] DEFAULT NULL, /* :: std :: option :: Option < Vec < Option < String > > > */
-	"weighted" bool DEFAULT NULL, /* Option < bool > */
-	"symmetrize" bool DEFAULT true, /* Option < bool > */
-	"tol" double precision DEFAULT 1e-6, /* Option < f64 > */
-	"max_iter" INT DEFAULT NULL, /* Option < i32 > */
-	"dtype" TEXT DEFAULT 'f32', /* Option < & str > */
-	"graph2" TEXT DEFAULT NULL /* Option < & str > */
-) RETURNS jsonb /* JsonB */
-STABLE PARALLEL RESTRICTED 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'distance_wrapper';
+
+CREATE FUNCTION warren.distance(graph text, v1 bigint, v2 bigint, method text,
+                                vectors_prefix text DEFAULT NULL, k integer DEFAULT NULL,
+                                x text DEFAULT NULL, y text DEFAULT NULL,
+                                compared_rows text DEFAULT 'shared', matrix text DEFAULT NULL,
+                                which text DEFAULT 'largest', rels text[] DEFAULT NULL,
+                                weighted boolean DEFAULT NULL, symmetrize boolean DEFAULT true,
+                                tol double precision DEFAULT 1e-6, max_iter integer DEFAULT NULL,
+                                dtype text DEFAULT 'f32', graph2 text DEFAULT NULL,
+                                per_relation boolean DEFAULT false)
+RETURNS jsonb
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'distance_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -1934,30 +1923,18 @@ AS 'MODULE_PATHNAME', 'cache_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/spectral_sql/eigen.rs:93
+-- crates/pg_warren/src/spectral_sql/eigen.rs:96
 -- pg_warren::spectral_sql::eigen::eigen
-CREATE  FUNCTION warren."eigen"(
-	"graph" TEXT, /* Option < & str > */
-	"k" INT, /* Option < i32 > */
-	"matrix" TEXT DEFAULT 'adjacency', /* Option < & str > */
-	"which" TEXT DEFAULT 'largest', /* Option < & str > */
-	"rels" TEXT[] DEFAULT NULL, /* :: std :: option :: Option < Vec < Option < String > > > */
-	"weighted" bool DEFAULT NULL, /* Option < bool > */
-	"symmetrize" bool DEFAULT true, /* Option < bool > */
-	"tol" double precision DEFAULT 1e-6, /* Option < f64 > */
-	"max_iter" INT DEFAULT NULL, /* Option < i32 > */
-	"vectors_prefix" TEXT DEFAULT NULL, /* Option < & str > */
-	"version" bigint DEFAULT NULL, /* Option < i64 > */
-	"dtype" TEXT DEFAULT 'f32', /* Option < & str > */
-	"persist" bool DEFAULT true /* Option < bool > */
-) RETURNS TABLE (
-	"i" INT,  /* i32 */
-	"eigenvalue" double precision,  /* f64 */
-	"residual" double precision  /* f64 */
-)
-VOLATILE PARALLEL UNSAFE 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'eigen_wrapper';
+
+CREATE FUNCTION warren.eigen(graph text, k integer, matrix text DEFAULT 'adjacency',
+                             which text DEFAULT 'largest', rels text[] DEFAULT NULL,
+                             weighted boolean DEFAULT NULL, symmetrize boolean DEFAULT true,
+                             tol double precision DEFAULT 1e-6, max_iter integer DEFAULT NULL,
+                             vectors_prefix text DEFAULT NULL, version bigint DEFAULT NULL,
+                             dtype text DEFAULT 'f32', persist boolean DEFAULT true,
+                             per_relation boolean DEFAULT false)
+RETURNS TABLE (i integer, eigenvalue double precision, residual double precision)
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'eigen_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */

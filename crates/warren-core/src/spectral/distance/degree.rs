@@ -3,13 +3,14 @@
 //!
 //! A node's degree is its number of distinct out-neighbours over all
 //! relations (the all-relations forward CSR; for an undirected graph, its
-//! number of neighbours). The distribution is over live nodes: tombstoned
+//! number of neighbours), or per relation the sum of its out-degrees in
+//! each relation (DESIGN.md §5.3). The distribution is over live nodes: tombstoned
 //! nodes are not in the version, isolated live nodes have degree 0. A
 //! version without live nodes counts as a point mass at degree 0.
 
 use super::super::{Resources, SpectralError};
 use crate::compute::{ComputeError, MemoryCharge};
-use crate::graph::{CsrRows, GraphCsr, Tombstones};
+use crate::graph::{AnyCsr, CsrRows, GraphCsr, Tombstones};
 use crate::interrupts::{Cancelled, Interrupts};
 
 /// How often the histogram pass checks the cancellation flag, in rows.
@@ -27,14 +28,16 @@ pub struct DegreeDistance {
 }
 
 /// The `degree` distance from `before` to `after`, each a version's CSRs
-/// and tombstones.
+/// and tombstones, with each node's degree counted once per neighbour or,
+/// `per_relation`, once per neighbour in each relation.
 pub fn degree_distance<I: Interrupts>(
     resources: &mut Resources<'_, I>,
     before: (&GraphCsr, &Tombstones),
     after: (&GraphCsr, &Tombstones),
+    per_relation: bool,
 ) -> Result<DegreeDistance, SpectralError> {
-    let before = Histogram::of(resources, before.0.all_relations().forward(), before.1)?;
-    let after = Histogram::of(resources, after.0.all_relations().forward(), after.1)?;
+    let before = Histogram::of(resources, &Degrees::of(before.0, per_relation), before.1)?;
+    let after = Histogram::of(resources, &Degrees::of(after.0, per_relation), after.1)?;
     let degrees = before.counts.len().max(after.counts.len());
     let (mut wasserstein, mut ks) = (0.0f64, 0.0f64);
     let (mut below_before, mut below_after) = (0u64, 0u64);
@@ -48,6 +51,36 @@ pub fn degree_distance<I: Interrupts>(
     Ok(DegreeDistance { wasserstein, ks })
 }
 
+/// Where a version's out-degrees are read: its all-relations rows, or
+/// each relation's forward CSR, summed.
+enum Degrees<'g> {
+    Once(CsrRows<'g>),
+    PerRelation(Vec<&'g AnyCsr>),
+}
+
+impl<'g> Degrees<'g> {
+    fn of(graph: &'g GraphCsr, per_relation: bool) -> Self {
+        match per_relation {
+            false => Self::Once(graph.all_relations().forward()),
+            true => Self::PerRelation(graph.relations().iter().map(|r| r.forward()).collect()),
+        }
+    }
+
+    fn id_space(&self) -> u64 {
+        match self {
+            Self::Once(rows) => rows.id_space(),
+            Self::PerRelation(csrs) => csrs.first().map_or(0, |csr| csr.id_space()),
+        }
+    }
+
+    fn degree(&self, row: u64) -> u64 {
+        match self {
+            Self::Once(rows) => rows.degree(row),
+            Self::PerRelation(csrs) => csrs.iter().map(|csr| csr.degree(row)).sum(),
+        }
+    }
+}
+
 /// The number of live nodes of each degree.
 #[derive(Debug)]
 struct Histogram {
@@ -59,7 +92,7 @@ struct Histogram {
 impl Histogram {
     fn of<I: Interrupts>(
         resources: &mut Resources<'_, I>,
-        csr: CsrRows<'_>,
+        csr: &Degrees<'_>,
         tombstones: &Tombstones,
     ) -> Result<Self, ComputeError> {
         let rows = csr.id_space();
@@ -110,7 +143,44 @@ mod tests {
         let memory = ComputeMemory::new(1 << 20);
         let mut resources =
             Resources { workers: &workers, memory: &memory, interrupts: &mut Uninterrupted };
-        degree_distance(&mut resources, (&before.0, &before.1), (&after.0, &after.1)).unwrap()
+        degree_distance(&mut resources, (&before.0, &before.1), (&after.0, &after.1), false)
+            .unwrap()
+    }
+
+    #[test]
+    fn per_relation_a_neighbour_counts_once_in_each_of_its_relations() {
+        // Node 0 → 1 in both relations and → 2 in one: degree 2, or 3 per
+        // relation, as node 0 of a version with three neighbours.
+        let tombstones = Tombstones::new(4).unwrap();
+        let two = reference::graph(
+            4,
+            2,
+            &vec![(0, 0, 1, 1.0), (1, 0, 1, 1.0), (0, 0, 2, 1.0)],
+            false,
+            false,
+        );
+        let three = reference::graph(
+            4,
+            1,
+            &vec![(0, 0, 1, 1.0), (0, 0, 2, 1.0), (0, 0, 3, 1.0)],
+            false,
+            false,
+        );
+        let workers = Workers::new(2).unwrap();
+        let memory = ComputeMemory::new(1 << 20);
+        let mut resources =
+            Resources { workers: &workers, memory: &memory, interrupts: &mut Uninterrupted };
+        let mut distance = |per_relation| {
+            degree_distance(
+                &mut resources,
+                (&two, &tombstones),
+                (&three, &tombstones),
+                per_relation,
+            )
+            .unwrap()
+        };
+        assert_eq!(distance(false), DegreeDistance { wasserstein: 0.25, ks: 0.25 });
+        assert_eq!(distance(true), DegreeDistance { wasserstein: 0.0, ks: 0.0 });
     }
 
     #[test]

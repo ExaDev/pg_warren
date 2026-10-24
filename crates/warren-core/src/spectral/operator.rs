@@ -2,7 +2,7 @@
 //! applied matrix-free through SpMV (DESIGN.md §6.5, `matrix`).
 //!
 //! `S` is the adjacency matrix of the selected relations (weights summed
-//! over relations, or 1 when unweighted), symmetrised as `(A + Aᵀ)/2` from
+//! over relations, or 1 when unweighted; per relation, 1 in each), symmetrised as `(A + Aᵀ)/2` from
 //! the forward and reverse CSRs, or taken as is when the caller says it is
 //! already symmetric (checked). When every selected relation's reverse CSR
 //! equals its forward CSR (an undirected graph's do), `A = Aᵀ` exactly and
@@ -85,12 +85,22 @@ pub struct GraphMatrix<'a> {
     /// Use `(A + Aᵀ)/2`. Without it, `A` must already be symmetric (an
     /// undirected graph), which saves an SpMV per step.
     pub symmetrize: bool,
+    /// Read a pair linked in several relations as an edge in each, so an
+    /// unweighted one weighs the number of its relations in `A` (DESIGN.md
+    /// §5.3); by default it is one edge.
+    pub per_relation: bool,
 }
 
 impl GraphMatrix<'_> {
     /// `operator` over every relation, weighted if the graph is, symmetrised.
     pub fn new(operator: Operator) -> Self {
-        Self { operator, relations: RelationSelection::All, weighted: None, symmetrize: true }
+        Self {
+            operator,
+            relations: RelationSelection::All,
+            weighted: None,
+            symmetrize: true,
+            per_relation: false,
+        }
     }
 }
 
@@ -140,6 +150,7 @@ impl<'g> LinearOperator<'g> {
         let forward = Product {
             relations: matrix.relations,
             weighted: matrix.weighted,
+            per_relation: matrix.per_relation,
             ..Product::new(Semiring::PlusTimes)
         };
         let mut operator = Self {

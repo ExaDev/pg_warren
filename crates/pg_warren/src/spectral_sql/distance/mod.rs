@@ -19,12 +19,13 @@ use super::SpectralSqlError;
 use crate::access::entry;
 use crate::activity::Running;
 use crate::cache::{resolve, CachedIds};
+use crate::extension::added_flag;
 use crate::source::with_id_type;
 
 /// What a `distance` call compares, checked.
 enum Method<'a> {
     Edit,
-    Degree,
+    Degree { per_relation: bool },
     Spectral(OperatorArguments, Eigenvalues<'a>),
     Subspace { prefix: &'a str, k: usize, compared: ComparedRows },
     Embedding { x: &'a str, y: &'a str, compared: ComparedRows },
@@ -34,7 +35,7 @@ impl Method<'_> {
     fn name(&self) -> &'static str {
         match self {
             Self::Edit => "edit",
-            Self::Degree => "degree",
+            Self::Degree { .. } => "degree",
             Self::Spectral(..) => "spectral",
             Self::Subspace { .. } => "subspace",
             Self::Embedding { .. } => "embedding",
@@ -45,7 +46,7 @@ impl Method<'_> {
     fn measure<E: CachedIds>(&self, pair: &mut Pair<E>) -> Result<Value, SpectralSqlError> {
         match self {
             Self::Edit => methods::edit(pair),
-            Self::Degree => methods::degree(pair),
+            Self::Degree { per_relation } => methods::degree(pair, *per_relation),
             Self::Spectral(operator, eigenvalues) => methods::spectral(pair, operator, eigenvalues),
             Self::Subspace { prefix, k, compared } => {
                 methods::subspace(pair, prefix, *k, *compared)
@@ -89,12 +90,29 @@ fn count(k: Option<i32>) -> Result<usize, SpectralSqlError> {
 ///   of `v2`.
 ///
 /// `subspace` and `embedding` read the rows of `compared_rows`: `shared`
-/// nodes (present on both sides) or `all` (absent rows as zero).
+/// nodes (present on both sides) or `all` (absent rows as zero). With
+/// `per_relation`, `degree` and `spectral` read a pair in several relations
+/// as an edge in each (DESIGN.md §5.3).
 #[allow(clippy::too_many_arguments)]
 // The SQL signature's arguments.
 // It reads and persists nothing (a fresh eigensolve for `spectral` is not
 // stored), so it is a read: `PARALLEL RESTRICTED` (DESIGN.md §6.9).
-#[pg_extern(schema = "warren", stable, parallel_restricted)]
+#[pg_extern(
+    schema = "warren",
+    sql = r#"
+CREATE FUNCTION warren.distance(graph text, v1 bigint, v2 bigint, method text,
+                                vectors_prefix text DEFAULT NULL, k integer DEFAULT NULL,
+                                x text DEFAULT NULL, y text DEFAULT NULL,
+                                compared_rows text DEFAULT 'shared', matrix text DEFAULT NULL,
+                                which text DEFAULT 'largest', rels text[] DEFAULT NULL,
+                                weighted boolean DEFAULT NULL, symmetrize boolean DEFAULT true,
+                                tol double precision DEFAULT 1e-6, max_iter integer DEFAULT NULL,
+                                dtype text DEFAULT 'f32', graph2 text DEFAULT NULL,
+                                per_relation boolean DEFAULT false)
+RETURNS jsonb
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'distance_wrapper';
+"#
+)]
 fn distance(
     graph: Option<&str>,
     v1: Option<i64>,
@@ -114,9 +132,12 @@ fn distance(
     max_iter: default!(Option<i32>, "NULL"),
     dtype: default!(Option<&str>, "'f32'"),
     graph2: default!(Option<&str>, "NULL"),
+    fcinfo: pg_sys::FunctionCallInfo,
 ) -> JsonB {
+    let per_relation = added_flag(fcinfo, 18);
     entry(|_| {
         let graph = graph.ok_or(SpectralSqlError::NullArgument("graph"))?;
+        let per_relation = per_relation.ok_or(SpectralSqlError::NullArgument("per_relation"))?;
         let v1 = v1.ok_or(SpectralSqlError::NullArgument("v1"))?;
         let v2 = v2.ok_or(SpectralSqlError::NullArgument("v2"))?;
         let compared = || {
@@ -127,7 +148,7 @@ fn distance(
         let prefix = || vectors_prefix.ok_or(SpectralSqlError::NullArgument("vectors_prefix"));
         let method = match method.ok_or(SpectralSqlError::NullArgument("method"))? {
             "edit" => Method::Edit,
-            "degree" => Method::Degree,
+            "degree" => Method::Degree { per_relation },
             "spectral" => {
                 // Stored eigenvectors carry no record of their operator, so
                 // their Rayleigh quotients need it named; a fresh solve
@@ -147,6 +168,7 @@ fn distance(
                     rels,
                     weighted,
                     symmetrize: symmetrize.ok_or(SpectralSqlError::NullArgument("symmetrize"))?,
+                    per_relation,
                 };
                 let eigenvalues = match vectors_prefix {
                     Some(prefix) => Eigenvalues::Stored { prefix, k: count(k)? },
@@ -194,7 +216,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::failure;
+    use crate::fixture::{failure, relation_expansions};
 
     /// Graph `g` over `g_nodes`/`g_edges`, undirected, with relations: two
     /// triangles joined by an edge. Its first version is returned.
@@ -404,6 +426,55 @@ mod tests {
             assert_eq!(cross["graph2"], "h");
             close(&same, &cross, method);
         }
+        Ok(())
+    }
+
+    /// With `per_relation`, a pair in k relations is k edges: the
+    /// spectrum is the weighted expansion's, and a node's degree counts a
+    /// neighbour once in each relation linking it.
+    #[pg_test]
+    fn per_relation_reads_a_pair_in_each_of_its_relations() -> Result<(), Error> {
+        relation_expansions("dp")?;
+        let current = |graph: &str| {
+            Spi::get_one::<i64>(&format!(
+                "SELECT (warren.info('{graph}') ->> 'current_version')::bigint"
+            ))?
+            .ok_or(Error::InvalidPosition)
+        };
+        let (v, each, once) = (current("dp_s")?, current("dp_each")?, current("dp_once")?);
+        let spectral = |per: bool| {
+            distance(&format!(
+                "'dp_s', {v}, {each}, 'spectral', k := 3, dtype := 'f64', tol := 1e-12,
+                 graph2 := 'dp_each', per_relation := {per}"
+            ))
+        };
+        let apart = |json: &serde_json::Value| json["max"].as_f64().unwrap_or(f64::NAN);
+        assert!(apart(&spectral(true)?) < 1e-9, "{}", spectral(true)?);
+        assert!(apart(&spectral(false)?) > 1e-3, "{}", spectral(false)?);
+        let degree = |per: bool| {
+            distance(&format!(
+                "'dp_s', {v}, {once}, 'degree', graph2 := 'dp_once', per_relation := {per}"
+            ))
+        };
+        assert_eq!(degree(false)?["wasserstein"].as_f64(), Some(0.0));
+        // The out-degree distributions, per relation on dp_s and once on
+        // dp_once, as SQL counts them.
+        let expected = Spi::get_one::<f64>(
+            "WITH per AS (SELECT n.id, count(DISTINCT (e.rel, e.dst)) FILTER (WHERE e.src IS NOT NULL) AS d
+                          FROM dp_nodes n LEFT JOIN dp_edges e ON e.src = n.id GROUP BY n.id),
+                  one AS (SELECT n.id, count(DISTINCT e.dst) AS d
+                          FROM dp_nodes n LEFT JOIN dp_edges e ON e.src = n.id GROUP BY n.id)
+             SELECT sum(abs((SELECT count(*) FROM per WHERE per.d <= x)
+                            - (SELECT count(*) FROM one WHERE one.d <= x)) / 60.0)::float8
+             FROM generate_series(0, (SELECT max(d) FROM per)) x",
+        )?;
+        let found = degree(true)?["wasserstein"].as_f64();
+        assert!(
+            found
+                .zip(expected)
+                .is_some_and(|(found, expected)| (found - expected).abs() < 1e-12 && found > 0.0),
+            "{found:?} {expected:?}"
+        );
         Ok(())
     }
 

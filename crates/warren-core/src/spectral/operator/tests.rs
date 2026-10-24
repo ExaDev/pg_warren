@@ -233,6 +233,32 @@ proptest! {
     }
 }
 
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+
+    /// Per relation, the operators are those of the multigraph: `A` sums
+    /// each relation's adjacency, so an unweighted pair in k relations
+    /// weighs k; with or without a stored merged CSR.
+    #[test]
+    fn per_relation_operators_match_the_multigraph_s_dense_matrices(
+        (n, edges, x, reverse) in scenarios(),
+        weighted in any::<bool>(),
+        store_merged in any::<bool>(),
+    ) {
+        let layout = crate::graph::CsrLayout { build_reverse: reverse, store_merged };
+        let graph = reference::graph_as(n, 2, &edges, true, layout);
+        let active = dense_reference::per_relation_operator(n, &edges, None, weighted, true, Operator::Adjacency).active;
+        let x: Vec<f64> = x.iter().zip(&active).map(|(&x, &a)| if a { x } else { 0.0 }).collect();
+        for operator in Operator::ALL {
+            let matrix = GraphMatrix { weighted: Some(weighted), per_relation: true, ..GraphMatrix::new(operator) };
+            let got = apply(&graph, &matrix, &x).unwrap();
+            let dense = dense_reference::per_relation_operator(n, &edges, None, weighted, true, operator);
+            let want: Vec<f64> = (&dense.matrix * nalgebra::DVector::from_column_slice(&x)).iter().copied().collect();
+            prop_assert!(close(&got, &want), "{:?}: {:?} != {:?}", operator, got, want);
+        }
+    }
+}
+
 /// `(A·x + Aᵀ·x)/2` with two plain SpMVs, as the operator computed it
 /// before it learned to skip the transposed product.
 fn two_products(graph: &GraphCsr, x: &[f64]) -> Vec<f64> {

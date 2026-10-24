@@ -34,7 +34,9 @@ DECLARE
         'warren.degree_vector(text, text, text, text[], bigint)',
         'warren.aggregate_neighbours(text, text, text, text, integer, text[], text, bigint)',
         'warren.gather(text, text, anyelement, anycompatible, text, text, text[], text, boolean, bigint, boolean)',
-        'warren.label_propagation_majority(text, text, text, integer, text[], bigint)'];
+        'warren.label_propagation_majority(text, text, text, integer, text[], bigint)',
+        'warren.eigen(text, integer, text, text, text[], boolean, boolean, double precision, integer, text, bigint, text, boolean)',
+        'warren.distance(text, bigint, bigint, text, text, integer, text, text, text, text, text, text[], boolean, boolean, double precision, integer, text, text)'];
     news text[] := ARRAY[
         'warren.contract(text, text, text, boolean, boolean, boolean, bigint, boolean)',
         'warren.modularity(text, text, double precision, boolean, bigint, boolean)',
@@ -54,7 +56,9 @@ DECLARE
         'warren.degree_vector(text, text, text, text[], bigint, boolean)',
         'warren.aggregate_neighbours(text, text, text, text, integer, text[], text, bigint, boolean)',
         'warren.gather(text, text, anyelement, anycompatible, text, text, text[], text, boolean, bigint, boolean, boolean)',
-        'warren.label_propagation_majority(text, text, text, integer, text[], bigint, boolean)'];
+        'warren.label_propagation_majority(text, text, text, integer, text[], bigint, boolean)',
+        'warren.eigen(text, integer, text, text, text[], boolean, boolean, double precision, integer, text, bigint, text, boolean, boolean)',
+        'warren.distance(text, bigint, bigint, text, text, integer, text, text, text, text, text, text[], boolean, boolean, double precision, integer, text, text, boolean)'];
     acls text[] := ARRAY[]::text[];
     kept record;
 BEGIN
@@ -883,6 +887,28 @@ BEGIN
   PERFORM warren.drop_vector(graph, '_warren_label_propagation_majority_' || part, v, true) FROM unnest(parts) part;
   RETURN i;
 END $$;
+
+CREATE FUNCTION warren.eigen(graph text, k integer, matrix text DEFAULT 'adjacency',
+                             which text DEFAULT 'largest', rels text[] DEFAULT NULL,
+                             weighted boolean DEFAULT NULL, symmetrize boolean DEFAULT true,
+                             tol double precision DEFAULT 1e-6, max_iter integer DEFAULT NULL,
+                             vectors_prefix text DEFAULT NULL, version bigint DEFAULT NULL,
+                             dtype text DEFAULT 'f32', persist boolean DEFAULT true,
+                             per_relation boolean DEFAULT false)
+RETURNS TABLE (i integer, eigenvalue double precision, residual double precision)
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'eigen_wrapper';
+
+CREATE FUNCTION warren.distance(graph text, v1 bigint, v2 bigint, method text,
+                                vectors_prefix text DEFAULT NULL, k integer DEFAULT NULL,
+                                x text DEFAULT NULL, y text DEFAULT NULL,
+                                compared_rows text DEFAULT 'shared', matrix text DEFAULT NULL,
+                                which text DEFAULT 'largest', rels text[] DEFAULT NULL,
+                                weighted boolean DEFAULT NULL, symmetrize boolean DEFAULT true,
+                                tol double precision DEFAULT 1e-6, max_iter integer DEFAULT NULL,
+                                dtype text DEFAULT 'f32', graph2 text DEFAULT NULL,
+                                per_relation boolean DEFAULT false)
+RETURNS jsonb
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'distance_wrapper';
 
     FOR i IN 1 .. pg_catalog.array_length(news, 1) LOOP
         -- An explicit ACL: start from no grants, then grant each entry again.

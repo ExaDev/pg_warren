@@ -138,6 +138,13 @@ mod tests {
         ("spmm", "{s}.spmm('t', 'one', 'm_{s}', persist := false)"),
         ("vector_degree", "{s}.vector_degree('t', 'd_{s}', persist := false)"),
         ("degree", "{s}.degree('t', 1::bigint)"),
+        ("eigen", "(SELECT string_agg(round(eigenvalue::numeric, 6)::text, ' ' ORDER BY i)
+                     FROM {s}.eigen('t', 2, dtype := 'f64'))"),
+        (
+            "distance",
+            "{s}.distance('t', (warren.info('t') ->> 'current_version')::bigint,
+                          (warren.info('t') ->> 'current_version')::bigint, 'degree') ->> 'ks'",
+        ),
         (
             "gather",
             "(SELECT string_agg(node_id || ':' || value, ' ' ORDER BY node_id)
