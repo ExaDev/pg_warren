@@ -168,9 +168,18 @@ bench/pooler.py a --scale 1000 --connections 1 4 --seconds 3 \
 # bench/results/parallel/
 bench/parallel.py --scale 1000 --rows 10000 --repeat 1 \
     --extension-revision "$(git rev-parse --short HEAD)" --extension-profile release
+# The real-graph suite (bench/corpus/README.md): keepset datasets, fetched
+# with the pinned keepset CLI (needs Node 22 and network) into
+# /var/tmp/warren-corpus, checked against NetworkX and timed (release build
+# in --pg-config's tree); results in bench/results/corpus/
+bench/corpus/suite.py fetch --tier tiny
+bench/corpus/suite.py check --tier tiny --pg-config $T/usr/lib/postgresql/16/bin/pg_config \
+    --extension-revision "$(git rev-parse --short HEAD)" --extension-profile release
+bench/corpus/suite.py time --tier medium --pg-config ... --extension-revision ... --extension-profile release
+bench/corpus/suite.py summary
 ```
 
-`bench/pooler.py`, `bench/parallel.py` and `bench/soak.py` start their own scratch cluster from
+`bench/pooler.py`, `bench/parallel.py`, `bench/soak.py` and `bench/corpus/suite.py` start their own scratch cluster from
 `--pg-config`'s binaries and load the `pg_warren` installed there. To
 benchmark a release build without replacing the debug build that `cargo pgrx
 test` and `test/run.py` install into the system tree (and that other

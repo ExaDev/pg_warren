@@ -37,6 +37,12 @@ End-to-end benchmark harness and fixture generators (DESIGN.md §12,
   times the 0.4.0 library and `louvain`/`leiden` (`--skip library`,
   `--skip communities`), and `--node-order locality` builds in locality
   order.
+- `corpus/` — the real-graph suite (DESIGN.md §12, §13 M11): keepset datasets
+  in tiers (tiny, medium, large), fetched by keepset's recipes and pinned by
+  checksum (`manifest.json`, `pins.json`), loaded into `nodes`/`edges`,
+  checked against NetworkX (`suite.py check`), timed on the §12 matrix
+  (`suite.py time`) and their text ids measured for front coding
+  (`suite.py ids`); results in `results/corpus/`. Its README has the details.
 - `results/` — committed results, one directory per pg_warren version
   (record them on a quiet machine; say which in the commit).
 - `requirements.txt` — pinned Python dependencies of `bench/` and `test/`.
