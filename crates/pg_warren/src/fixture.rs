@@ -388,8 +388,9 @@ pub(crate) fn iri_star(name: &str, leaves: i64) -> Result<(), Error> {
     ))
 }
 
-/// Unweighted directed graphs over one edge list in three relations, many
-/// pairs linked in two or three of them (DESIGN.md §5.3): `<name>_s`
+/// Unweighted directed graphs over one edge list in three relations, its
+/// pairs (self-loops aside) linked in one, two or three of them (about
+/// 110, 185 and 25 pairs; DESIGN.md §5.3): `<name>_s`
 /// stores the merged CSR and `<name>_u` does not; `<name>_each` is their
 /// per-relation expansion, one weighted edge per pair weighing the number
 /// of its relations; `<name>_once` is their deduplicated graph, one
@@ -400,7 +401,7 @@ pub(crate) fn relation_expansions(name: &str) -> Result<(), Error> {
          CREATE TABLE {name}_edges AS
              SELECT s::bigint AS src, d::bigint AS dst, 'r' || r AS rel
              FROM generate_series(1, 60) s, generate_series(1, 60) d, generate_series(0, 2) r
-             WHERE (s * 13 + d * 7) % 11 = 0 AND (s + d + r) % 3 <> 0
+             WHERE (s * 13 + d * 7) % 11 = 0 AND (s + d + r) % 4 <> 0 AND (s * d + r) % 5 <> 0
                 OR s = d AND s % 7 = r;
          SELECT warren.create_graph('{name}_s', 'SELECT id FROM {name}_nodes',
                                     'SELECT src, dst, rel FROM {name}_edges', has_relations := true);
@@ -420,12 +421,12 @@ pub(crate) fn relation_expansions(name: &str) -> Result<(), Error> {
 }
 
 /// Weighted directed acyclic graphs over one edge list in three relations,
-/// a pair's weight differing between its relations, as
-/// [`relation_expansions`]: `<name>_s` and `<name>_u` (no merged CSR);
-/// `<name>_each`, one edge per pair weighing `fold` (an SQL aggregate) of
-/// its relations' weights; `<name>_once`, one edge per pair weighing their
-/// sum (DESIGN.md §5.3). Edges run from lower ids to higher, over 60 nodes,
-/// refreshed.
+/// a pair's weight differing between its relations, its pairs linked in
+/// one, two or three of them, as [`relation_expansions`]: `<name>_s` and
+/// `<name>_u` (no merged CSR); `<name>_each`, one edge per pair weighing
+/// `fold` (an SQL aggregate) of its relations' weights; `<name>_once`, one
+/// edge per pair weighing their sum (DESIGN.md §5.3). Edges run from lower
+/// ids to higher, over 60 nodes, refreshed.
 pub(crate) fn weighted_relation_expansions(name: &str, fold: &str) -> Result<(), Error> {
     Spi::run(&format!(
         "CREATE TABLE {name}_nodes AS SELECT generate_series(1, 60)::bigint AS id;
@@ -433,7 +434,7 @@ pub(crate) fn weighted_relation_expansions(name: &str, fold: &str) -> Result<(),
              SELECT s::bigint AS src, d::bigint AS dst, 'r' || r AS rel,
                     (1 + (s * 3 + d + r * 2) % 5)::float8 AS w
              FROM generate_series(1, 60) s, generate_series(1, 60) d, generate_series(0, 2) r
-             WHERE s < d AND (s * 13 + d * 7) % 11 = 0 AND (s + d + r) % 3 <> 0;
+             WHERE s < d AND (s * 13 + d * 7) % 11 = 0 AND (s + d + r) % 4 <> 0 AND (s * d + r) % 5 <> 0;
          SELECT warren.create_graph('{name}_s', 'SELECT id FROM {name}_nodes',
                                     'SELECT src, dst, rel, w FROM {name}_edges',
                                     weighted := true, has_relations := true);
