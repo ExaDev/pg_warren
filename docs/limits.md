@@ -38,13 +38,13 @@ Other built-in bounds:
 - A `refresh` streams each relation's CSRs to `warren.segments` as it builds
   them, so it holds the edge list (20 bytes per weighted edge, 12 unweighted,
   8 with one relation), the id map (24 bytes per `bigint` node), the
-  relation dictionary, and a group of relations' forward CSRs with one
-  reverse CSR: as many relations at once as fit half of what remains of the
-  budget, so a small graph builds in one pass and a large one in up to
-  about eight. With the merged CSR stored, its build peaks at about 28 bytes
+  relation dictionary, 8 bytes per node of row cursors while it builds the
+  relations, and a group of relations' forward CSRs with one reverse CSR
+  (each relation's offsets at most what its edges need): as many relations
+  at once as fit half of what remains of the budget, so a small graph
+  builds in one pass and a large one in up to about eight. With the merged CSR stored, its build peaks at about 28 bytes
   per weighted edge. A relation column with a distinct name per row is
-  refused while it is read (the dictionary is charged as it grows, and the
-  offsets checked as relations are added).
+  refused while it is read (the dictionary is charged as it grows).
 - A `refresh` reports the most build memory it held at `DEBUG1`.
 
 Every long call checks for interrupts (traversals every 65,536 units of work,
