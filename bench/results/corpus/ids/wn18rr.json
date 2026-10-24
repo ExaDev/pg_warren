@@ -1,0 +1,35 @@
+{
+ "dataset": "wn18rr",
+ "distribution": {
+  "count": 40943,
+  "bytes": 327544,
+  "min": 8,
+  "max": 8,
+  "mean": 8.0,
+  "percentiles": {
+   "50": 8,
+   "90": 8,
+   "99": 8
+  },
+  "lengths": {
+   "8": 40943
+  }
+ },
+ "id_map": {
+  "id_bytes": 327544,
+  "id_offsets": 327552,
+  "id_order": 163772,
+  "total": 818868
+ },
+ "front_coded": {
+  "bytes": 226607,
+  "blocks": 2559,
+  "offsets_bytes": 20472,
+  "mean_shared_prefix": 4.696331804918716,
+  "ratio": 1.4454275463688235,
+  "ratio_with_offsets": 1.325665070685894,
+  "rank_permutation_bytes": 163772,
+  "map_total": 574623,
+  "map_ratio": 1.4250525997045018
+ }
+}

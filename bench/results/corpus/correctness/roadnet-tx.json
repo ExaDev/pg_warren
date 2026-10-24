@@ -1,0 +1,246 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "check",
+   "--tier",
+   "tiny",
+   "--tier",
+   "medium",
+   "--pg-config",
+   "/var/tmp/warren-corpus/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "1ffdcd9",
+   "--extension-profile",
+   "release"
+  ],
+  "harness": {
+   "revision": "f4c2e5ed62e679c21e771643bbc47dc594de8899",
+   "dirty": true
+  },
+  "extension": {
+   "revision": "1ffdcd9",
+   "profile": "release",
+   "library": "/var/tmp/warren-corpus/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "5499e8bca4b5710e1b28f9addaf05fe9538a6100b34dcf8406c30e2ff4ac2174"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872804352,
+  "kernel": "6.18.44-fc-v153",
+  "load_average": [
+   1.00537109375,
+   1.51416015625,
+   1.7294921875
+  ]
+ },
+ "dataset": "roadnet-tx",
+ "tier": "medium",
+ "fetched": {
+  "tables": {
+   "nodes": 1379917,
+   "edges": 3843320,
+   "ids": "integer",
+   "relations": 0,
+   "self_loops": 0
+  },
+  "provenance": {
+   "entryId": "roadnet-tx",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-24T13:50:00.002Z",
+   "source": {
+    "url": "https://snap.stanford.edu/data/roadNet-TX.txt.gz",
+    "status": "live"
+   },
+   "fetchedUrl": "https://snap.stanford.edu/data/roadNet-TX.txt.gz",
+   "sha256": "1bc0ce058546ae66101d57af7c16de37225e37778ad2e3781b4f7bf3a28cb41f",
+   "byteLength": 12442024
+  }
+ },
+ "version": {
+  "seq": 1,
+  "bytes": 75076532,
+  "label": null,
+  "staged": false,
+  "current": true,
+  "vectors": 0,
+  "version": 1,
+  "built_at": "2026-10-24T14:30:00.10041+00:00",
+  "id_space": 1379917,
+  "built_lsn": "0/4FBC8000",
+  "staleness": "00:00:01.58973",
+  "edge_count": 3843320,
+  "node_count": 1379917,
+  "label_vector": null,
+  "parent_graph": null,
+  "target_width": 4,
+  "dropped_edges": 0,
+  "compacted_from": null,
+  "parent_version": null,
+  "deduplicated_edges": 3843320
+ },
+ "seconds": 457.0,
+ "findings": [
+  {
+   "check": "node_count",
+   "status": "match",
+   "compared": 1,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "dropped_edges",
+   "status": "match",
+   "compared": 1,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "degree out",
+   "status": "match",
+   "compared": 1379917,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "bfs depths",
+   "status": "match",
+   "compared": 1351137,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "source": "468366"
+  },
+  {
+   "check": "bfs depths",
+   "status": "match",
+   "compared": 1351137,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "source": "1254993"
+  },
+  {
+   "check": "components",
+   "status": "match",
+   "warren_parts": 424,
+   "oracle_parts": 424,
+   "differing_parts": 0
+  },
+  {
+   "check": "shortest_path length",
+   "status": "match",
+   "compared": 25,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "shortest_path edges",
+   "status": "match",
+   "compared": 25,
+   "invalid": []
+  },
+  {
+   "check": "pagerank",
+   "status": "match",
+   "compared": 1379917,
+   "mismatches": 0,
+   "max_error": 8.470329472543003e-22,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "triangles",
+   "status": "match",
+   "compared": 1379917,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "clustering",
+   "status": "match",
+   "compared": 1379917,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "core_number",
+   "status": "match",
+   "compared": 1379917,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "modularity definition",
+   "status": "match",
+   "warren": 0.9913485566333007,
+   "oracle": 0.9913485566333046,
+   "difference": -3.885780586188048e-15,
+   "note": "warren.modularity and NetworkX scoring NetworkX's Louvain partition"
+  },
+  {
+   "check": "louvain",
+   "status": "match",
+   "warren": 0.9913245636003413,
+   "oracle": 0.9913485566333007,
+   "difference": -2.3993032959412908e-05,
+   "slack": 0.02
+  },
+  {
+   "check": "louvain returned modularity",
+   "status": "match",
+   "warren": 0.9913245636003413,
+   "oracle": 0.9913245636003468,
+   "difference": -5.551115123125783e-15,
+   "communities": 747
+  },
+  {
+   "check": "leiden",
+   "status": "match",
+   "warren": 0.9920194447279792,
+   "oracle": 0.9913485566333007,
+   "difference": 0.0006708880946785234,
+   "slack": 0.02
+  },
+  {
+   "check": "leiden returned modularity",
+   "status": "match",
+   "warren": 0.9920194447279792,
+   "oracle": 0.9920194447279851,
+   "difference": -5.88418203051333e-15,
+   "communities": 752
+  }
+ ]
+}

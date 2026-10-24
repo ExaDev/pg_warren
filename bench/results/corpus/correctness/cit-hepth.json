@@ -1,0 +1,296 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "check",
+   "--tier",
+   "tiny",
+   "--tier",
+   "medium",
+   "--pg-config",
+   "/var/tmp/warren-corpus/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "1ffdcd9",
+   "--extension-profile",
+   "release"
+  ],
+  "harness": {
+   "revision": "6bded0a30cd86d7ea3d64cd82be3a002348d0b48",
+   "dirty": true
+  },
+  "extension": {
+   "revision": "1ffdcd9",
+   "profile": "release",
+   "library": "/var/tmp/warren-corpus/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "5499e8bca4b5710e1b28f9addaf05fe9538a6100b34dcf8406c30e2ff4ac2174"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872804352,
+  "kernel": "6.18.44-fc-v153",
+  "load_average": [
+   1.02587890625,
+   1.22021484375,
+   1.85888671875
+  ]
+ },
+ "dataset": "cit-hepth",
+ "tier": "medium",
+ "fetched": {
+  "tables": {
+   "nodes": 27770,
+   "edges": 352807,
+   "ids": "integer",
+   "relations": 0,
+   "self_loops": 39
+  },
+  "provenance": {
+   "entryId": "cit-hepth",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-24T13:48:24.191Z",
+   "source": {
+    "url": "https://snap.stanford.edu/data/cit-HepTh.txt.gz",
+    "status": "live"
+   },
+   "fetchedUrl": "https://snap.stanford.edu/data/cit-HepTh.txt.gz",
+   "sha256": "7df944b502bd7b687b0e7e94ba9b0a87f202693254558ae5f8ea45657697eb32",
+   "byteLength": 1317497
+  }
+ },
+ "version": {
+  "seq": 1,
+  "bytes": 3714700,
+  "label": null,
+  "staged": false,
+  "current": true,
+  "vectors": 0,
+  "version": 1,
+  "built_at": "2026-10-24T14:01:46.923642+00:00",
+  "id_space": 27770,
+  "built_lsn": "0/8319580",
+  "staleness": "00:00:00.104997",
+  "edge_count": 352807,
+  "node_count": 27770,
+  "label_vector": null,
+  "parent_graph": null,
+  "target_width": 4,
+  "dropped_edges": 0,
+  "compacted_from": null,
+  "parent_version": null,
+  "deduplicated_edges": 0
+ },
+ "seconds": 30.1,
+ "findings": [
+  {
+   "check": "node_count",
+   "status": "match",
+   "compared": 1,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "dropped_edges",
+   "status": "match",
+   "compared": 1,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "degree out",
+   "status": "match",
+   "compared": 27770,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "degree in",
+   "status": "match",
+   "compared": 27770,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "degree both",
+   "status": "match",
+   "compared": 27770,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "bfs depths",
+   "status": "match",
+   "compared": 16498,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "source": "9711200"
+  },
+  {
+   "check": "bfs depths",
+   "status": "match",
+   "compared": 16553,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "source": "202012"
+  },
+  {
+   "check": "components",
+   "status": "match",
+   "warren_parts": 143,
+   "oracle_parts": 143,
+   "differing_parts": 0
+  },
+  {
+   "check": "shortest_path length",
+   "status": "match",
+   "compared": 25,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "shortest_path edges",
+   "status": "match",
+   "compared": 25,
+   "invalid": []
+  },
+  {
+   "check": "pagerank",
+   "status": "match",
+   "compared": 27770,
+   "mismatches": 0,
+   "max_error": 1.3877787807814457e-17,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "triangles",
+   "status": "match",
+   "compared": 27770,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "clustering",
+   "status": "documented difference",
+   "compared": 27770,
+   "mismatches": 35,
+   "max_error": 0.25,
+   "examples": [
+    {
+     "node": "10116",
+     "warren": 0.3053763440860215,
+     "oracle": 0.3264367816091954
+    },
+    {
+     "node": "103102",
+     "warren": 0.3120748299319728,
+     "oracle": 0.325354609929078
+    },
+    {
+     "node": "104082",
+     "warren": 0.18114478114478114,
+     "oracle": 0.18798043326345212
+    },
+    {
+     "node": "105013",
+     "warren": 0.25,
+     "oracle": 0.2833333333333333
+    },
+    {
+     "node": "107134",
+     "warren": 0.26265715256540945,
+     "oracle": 0.2675666320526134
+    }
+   ],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "documented": {
+    "reason": "clustering counts a node with a self-loop among its own neighbours (vector_degree), NetworkX leaves the self-loop out (docs/compute.md, DESIGN.md \u00a76.7)",
+    "nodes": 35
+   }
+  },
+  {
+   "check": "core_number",
+   "status": "match",
+   "compared": 27770,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "modularity definition",
+   "status": "match",
+   "warren": 0.6578208626618874,
+   "oracle": 0.6578208626618886,
+   "difference": -1.1102230246251565e-15,
+   "note": "warren.modularity and NetworkX scoring NetworkX's Louvain partition"
+  },
+  {
+   "check": "louvain",
+   "status": "match",
+   "warren": 0.6555176814584972,
+   "oracle": 0.6578208626618874,
+   "difference": -0.0023031812033902366,
+   "slack": 0.02
+  },
+  {
+   "check": "louvain returned modularity",
+   "status": "match",
+   "warren": 0.6555176814584972,
+   "oracle": 0.6555176814584986,
+   "difference": -1.4432899320127035e-15,
+   "communities": 169
+  },
+  {
+   "check": "leiden",
+   "status": "match",
+   "warren": 0.6652361730298958,
+   "oracle": 0.6578208626618874,
+   "difference": 0.007415310368008354,
+   "slack": 0.02
+  },
+  {
+   "check": "leiden returned modularity",
+   "status": "match",
+   "warren": 0.6652361730298958,
+   "oracle": 0.6652361730298976,
+   "difference": -1.7763568394002505e-15,
+   "communities": 174
+  }
+ ]
+}

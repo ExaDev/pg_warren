@@ -1,0 +1,41 @@
+{
+ "dataset": "kg-codex-s",
+ "distribution": {
+  "count": 2034,
+  "bytes": 12821,
+  "min": 3,
+  "max": 9,
+  "mean": 6.303343166175025,
+  "percentiles": {
+   "50": 7,
+   "90": 7,
+   "99": 9
+  },
+  "lengths": {
+   "3": 37,
+   "4": 193,
+   "5": 200,
+   "6": 460,
+   "7": 1001,
+   "8": 116,
+   "9": 27
+  }
+ },
+ "id_map": {
+  "id_bytes": 12821,
+  "id_offsets": 16280,
+  "id_order": 8136,
+  "total": 37237
+ },
+ "front_coded": {
+  "bytes": 9532,
+  "blocks": 128,
+  "offsets_bytes": 1024,
+  "mean_shared_prefix": 3.7927597061909757,
+  "ratio": 1.345048258497692,
+  "ratio_with_offsets": 1.214569912845775,
+  "rank_permutation_bytes": 8136,
+  "map_total": 26828,
+  "map_ratio": 1.3879901595348143
+ }
+}

@@ -1,0 +1,35 @@
+{
+ "dataset": "transport-airline",
+ "distribution": {
+  "count": 3425,
+  "bytes": 10275,
+  "min": 3,
+  "max": 3,
+  "mean": 3.0,
+  "percentiles": {
+   "50": 3,
+   "90": 3,
+   "99": 3
+  },
+  "lengths": {
+   "3": 3425
+  }
+ },
+ "id_map": {
+  "id_bytes": 10275,
+  "id_offsets": 27408,
+  "id_order": 13700,
+  "total": 51383
+ },
+ "front_coded": {
+  "bytes": 11067,
+  "blocks": 215,
+  "offsets_bytes": 1720,
+  "mean_shared_prefix": 1.8202492211838006,
+  "ratio": 0.9284358904852263,
+  "ratio_with_offsets": 0.8035504809572221,
+  "rank_permutation_bytes": 13700,
+  "map_total": 40187,
+  "map_ratio": 1.278597556423719
+ }
+}

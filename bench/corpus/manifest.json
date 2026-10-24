@@ -1,0 +1,124 @@
+{
+ "keepset": {
+  "version": "0.57.0",
+  "commit": "944b86ebc67d46543affddbce32eb93dd5218489",
+  "catalogue": "1.33.0",
+  "lock": "keepset_cli/package-lock.json"
+ },
+ "datasets": {
+  "karate": {
+   "tier": "tiny", "domain": "social", "ids": "integer", "directed": false, "weighted": false, "relations": false,
+   "nodes": 34, "edges": 78,
+   "licence": "free for scientific use, to the best of the compiler's knowledge (Newman's netdata)",
+   "why": "the smallest classic social graph: every check is cheap and hand-checkable"
+  },
+  "lesmis": {
+   "tier": "tiny", "domain": "social", "ids": "integer", "directed": false, "weighted": true, "relations": false,
+   "nodes": 77, "edges": 254,
+   "licence": "unrecorded (KONECT moreno_lesmis)",
+   "why": "the one reachable keepset graph whose recipe keeps real edge weights (co-appearance counts): dijkstra, weighted pagerank and weighted modularity"
+  },
+  "celegans": {
+   "tier": "tiny", "domain": "biological", "ids": "integer", "directed": true, "weighted": false, "relations": false,
+   "nodes": 131, "edges": 764,
+   "licence": "unrecorded (SNAP C-elegans-frontal)",
+   "why": "a small directed graph with nodes that only send or only receive: bfs out-edges, in- and out-degree"
+  },
+  "polblogs": {
+   "tier": "tiny", "domain": "social", "ids": "integer", "directed": true, "weighted": false, "relations": false,
+   "nodes": 1490, "edges": 19090,
+   "licence": "free for scientific use, to the best of the compiler's knowledge (Newman's netdata)",
+   "why": "directed hyperlinks with parallel edges and self-loops, so the build's deduplication and the self-loop rules are exercised on real data"
+  },
+  "london_transport": {
+   "tier": "tiny", "domain": "transport", "ids": "integer", "directed": false, "weighted": false, "relations": false,
+   "nodes": 369, "edges": 441,
+   "licence": "unrecorded (Netzschleuder london_transport)",
+   "why": "a sparse, near-planar transport network: long shortest paths, few triangles, a low degeneracy (keepset's topology recipe drops its layer weights)"
+  },
+  "transport-airline": {
+   "tier": "tiny", "domain": "transport", "ids": "text", "directed": false, "weighted": false, "relations": false,
+   "nodes": 3425, "edges": 67663,
+   "licence": "unrecorded (OpenFlights routes)",
+   "why": "airline routes keyed by IATA codes: text ids of three bytes, the short end of the id-length distribution"
+  },
+  "facebook": {
+   "tier": "tiny", "domain": "social", "ids": "integer", "directed": false, "weighted": false, "relations": false,
+   "nodes": 4039, "edges": 88234,
+   "licence": "unrecorded (SNAP ego-Facebook)",
+   "why": "a dense, clustered social graph: many triangles, high core numbers and strong communities"
+  },
+  "kg-codex-s": {
+   "tier": "tiny", "domain": "knowledge graph", "ids": "text", "directed": true, "weighted": false, "relations": true,
+   "nodes": 2034, "edges": 32888,
+   "licence": "unrecorded (CoDEx, from Wikidata)",
+   "why": "a small Wikidata knowledge graph with 42 relations and Wikidata Q-ids as text ids"
+  },
+  "wn18rr": {
+   "tier": "tiny", "domain": "knowledge graph", "ids": "text", "directed": true, "weighted": false, "relations": true,
+   "nodes": 40943, "edges": 93003,
+   "licence": "unrecorded (WN18RR, from WordNet)",
+   "why": "WordNet offsets as ids: digit strings with leading zeros, which are text and must not be read as integers; 11 relations and self-loops"
+  },
+  "cit-hepth": {
+   "tier": "medium", "domain": "citation", "ids": "integer", "directed": true, "weighted": false, "relations": false,
+   "nodes": 27770, "edges": 352807,
+   "licence": "unrecorded (SNAP cit-HepTh)",
+   "why": "a citation graph, nearly acyclic and directed (cora and citeseer were unreachable from this machine)"
+  },
+  "email-enron": {
+   "tier": "medium", "domain": "social", "ids": "integer", "directed": false, "weighted": false, "relations": false,
+   "nodes": 36692, "edges": 367662,
+   "licence": "unrecorded (SNAP email-Enron)",
+   "why": "a communication graph listed in both directions: half its edges are deduplicated as undirected"
+  },
+  "fb15k-237": {
+   "tier": "medium", "domain": "knowledge graph", "ids": "text", "directed": true, "weighted": false, "relations": true,
+   "nodes": 14541, "edges": 310116,
+   "licence": "unrecorded (FB15k-237, from Freebase)",
+   "why": "Freebase machine ids (/m/...) as text ids, 237 relations: the multi-relation build at scale"
+  },
+  "ss-gleich-usroads-48": {
+   "tier": "medium", "domain": "road", "ids": "integer", "directed": false, "weighted": false, "relations": false,
+   "nodes": 126146, "edges": 323900,
+   "licence": "CC-BY-4.0 (SuiteSparse Gleich/usroads-48)",
+   "why": "the road network of the 48 contiguous US states: a large diameter and degree at most 7"
+  },
+  "dblp": {
+   "tier": "medium", "domain": "citation", "ids": "integer", "directed": false, "weighted": false, "relations": false,
+   "nodes": 317080, "edges": 1049866,
+   "licence": "unrecorded (SNAP com-DBLP)",
+   "why": "the co-authorship graph of computer science bibliography, about a million edges with strong communities"
+  },
+  "yago3-10": {
+   "tier": "medium", "domain": "knowledge graph", "ids": "text", "directed": true, "weighted": false, "relations": true,
+   "nodes": 123182, "edges": 1089040,
+   "licence": "unrecorded (YAGO3-10)",
+   "why": "entity names as text ids (Wikipedia titles), 37 relations: the long, varied end of the id-length distribution"
+  },
+  "hetionet": {
+   "tier": "medium", "domain": "knowledge graph", "ids": "text", "directed": true, "weighted": false, "relations": true,
+   "nodes": 45158, "edges": 2250197,
+   "licence": "CC0 1.0 for original content, each integrated source under its own licence (Hetionet v1.0)",
+   "why": "a biomedical knowledge graph of 24 relations whose ids are typed CURIE-like strings (Gene::9021, Biological Process::GO:0071357) with long shared prefixes"
+  },
+  "roadnet-tx": {
+   "tier": "medium", "domain": "road", "ids": "integer", "directed": false, "weighted": false, "relations": false,
+   "nodes": 1379917, "edges": 3843320,
+   "licence": "unrecorded (SNAP roadNet-TX)",
+   "why": "the Texas road network, 1.4M nodes listed in both directions: the largest medium graph and a high diameter"
+  },
+  "livejournal": {
+   "tier": "large", "domain": "social", "ids": "integer", "directed": false, "weighted": false, "relations": false,
+   "nodes": 3997962, "edges": 34681189,
+   "licence": "unrecorded (SNAP com-LiveJournal)",
+   "why": "a 35M-edge social graph, the §13 large tier"
+  },
+  "ogbn-mag": {
+   "tier": "large", "domain": "citation", "ids": "text", "directed": true, "weighted": false, "relations": true,
+   "nodes": 1939743, "edges": 21111007,
+   "licence": "ODC-By-1.0 (OGB ogbn-mag, from Microsoft Academic Graph)",
+   "why": "a heterogeneous academic graph of four relations with typed text ids (paper:123), 21M edges, the §13 large tier"
+  }
+ }
+}

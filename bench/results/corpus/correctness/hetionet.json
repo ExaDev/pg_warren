@@ -1,0 +1,280 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "check",
+   "--tier",
+   "tiny",
+   "--tier",
+   "medium",
+   "--pg-config",
+   "/var/tmp/warren-corpus/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "1ffdcd9",
+   "--extension-profile",
+   "release"
+  ],
+  "harness": {
+   "revision": "f4c2e5ed62e679c21e771643bbc47dc594de8899",
+   "dirty": true
+  },
+  "extension": {
+   "revision": "1ffdcd9",
+   "profile": "release",
+   "library": "/var/tmp/warren-corpus/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "5499e8bca4b5710e1b28f9addaf05fe9538a6100b34dcf8406c30e2ff4ac2174"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872804352,
+  "kernel": "6.18.44-fc-v153",
+  "load_average": [
+   2.59326171875,
+   2.75146484375,
+   2.0400390625
+  ]
+ },
+ "dataset": "hetionet",
+ "tier": "medium",
+ "fetched": {
+  "tables": {
+   "nodes": 45158,
+   "edges": 2250197,
+   "ids": "text",
+   "relations": 24,
+   "self_loops": 0
+  },
+  "provenance": {
+   "entryId": "hetionet",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-24T13:49:26.389Z",
+   "source": {
+    "url": "https://media.githubusercontent.com/media/hetio/hetionet/main/hetnet/tsv/hetionet-v1.0-edges.sif.gz",
+    "status": "live",
+    "snapshot": {
+     "url": "https://web.archive.org/web/20261022011839/https://media.githubusercontent.com/media/hetio/hetionet/main/hetnet/tsv/hetionet-v1.0-edges.sif.gz",
+     "timestamp": "20261022011839",
+     "sha256": "611f0411ac666be4e0270e54bbca67407e14720bfc3099311f0f5eec25c5a947",
+     "byteLength": 12401407
+    }
+   },
+   "fetchedUrl": "https://media.githubusercontent.com/media/hetio/hetionet/main/hetnet/tsv/hetionet-v1.0-edges.sif.gz",
+   "sha256": "611f0411ac666be4e0270e54bbca67407e14720bfc3099311f0f5eec25c5a947",
+   "byteLength": 12401407
+  }
+ },
+ "version": {
+  "seq": 1,
+  "bytes": 54382864,
+  "label": null,
+  "staged": false,
+  "current": true,
+  "vectors": 0,
+  "version": 1,
+  "built_at": "2026-10-24T14:16:55.366813+00:00",
+  "id_space": 45158,
+  "built_lsn": "0/3C612000",
+  "staleness": "00:00:01.140944",
+  "edge_count": 2250197,
+  "node_count": 45158,
+  "label_vector": null,
+  "parent_graph": null,
+  "target_width": 4,
+  "dropped_edges": 0,
+  "compacted_from": null,
+  "parent_version": null,
+  "deduplicated_edges": 0
+ },
+ "seconds": 776.6,
+ "findings": [
+  {
+   "check": "node_count",
+   "status": "match",
+   "compared": 1,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "dropped_edges",
+   "status": "match",
+   "compared": 1,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "degree out",
+   "status": "match",
+   "compared": 45158,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "degree in",
+   "status": "match",
+   "compared": 45158,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "degree both",
+   "status": "match",
+   "compared": 45158,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "bfs depths",
+   "status": "match",
+   "compared": 35404,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "source": "Anatomy::UBERON:0000955"
+  },
+  {
+   "check": "bfs depths",
+   "status": "match",
+   "compared": 1,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "source": "Biological Process::GO:0070350"
+  },
+  {
+   "check": "components",
+   "status": "match",
+   "warren_parts": 1,
+   "oracle_parts": 1,
+   "differing_parts": 0
+  },
+  {
+   "check": "shortest_path length",
+   "status": "match",
+   "compared": 25,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "shortest_path edges",
+   "status": "match",
+   "compared": 25,
+   "invalid": []
+  },
+  {
+   "check": "pagerank",
+   "status": "match",
+   "compared": 45158,
+   "mismatches": 0,
+   "max_error": 2.873135757086587e-17,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "triangles",
+   "status": "match",
+   "compared": 45158,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "clustering",
+   "status": "match",
+   "compared": 45158,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "core_number",
+   "status": "match",
+   "compared": 45158,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "modularity definition",
+   "status": "match",
+   "warren": 0.3410069716510601,
+   "oracle": 0.34100697165106014,
+   "difference": -5.551115123125783e-17,
+   "note": "warren.modularity and NetworkX scoring NetworkX's Louvain partition"
+  },
+  {
+   "check": "modularity, a pair in several relations",
+   "status": "definition difference",
+   "warren": 0.3410069716510601,
+   "oracle": 0.35059207336286413,
+   "difference": -0.009585101711804045,
+   "note": "NetworkX with A at 1 for an unweighted pair in several relations, as spmv defines A (docs/compute.md); pg_warren's undirected view counts the pair once per relation"
+  },
+  {
+   "check": "louvain",
+   "status": "match",
+   "warren": 0.33997281743374613,
+   "oracle": 0.3410069716510601,
+   "difference": -0.001034154217313954,
+   "slack": 0.02
+  },
+  {
+   "check": "louvain returned modularity",
+   "status": "match",
+   "warren": 0.33997281743374613,
+   "oracle": 0.33997281743374613,
+   "difference": 0.0,
+   "communities": 10
+  },
+  {
+   "check": "leiden",
+   "status": "match",
+   "warren": 0.34548587510869233,
+   "oracle": 0.3410069716510601,
+   "difference": 0.004478903457632244,
+   "slack": 0.02
+  },
+  {
+   "check": "leiden returned modularity",
+   "status": "match",
+   "warren": 0.34548587510869233,
+   "oracle": 0.3454858751086923,
+   "difference": 5.551115123125783e-17,
+   "communities": 10
+  }
+ ]
+}
