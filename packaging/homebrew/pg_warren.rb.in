@@ -1,6 +1,6 @@
 # The formula of the exadev/homebrew-tap tap (brew install exadev/tap/pg_warren),
-# rendered for each release by release/homebrew.py; the release's bottles
-# are added by `brew bottle --merge --write`. CONTRIBUTING.md, "Packages".
+# rendered for each release by release/homebrew.py, then again by the
+# publish job with only the bottle block `brew bottle --merge --write` added. CONTRIBUTING.md, "Packages".
 # Modelled on homebrew-core's pgvector: built for each postgresql@NN it
 # depends on, into that formula's extension directories.
 class PgWarren < Formula
@@ -9,7 +9,7 @@ class PgWarren < Formula
   url "https://github.com/ExaDev/pg_warren/releases/download/v@VERSION@/pg_warren-@VERSION@.tar.gz"
   sha256 "@SHA256@"
   license "Apache-2.0"
-
+@BOTTLE@
   depends_on "postgresql@17" => [:build, :test]
   depends_on "postgresql@18" => [:build, :test]
   depends_on "rust" => :build
@@ -22,6 +22,8 @@ class PgWarren < Formula
     system "cargo", "install", "cargo-pgrx", "--version", "@PGRX_VERSION@", "--locked",
            "--root", buildpath/"cargo-pgrx"
     ENV.prepend_path "PATH", buildpath/"cargo-pgrx/bin"
+    # The Postgres symbols resolve when the server loads the library.
+    ENV.append_to_rustflags "-C link-arg=-Wl,-undefined,dynamic_lookup" if OS.mac?
     ENV["PGRX_HOME"] = buildpath/"pgrx-home"
     postgresqls.each do |postgresql|
       pg_config = postgresql.opt_bin/"pg_config"

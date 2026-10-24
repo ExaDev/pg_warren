@@ -284,6 +284,11 @@ jobs:
     name: macOS arm64 pgrx tests + SQL harness (Homebrew PG 18)
     runs-on: macos-15
     continue-on-error: true
+    env:
+      # RUSTFLAGS replaces, not extends, crates/pg_warren/.cargo/config.toml's
+      # macOS rustflags, so repeat its link flag: the Postgres symbols
+      # resolve when the server loads the library.
+      RUSTFLAGS: -D warnings -Clink-arg=-Wl,-undefined,dynamic_lookup
     steps:
       - uses: actions/checkout@v4
       - name: Install pinned Rust toolchain (rust-toolchain.toml)
@@ -327,7 +332,8 @@ jobs:
         run: |
           set -euo pipefail
           brew tap-new --no-git exadev/tap
-          python3 release/homebrew.py 0.0.0 "$(printf '%064d' 0)" "$PGRX_VERSION" \
+          git archive --format=tar.gz --prefix=pg_warren-0.0.0/ -o "$RUNNER_TEMP/pg_warren-0.0.0.tar.gz" HEAD
+          python3 release/homebrew.py "$RUNNER_TEMP/pg_warren-0.0.0.tar.gz" \
             >"$(brew --repo exadev/tap)/Formula/pg_warren.rb"
           brew style exadev/tap/pg_warren
           brew audit --strict --formula exadev/tap/pg_warren
