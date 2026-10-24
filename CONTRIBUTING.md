@@ -127,7 +127,8 @@ pip install -r bench/requirements.txt      # numpy, networkx, scipy, pytest (pin
 ```
 
 ```sh
-# Generator, harness and oracle unit tests (no Postgres needed)
+# Generator, harness, oracle and release-tooling (release/) unit tests
+# (no Postgres needed; release/tests clones this repository's history)
 pytest
 
 # SQL tests in test/sql/: installs pg_warren (cargo pgrx install, debug) and
@@ -227,16 +228,56 @@ format. To benchmark a new function, add a workload with `requires` to
   loaded at once, but the catalog (new columns, functions, storage) only
   changes with the update, so calls in between can fail. Release notes
   (CHANGELOG.md) say so for every release with a schema change.
-- To release: finalise CHANGELOG.md (and README's Status) in a commit
-  that is otherwise the version in development; that commit gets the tag
-  `vX.Y.Z`. Then, in one commit: add the version's line to
-  `sql/released.sha256` (`cd sql && sha256sum pg_warren--X.Y.Z.sql >>
-  released.sha256`), record the tagged commit in `sql/released.commits`
-  (`echo "$(git rev-parse vX.Y.Z^{commit})  X.Y.Z" >> sql/released.commits`),
-  bump the workspace version, regenerate its install
-  script (`sql/schema-drift.sh --update`) and add the header-only upgrade
-  script `sql/pg_warren--X.Y.Z--<next>.sql`. In the other order the tagged
-  commit fails `schema-drift.sh` (its version would already be released).
+- A release is two commits, made by `release/prepare.py X.Y.Z NEXT`
+  (see its docstring): **the commit to tag** `vX.Y.Z`, `release: X.Y.Z`,
+  which dates CHANGELOG's section in development (`--title` names it) and
+  points README's install at `vX.Y.Z` after `sql/schema-drift.sh` passes;
+  then **the freeze commit**, `release: freeze X.Y.Z, develop NEXT`, which
+  adds the install script's sha256 to `sql/released.sha256`, records the
+  commit to tag in `sql/released.commits`, bumps the workspace version
+  (`Cargo.toml`, `Cargo.lock`), generates NEXT's install script
+  (`sql/schema-drift.sh --update`), adds the header-only
+  `sql/pg_warren--X.Y.Z--NEXT.sql` and opens CHANGELOG's NEXT section. In
+  the other order the tagged commit would fail `schema-drift.sh` (its
+  version would already be released). `test/upgrade.py` reads the releases
+  from those two files, so it needs no edit. The script refuses a dirty
+  tree, a released or tagged version and one that is not in development;
+  run again, it changes nothing, and after a failed freeze it resumes.
+- **To release** (DESIGN.md §13, M11 "Distribution"):
+  1. Merge what a person writes first, in an ordinary PR: CHANGELOG's
+     section as release notes, README's Status (the release as released,
+     NEXT as in development) and DESIGN §13's done list. The release
+     commits change none of it.
+  2. Run the **Release (prepare)** workflow from main (Actions → Release
+     (prepare) → Run workflow) with the version, and optionally the next
+     version (default `X.(Y+1).0`) and the release's name. It runs
+     `release/prepare.py` on a new branch `release-X.Y.Z`, opens the
+     release PR with CHANGELOG's section as its body, and dispatches CI on
+     the branch, Miri and `test/upgrade.py` included (a PR opened with
+     `GITHUB_TOKEN` starts no `pull_request` run; a dispatch does, and its
+     checks show on the PR).
+  3. Review the release PR and its CI. To change it, close it, delete the
+     branch, fix main and run the workflow again: a commit pushed on top
+     would not be in the tagged commit.
+  4. **Merge it with a merge commit**, never a squash or a rebase: the
+     recorded commit to tag must be in main's history.
+  5. The merge changes `sql/released.commits`, which starts **Release
+     (publish)**. It verifies every frozen install script, then waits for
+     a reviewer of the `release` environment to approve; it then tags the
+     recorded commit `vX.Y.Z` (annotated) and creates the GitHub Release
+     with CHANGELOG's section as its notes. A re-run succeeds if the tag
+     is already on the recorded commit and fails if it is on another; run
+     it by hand (with a version, or none for the latest) to publish again.
+- **Manual fallback**, without the workflows: on a branch from main,
+  `release/prepare.py X.Y.Z NEXT --title "..."` (it needs cargo-pgrx
+  initialised for `$PG`, default pg16), push it and open the PR, run
+  `test/upgrade.py` and Miri (`cargo +$MIRI_NIGHTLY miri test -p
+  warren-core`) on it, and merge with a merge commit. Release (publish)
+  still runs on that merge; if it cannot, on an up-to-date main:
+  `release/publish.py verify && release/publish.py tag X.Y.Z && git push
+  origin vX.Y.Z`, then `release/changelog.py notes X.Y.Z` as the
+  Release's notes (`gh release create vX.Y.Z --verify-tag --notes-file`).
+  Only a ruleset bypass actor can push the tag (below).
 - pg_warren is a **trusted** extension, so a non-superuser's `CREATE` or
   `ALTER EXTENSION` runs every install and upgrade script as the bootstrap
   superuser. Scripts create objects only in schema `warren`, schema-qualify
@@ -249,6 +290,41 @@ test/upgrade.py --pg-config "$(command -v pg_config)"   # builds each release fr
 test/upgrade.py --no-install --trusted   # the same, installed and updated by a non-superuser
 test/dump.py --pg-config "$(command -v pg_config)"   # pg_dump and restore of graphs (plain, custom, trusted)
 ```
+
+### Release settings (owner setup)
+
+Set once in the repository's settings; the workflows assume them.
+
+1. **Environment `release`** (Settings → Environments → New environment):
+   *Required reviewers*: the people who may publish a release (with
+   *Prevent self-review* if more than one); *Deployment branches and
+   tags*: *Selected branches and tags*, with the branch rule `main`. It
+   needs no secrets.
+2. **Tag ruleset for `v*`** (Settings → Rules → Rulesets → New ruleset →
+   New tag ruleset): enforcement *Active*; target tags matching the
+   pattern `v*`; rules *Restrict creations*, *Restrict updates* and
+   *Restrict deletions*; bypass list: the **GitHub Actions** app (*Add
+   bypass* → *GitHub Apps* → GitHub Actions, "Always allow"), since
+   `GITHUB_TOKEN` pushes as `github-actions[bot]`, that app's identity,
+   and *Repository admin* (the manual fallback). The bypass covers any
+   workflow whose token can write contents; of the workflows only the two
+   release ones ask for `contents: write`, Release (prepare) pushes only
+   its `release-*` branch, and Release (publish) tags only after the
+   `release` environment's approval. If the bypass picker does not offer
+   the GitHub Actions app, a GitHub App of your own is the alternative:
+   add it as the bypass, keep its key as a secret of the `release`
+   environment, and have the publish job push with its token
+   (`actions/create-github-app-token`) instead of `GITHUB_TOKEN`.
+3. **Actions → General → Workflow permissions**: keep the default
+   *Read repository contents and packages permissions* (each job asks
+   for what it needs), and tick **Allow GitHub Actions to create and
+   approve pull requests**: Release (prepare) opens the release PR with
+   `GITHUB_TOKEN`.
+4. **Pull requests** (Settings → General): keep *Allow merge commits*
+   enabled; release PRs must be merged with one. If `main`'s branch
+   protection requires status checks, the dispatched CI run's checks
+   satisfy them: they have the same names as a `pull_request` run's.
+5. **No secrets**: neither workflow needs a PAT or a GitHub App token.
 
 ## Docker
 
