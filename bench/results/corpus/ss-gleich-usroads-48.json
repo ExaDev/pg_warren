@@ -1,0 +1,599 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "time",
+   "--tier",
+   "medium",
+   "--pg-config",
+   "/var/tmp/warren-corpus/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "1ffdcd9",
+   "--extension-profile",
+   "release"
+  ],
+  "harness": {
+   "revision": "1ccaf3068d975dd471173d9ccc5ee60a940c9809",
+   "dirty": true
+  },
+  "extension": {
+   "revision": "1ffdcd9",
+   "profile": "release",
+   "library": "/var/tmp/warren-corpus/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "5499e8bca4b5710e1b28f9addaf05fe9538a6100b34dcf8406c30e2ff4ac2174"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872804352,
+  "kernel": "6.18.44-fc-v153",
+  "load_average": [
+   6.1298828125,
+   3.2001953125,
+   2.3125
+  ]
+ },
+ "dataset": "ss-gleich-usroads-48",
+ "tier": "medium",
+ "fetched": {
+  "tables": {
+   "nodes": 126146,
+   "edges": 161950,
+   "ids": "integer",
+   "relations": 0,
+   "self_loops": 0
+  },
+  "provenance": {
+   "entryId": "ss-gleich-usroads-48",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-24T13:48:45.413Z",
+   "source": {
+    "url": "https://www.cise.ufl.edu/research/sparse/MM/Gleich/usroads-48.tar.gz",
+    "status": "live"
+   },
+   "fetchedUrl": "https://www.cise.ufl.edu/research/sparse/MM/Gleich/usroads-48.tar.gz",
+   "sha256": "7118d65446f868f6803f77dcd422935b0c480e2445d25e37f2cf05aa269d2d0e",
+   "byteLength": 990717,
+   "member": "usroads-48/usroads-48.mtx"
+  }
+ },
+ "source": "'58080'::bigint",
+ "stages": {
+  "refresh": {
+   "sql": "SELECT warren.refresh('g')",
+   "seconds": [
+    0.1161
+   ],
+   "median_seconds": 0.1161,
+   "rows": [
+    "1"
+   ],
+   "first_rows": [
+    "1"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 3207168,
+   "peak_rss_anon": 16052224,
+   "vm_hwm": 70955008,
+   "rss_anon_after": 7708672,
+   "rss_shmem_after": 39858176
+  },
+  "cold load": {
+   "sql": "SELECT warren.evict('g'), warren.prewarm('g')",
+   "seconds": [
+    0.0247
+   ],
+   "median_seconds": 0.0247,
+   "rows": [
+    "0|1"
+   ],
+   "first_rows": [
+    "0|1"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 7708672,
+   "peak_rss_anon": 15388672,
+   "vm_hwm": 72699904,
+   "rss_anon_after": 15388672,
+   "rss_shmem_after": 39858176
+  },
+  "bfs depth 6": {
+   "sql": "SELECT bench_seconds($soak$SELECT count(*) FROM warren.bfs('g', ARRAY['58080'::bigint], 6)$soak$)",
+   "seconds": [
+    0.0027,
+    0.0036,
+    0.0003
+   ],
+   "median_seconds": 0.0027,
+   "rows": [
+    "0.000175"
+   ],
+   "first_rows": [
+    "0.000412",
+    "0.00024",
+    "0.000175"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 15388672,
+   "peak_rss_anon": 15409152,
+   "vm_hwm": 73236480,
+   "rss_anon_after": 15409152,
+   "rss_shmem_after": 39858176,
+   "server_seconds": [
+    0.000412,
+    0.00024,
+    0.000175
+   ],
+   "server_median_seconds": 0.00024
+  },
+  "bfs depth 6 rows": {
+   "sql": "SELECT count(*) FROM warren.bfs('g', ARRAY['58080'::bigint], 6)",
+   "seconds": [
+    0.0003
+   ],
+   "median_seconds": 0.0003,
+   "rows": [
+    "68"
+   ],
+   "first_rows": [
+    "68"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 15409152,
+   "peak_rss_anon": 15409152,
+   "vm_hwm": 73236480,
+   "rss_anon_after": 15409152,
+   "rss_shmem_after": 39858176
+  },
+  "bfs depth 6 recursive CTE": {
+   "sql": "WITH RECURSIVE r (id, depth) AS (SELECT '58080'::bigint, 0 UNION SELECT n.id, r.depth + 1 FROM r CROSS JOIN LATERAL (SELECT dst FROM edges WHERE src = r.id UNION ALL SELECT src FROM edges WHERE dst = r.id) n (id) WHERE r.depth < 6) SELECT count(DISTINCT id) FROM r",
+   "seconds": [
+    0.0009
+   ],
+   "median_seconds": 0.0009,
+   "rows": [
+    "68"
+   ],
+   "first_rows": [
+    "68"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 15409152,
+   "peak_rss_anon": 15413248,
+   "vm_hwm": 73474048,
+   "rss_anon_after": 15413248,
+   "rss_shmem_after": 40087552
+  },
+  "neighbours": {
+   "sql": "SELECT bench_seconds($soak$SELECT count(*) FROM warren.neighbours('g', '58080'::bigint)$soak$)",
+   "seconds": [
+    0.0003,
+    0.0001,
+    0.0001,
+    0.0001,
+    0.0001,
+    0.0001,
+    0.0001,
+    0.0001,
+    0.0001,
+    0.0001,
+    0.0001,
+    0.0001,
+    0.0001,
+    0.0001,
+    0.0001,
+    0.0001,
+    0.0001,
+    0.0001,
+    0.0001,
+    0.0001
+   ],
+   "median_seconds": 0.0001,
+   "rows": [
+    "3.6e-05"
+   ],
+   "first_rows": [
+    "0.000159",
+    "6e-05",
+    "4.4e-05",
+    "4.1e-05",
+    "3.5e-05",
+    "3.4e-05",
+    "3.4e-05",
+    "3.2e-05",
+    "3.1e-05",
+    "3e-05",
+    "3.1e-05",
+    "3.1e-05",
+    "3.1e-05",
+    "3.1e-05",
+    "9.4e-05",
+    "3.8e-05",
+    "3.3e-05",
+    "3.2e-05",
+    "8.5e-05",
+    "3.6e-05"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 15413248,
+   "peak_rss_anon": 15413248,
+   "vm_hwm": 73605120,
+   "rss_anon_after": 15413248,
+   "rss_shmem_after": 40087552,
+   "server_seconds": [
+    0.000159,
+    6e-05,
+    4.4e-05,
+    4.1e-05,
+    3.5e-05,
+    3.4e-05,
+    3.4e-05,
+    3.2e-05,
+    3.1e-05,
+    3e-05,
+    3.1e-05,
+    3.1e-05,
+    3.1e-05,
+    3.1e-05,
+    9.4e-05,
+    3.8e-05,
+    3.3e-05,
+    3.2e-05,
+    8.5e-05,
+    3.6e-05
+   ],
+   "server_median_seconds": 3.4e-05
+  },
+  "reachable_set": {
+   "sql": "SELECT bench_seconds($soak$SELECT count(*) FROM warren.reachable_set('g', ARRAY['58080'::bigint])$soak$)",
+   "seconds": [
+    0.0526,
+    0.0206,
+    0.0216
+   ],
+   "median_seconds": 0.0216,
+   "rows": [
+    "0.021402"
+   ],
+   "first_rows": [
+    "0.052387",
+    "0.020413",
+    "0.021402"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 15413248,
+   "peak_rss_anon": 18677760,
+   "vm_hwm": 77119488,
+   "rss_anon_after": 13922304,
+   "rss_shmem_after": 40087552,
+   "server_seconds": [
+    0.052387,
+    0.020413,
+    0.021402
+   ],
+   "server_median_seconds": 0.021402
+  },
+  "reachable_set stats": {
+   "graph": "g",
+   "version": 1,
+   "function": "reachable_set",
+   "truncated": false,
+   "nodes_visited": 126146,
+   "edges_traversed": 323900
+  },
+  "reachable_set rows": {
+   "sql": "SELECT count(*) FROM warren.reachable_set('g', ARRAY['58080'::bigint])",
+   "seconds": [
+    0.0217
+   ],
+   "median_seconds": 0.0217,
+   "rows": [
+    "126146"
+   ],
+   "first_rows": [
+    "126146"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 13922304,
+   "peak_rss_anon": 19353600,
+   "vm_hwm": 77119488,
+   "rss_anon_after": 13922304,
+   "rss_shmem_after": 40087552
+  },
+  "components": {
+   "sql": "SELECT count(DISTINCT component_id) FROM warren.components('g', NULL::bigint)",
+   "seconds": [
+    0.0245
+   ],
+   "median_seconds": 0.0245,
+   "rows": [
+    "1"
+   ],
+   "first_rows": [
+    "1"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 13922304,
+   "peak_rss_anon": 22929408,
+   "vm_hwm": 81182720,
+   "rss_anon_after": 18608128,
+   "rss_shmem_after": 40087552
+  },
+  "pagerank 20 iterations": {
+   "sql": "SELECT warren.pagerank('g', 'pr', tol := 0, max_iter := 20)",
+   "seconds": [
+    0.1752
+   ],
+   "median_seconds": 0.1752,
+   "rows": [
+    "20"
+   ],
+   "first_rows": [
+    "20"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 18608128,
+   "peak_rss_anon": 34787328,
+   "vm_hwm": 96210944,
+   "rss_anon_after": 33783808,
+   "rss_shmem_after": 42573824
+  },
+  "eigen k=20": {
+   "sql": "SELECT count(*), max(residual) FROM warren.eigen('g', 20, 'normalized_laplacian', 'smallest', tol := 1e-06)",
+   "seconds": [
+    104.8964
+   ],
+   "median_seconds": 104.8964,
+   "rows": [
+    "20|2.264899107088103e-06"
+   ],
+   "first_rows": [
+    "20|2.264899107088103e-06"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 33783808,
+   "peak_rss_anon": 54640640,
+   "vm_hwm": 118689792,
+   "rss_anon_after": 35827712,
+   "rss_shmem_after": 42573824
+  },
+  "embedding d=64 load": {
+   "sql": "SELECT warren.vector_from_query('g', 'emb', $q$SELECT id, (SELECT array_agg(sin(k * (hashtext(id::text) % 1000))::real ORDER BY k) FROM generate_series(1, 64) k) FROM nodes$q$, 'f32')",
+   "seconds": [
+    1.6506
+   ],
+   "median_seconds": 1.6506,
+   "rows": [
+    "2"
+   ],
+   "first_rows": [
+    "2"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 35827712,
+   "peak_rss_anon": 135864320,
+   "vm_hwm": 290627584,
+   "rss_anon_after": 90705920,
+   "rss_shmem_after": 85323776
+  },
+  "aggregate_neighbours d=64": {
+   "sql": "SELECT warren.aggregate_neighbours('g', 'emb', 'emb_nbr')",
+   "seconds": [
+    0.4343
+   ],
+   "median_seconds": 0.4343,
+   "rows": [
+    ""
+   ],
+   "first_rows": [
+    ""
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 90705920,
+   "peak_rss_anon": 201990144,
+   "vm_hwm": 391110656,
+   "rss_anon_after": 201990144,
+   "rss_shmem_after": 119255040
+  },
+  "triangles": {
+   "sql": "SELECT warren.triangles('g', 'tri')",
+   "seconds": [
+    0.0244
+   ],
+   "median_seconds": 0.0244,
+   "rows": [
+    "4"
+   ],
+   "first_rows": [
+    "4"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 201990144,
+   "peak_rss_anon": 207147008,
+   "vm_hwm": 397320192,
+   "rss_anon_after": 207147008,
+   "rss_shmem_after": 120307712
+  },
+  "clustering": {
+   "sql": "SELECT warren.clustering('g', 'cc')",
+   "seconds": [
+    0.0433
+   ],
+   "median_seconds": 0.0433,
+   "rows": [
+    ""
+   ],
+   "first_rows": [
+    ""
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 207147008,
+   "peak_rss_anon": 207167488,
+   "vm_hwm": 398393344,
+   "rss_anon_after": 207167488,
+   "rss_shmem_after": 121360384
+  },
+  "core_number": {
+   "sql": "SELECT warren.core_number('g', 'core')",
+   "seconds": [
+    0.0236
+   ],
+   "median_seconds": 0.0236,
+   "rows": [
+    "3"
+   ],
+   "first_rows": [
+    "3"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 207167488,
+   "peak_rss_anon": 209186816,
+   "vm_hwm": 401457152,
+   "rss_anon_after": 209186816,
+   "rss_shmem_after": 122404864
+  },
+  "louvain": {
+   "sql": "SELECT warren.louvain('g', 'louvain')",
+   "seconds": [
+    0.3896
+   ],
+   "median_seconds": 0.3896,
+   "rows": [
+    "0.9786380373651203"
+   ],
+   "first_rows": [
+    "0.9786380373651203"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 209186816,
+   "peak_rss_anon": 224481280,
+   "vm_hwm": 430772224,
+   "rss_anon_after": 224481280,
+   "rss_shmem_after": 135966720
+  },
+  "leiden": {
+   "sql": "SELECT warren.leiden('g', 'leiden')",
+   "seconds": [
+    0.867
+   ],
+   "median_seconds": 0.867,
+   "rows": [
+    "0.9801439872440707"
+   ],
+   "first_rows": [
+    "0.9801439872440707"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 224481280,
+   "peak_rss_anon": 240930816,
+   "vm_hwm": 476438528,
+   "rss_anon_after": 240930816,
+   "rss_shmem_after": 165183488
+  },
+  "second refresh": {
+   "sql": "SELECT warren.refresh('g')",
+   "seconds": [
+    0.1007
+   ],
+   "median_seconds": 0.1007,
+   "rows": [
+    "23"
+   ],
+   "first_rows": [
+    "23"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 240939008,
+   "peak_rss_anon": 240939008,
+   "vm_hwm": 483569664,
+   "rss_anon_after": 240939008,
+   "rss_shmem_after": 172306432
+  },
+  "diff": {
+   "sql": "SELECT warren.diff('g', 1, 23)",
+   "seconds": [
+    0.029
+   ],
+   "median_seconds": 0.029,
+   "rows": [
+    "{\"to\": 23, \"from\": 1, \"nodes\": {\"added\": 0, \"after\": 126146, \"before\": 126146, \"removed\": 0}, \"in_degree\": {\"histogram\": [{\"after\": 1, \"before\": 0, \"degree\": 0}, {\"after\": 2208, \"before\": 2155, \"degree\": 1}, {\"after\": 70851, \"before\": 70856, \"degree\": 2}, {\"after\": 32754, \"before\": 32762, \"degree\": 3}, {\"after\": 20102, \"before\": 20142, \"degree\": 4}, {\"after\": 207, \"before\": 208, \"degree\": 5}, {\"after\": 22, \"before\": 22, \"degree\": 6}, {\"after\": 1, \"before\": 1, \"degree\": 7}], \"mean_after\": 2.5665023068507917, \"mean_before\": 2.567659695907916, \"ks_statistic\": 0.0004280754046898039}, \"relations\": [{\"added\": 0, \"after\": 323754, \"before\": 323900, \"removed\": 146, \"relation\": \"\"}], \"out_degree\": {\"histogram\": [{\"after\": 1, \"before\": 0, \"degree\": 0}, {\"after\": 2208, \"before\": 2155, \"degree\": 1}, {\"after\": 70851, \"before\": 70856, \"degree\": 2}, {\"after\": 32754, \"before\": 32762, \"degree\": 3}, {\"after\": 20102, \"before\": 20142, \"degree\": 4}, {\"after\": 207, \"before\": 208, \"degree\": 5}, {\"after\": 22, \"before\": 22, \"degree\": 6}, {\"after\": 1, \"before\": 1, \"degree\": 7}], \"mean_after\": 2.5665023068507917, \"mean_before\": 2.567659695907916, \"ks_statistic\": 0.0004280754046898039}, \"all_relations\": {\"added\": 0, \"after\": 323754, \"before\": 323900, \"removed\": 146}}"
+   ],
+   "first_rows": [
+    "{\"to\": 23, \"from\": 1, \"nodes\": {\"added\": 0, \"after\": 126146, \"before\": 126146, \"removed\": 0}, \"in_degree\": {\"histogram\": [{\"after\": 1, \"before\": 0, \"degree\": 0}, {\"after\": 2208, \"before\": 2155, \"degree\": 1}, {\"after\": 70851, \"before\": 70856, \"degree\": 2}, {\"after\": 32754, \"before\": 32762, \"degree\": 3}, {\"after\": 20102, \"before\": 20142, \"degree\": 4}, {\"after\": 207, \"before\": 208, \"degree\": 5}, {\"after\": 22, \"before\": 22, \"degree\": 6}, {\"after\": 1, \"before\": 1, \"degree\": 7}], \"mean_after\": 2.5665023068507917, \"mean_before\": 2.567659695907916, \"ks_statistic\": 0.0004280754046898039}, \"relations\": [{\"added\": 0, \"after\": 323754, \"before\": 323900, \"removed\": 146, \"relation\": \"\"}], \"out_degree\": {\"histogram\": [{\"after\": 1, \"before\": 0, \"degree\": 0}, {\"after\": 2208, \"before\": 2155, \"degree\": 1}, {\"after\": 70851, \"before\": 70856, \"degree\": 2}, {\"after\": 32754, \"before\": 32762, \"degree\": 3}, {\"after\": 20102, \"before\": 20142, \"degree\": 4}, {\"after\": 207, \"before\": 208, \"degree\": 5}, {\"after\": 22, \"before\": 22, \"degree\": 6}, {\"after\": 1, \"before\": 1, \"degree\": 7}], \"mean_after\": 2.5665023068507917, \"mean_before\": 2.567659695907916, \"ks_statistic\": 0.0004280754046898039}, \"all_relations\": {\"added\": 0, \"after\": 323754, \"before\": 323900, \"removed\": 146}}"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 240939008,
+   "peak_rss_anon": 240939008,
+   "vm_hwm": 483700736,
+   "rss_anon_after": 240939008,
+   "rss_shmem_after": 172306432
+  }
+ },
+ "version": {
+  "seq": 1,
+  "bytes": 6643780,
+  "label": null,
+  "staged": false,
+  "current": true,
+  "vectors": 0,
+  "version": 1,
+  "built_at": "2026-10-24T15:04:45.907946+00:00",
+  "id_space": 126146,
+  "built_lsn": "0/158FA000",
+  "staleness": "00:00:00.121662",
+  "edge_count": 323900,
+  "node_count": 126146,
+  "label_vector": null,
+  "parent_graph": null,
+  "target_width": 4,
+  "dropped_edges": 0,
+  "compacted_from": null,
+  "parent_version": null,
+  "deduplicated_edges": 0
+ },
+ "settings": [
+  "fsync=off",
+  "full_page_writes=off",
+  "jit=on",
+  "maintenance_work_mem=1GB",
+  "max_parallel_workers_per_gather=2",
+  "max_wal_size=1GB",
+  "shared_buffers=1GB",
+  "shared_preload_libraries=",
+  "statement_timeout=10min",
+  "synchronous_commit=off",
+  "wal_level=minimal",
+  "warren.max_build_memory=4GB",
+  "warren.max_cache_memory=4GB",
+  "warren.max_compute_memory=4GB",
+  "warren.shared_cache_memory=4GB",
+  "warren.threads=4",
+  "work_mem=64MB"
+ ],
+ "reachable_set_edges_per_second": 15134099.616858236
+}

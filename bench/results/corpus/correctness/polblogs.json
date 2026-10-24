@@ -1,0 +1,282 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "check",
+   "--tier",
+   "tiny",
+   "--tier",
+   "medium",
+   "--pg-config",
+   "/var/tmp/warren-corpus/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "1ffdcd9",
+   "--extension-profile",
+   "release"
+  ],
+  "harness": {
+   "revision": "6bded0a30cd86d7ea3d64cd82be3a002348d0b48",
+   "dirty": true
+  },
+  "extension": {
+   "revision": "1ffdcd9",
+   "profile": "release",
+   "library": "/var/tmp/warren-corpus/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "5499e8bca4b5710e1b28f9addaf05fe9538a6100b34dcf8406c30e2ff4ac2174"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872804352,
+  "kernel": "6.18.44-fc-v153",
+  "load_average": [
+   0.64404296875,
+   1.1953125,
+   1.8896484375
+  ]
+ },
+ "dataset": "polblogs",
+ "tier": "tiny",
+ "fetched": {
+  "tables": {
+   "nodes": 1490,
+   "edges": 19090,
+   "ids": "integer",
+   "relations": 0,
+   "self_loops": 3
+  },
+  "provenance": {
+   "entryId": "polblogs",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-24T13:47:12.347Z",
+   "source": {
+    "url": "https://websites.umich.edu/~mejn/netdata/polblogs.zip",
+    "status": "live"
+   },
+   "fetchedUrl": "https://websites.umich.edu/~mejn/netdata/polblogs.zip",
+   "sha256": "e047df21736fef9037f0450f7d3756ecb16a8e347417723181c0f7e493021ddb",
+   "byteLength": 94090,
+   "member": "polblogs.gml"
+  }
+ },
+ "version": {
+  "seq": 1,
+  "bytes": 200204,
+  "label": null,
+  "staged": false,
+  "current": true,
+  "vectors": 0,
+  "version": 1,
+  "built_at": "2026-10-24T14:01:19.420633+00:00",
+  "id_space": 1490,
+  "built_lsn": "0/2800000",
+  "staleness": "00:00:00.02337",
+  "edge_count": 19025,
+  "node_count": 1490,
+  "label_vector": null,
+  "parent_graph": null,
+  "target_width": 4,
+  "dropped_edges": 0,
+  "compacted_from": null,
+  "parent_version": null,
+  "deduplicated_edges": 65
+ },
+ "seconds": 1.7,
+ "findings": [
+  {
+   "check": "node_count",
+   "status": "match",
+   "compared": 1,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "dropped_edges",
+   "status": "match",
+   "compared": 1,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "degree out",
+   "status": "match",
+   "compared": 1490,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "degree in",
+   "status": "match",
+   "compared": 1490,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "degree both",
+   "status": "match",
+   "compared": 1490,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "bfs depths",
+   "status": "match",
+   "compared": 958,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "source": "855"
+  },
+  {
+   "check": "bfs depths",
+   "status": "match",
+   "compared": 958,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "source": "1246"
+  },
+  {
+   "check": "components",
+   "status": "match",
+   "warren_parts": 268,
+   "oracle_parts": 268,
+   "differing_parts": 0
+  },
+  {
+   "check": "shortest_path length",
+   "status": "match",
+   "compared": 25,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "shortest_path edges",
+   "status": "match",
+   "compared": 25,
+   "invalid": []
+  },
+  {
+   "check": "pagerank",
+   "status": "match",
+   "compared": 1490,
+   "mismatches": 0,
+   "max_error": 3.8163916471489756e-17,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "triangles",
+   "status": "match",
+   "compared": 1490,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "clustering",
+   "status": "documented difference",
+   "compared": 1490,
+   "mismatches": 2,
+   "max_error": 0.012037906599504822,
+   "examples": [
+    {
+     "node": "1047",
+     "warren": 0.306966618287373,
+     "oracle": 0.3190045248868778
+    },
+    {
+     "node": "24",
+     "warren": 0.30887491264849753,
+     "oracle": 0.32075471698113206
+    }
+   ],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "documented": {
+    "reason": "clustering counts a node with a self-loop among its own neighbours (vector_degree), NetworkX leaves the self-loop out (docs/compute.md, DESIGN.md \u00a76.7)",
+    "nodes": 2
+   }
+  },
+  {
+   "check": "core_number",
+   "status": "match",
+   "compared": 1490,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0
+  },
+  {
+   "check": "modularity definition",
+   "status": "match",
+   "warren": 0.43182823762218947,
+   "oracle": 0.43182823762218947,
+   "difference": 0.0,
+   "note": "warren.modularity and NetworkX scoring NetworkX's Louvain partition"
+  },
+  {
+   "check": "louvain",
+   "status": "match",
+   "warren": 0.43197110103070013,
+   "oracle": 0.43182823762218947,
+   "difference": 0.00014286340851066281,
+   "slack": 0.02
+  },
+  {
+   "check": "louvain returned modularity",
+   "status": "match",
+   "warren": 0.43197110103070013,
+   "oracle": 0.43197110103069997,
+   "difference": 1.6653345369377348e-16,
+   "communities": 280
+  },
+  {
+   "check": "leiden",
+   "status": "match",
+   "warren": 0.43195450346300696,
+   "oracle": 0.43182823762218947,
+   "difference": 0.00012626584081748549,
+   "slack": 0.02
+  },
+  {
+   "check": "leiden returned modularity",
+   "status": "match",
+   "warren": 0.43195450346300696,
+   "oracle": 0.4319545034630069,
+   "difference": 5.551115123125783e-17,
+   "communities": 280
+  }
+ ]
+}

@@ -1,0 +1,38 @@
+{
+ "dataset": "fb15k-237",
+ "distribution": {
+  "count": 14541,
+  "bytes": 127874,
+  "min": 7,
+  "max": 10,
+  "mean": 8.794030671893267,
+  "percentiles": {
+   "50": 9,
+   "90": 10,
+   "99": 10
+  },
+  "lengths": {
+   "7": 141,
+   "8": 4614,
+   "9": 7885,
+   "10": 1901
+  }
+ },
+ "id_map": {
+  "id_bytes": 127874,
+  "id_offsets": 116336,
+  "id_order": 58164,
+  "total": 302374
+ },
+ "front_coded": {
+  "bytes": 68842,
+  "blocks": 909,
+  "offsets_bytes": 7272,
+  "mean_shared_prefix": 6.397080399061033,
+  "ratio": 1.8574997821097585,
+  "ratio_with_offsets": 1.68003258270489,
+  "rank_permutation_bytes": 58164,
+  "map_total": 192442,
+  "map_ratio": 1.571247440787354
+ }
+}

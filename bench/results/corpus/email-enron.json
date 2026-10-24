@@ -1,0 +1,600 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "time",
+   "--tier",
+   "medium",
+   "--pg-config",
+   "/var/tmp/warren-corpus/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "1ffdcd9",
+   "--extension-profile",
+   "release"
+  ],
+  "harness": {
+   "revision": "1ccaf3068d975dd471173d9ccc5ee60a940c9809",
+   "dirty": true
+  },
+  "extension": {
+   "revision": "1ffdcd9",
+   "profile": "release",
+   "library": "/var/tmp/warren-corpus/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "5499e8bca4b5710e1b28f9addaf05fe9538a6100b34dcf8406c30e2ff4ac2174"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872804352,
+  "kernel": "6.18.44-fc-v153",
+  "load_average": [
+   3.2578125,
+   1.62109375,
+   1.74951171875
+  ]
+ },
+ "dataset": "email-enron",
+ "tier": "medium",
+ "fetched": {
+  "tables": {
+   "nodes": 36692,
+   "edges": 367662,
+   "ids": "integer",
+   "relations": 0,
+   "self_loops": 0
+  },
+  "provenance": {
+   "entryId": "email-enron",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-24T13:48:29.863Z",
+   "source": {
+    "url": "https://snap.stanford.edu/data/email-Enron.txt.gz",
+    "status": "live"
+   },
+   "fetchedUrl": "https://snap.stanford.edu/data/email-Enron.txt.gz",
+   "sha256": "55cfead79b1f0161786179a48796c2a119bd7026a246238b257b6be9d8b69b68",
+   "byteLength": 1055993
+  }
+ },
+ "source": "'5038'::bigint",
+ "stages": {
+  "refresh": {
+   "sql": "SELECT warren.refresh('g')",
+   "seconds": [
+    0.1272
+   ],
+   "median_seconds": 0.1272,
+   "rows": [
+    "1"
+   ],
+   "first_rows": [
+    "1"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 3207168,
+   "peak_rss_anon": 17047552,
+   "vm_hwm": 66609152,
+   "rss_anon_after": 7778304,
+   "rss_shmem_after": 39309312
+  },
+  "cold load": {
+   "sql": "SELECT warren.evict('g'), warren.prewarm('g')",
+   "seconds": [
+    0.0053
+   ],
+   "median_seconds": 0.0053,
+   "rows": [
+    "0|1"
+   ],
+   "first_rows": [
+    "0|1"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 7778304,
+   "peak_rss_anon": 12218368,
+   "vm_hwm": 69029888,
+   "rss_anon_after": 12218368,
+   "rss_shmem_after": 39374848
+  },
+  "bfs depth 6": {
+   "sql": "SELECT bench_seconds($soak$SELECT count(*) FROM warren.bfs('g', ARRAY['5038'::bigint], 6)$soak$)",
+   "seconds": [
+    0.0086,
+    0.0084,
+    0.0083
+   ],
+   "median_seconds": 0.0084,
+   "rows": [
+    "0.008113"
+   ],
+   "first_rows": [
+    "0.008258",
+    "0.008251",
+    "0.008113"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 12218368,
+   "peak_rss_anon": 12218368,
+   "vm_hwm": 70656000,
+   "rss_anon_after": 10022912,
+   "rss_shmem_after": 39440384,
+   "server_seconds": [
+    0.008258,
+    0.008251,
+    0.008113
+   ],
+   "server_median_seconds": 0.008251
+  },
+  "bfs depth 6 rows": {
+   "sql": "SELECT count(*) FROM warren.bfs('g', ARRAY['5038'::bigint], 6)",
+   "seconds": [
+    0.0096
+   ],
+   "median_seconds": 0.0096,
+   "rows": [
+    "33678"
+   ],
+   "first_rows": [
+    "33678"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 10022912,
+   "peak_rss_anon": 10022912,
+   "vm_hwm": 70295552,
+   "rss_anon_after": 10022912,
+   "rss_shmem_after": 39440384
+  },
+  "bfs depth 6 recursive CTE": {
+   "sql": "WITH RECURSIVE r (id, depth) AS (SELECT '5038'::bigint, 0 UNION SELECT n.id, r.depth + 1 FROM r CROSS JOIN LATERAL (SELECT dst FROM edges WHERE src = r.id UNION ALL SELECT src FROM edges WHERE dst = r.id) n (id) WHERE r.depth < 6) SELECT count(DISTINCT id) FROM r",
+   "seconds": [
+    0.8085
+   ],
+   "median_seconds": 0.8085,
+   "rows": [
+    "33678"
+   ],
+   "first_rows": [
+    "33678"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 10022912,
+   "peak_rss_anon": 37679104,
+   "vm_hwm": 101269504,
+   "rss_anon_after": 10289152,
+   "rss_shmem_after": 46104576
+  },
+  "neighbours": {
+   "sql": "SELECT bench_seconds($soak$SELECT count(*) FROM warren.neighbours('g', '5038'::bigint)$soak$)",
+   "seconds": [
+    0.0007,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0003,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002
+   ],
+   "median_seconds": 0.0002,
+   "rows": [
+    "0.00012"
+   ],
+   "first_rows": [
+    "0.000414",
+    "0.000161",
+    "0.000139",
+    "0.000128",
+    "0.000126",
+    "0.000121",
+    "0.000123",
+    "0.000125",
+    "0.000259",
+    "0.00017",
+    "0.00013",
+    "0.000135",
+    "0.000127",
+    "0.000121",
+    "0.000122",
+    "0.000121",
+    "0.00012",
+    "0.000121",
+    "0.000119",
+    "0.00012"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 10289152,
+   "peak_rss_anon": 10289152,
+   "vm_hwm": 74481664,
+   "rss_anon_after": 10289152,
+   "rss_shmem_after": 46104576,
+   "server_seconds": [
+    0.000414,
+    0.000161,
+    0.000139,
+    0.000128,
+    0.000126,
+    0.000121,
+    0.000123,
+    0.000125,
+    0.000259,
+    0.00017,
+    0.00013,
+    0.000135,
+    0.000127,
+    0.000121,
+    0.000122,
+    0.000121,
+    0.00012,
+    0.000121,
+    0.000119,
+    0.00012
+   ],
+   "server_median_seconds": 0.00012550000000000001
+  },
+  "reachable_set": {
+   "sql": "SELECT bench_seconds($soak$SELECT count(*) FROM warren.reachable_set('g', ARRAY['5038'::bigint])$soak$)",
+   "seconds": [
+    0.006,
+    0.0049,
+    0.0047
+   ],
+   "median_seconds": 0.0049,
+   "rows": [
+    "0.004485"
+   ],
+   "first_rows": [
+    "0.005789",
+    "0.004656",
+    "0.004485"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 10289152,
+   "peak_rss_anon": 11993088,
+   "vm_hwm": 76185600,
+   "rss_anon_after": 11993088,
+   "rss_shmem_after": 46104576,
+   "server_seconds": [
+    0.005789,
+    0.004656,
+    0.004485
+   ],
+   "server_median_seconds": 0.004656
+  },
+  "reachable_set stats": {
+   "graph": "g",
+   "version": 1,
+   "function": "reachable_set",
+   "truncated": false,
+   "nodes_visited": 33696,
+   "edges_traversed": 148882
+  },
+  "reachable_set rows": {
+   "sql": "SELECT count(*) FROM warren.reachable_set('g', ARRAY['5038'::bigint])",
+   "seconds": [
+    0.0056
+   ],
+   "median_seconds": 0.0056,
+   "rows": [
+    "33696"
+   ],
+   "first_rows": [
+    "33696"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 11993088,
+   "peak_rss_anon": 11997184,
+   "vm_hwm": 76189696,
+   "rss_anon_after": 11997184,
+   "rss_shmem_after": 46104576
+  },
+  "components": {
+   "sql": "SELECT count(DISTINCT component_id) FROM warren.components('g', NULL::bigint)",
+   "seconds": [
+    0.0081
+   ],
+   "median_seconds": 0.0081,
+   "rows": [
+    "1065"
+   ],
+   "first_rows": [
+    "1065"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 11997184,
+   "peak_rss_anon": 13303808,
+   "vm_hwm": 77561856,
+   "rss_anon_after": 13303808,
+   "rss_shmem_after": 46104576
+  },
+  "pagerank 20 iterations": {
+   "sql": "SELECT warren.pagerank('g', 'pr', tol := 0, max_iter := 20)",
+   "seconds": [
+    0.0792
+   ],
+   "median_seconds": 0.0792,
+   "rows": [
+    "20"
+   ],
+   "first_rows": [
+    "20"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 13303808,
+   "peak_rss_anon": 16818176,
+   "vm_hwm": 83636224,
+   "rss_anon_after": 16818176,
+   "rss_shmem_after": 47263744
+  },
+  "eigen k=20": {
+   "sql": "SELECT count(*), max(residual) FROM warren.eigen('g', 20, 'normalized_laplacian', 'smallest', tol := 1e-06)",
+   "seconds": [
+    0.9528
+   ],
+   "median_seconds": 0.9528,
+   "rows": [
+    "20|7.362586163546839e-07"
+   ],
+   "first_rows": [
+    "20|7.362586163546839e-07"
+   ],
+   "notices": [],
+   "warnings": [
+    "WARNING:  the matrix has 1065 connected components: eigenvalues repeat (each Laplacian has 0 once per component), and single-vector Lanczos may return fewer copies of a repeated eigenvalue than there are"
+   ],
+   "rss_anon_before": 16818176,
+   "peak_rss_anon": 23617536,
+   "vm_hwm": 90894336,
+   "rss_anon_after": 23617536,
+   "rss_shmem_after": 47263744
+  },
+  "embedding d=64 load": {
+   "sql": "SELECT warren.vector_from_query('g', 'emb', $q$SELECT id, (SELECT array_agg(sin(k * (hashtext(id::text) % 1000))::real ORDER BY k) FROM generate_series(1, 64) k) FROM nodes$q$, 'f32')",
+   "seconds": [
+    0.4171
+   ],
+   "median_seconds": 0.4171,
+   "rows": [
+    "2"
+   ],
+   "first_rows": [
+    "2"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 23617536,
+   "peak_rss_anon": 70926336,
+   "vm_hwm": 199364608,
+   "rss_anon_after": 29110272,
+   "rss_shmem_after": 67096576
+  },
+  "aggregate_neighbours d=64": {
+   "sql": "SELECT warren.aggregate_neighbours('g', 'emb', 'emb_nbr')",
+   "seconds": [
+    0.0835
+   ],
+   "median_seconds": 0.0835,
+   "rows": [
+    ""
+   ],
+   "first_rows": [
+    ""
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 29110272,
+   "peak_rss_anon": 89735168,
+   "vm_hwm": 231108608,
+   "rss_anon_after": 47923200,
+   "rss_shmem_after": 78950400
+  },
+  "triangles": {
+   "sql": "SELECT warren.triangles('g', 'tri')",
+   "seconds": [
+    0.1897
+   ],
+   "median_seconds": 0.1897,
+   "rows": [
+    "4"
+   ],
+   "first_rows": [
+    "4"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 47923200,
+   "peak_rss_anon": 53534720,
+   "vm_hwm": 196870144,
+   "rss_anon_after": 53534720,
+   "rss_shmem_after": 79253504
+  },
+  "clustering": {
+   "sql": "SELECT warren.clustering('g', 'cc')",
+   "seconds": [
+    0.1867
+   ],
+   "median_seconds": 0.1867,
+   "rows": [
+    ""
+   ],
+   "first_rows": [
+    ""
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 53534720,
+   "peak_rss_anon": 54300672,
+   "vm_hwm": 197943296,
+   "rss_anon_after": 54300672,
+   "rss_shmem_after": 79560704
+  },
+  "core_number": {
+   "sql": "SELECT warren.core_number('g', 'core')",
+   "seconds": [
+    0.0123
+   ],
+   "median_seconds": 0.0123,
+   "rows": [
+    "43"
+   ],
+   "first_rows": [
+    "43"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 54300672,
+   "peak_rss_anon": 54886400,
+   "vm_hwm": 198844416,
+   "rss_anon_after": 54886400,
+   "rss_shmem_after": 79876096
+  },
+  "louvain": {
+   "sql": "SELECT warren.louvain('g', 'louvain')",
+   "seconds": [
+    0.1372
+   ],
+   "median_seconds": 0.1372,
+   "rows": [
+    "0.619192770928199"
+   ],
+   "first_rows": [
+    "0.619192770928199"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 54886400,
+   "peak_rss_anon": 64106496,
+   "vm_hwm": 210690048,
+   "rss_anon_after": 64106496,
+   "rss_shmem_after": 82042880
+  },
+  "leiden": {
+   "sql": "SELECT warren.leiden('g', 'leiden')",
+   "seconds": [
+    0.362
+   ],
+   "median_seconds": 0.362,
+   "rows": [
+    "0.6255431011759253"
+   ],
+   "first_rows": [
+    "0.6255431011759253"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 64106496,
+   "peak_rss_anon": 80723968,
+   "vm_hwm": 237563904,
+   "rss_anon_after": 80723968,
+   "rss_shmem_after": 92299264
+  },
+  "second refresh": {
+   "sql": "SELECT warren.refresh('g')",
+   "seconds": [
+    0.098
+   ],
+   "median_seconds": 0.098,
+   "rows": [
+    "17"
+   ],
+   "first_rows": [
+    "17"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 80732160,
+   "peak_rss_anon": 87834624,
+   "vm_hwm": 249176064,
+   "rss_anon_after": 87834624,
+   "rss_shmem_after": 96800768
+  },
+  "diff": {
+   "sql": "SELECT warren.diff('g', 1, 17)",
+   "seconds": [
+    0.0146
+   ],
+   "median_seconds": 0.0146,
+   "rows": [
+    "{\"to\": 17, \"from\": 1, \"nodes\": {\"added\": 0, \"after\": 36692, \"before\": 36692, \"removed\": 0}, \"in_degree\": {\"histogram\": [{\"after\": 11211, \"before\": 11211, \"degree\": 1}, {\"after\": 3800, \"before\": 3800, \"degree\": 2}, {\"after\": 5167, \"before\": 5167, \"degree\": 3}, {\"after\": 3366, \"before\": 3366, \"degree\": 4}, {\"after\": 2212, \"before\": 2212, \"degree\": 5}, {\"after\": 1966, \"before\": 1966, \"degree\": 6}, {\"after\": 1117, \"before\": 1117, \"degree\": 7}, {\"after\": 817, \"before\": 817, \"degree\": 8}, {\"after\": 671, \"before\": 671, \"degree\": 9}, {\"after\": 588, \"before\": 588, \"degree\": 10}, {\"after\": 457, \"before\": 457, \"degree\": 11}, {\"after\": 401, \"before\": 401, \"degree\": 12}, {\"after\": 329, \"before\": 329, \"degree\": 13}, {\"after\": 263, \"before\": 263, \"degree\": 14}, {\"after\": 216, \"before\": 216, \"degree\": 15}, {\"after\": 239, \"before\": 239, \"degree\": 16}, {\"after\": 188, \"before\": 188, \"degree\": 17}, {\"after\": 203, \"before\": 203, \"degree\": 18}, {\"after\": 155, \"before\": 155, \"degree\": 19}, {\"after\": 148, \"before\": 148, \"degree\": 20}, {\"after\": 123, \"before\": 123, \"degree\": 21}, {\"after\": 104, \"before\": 104, \"degree\": 22}, {\"after\": 108, \"before\": 108, \"degree\": 23}, {\"after\": 122, \"before\": 122, \"degree\": 24}, {\"after\": 84, \"before\": 84, \"degree\": 25}, {\"after\": 86, \"before\": 86, \"degree\": 26}, {\"after\": 85, \"before\": 85, \"degree\": 27}, {\"after\": 86, \"before\": 86, \"degree\": 28}, {\"after\": 80, \"before\": 80, \"degree\": 29}, {\"after\": 72, \"before\": 72, \"degree\": 30}, {\"after\": 74, \"before\": 74, \"degree\": 31}, {\"after\": 63, \"before\": 63, \"degree\": 32}, {\"after\": 58, \"before\": 58, \"degree\": 33}, {\"after\": 64, \"before\": 64, \"degree\": 34}, {\"after\": 49, \"before\": 49, \"degree\": 35}, {\"after\": 54, \"before\": 54, \"degree\": 36}, {\"after\": 46, \"before\": 46, \"degree\": 37}, {\"after\": 61, \"before\": 61, \"degree\": 38}, {\"after\": 50, \"before\": 50, \"degree\": 39}, {\"after\": 41, \"before\": 41, \"degree\": 40}, {\"after\": 43, \"before\": 43, \"degree\": 41}, {\"after\": 38, \"before\": 38, \"degree\": 42}, {\"after\": 50, \"before\": 50, \"degree\": 43}, {\"after\": 40, \"before\": 40, \"degree\": 44}, {\"after\": 28, \"before\": 28, \"degree\": 45}, {\"after\": 26, \"before\": 26, \"degree\": 46}, {\"after\": 37, \"before\": 37, \"degree\": 47}, {\"after\": 27, \"before\": 27, \"degree\": 48}, {\"after\": 32, \"before\": 32, \"degree\": 49}, {\"after\": 31, \"before\": 31, \"degree\": 50}, {\"after\": 30, \"before\": 30, \"degree\": 51}, {\"after\": 24, \"before\": 24, \"degree\": 52}, {\"after\": 25, \"before\": 25, \"degree\": 53}, {\"after\": 33, \"before\": 33, \"degree\": 54}, {\"after\": 23, \"before\": 23, \"degree\": 55}, {\"after\": 16, \"before\": 16, \"degree\": 56}, {\"after\": 23, \"before\": 23, \"degree\": 57}, {\"after\": 21, \"before\": 21, \"degree\": 58}, {\"after\": 27, \"before\": 27, \"degree\": 59}, {\"after\": 31, \"before\": 31, \"degree\": 60}, {\"after\": 20, \"before\": 20, \"degree\": 61}, {\"after\": 26, \"before\": 26, \"degree\": 62}, {\"after\": 19, \"before\": 19, \"degree\": 63}, {\"after\": 17, \"before\": 17, \"degree\": 64}, {\"after\": 18, \"before\": 18, \"degree\": 65}, {\"after\": 18, \"before\": 18, \"degree\": 66}, {\"after\": 15, \"before\": 15, \"degree\": 67}, {\"after\": 20, \"before\": 20, \"degree\": 68}, {\"after\": 21, \"before\": 21, \"degree\": 69}, {\"after\": 14, \"before\": 14, \"degree\": 70}, {\"after\": 12, \"before\": 12, \"degree\": 71}, {\"after\": 20, \"before\": 20, \"degree\": 72}, {\"after\": 19, \"before\": 19, \"degree\": 73}, {\"after\": 20, \"before\": 20, \"degree\": 74}, {\"after\": 19, \"before\": 19, \"degree\": 75}, {\"after\": 12, \"before\": 12, \"degree\": 76}, {\"after\": 13, \"before\": 13, \"degree\": 77}, {\"after\": 9, \"before\": 9, \"degree\": 78}, {\"after\": 9, \"before\": 9, \"degree\": 79}, {\"after\": 14, \"before\": 14, \"degree\": 80}, {\"after\": 20, \"before\": 20, \"degree\": 81}, {\"after\": 9, \"before\": 9, \"degree\": 82}, {\"after\": 5, \"before\": 5, \"degree\": 83}, {\"after\": 17, \"before\": 17, \"degree\": 84}, {\"after\": 9, \"before\": 9, \"degree\": 85}, {\"after\": 14, \"before\": 14, \"degree\": 86}, {\"after\": 8, \"before\": 8, \"degree\": 87}, {\"after\": 9, \"before\": 9, \"degree\": 88}, {\"after\": 7, \"before\": 7, \"degree\": 89}, {\"after\": 11, \"before\": 11, \"degree\": 90}, {\"after\": 7, \"before\": 7, \"degree\": 91}, {\"after\": 11, \"before\": 11, \"degree\": 92}, {\"after\": 10, \"before\": 10, \"degree\": 93}, {\"after\": 10, \"before\": 10, \"degree\": 94}, {\"after\": 5, \"before\": 5, \"degree\": 95}, {\"after\": 8, \"before\": 8, \"degree\": 96}, {\"after\": 4, \"before\": 4, \"degree\": 97}, {\"after\": 8, \"before\": 8, \"degree\": 98}, {\"after\": 7, \"before\": 7, \"degree\": 99}, {\"after\": 9, \"before\": 9, \"degree\": 100}, {\"after\": 7, \"before\": 7, \"degree\": 101}, {\"after\": 6, \"before\": 6, \"degree\": 102}, {\"after\": 7, \"before\": 7, \"degree\": 103}, {\"after\": 7, \"before\": 7, \"degree\": 104}, {\"after\": 11, \"before\": 11, \"degree\": 105}, {\"after\": 8, \"before\": 8, \"degree\": 106}, {\"after\": 6, \"before\": 6, \"degree\": 107}, {\"after\": 8, \"before\": 8, \"degree\": 108}, {\"after\": 6, \"before\": 6, \"degree\": 109}, {\"after\": 5, \"before\": 5, \"degree\": 110}, {\"after\": 5, \"before\": 5, \"degree\": 111}, {\"after\": 7, \"before\": 7, \"degree\": 112}, {\"after\": 4, \"before\": 4, \"degree\": 113}, {\"after\": 6, \"before\": 6, \"degree\": 114}, {\"after\": 6, \"before\": 6, \"degree\": 115}, {\"after\": 4, \"before\": 4, \"degree\": 116}, {\"after\": 3, \"before\": 3, \"degree\": 117}, {\"after\": 4, \"before\": 4, \"degree\": 118}, {\"after\": 9, \"before\": 9, \"degree\": 119}, {\"after\": 4, \"before\": 4, \"degree\": 120}, {\"after\": 8, \"before\": 8, \"degree\": 121}, {\"after\": 3, \"before\": 3, \"degree\": 122}, {\"after\": 9, \"before\": 9, \"degree\": 123}, {\"after\": 4, \"before\": 4, \"degree\": 124}, {\"after\": 4, \"before\": 4, \"degree\": 125}, {\"after\": 4, \"before\": 4, \"degree\": 126}, {\"after\": 5, \"before\": 5, \"degree\": 127}, {\"after\": 1, \"before\": 1, \"degree\": 128}, {\"after\": 2, \"before\": 2, \"degree\": 129}, {\"after\": 4, \"before\": 4, \"degree\": 130}, {\"after\": 2, \"before\": 2, \"degree\": 131}, {\"after\": 3, \"before\": 3, \"degree\": 132}, {\"after\": 6, \"before\": 6, \"degree\": 133}, {\"after\": 3, \"before\": 3, \"degree\": 134}, {\"after\": 5, \"before\": 5, \"degree\": 135}, {\"after\": 5, \"before\": 5, \"degree\": 136}, {\"after\": 8, \"before\": 8, \"degree\": 137}, {\"after\": 6, \"before\": 6, \"degree\": 138}, {\"after\": 4, \"before\": 4, \"degree\": 139}, {\"after\": 3, \"before\": 3, \"degree\": 140}, {\"after\": 4, \"before\": 4, \"degree\": 141}, {\"after\": 3, \"before\": 3, \"degree\": 142}, {\"after\": 4, \"before\": 4, \"degree\": 143}, {\"after\": 5, \"before\": 5, \"degree\": 144}, {\"after\": 4, \"before\": 4, \"degree\": 145}, {\"after\": 4, \"before\": 4, \"degree\": 146}, {\"after\": 8, \"before\": 8, \"degree\": 147}, {\"after\": 1, \"before\": 1, \"degree\": 148}, {\"after\": 4, \"before\": 4, \"degree\": 149}, {\"after\": 2, \"before\": 2, \"degree\": 150}, {\"after\": 2, \"before\": 2, \"degree\": 151}, {\"after\": 3, \"before\": 3, \"degree\": 155}, {\"after\": 2, \"before\": 2, \"degree\": 156}, {\"after\": 4, \"before\": 4, \"degree\": 157}, {\"after\": 4, \"before\": 4, \"degree\": 158}, {\"after\": 2, \"before\": 2, \"degree\": 159}, {\"after\": 3, \"before\": 3, \"degree\": 160}, {\"after\": 1, \"before\": 1, \"degree\": 161}, {\"after\": 5, \"before\": 5, \"degree\": 162}, {\"after\": 4, \"before\": 4, \"degree\": 163}, {\"after\": 2, \"before\": 2, \"degree\": 164}, {\"after\": 3, \"before\": 3, \"degree\": 165}, {\"after\": 2, \"before\": 2, \"degree\": 166}, {\"after\": 4, \"before\": 4, \"degree\": 167}, {\"after\": 5, \"before\": 5, \"degree\": 168}, {\"after\": 2, \"before\": 2, \"degree\": 169}, {\"after\": 2, \"before\": 2, \"degree\": 170}, {\"after\": 2, \"before\": 2, \"degree\": 171}, {\"after\": 5, \"before\": 5, \"degree\": 172}, {\"after\": 2, \"before\": 2, \"degree\": 173}, {\"after\": 4, \"before\": 4, \"degree\": 174}, {\"after\": 2, \"before\": 2, \"degree\": 175}, {\"after\": 1, \"before\": 1, \"degree\": 176}, {\"after\": 1, \"before\": 1, \"degree\": 177}, {\"after\": 5, \"before\": 5, \"degree\": 178}, {\"after\": 3, \"before\": 3, \"degree\": 180}, {\"after\": 6, \"before\": 6, \"degree\": 181}, {\"after\": 1, \"before\": 1, \"degree\": 183}, {\"after\": 2, \"before\": 2, \"degree\": 184}, {\"after\": 1, \"before\": 1, \"degree\": 185}, {\"after\": 2, \"before\": 2, \"degree\": 186}, {\"after\": 1, \"before\": 1, \"degree\": 187}, {\"after\": 4, \"before\": 4, \"degree\": 190}, {\"after\": 1, \"before\": 1, \"degree\": 191}, {\"after\": 1, \"before\": 1, \"degree\": 192}, {\"after\": 1, \"before\": 1, \"degree\": 197}, {\"after\": 1, \"before\": 1, \"degree\": 198}, {\"after\": 1, \"before\": 1, \"degree\": 200}, {\"after\": 1, \"before\": 1, \"degree\": 201}, {\"after\": 2, \"before\": 2, \"degree\": 203}, {\"after\": 1, \"before\": 1, \"degree\": 204}, {\"after\": 2, \"before\": 2, \"degree\": 205}, {\"after\": 1, \"before\": 1, \"degree\": 206}, {\"after\": 4, \"before\": 4, \"degree\": 207}, {\"after\": 1, \"before\": 1, \"degree\": 209}, {\"after\": 1, \"before\": 1, \"degree\": 210}, {\"after\": 1, \"before\": 1, \"degree\": 211}, {\"after\": 3, \"before\": 3, \"degree\": 212}, {\"after\": 1, \"before\": 1, \"degree\": 213}, {\"after\": 2, \"before\": 2, \"degree\": 214}, {\"after\": 1, \"before\": 1, \"degree\": 215}, {\"after\": 1, \"before\": 1, \"degree\": 216}, {\"after\": 3, \"before\": 3, \"degree\": 217}, {\"after\": 2, \"before\": 2, \"degree\": 218}, {\"after\": 3, \"before\": 3, \"degree\": 219}, {\"after\": 1, \"before\": 1, \"degree\": 220}, {\"after\": 2, \"before\": 2, \"degree\": 221}, {\"after\": 2, \"before\": 2, \"degree\": 223}, {\"after\": 1, \"before\": 1, \"degree\": 225}, {\"after\": 1, \"before\": 1, \"degree\": 226}, {\"after\": 3, \"before\": 3, \"degree\": 227}, {\"after\": 3, \"before\": 3, \"degree\": 228}, {\"after\": 3, \"before\": 3, \"degree\": 229}, {\"after\": 2, \"before\": 2, \"degree\": 230}, {\"after\": 1, \"before\": 1, \"degree\": 231}, {\"after\": 2, \"before\": 2, \"degree\": 232}, {\"after\": 1, \"before\": 1, \"degree\": 233}, {\"after\": 2, \"before\": 2, \"degree\": 234}, {\"after\": 1, \"before\": 1, \"degree\": 235}, {\"after\": 1, \"before\": 1, \"degree\": 239}, {\"after\": 1, \"before\": 1, \"degree\": 240}, {\"after\": 4, \"before\": 4, \"degree\": 243}, {\"after\": 2, \"before\": 2, \"degree\": 244}, {\"after\": 1, \"before\": 1, \"degree\": 246}, {\"after\": 1, \"before\": 1, \"degree\": 247}, {\"after\": 1, \"before\": 1, \"degree\": 249}, {\"after\": 2, \"before\": 2, \"degree\": 253}, {\"after\": 1, \"before\": 1, \"degree\": 257}, {\"after\": 3, \"before\": 3, \"degree\": 258}, {\"after\": 1, \"before\": 1, \"degree\": 261}, {\"after\": 1, \"before\": 1, \"degree\": 262}, {\"after\": 3, \"before\": 3, \"degree\": 263}, {\"after\": 1, \"before\": 1, \"degree\": 264}, {\"after\": 1, \"before\": 1, \"degree\": 269}, {\"after\": 1, \"before\": 1, \"degree\": 270}, {\"after\": 1, \"before\": 1, \"degree\": 271}, {\"after\": 2, \"before\": 2, \"degree\": 275}, {\"after\": 1, \"before\": 1, \"degree\": 277}, {\"after\": 1, \"before\": 1, \"degree\": 278}, {\"after\": 1, \"before\": 1, \"degree\": 279}, {\"after\": 2, \"before\": 2, \"degree\": 280}, {\"after\": 1, \"before\": 1, \"degree\": 281}, {\"after\": 1, \"before\": 1, \"degree\": 282}, {\"after\": 1, \"before\": 1, \"degree\": 283}, {\"after\": 1, \"before\": 1, \"degree\": 284}, {\"after\": 1, \"before\": 1, \"degree\": 285}, {\"after\": 1, \"before\": 1, \"degree\": 286}, {\"after\": 1, \"before\": 1, \"degree\": 292}, {\"after\": 1, \"before\": 1, \"degree\": 293}, {\"after\": 1, \"before\": 1, \"degree\": 295}, {\"after\": 1, \"before\": 1, \"degree\": 296}, {\"after\": 2, \"before\": 2, \"degree\": 297}, {\"after\": 1, \"before\": 1, \"degree\": 298}, {\"after\": 1, \"before\": 1, \"degree\": 299}, {\"after\": 1, \"before\": 1, \"degree\": 300}, {\"after\": 1, \"before\": 1, \"degree\": 302}, {\"after\": 1, \"before\": 1, \"degree\": 304}, {\"after\": 1, \"before\": 1, \"degree\": 305}, {\"after\": 1, \"before\": 1, \"degree\": 306}, {\"after\": 1, \"before\": 1, \"degree\": 307}, {\"after\": 2, \"before\": 2, \"degree\": 308}, {\"after\": 1, \"before\": 1, \"degree\": 309}, {\"after\": 3, \"before\": 3, \"degree\": 310}, {\"after\": 1, \"before\": 1, \"degree\": 312}, {\"after\": 1, \"before\": 1, \"degree\": 314}, {\"after\": 1, \"before\": 1, \"degree\": 322}, {\"after\": 1, \"before\": 1, \"degree\": 327}, {\"after\": 1, \"before\": 1, \"degree\": 330}, {\"after\": 1, \"before\": 1, \"degree\": 332}, {\"after\": 1, \"before\": 1, \"degree\": 338}, {\"after\": 3, \"before\": 3, \"degree\": 339}, {\"after\": 2, \"before\": 2, \"degree\": 343}, {\"after\": 1, \"before\": 1, \"degree\": 344}, {\"after\": 1, \"before\": 1, \"degree\": 361}, {\"after\": 1, \"before\": 1, \"degree\": 363}, {\"after\": 1, \"before\": 1, \"degree\": 364}, {\"after\": 2, \"before\": 2, \"degree\": 365}, {\"after\": 1, \"before\": 1, \"degree\": 366}, {\"after\": 2, \"before\": 2, \"degree\": 377}, {\"after\": 1, \"before\": 1, \"degree\": 383}, {\"after\": 2, \"before\": 2, \"degree\": 386}, {\"after\": 1, \"before\": 1, \"degree\": 389}, {\"after\": 1, \"before\": 1, \"degree\": 396}, {\"after\": 1, \"before\": 1, \"degree\": 397}, {\"after\": 1, \"before\": 1, \"degree\": 399}, {\"after\": 2, \"before\": 2, \"degree\": 405}, {\"after\": 1, \"before\": 1, \"degree\": 417}, {\"after\": 1, \"before\": 1, \"degree\": 421}, {\"after\": 1, \"before\": 1, \"degree\": 422}, {\"after\": 1, \"before\": 1, \"degree\": 423}, {\"after\": 1, \"before\": 1, \"degree\": 424}, {\"after\": 1, \"before\": 1, \"degree\": 446}, {\"after\": 1, \"before\": 1, \"degree\": 449}, {\"after\": 1, \"before\": 1, \"degree\": 455}, {\"after\": 1, \"before\": 1, \"degree\": 459}, {\"after\": 1, \"before\": 1, \"degree\": 463}, {\"after\": 1, \"before\": 1, \"degree\": 468}, {\"after\": 1, \"before\": 1, \"degree\": 479}, {\"after\": 1, \"before\": 1, \"degree\": 481}, {\"after\": 1, \"before\": 1, \"degree\": 486}, {\"after\": 1, \"before\": 1, \"degree\": 496}, {\"after\": 1, \"before\": 1, \"degree\": 497}, {\"after\": 1, \"before\": 1, \"degree\": 505}, {\"after\": 1, \"before\": 1, \"degree\": 514}, {\"after\": 1, \"before\": 1, \"degree\": 521}, {\"after\": 1, \"before\": 1, \"degree\": 537}, {\"after\": 1, \"before\": 1, \"degree\": 538}, {\"after\": 1, \"before\": 1, \"degree\": 539}, {\"after\": 1, \"before\": 1, \"degree\": 540}, {\"after\": 1, \"before\": 1, \"degree\": 542}, {\"after\": 1, \"before\": 1, \"degree\": 552}, {\"after\": 1, \"before\": 1, \"degree\": 591}, {\"after\": 1, \"before\": 1, \"degree\": 597}, {\"after\": 1, \"before\": 1, \"degree\": 607}, {\"after\": 1, \"before\": 1, \"degree\": 609}, {\"after\": 1, \"before\": 1, \"degree\": 666}, {\"after\": 1, \"before\": 1, \"degree\": 686}, {\"after\": 1, \"before\": 1, \"degree\": 705}, {\"after\": 1, \"before\": 1, \"degree\": 711}, {\"after\": 1, \"before\": 1, \"degree\": 791}, {\"after\": 1, \"before\": 1, \"degree\": 815}, {\"after\": 1, \"before\": 1, \"degree\": 829}, {\"after\": 1, \"before\": 1, \"degree\": 834}, {\"after\": 1, \"before\": 1, \"degree\": 908}, {\"after\": 1, \"before\": 1, \"degree\": 924}, {\"after\": 1, \"before\": 1, \"degree\": 1026}, {\"after\": 1, \"before\": 1, \"degree\": 1068}, {\"after\": 1, \"before\": 1, \"degree\": 1099}, {\"after\": 1, \"before\": 1, \"degree\": 1143}, {\"after\": 1, \"before\": 1, \"degree\": 1244}, {\"after\": 1, \"before\": 1, \"degree\": 1245}, {\"after\": 1, \"before\": 1, \"degree\": 1261}, {\"after\": 1, \"before\": 1, \"degree\": 1367}, {\"after\": 1, \"before\": 1, \"degree\": 1383}], \"mean_after\": 10.020222391802028, \"mean_before\": 10.020222391802028, \"ks_statistic\": 0.0}, \"relations\": [{\"added\": 0, \"after\": 367662, \"before\": 367662, \"removed\": 0, \"relation\": \"\"}], \"out_degree\": {\"histogram\": [{\"after\": 11211, \"before\": 11211, \"degree\": 1}, {\"after\": 3800, \"before\": 3800, \"degree\": 2}, {\"after\": 5167, \"before\": 5167, \"degree\": 3}, {\"after\": 3366, \"before\": 3366, \"degree\": 4}, {\"after\": 2212, \"before\": 2212, \"degree\": 5}, {\"after\": 1966, \"before\": 1966, \"degree\": 6}, {\"after\": 1117, \"before\": 1117, \"degree\": 7}, {\"after\": 817, \"before\": 817, \"degree\": 8}, {\"after\": 671, \"before\": 671, \"degree\": 9}, {\"after\": 588, \"before\": 588, \"degree\": 10}, {\"after\": 457, \"before\": 457, \"degree\": 11}, {\"after\": 401, \"before\": 401, \"degree\": 12}, {\"after\": 329, \"before\": 329, \"degree\": 13}, {\"after\": 263, \"before\": 263, \"degree\": 14}, {\"after\": 216, \"before\": 216, \"degree\": 15}, {\"after\": 239, \"before\": 239, \"degree\": 16}, {\"after\": 188, \"before\": 188, \"degree\": 17}, {\"after\": 203, \"before\": 203, \"degree\": 18}, {\"after\": 155, \"before\": 155, \"degree\": 19}, {\"after\": 148, \"before\": 148, \"degree\": 20}, {\"after\": 123, \"before\": 123, \"degree\": 21}, {\"after\": 104, \"before\": 104, \"degree\": 22}, {\"after\": 108, \"before\": 108, \"degree\": 23}, {\"after\": 122, \"before\": 122, \"degree\": 24}, {\"after\": 84, \"before\": 84, \"degree\": 25}, {\"after\": 86, \"before\": 86, \"degree\": 26}, {\"after\": 85, \"before\": 85, \"degree\": 27}, {\"after\": 86, \"before\": 86, \"degree\": 28}, {\"after\": 80, \"before\": 80, \"degree\": 29}, {\"after\": 72, \"before\": 72, \"degree\": 30}, {\"after\": 74, \"before\": 74, \"degree\": 31}, {\"after\": 63, \"before\": 63, \"degree\": 32}, {\"after\": 58, \"before\": 58, \"degree\": 33}, {\"after\": 64, \"before\": 64, \"degree\": 34}, {\"after\": 49, \"before\": 49, \"degree\": 35}, {\"after\": 54, \"before\": 54, \"degree\": 36}, {\"after\": 46, \"before\": 46, \"degree\": 37}, {\"after\": 61, \"before\": 61, \"degree\": 38}, {\"after\": 50, \"before\": 50, \"degree\": 39}, {\"after\": 41, \"before\": 41, \"degree\": 40}, {\"after\": 43, \"before\": 43, \"degree\": 41}, {\"after\": 38, \"before\": 38, \"degree\": 42}, {\"after\": 50, \"before\": 50, \"degree\": 43}, {\"after\": 40, \"before\": 40, \"degree\": 44}, {\"after\": 28, \"before\": 28, \"degree\": 45}, {\"after\": 26, \"before\": 26, \"degree\": 46}, {\"after\": 37, \"before\": 37, \"degree\": 47}, {\"after\": 27, \"before\": 27, \"degree\": 48}, {\"after\": 32, \"before\": 32, \"degree\": 49}, {\"after\": 31, \"before\": 31, \"degree\": 50}, {\"after\": 30, \"before\": 30, \"degree\": 51}, {\"after\": 24, \"before\": 24, \"degree\": 52}, {\"after\": 25, \"before\": 25, \"degree\": 53}, {\"after\": 33, \"before\": 33, \"degree\": 54}, {\"after\": 23, \"before\": 23, \"degree\": 55}, {\"after\": 16, \"before\": 16, \"degree\": 56}, {\"after\": 23, \"before\": 23, \"degree\": 57}, {\"after\": 21, \"before\": 21, \"degree\": 58}, {\"after\": 27, \"before\": 27, \"degree\": 59}, {\"after\": 31, \"before\": 31, \"degree\": 60}, {\"after\": 20, \"before\": 20, \"degree\": 61}, {\"after\": 26, \"before\": 26, \"degree\": 62}, {\"after\": 19, \"before\": 19, \"degree\": 63}, {\"after\": 17, \"before\": 17, \"degree\": 64}, {\"after\": 18, \"before\": 18, \"degree\": 65}, {\"after\": 18, \"before\": 18, \"degree\": 66}, {\"after\": 15, \"before\": 15, \"degree\": 67}, {\"after\": 20, \"before\": 20, \"degree\": 68}, {\"after\": 21, \"before\": 21, \"degree\": 69}, {\"after\": 14, \"before\": 14, \"degree\": 70}, {\"after\": 12, \"before\": 12, \"degree\": 71}, {\"after\": 20, \"before\": 20, \"degree\": 72}, {\"after\": 19, \"before\": 19, \"degree\": 73}, {\"after\": 20, \"before\": 20, \"degree\": 74}, {\"after\": 19, \"before\": 19, \"degree\": 75}, {\"after\": 12, \"before\": 12, \"degree\": 76}, {\"after\": 13, \"before\": 13, \"degree\": 77}, {\"after\": 9, \"before\": 9, \"degree\": 78}, {\"after\": 9, \"before\": 9, \"degree\": 79}, {\"after\": 14, \"before\": 14, \"degree\": 80}, {\"after\": 20, \"before\": 20, \"degree\": 81}, {\"after\": 9, \"before\": 9, \"degree\": 82}, {\"after\": 5, \"before\": 5, \"degree\": 83}, {\"after\": 17, \"before\": 17, \"degree\": 84}, {\"after\": 9, \"before\": 9, \"degree\": 85}, {\"after\": 14, \"before\": 14, \"degree\": 86}, {\"after\": 8, \"before\": 8, \"degree\": 87}, {\"after\": 9, \"before\": 9, \"degree\": 88}, {\"after\": 7, \"before\": 7, \"degree\": 89}, {\"after\": 11, \"before\": 11, \"degree\": 90}, {\"after\": 7, \"before\": 7, \"degree\": 91}, {\"after\": 11, \"before\": 11, \"degree\": 92}, {\"after\": 10, \"before\": 10, \"degree\": 93}, {\"after\": 10, \"before\": 10, \"degree\": 94}, {\"after\": 5, \"before\": 5, \"degree\": 95}, {\"after\": 8, \"before\": 8, \"degree\": 96}, {\"after\": 4, \"before\": 4, \"degree\": 97}, {\"after\": 8, \"before\": 8, \"degree\": 98}, {\"after\": 7, \"before\": 7, \"degree\": 99}, {\"after\": 9, \"before\": 9, \"degree\": 100}, {\"after\": 7, \"before\": 7, \"degree\": 101}, {\"after\": 6, \"before\": 6, \"degree\": 102}, {\"after\": 7, \"before\": 7, \"degree\": 103}, {\"after\": 7, \"before\": 7, \"degree\": 104}, {\"after\": 11, \"before\": 11, \"degree\": 105}, {\"after\": 8, \"before\": 8, \"degree\": 106}, {\"after\": 6, \"before\": 6, \"degree\": 107}, {\"after\": 8, \"before\": 8, \"degree\": 108}, {\"after\": 6, \"before\": 6, \"degree\": 109}, {\"after\": 5, \"before\": 5, \"degree\": 110}, {\"after\": 5, \"before\": 5, \"degree\": 111}, {\"after\": 7, \"before\": 7, \"degree\": 112}, {\"after\": 4, \"before\": 4, \"degree\": 113}, {\"after\": 6, \"before\": 6, \"degree\": 114}, {\"after\": 6, \"before\": 6, \"degree\": 115}, {\"after\": 4, \"before\": 4, \"degree\": 116}, {\"after\": 3, \"before\": 3, \"degree\": 117}, {\"after\": 4, \"before\": 4, \"degree\": 118}, {\"after\": 9, \"before\": 9, \"degree\": 119}, {\"after\": 4, \"before\": 4, \"degree\": 120}, {\"after\": 8, \"before\": 8, \"degree\": 121}, {\"after\": 3, \"before\": 3, \"degree\": 122}, {\"after\": 9, \"before\": 9, \"degree\": 123}, {\"after\": 4, \"before\": 4, \"degree\": 124}, {\"after\": 4, \"before\": 4, \"degree\": 125}, {\"after\": 4, \"before\": 4, \"degree\": 126}, {\"after\": 5, \"before\": 5, \"degree\": 127}, {\"after\": 1, \"before\": 1, \"degree\": 128}, {\"after\": 2, \"before\": 2, \"degree\": 129}, {\"after\": 4, \"before\": 4, \"degree\": 130}, {\"after\": 2, \"before\": 2, \"degree\": 131}, {\"after\": 3, \"before\": 3, \"degree\": 132}, {\"after\": 6, \"before\": 6, \"degree\": 133}, {\"after\": 3, \"before\": 3, \"degree\": 134}, {\"after\": 5, \"before\": 5, \"degree\": 135}, {\"after\": 5, \"before\": 5, \"degree\": 136}, {\"after\": 8, \"before\": 8, \"degree\": 137}, {\"after\": 6, \"before\": 6, \"degree\": 138}, {\"after\": 4, \"before\": 4, \"degree\": 139}, {\"after\": 3, \"before\": 3, \"degree\": 140}, {\"after\": 4, \"before\": 4, \"degree\": 141}, {\"after\": 3, \"before\": 3, \"degree\": 142}, {\"after\": 4, \"before\": 4, \"degree\": 143}, {\"after\": 5, \"before\": 5, \"degree\": 144}, {\"after\": 4, \"before\": 4, \"degree\": 145}, {\"after\": 4, \"before\": 4, \"degree\": 146}, {\"after\": 8, \"before\": 8, \"degree\": 147}, {\"after\": 1, \"before\": 1, \"degree\": 148}, {\"after\": 4, \"before\": 4, \"degree\": 149}, {\"after\": 2, \"before\": 2, \"degree\": 150}, {\"after\": 2, \"before\": 2, \"degree\": 151}, {\"after\": 3, \"before\": 3, \"degree\": 155}, {\"after\": 2, \"before\": 2, \"degree\": 156}, {\"after\": 4, \"before\": 4, \"degree\": 157}, {\"after\": 4, \"before\": 4, \"degree\": 158}, {\"after\": 2, \"before\": 2, \"degree\": 159}, {\"after\": 3, \"before\": 3, \"degree\": 160}, {\"after\": 1, \"before\": 1, \"degree\": 161}, {\"after\": 5, \"before\": 5, \"degree\": 162}, {\"after\": 4, \"before\": 4, \"degree\": 163}, {\"after\": 2, \"before\": 2, \"degree\": 164}, {\"after\": 3, \"before\": 3, \"degree\": 165}, {\"after\": 2, \"before\": 2, \"degree\": 166}, {\"after\": 4, \"before\": 4, \"degree\": 167}, {\"after\": 5, \"before\": 5, \"degree\": 168}, {\"after\": 2, \"before\": 2, \"degree\": 169}, {\"after\": 2, \"before\": 2, \"degree\": 170}, {\"after\": 2, \"before\": 2, \"degree\": 171}, {\"after\": 5, \"before\": 5, \"degree\": 172}, {\"after\": 2, \"before\": 2, \"degree\": 173}, {\"after\": 4, \"before\": 4, \"degree\": 174}, {\"after\": 2, \"before\": 2, \"degree\": 175}, {\"after\": 1, \"before\": 1, \"degree\": 176}, {\"after\": 1, \"before\": 1, \"degree\": 177}, {\"after\": 5, \"before\": 5, \"degree\": 178}, {\"after\": 3, \"before\": 3, \"degree\": 180}, {\"after\": 6, \"before\": 6, \"degree\": 181}, {\"after\": 1, \"before\": 1, \"degree\": 183}, {\"after\": 2, \"before\": 2, \"degree\": 184}, {\"after\": 1, \"before\": 1, \"degree\": 185}, {\"after\": 2, \"before\": 2, \"degree\": 186}, {\"after\": 1, \"before\": 1, \"degree\": 187}, {\"after\": 4, \"before\": 4, \"degree\": 190}, {\"after\": 1, \"before\": 1, \"degree\": 191}, {\"after\": 1, \"before\": 1, \"degree\": 192}, {\"after\": 1, \"before\": 1, \"degree\": 197}, {\"after\": 1, \"before\": 1, \"degree\": 198}, {\"after\": 1, \"before\": 1, \"degree\": 200}, {\"after\": 1, \"before\": 1, \"degree\": 201}, {\"after\": 2, \"before\": 2, \"degree\": 203}, {\"after\": 1, \"before\": 1, \"degree\": 204}, {\"after\": 2, \"before\": 2, \"degree\": 205}, {\"after\": 1, \"before\": 1, \"degree\": 206}, {\"after\": 4, \"before\": 4, \"degree\": 207}, {\"after\": 1, \"before\": 1, \"degree\": 209}, {\"after\": 1, \"before\": 1, \"degree\": 210}, {\"after\": 1, \"before\": 1, \"degree\": 211}, {\"after\": 3, \"before\": 3, \"degree\": 212}, {\"after\": 1, \"before\": 1, \"degree\": 213}, {\"after\": 2, \"before\": 2, \"degree\": 214}, {\"after\": 1, \"before\": 1, \"degree\": 215}, {\"after\": 1, \"before\": 1, \"degree\": 216}, {\"after\": 3, \"before\": 3, \"degree\": 217}, {\"after\": 2, \"before\": 2, \"degree\": 218}, {\"after\": 3, \"before\": 3, \"degree\": 219}, {\"after\": 1, \"before\": 1, \"degree\": 220}, {\"after\": 2, \"before\": 2, \"degree\": 221}, {\"after\": 2, \"before\": 2, \"degree\": 223}, {\"after\": 1, \"before\": 1, \"degree\": 225}, {\"after\": 1, \"before\": 1, \"degree\": 226}, {\"after\": 3, \"before\": 3, \"degree\": 227}, {\"after\": 3, \"before\": 3, \"degree\": 228}, {\"after\": 3, \"before\": 3, \"degree\": 229}, {\"after\": 2, \"before\": 2, \"degree\": 230}, {\"after\": 1, \"before\": 1, \"degree\": 231}, {\"after\": 2, \"before\": 2, \"degree\": 232}, {\"after\": 1, \"before\": 1, \"degree\": 233}, {\"after\": 2, \"before\": 2, \"degree\": 234}, {\"after\": 1, \"before\": 1, \"degree\": 235}, {\"after\": 1, \"before\": 1, \"degree\": 239}, {\"after\": 1, \"before\": 1, \"degree\": 240}, {\"after\": 4, \"before\": 4, \"degree\": 243}, {\"after\": 2, \"before\": 2, \"degree\": 244}, {\"after\": 1, \"before\": 1, \"degree\": 246}, {\"after\": 1, \"before\": 1, \"degree\": 247}, {\"after\": 1, \"before\": 1, \"degree\": 249}, {\"after\": 2, \"before\": 2, \"degree\": 253}, {\"after\": 1, \"before\": 1, \"degree\": 257}, {\"after\": 3, \"before\": 3, \"degree\": 258}, {\"after\": 1, \"before\": 1, \"degree\": 261}, {\"after\": 1, \"before\": 1, \"degree\": 262}, {\"after\": 3, \"before\": 3, \"degree\": 263}, {\"after\": 1, \"before\": 1, \"degree\": 264}, {\"after\": 1, \"before\": 1, \"degree\": 269}, {\"after\": 1, \"before\": 1, \"degree\": 270}, {\"after\": 1, \"before\": 1, \"degree\": 271}, {\"after\": 2, \"before\": 2, \"degree\": 275}, {\"after\": 1, \"before\": 1, \"degree\": 277}, {\"after\": 1, \"before\": 1, \"degree\": 278}, {\"after\": 1, \"before\": 1, \"degree\": 279}, {\"after\": 2, \"before\": 2, \"degree\": 280}, {\"after\": 1, \"before\": 1, \"degree\": 281}, {\"after\": 1, \"before\": 1, \"degree\": 282}, {\"after\": 1, \"before\": 1, \"degree\": 283}, {\"after\": 1, \"before\": 1, \"degree\": 284}, {\"after\": 1, \"before\": 1, \"degree\": 285}, {\"after\": 1, \"before\": 1, \"degree\": 286}, {\"after\": 1, \"before\": 1, \"degree\": 292}, {\"after\": 1, \"before\": 1, \"degree\": 293}, {\"after\": 1, \"before\": 1, \"degree\": 295}, {\"after\": 1, \"before\": 1, \"degree\": 296}, {\"after\": 2, \"before\": 2, \"degree\": 297}, {\"after\": 1, \"before\": 1, \"degree\": 298}, {\"after\": 1, \"before\": 1, \"degree\": 299}, {\"after\": 1, \"before\": 1, \"degree\": 300}, {\"after\": 1, \"before\": 1, \"degree\": 302}, {\"after\": 1, \"before\": 1, \"degree\": 304}, {\"after\": 1, \"before\": 1, \"degree\": 305}, {\"after\": 1, \"before\": 1, \"degree\": 306}, {\"after\": 1, \"before\": 1, \"degree\": 307}, {\"after\": 2, \"before\": 2, \"degree\": 308}, {\"after\": 1, \"before\": 1, \"degree\": 309}, {\"after\": 3, \"before\": 3, \"degree\": 310}, {\"after\": 1, \"before\": 1, \"degree\": 312}, {\"after\": 1, \"before\": 1, \"degree\": 314}, {\"after\": 1, \"before\": 1, \"degree\": 322}, {\"after\": 1, \"before\": 1, \"degree\": 327}, {\"after\": 1, \"before\": 1, \"degree\": 330}, {\"after\": 1, \"before\": 1, \"degree\": 332}, {\"after\": 1, \"before\": 1, \"degree\": 338}, {\"after\": 3, \"before\": 3, \"degree\": 339}, {\"after\": 2, \"before\": 2, \"degree\": 343}, {\"after\": 1, \"before\": 1, \"degree\": 344}, {\"after\": 1, \"before\": 1, \"degree\": 361}, {\"after\": 1, \"before\": 1, \"degree\": 363}, {\"after\": 1, \"before\": 1, \"degree\": 364}, {\"after\": 2, \"before\": 2, \"degree\": 365}, {\"after\": 1, \"before\": 1, \"degree\": 366}, {\"after\": 2, \"before\": 2, \"degree\": 377}, {\"after\": 1, \"before\": 1, \"degree\": 383}, {\"after\": 2, \"before\": 2, \"degree\": 386}, {\"after\": 1, \"before\": 1, \"degree\": 389}, {\"after\": 1, \"before\": 1, \"degree\": 396}, {\"after\": 1, \"before\": 1, \"degree\": 397}, {\"after\": 1, \"before\": 1, \"degree\": 399}, {\"after\": 2, \"before\": 2, \"degree\": 405}, {\"after\": 1, \"before\": 1, \"degree\": 417}, {\"after\": 1, \"before\": 1, \"degree\": 421}, {\"after\": 1, \"before\": 1, \"degree\": 422}, {\"after\": 1, \"before\": 1, \"degree\": 423}, {\"after\": 1, \"before\": 1, \"degree\": 424}, {\"after\": 1, \"before\": 1, \"degree\": 446}, {\"after\": 1, \"before\": 1, \"degree\": 449}, {\"after\": 1, \"before\": 1, \"degree\": 455}, {\"after\": 1, \"before\": 1, \"degree\": 459}, {\"after\": 1, \"before\": 1, \"degree\": 463}, {\"after\": 1, \"before\": 1, \"degree\": 468}, {\"after\": 1, \"before\": 1, \"degree\": 479}, {\"after\": 1, \"before\": 1, \"degree\": 481}, {\"after\": 1, \"before\": 1, \"degree\": 486}, {\"after\": 1, \"before\": 1, \"degree\": 496}, {\"after\": 1, \"before\": 1, \"degree\": 497}, {\"after\": 1, \"before\": 1, \"degree\": 505}, {\"after\": 1, \"before\": 1, \"degree\": 514}, {\"after\": 1, \"before\": 1, \"degree\": 521}, {\"after\": 1, \"before\": 1, \"degree\": 537}, {\"after\": 1, \"before\": 1, \"degree\": 538}, {\"after\": 1, \"before\": 1, \"degree\": 539}, {\"after\": 1, \"before\": 1, \"degree\": 540}, {\"after\": 1, \"before\": 1, \"degree\": 542}, {\"after\": 1, \"before\": 1, \"degree\": 552}, {\"after\": 1, \"before\": 1, \"degree\": 591}, {\"after\": 1, \"before\": 1, \"degree\": 597}, {\"after\": 1, \"before\": 1, \"degree\": 607}, {\"after\": 1, \"before\": 1, \"degree\": 609}, {\"after\": 1, \"before\": 1, \"degree\": 666}, {\"after\": 1, \"before\": 1, \"degree\": 686}, {\"after\": 1, \"before\": 1, \"degree\": 705}, {\"after\": 1, \"before\": 1, \"degree\": 711}, {\"after\": 1, \"before\": 1, \"degree\": 791}, {\"after\": 1, \"before\": 1, \"degree\": 815}, {\"after\": 1, \"before\": 1, \"degree\": 829}, {\"after\": 1, \"before\": 1, \"degree\": 834}, {\"after\": 1, \"before\": 1, \"degree\": 908}, {\"after\": 1, \"before\": 1, \"degree\": 924}, {\"after\": 1, \"before\": 1, \"degree\": 1026}, {\"after\": 1, \"before\": 1, \"degree\": 1068}, {\"after\": 1, \"before\": 1, \"degree\": 1099}, {\"after\": 1, \"before\": 1, \"degree\": 1143}, {\"after\": 1, \"before\": 1, \"degree\": 1244}, {\"after\": 1, \"before\": 1, \"degree\": 1245}, {\"after\": 1, \"before\": 1, \"degree\": 1261}, {\"after\": 1, \"before\": 1, \"degree\": 1367}, {\"after\": 1, \"before\": 1, \"degree\": 1383}], \"mean_after\": 10.020222391802028, \"mean_before\": 10.020222391802028, \"ks_statistic\": 0.0}, \"all_relations\": {\"added\": 0, \"after\": 367662, \"before\": 367662, \"removed\": 0}}"
+   ],
+   "first_rows": [
+    "{\"to\": 17, \"from\": 1, \"nodes\": {\"added\": 0, \"after\": 36692, \"before\": 36692, \"removed\": 0}, \"in_degree\": {\"histogram\": [{\"after\": 11211, \"before\": 11211, \"degree\": 1}, {\"after\": 3800, \"before\": 3800, \"degree\": 2}, {\"after\": 5167, \"before\": 5167, \"degree\": 3}, {\"after\": 3366, \"before\": 3366, \"degree\": 4}, {\"after\": 2212, \"before\": 2212, \"degree\": 5}, {\"after\": 1966, \"before\": 1966, \"degree\": 6}, {\"after\": 1117, \"before\": 1117, \"degree\": 7}, {\"after\": 817, \"before\": 817, \"degree\": 8}, {\"after\": 671, \"before\": 671, \"degree\": 9}, {\"after\": 588, \"before\": 588, \"degree\": 10}, {\"after\": 457, \"before\": 457, \"degree\": 11}, {\"after\": 401, \"before\": 401, \"degree\": 12}, {\"after\": 329, \"before\": 329, \"degree\": 13}, {\"after\": 263, \"before\": 263, \"degree\": 14}, {\"after\": 216, \"before\": 216, \"degree\": 15}, {\"after\": 239, \"before\": 239, \"degree\": 16}, {\"after\": 188, \"before\": 188, \"degree\": 17}, {\"after\": 203, \"before\": 203, \"degree\": 18}, {\"after\": 155, \"before\": 155, \"degree\": 19}, {\"after\": 148, \"before\": 148, \"degree\": 20}, {\"after\": 123, \"before\": 123, \"degree\": 21}, {\"after\": 104, \"before\": 104, \"degree\": 22}, {\"after\": 108, \"before\": 108, \"degree\": 23}, {\"after\": 122, \"before\": 122, \"degree\": 24}, {\"after\": 84, \"before\": 84, \"degree\": 25}, {\"after\": 86, \"before\": 86, \"degree\": 26}, {\"after\": 85, \"before\": 85, \"degree\": 27}, {\"after\": 86, \"before\": 86, \"degree\": 28}, {\"after\": 80, \"before\": 80, \"degree\": 29}, {\"after\": 72, \"before\": 72, \"degree\": 30}, {\"after\": 74, \"before\": 74, \"degree\": 31}, {\"after\": 63, \"before\": 63, \"degree\": 32}, {\"after\": 58, \"before\": 58, \"degree\": 33}, {\"after\": 64, \"before\": 64, \"degree\": 34}, {\"after\": 49, \"before\": 49, \"degree\": 35}, {\"after\": 54, \"before\": 54, \"degree\": 36}, {\"after\": 46, \"before\": 46, \"degree\": 37}, {\"after\": 61, \"before\": 61, \"degree\": 38}, {\"after\": 50, \"before\": 50, \"degree\": 39}, {\"after\": 41, \"before\": 41, \"degree\": 40}, {\"after\": 43, \"before\": 43, \"degree\": 41}, {\"after\": 38, \"before\": 38, \"degree\": 42}, {\"after\": 50, \"before\": 50, \"degree\": 43}, {\"after\": 40, \"before\": 40, \"degree\": 44}, {\"after\": 28, \"before\": 28, \"degree\": 45}, {\"after\": 26, \"before\": 26, \"degree\": 46}, {\"after\": 37, \"before\": 37, \"degree\": 47}, {\"after\": 27, \"before\": 27, \"degree\": 48}, {\"after\": 32, \"before\": 32, \"degree\": 49}, {\"after\": 31, \"before\": 31, \"degree\": 50}, {\"after\": 30, \"before\": 30, \"degree\": 51}, {\"after\": 24, \"before\": 24, \"degree\": 52}, {\"after\": 25, \"before\": 25, \"degree\": 53}, {\"after\": 33, \"before\": 33, \"degree\": 54}, {\"after\": 23, \"before\": 23, \"degree\": 55}, {\"after\": 16, \"before\": 16, \"degree\": 56}, {\"after\": 23, \"before\": 23, \"degree\": 57}, {\"after\": 21, \"before\": 21, \"degree\": 58}, {\"after\": 27, \"before\": 27, \"degree\": 59}, {\"after\": 31, \"before\": 31, \"degree\": 60}, {\"after\": 20, \"before\": 20, \"degree\": 61}, {\"after\": 26, \"before\": 26, \"degree\": 62}, {\"after\": 19, \"before\": 19, \"degree\": 63}, {\"after\": 17, \"before\": 17, \"degree\": 64}, {\"after\": 18, \"before\": 18, \"degree\": 65}, {\"after\": 18, \"before\": 18, \"degree\": 66}, {\"after\": 15, \"before\": 15, \"degree\": 67}, {\"after\": 20, \"before\": 20, \"degree\": 68}, {\"after\": 21, \"before\": 21, \"degree\": 69}, {\"after\": 14, \"before\": 14, \"degree\": 70}, {\"after\": 12, \"before\": 12, \"degree\": 71}, {\"after\": 20, \"before\": 20, \"degree\": 72}, {\"after\": 19, \"before\": 19, \"degree\": 73}, {\"after\": 20, \"before\": 20, \"degree\": 74}, {\"after\": 19, \"before\": 19, \"degree\": 75}, {\"after\": 12, \"before\": 12, \"degree\": 76}, {\"after\": 13, \"before\": 13, \"degree\": 77}, {\"after\": 9, \"before\": 9, \"degree\": 78}, {\"after\": 9, \"before\": 9, \"degree\": 79}, {\"after\": 14, \"before\": 14, \"degree\": 80}, {\"after\": 20, \"before\": 20, \"degree\": 81}, {\"after\": 9, \"before\": 9, \"degree\": 82}, {\"after\": 5, \"before\": 5, \"degree\": 83}, {\"after\": 17, \"before\": 17, \"degree\": 84}, {\"after\": 9, \"before\": 9, \"degree\": 85}, {\"after\": 14, \"before\": 14, \"degree\": 86}, {\"after\": 8, \"before\": 8, \"degree\": 87}, {\"after\": 9, \"before\": 9, \"degree\": 88}, {\"after\": 7, \"before\": 7, \"degree\": 89}, {\"after\": 11, \"before\": 11, \"degree\": 90}, {\"after\": 7, \"before\": 7, \"degree\": 91}, {\"after\": 11, \"before\": 11, \"degree\": 92}, {\"after\": 10, \"before\": 10, \"degree\": 93}, {\"after\": 10, \"before\": 10, \"degree\": 94}, {\"after\": 5, \"before\": 5, \"degree\": 95}, {\"after\": 8, \"before\": 8, \"degree\": 96}, {\"after\": 4, \"before\": 4, \"degree\": 97}, {\"after\": 8, \"before\": 8, \"degree\": 98}, {\"after\": 7, \"before\": 7, \"degree\": 99}, {\"after\": 9, \"before\": 9, \"degree\": 100}, {\"after\": 7, \"before\": 7, \"degree\": 101}, {\"after\": 6, \"before\": 6, \"degree\": 102}, {\"after\": 7, \"before\": 7, \"degree\": 103}, {\"after\": 7, \"before\": 7, \"degree\": 104}, {\"after\": 11, \"before\": 11, \"degree\": 105}, {\"after\": 8, \"before\": 8, \"degree\": 106}, {\"after\": 6, \"before\": 6, \"degree\": 107}, {\"after\": 8, \"before\": 8, \"degree\": 108}, {\"after\": 6, \"before\": 6, \"degree\": 109}, {\"after\": 5, \"before\": 5, \"degree\": 110}, {\"after\": 5, \"before\": 5, \"degree\": 111}, {\"after\": 7, \"before\": 7, \"degree\": 112}, {\"after\": 4, \"before\": 4, \"degree\": 113}, {\"after\": 6, \"before\": 6, \"degree\": 114}, {\"after\": 6, \"before\": 6, \"degree\": 115}, {\"after\": 4, \"before\": 4, \"degree\": 116}, {\"after\": 3, \"before\": 3, \"degree\": 117}, {\"after\": 4, \"before\": 4, \"degree\": 118}, {\"after\": 9, \"before\": 9, \"degree\": 119}, {\"after\": 4, \"before\": 4, \"degree\": 120}, {\"after\": 8, \"before\": 8, \"degree\": 121}, {\"after\": 3, \"before\": 3, \"degree\": 122}, {\"after\": 9, \"before\": 9, \"degree\": 123}, {\"after\": 4, \"before\": 4, \"degree\": 124}, {\"after\": 4, \"before\": 4, \"degree\": 125}, {\"after\": 4, \"before\": 4, \"degree\": 126}, {\"after\": 5, \"before\": 5, \"degree\": 127}, {\"after\": 1, \"before\": 1, \"degree\": 128}, {\"after\": 2, \"before\": 2, \"degree\": 129}, {\"after\": 4, \"before\": 4, \"degree\": 130}, {\"after\": 2, \"before\": 2, \"degree\": 131}, {\"after\": 3, \"before\": 3, \"degree\": 132}, {\"after\": 6, \"before\": 6, \"degree\": 133}, {\"after\": 3, \"before\": 3, \"degree\": 134}, {\"after\": 5, \"before\": 5, \"degree\": 135}, {\"after\": 5, \"before\": 5, \"degree\": 136}, {\"after\": 8, \"before\": 8, \"degree\": 137}, {\"after\": 6, \"before\": 6, \"degree\": 138}, {\"after\": 4, \"before\": 4, \"degree\": 139}, {\"after\": 3, \"before\": 3, \"degree\": 140}, {\"after\": 4, \"before\": 4, \"degree\": 141}, {\"after\": 3, \"before\": 3, \"degree\": 142}, {\"after\": 4, \"before\": 4, \"degree\": 143}, {\"after\": 5, \"before\": 5, \"degree\": 144}, {\"after\": 4, \"before\": 4, \"degree\": 145}, {\"after\": 4, \"before\": 4, \"degree\": 146}, {\"after\": 8, \"before\": 8, \"degree\": 147}, {\"after\": 1, \"before\": 1, \"degree\": 148}, {\"after\": 4, \"before\": 4, \"degree\": 149}, {\"after\": 2, \"before\": 2, \"degree\": 150}, {\"after\": 2, \"before\": 2, \"degree\": 151}, {\"after\": 3, \"before\": 3, \"degree\": 155}, {\"after\": 2, \"before\": 2, \"degree\": 156}, {\"after\": 4, \"before\": 4, \"degree\": 157}, {\"after\": 4, \"before\": 4, \"degree\": 158}, {\"after\": 2, \"before\": 2, \"degree\": 159}, {\"after\": 3, \"before\": 3, \"degree\": 160}, {\"after\": 1, \"before\": 1, \"degree\": 161}, {\"after\": 5, \"before\": 5, \"degree\": 162}, {\"after\": 4, \"before\": 4, \"degree\": 163}, {\"after\": 2, \"before\": 2, \"degree\": 164}, {\"after\": 3, \"before\": 3, \"degree\": 165}, {\"after\": 2, \"before\": 2, \"degree\": 166}, {\"after\": 4, \"before\": 4, \"degree\": 167}, {\"after\": 5, \"before\": 5, \"degree\": 168}, {\"after\": 2, \"before\": 2, \"degree\": 169}, {\"after\": 2, \"before\": 2, \"degree\": 170}, {\"after\": 2, \"before\": 2, \"degree\": 171}, {\"after\": 5, \"before\": 5, \"degree\": 172}, {\"after\": 2, \"before\": 2, \"degree\": 173}, {\"after\": 4, \"before\": 4, \"degree\": 174}, {\"after\": 2, \"before\": 2, \"degree\": 175}, {\"after\": 1, \"before\": 1, \"degree\": 176}, {\"after\": 1, \"before\": 1, \"degree\": 177}, {\"after\": 5, \"before\": 5, \"degree\": 178}, {\"after\": 3, \"before\": 3, \"degree\": 180}, {\"after\": 6, \"before\": 6, \"degree\": 181}, {\"after\": 1, \"before\": 1, \"degree\": 183}, {\"after\": 2, \"before\": 2, \"degree\": 184}, {\"after\": 1, \"before\": 1, \"degree\": 185}, {\"after\": 2, \"before\": 2, \"degree\": 186}, {\"after\": 1, \"before\": 1, \"degree\": 187}, {\"after\": 4, \"before\": 4, \"degree\": 190}, {\"after\": 1, \"before\": 1, \"degree\": 191}, {\"after\": 1, \"before\": 1, \"degree\": 192}, {\"after\": 1, \"before\": 1, \"degree\": 197}, {\"after\": 1, \"before\": 1, \"degree\": 198}, {\"after\": 1, \"before\": 1, \"degree\": 200}, {\"after\": 1, \"before\": 1, \"degree\": 201}, {\"after\": 2, \"before\": 2, \"degree\": 203}, {\"after\": 1, \"before\": 1, \"degree\": 204}, {\"after\": 2, \"before\": 2, \"degree\": 205}, {\"after\": 1, \"before\": 1, \"degree\": 206}, {\"after\": 4, \"before\": 4, \"degree\": 207}, {\"after\": 1, \"before\": 1, \"degree\": 209}, {\"after\": 1, \"before\": 1, \"degree\": 210}, {\"after\": 1, \"before\": 1, \"degree\": 211}, {\"after\": 3, \"before\": 3, \"degree\": 212}, {\"after\": 1, \"before\": 1, \"degree\": 213}, {\"after\": 2, \"before\": 2, \"degree\": 214}, {\"after\": 1, \"before\": 1, \"degree\": 215}, {\"after\": 1, \"before\": 1, \"degree\": 216}, {\"after\": 3, \"before\": 3, \"degree\": 217}, {\"after\": 2, \"before\": 2, \"degree\": 218}, {\"after\": 3, \"before\": 3, \"degree\": 219}, {\"after\": 1, \"before\": 1, \"degree\": 220}, {\"after\": 2, \"before\": 2, \"degree\": 221}, {\"after\": 2, \"before\": 2, \"degree\": 223}, {\"after\": 1, \"before\": 1, \"degree\": 225}, {\"after\": 1, \"before\": 1, \"degree\": 226}, {\"after\": 3, \"before\": 3, \"degree\": 227}, {\"after\": 3, \"before\": 3, \"degree\": 228}, {\"after\": 3, \"before\": 3, \"degree\": 229}, {\"after\": 2, \"before\": 2, \"degree\": 230}, {\"after\": 1, \"before\": 1, \"degree\": 231}, {\"after\": 2, \"before\": 2, \"degree\": 232}, {\"after\": 1, \"before\": 1, \"degree\": 233}, {\"after\": 2, \"before\": 2, \"degree\": 234}, {\"after\": 1, \"before\": 1, \"degree\": 235}, {\"after\": 1, \"before\": 1, \"degree\": 239}, {\"after\": 1, \"before\": 1, \"degree\": 240}, {\"after\": 4, \"before\": 4, \"degree\": 243}, {\"after\": 2, \"before\": 2, \"degree\": 244}, {\"after\": 1, \"before\": 1, \"degree\": 246}, {\"after\": 1, \"before\": 1, \"degree\": 247}, {\"after\": 1, \"before\": 1, \"degree\": 249}, {\"after\": 2, \"before\": 2, \"degree\": 253}, {\"after\": 1, \"before\": 1, \"degree\": 257}, {\"after\": 3, \"before\": 3, \"degree\": 258}, {\"after\": 1, \"before\": 1, \"degree\": 261}, {\"after\": 1, \"before\": 1, \"degree\": 262}, {\"after\": 3, \"before\": 3, \"degree\": 263}, {\"after\": 1, \"before\": 1, \"degree\": 264}, {\"after\": 1, \"before\": 1, \"degree\": 269}, {\"after\": 1, \"before\": 1, \"degree\": 270}, {\"after\": 1, \"before\": 1, \"degree\": 271}, {\"after\": 2, \"before\": 2, \"degree\": 275}, {\"after\": 1, \"before\": 1, \"degree\": 277}, {\"after\": 1, \"before\": 1, \"degree\": 278}, {\"after\": 1, \"before\": 1, \"degree\": 279}, {\"after\": 2, \"before\": 2, \"degree\": 280}, {\"after\": 1, \"before\": 1, \"degree\": 281}, {\"after\": 1, \"before\": 1, \"degree\": 282}, {\"after\": 1, \"before\": 1, \"degree\": 283}, {\"after\": 1, \"before\": 1, \"degree\": 284}, {\"after\": 1, \"before\": 1, \"degree\": 285}, {\"after\": 1, \"before\": 1, \"degree\": 286}, {\"after\": 1, \"before\": 1, \"degree\": 292}, {\"after\": 1, \"before\": 1, \"degree\": 293}, {\"after\": 1, \"before\": 1, \"degree\": 295}, {\"after\": 1, \"before\": 1, \"degree\": 296}, {\"after\": 2, \"before\": 2, \"degree\": 297}, {\"after\": 1, \"before\": 1, \"degree\": 298}, {\"after\": 1, \"before\": 1, \"degree\": 299}, {\"after\": 1, \"before\": 1, \"degree\": 300}, {\"after\": 1, \"before\": 1, \"degree\": 302}, {\"after\": 1, \"before\": 1, \"degree\": 304}, {\"after\": 1, \"before\": 1, \"degree\": 305}, {\"after\": 1, \"before\": 1, \"degree\": 306}, {\"after\": 1, \"before\": 1, \"degree\": 307}, {\"after\": 2, \"before\": 2, \"degree\": 308}, {\"after\": 1, \"before\": 1, \"degree\": 309}, {\"after\": 3, \"before\": 3, \"degree\": 310}, {\"after\": 1, \"before\": 1, \"degree\": 312}, {\"after\": 1, \"before\": 1, \"degree\": 314}, {\"after\": 1, \"before\": 1, \"degree\": 322}, {\"after\": 1, \"before\": 1, \"degree\": 327}, {\"after\": 1, \"before\": 1, \"degree\": 330}, {\"after\": 1, \"before\": 1, \"degree\": 332}, {\"after\": 1, \"before\": 1, \"degree\": 338}, {\"after\": 3, \"before\": 3, \"degree\": 339}, {\"after\": 2, \"before\": 2, \"degree\": 343}, {\"after\": 1, \"before\": 1, \"degree\": 344}, {\"after\": 1, \"before\": 1, \"degree\": 361}, {\"after\": 1, \"before\": 1, \"degree\": 363}, {\"after\": 1, \"before\": 1, \"degree\": 364}, {\"after\": 2, \"before\": 2, \"degree\": 365}, {\"after\": 1, \"before\": 1, \"degree\": 366}, {\"after\": 2, \"before\": 2, \"degree\": 377}, {\"after\": 1, \"before\": 1, \"degree\": 383}, {\"after\": 2, \"before\": 2, \"degree\": 386}, {\"after\": 1, \"before\": 1, \"degree\": 389}, {\"after\": 1, \"before\": 1, \"degree\": 396}, {\"after\": 1, \"before\": 1, \"degree\": 397}, {\"after\": 1, \"before\": 1, \"degree\": 399}, {\"after\": 2, \"before\": 2, \"degree\": 405}, {\"after\": 1, \"before\": 1, \"degree\": 417}, {\"after\": 1, \"before\": 1, \"degree\": 421}, {\"after\": 1, \"before\": 1, \"degree\": 422}, {\"after\": 1, \"before\": 1, \"degree\": 423}, {\"after\": 1, \"before\": 1, \"degree\": 424}, {\"after\": 1, \"before\": 1, \"degree\": 446}, {\"after\": 1, \"before\": 1, \"degree\": 449}, {\"after\": 1, \"before\": 1, \"degree\": 455}, {\"after\": 1, \"before\": 1, \"degree\": 459}, {\"after\": 1, \"before\": 1, \"degree\": 463}, {\"after\": 1, \"before\": 1, \"degree\": 468}, {\"after\": 1, \"before\": 1, \"degree\": 479}, {\"after\": 1, \"before\": 1, \"degree\": 481}, {\"after\": 1, \"before\": 1, \"degree\": 486}, {\"after\": 1, \"before\": 1, \"degree\": 496}, {\"after\": 1, \"before\": 1, \"degree\": 497}, {\"after\": 1, \"before\": 1, \"degree\": 505}, {\"after\": 1, \"before\": 1, \"degree\": 514}, {\"after\": 1, \"before\": 1, \"degree\": 521}, {\"after\": 1, \"before\": 1, \"degree\": 537}, {\"after\": 1, \"before\": 1, \"degree\": 538}, {\"after\": 1, \"before\": 1, \"degree\": 539}, {\"after\": 1, \"before\": 1, \"degree\": 540}, {\"after\": 1, \"before\": 1, \"degree\": 542}, {\"after\": 1, \"before\": 1, \"degree\": 552}, {\"after\": 1, \"before\": 1, \"degree\": 591}, {\"after\": 1, \"before\": 1, \"degree\": 597}, {\"after\": 1, \"before\": 1, \"degree\": 607}, {\"after\": 1, \"before\": 1, \"degree\": 609}, {\"after\": 1, \"before\": 1, \"degree\": 666}, {\"after\": 1, \"before\": 1, \"degree\": 686}, {\"after\": 1, \"before\": 1, \"degree\": 705}, {\"after\": 1, \"before\": 1, \"degree\": 711}, {\"after\": 1, \"before\": 1, \"degree\": 791}, {\"after\": 1, \"before\": 1, \"degree\": 815}, {\"after\": 1, \"before\": 1, \"degree\": 829}, {\"after\": 1, \"before\": 1, \"degree\": 834}, {\"after\": 1, \"before\": 1, \"degree\": 908}, {\"after\": 1, \"before\": 1, \"degree\": 924}, {\"after\": 1, \"before\": 1, \"degree\": 1026}, {\"after\": 1, \"before\": 1, \"degree\": 1068}, {\"after\": 1, \"before\": 1, \"degree\": 1099}, {\"after\": 1, \"before\": 1, \"degree\": 1143}, {\"after\": 1, \"before\": 1, \"degree\": 1244}, {\"after\": 1, \"before\": 1, \"degree\": 1245}, {\"after\": 1, \"before\": 1, \"degree\": 1261}, {\"after\": 1, \"before\": 1, \"degree\": 1367}, {\"after\": 1, \"before\": 1, \"degree\": 1383}], \"mean_after\": 10.020222391802028, \"mean_before\": 10.020222391802028, \"ks_statistic\": 0.0}, \"relations\": [{\"added\": 0, \"after\": 367662, \"before\": 367662, \"removed\": 0, \"relation\": \"\"}], \"out_degree\": {\"histogram\": [{\"after\": 11211, \"before\": 11211, \"degree\": 1}, {\"after\": 3800, \"before\": 3800, \"degree\": 2}, {\"after\": 5167, \"before\": 5167, \"degree\": 3}, {\"after\": 3366, \"before\": 3366, \"degree\": 4}, {\"after\": 2212, \"before\": 2212, \"degree\": 5}, {\"after\": 1966, \"before\": 1966, \"degree\": 6}, {\"after\": 1117, \"before\": 1117, \"degree\": 7}, {\"after\": 817, \"before\": 817, \"degree\": 8}, {\"after\": 671, \"before\": 671, \"degree\": 9}, {\"after\": 588, \"before\": 588, \"degree\": 10}, {\"after\": 457, \"before\": 457, \"degree\": 11}, {\"after\": 401, \"before\": 401, \"degree\": 12}, {\"after\": 329, \"before\": 329, \"degree\": 13}, {\"after\": 263, \"before\": 263, \"degree\": 14}, {\"after\": 216, \"before\": 216, \"degree\": 15}, {\"after\": 239, \"before\": 239, \"degree\": 16}, {\"after\": 188, \"before\": 188, \"degree\": 17}, {\"after\": 203, \"before\": 203, \"degree\": 18}, {\"after\": 155, \"before\": 155, \"degree\": 19}, {\"after\": 148, \"before\": 148, \"degree\": 20}, {\"after\": 123, \"before\": 123, \"degree\": 21}, {\"after\": 104, \"before\": 104, \"degree\": 22}, {\"after\": 108, \"before\": 108, \"degree\": 23}, {\"after\": 122, \"before\": 122, \"degree\": 24}, {\"after\": 84, \"before\": 84, \"degree\": 25}, {\"after\": 86, \"before\": 86, \"degree\": 26}, {\"after\": 85, \"before\": 85, \"degree\": 27}, {\"after\": 86, \"before\": 86, \"degree\": 28}, {\"after\": 80, \"before\": 80, \"degree\": 29}, {\"after\": 72, \"before\": 72, \"degree\": 30}, {\"after\": 74, \"before\": 74, \"degree\": 31}, {\"after\": 63, \"before\": 63, \"degree\": 32}, {\"after\": 58, \"before\": 58, \"degree\": 33}, {\"after\": 64, \"before\": 64, \"degree\": 34}, {\"after\": 49, \"before\": 49, \"degree\": 35}, {\"after\": 54, \"before\": 54, \"degree\": 36}, {\"after\": 46, \"before\": 46, \"degree\": 37}, {\"after\": 61, \"before\": 61, \"degree\": 38}, {\"after\": 50, \"before\": 50, \"degree\": 39}, {\"after\": 41, \"before\": 41, \"degree\": 40}, {\"after\": 43, \"before\": 43, \"degree\": 41}, {\"after\": 38, \"before\": 38, \"degree\": 42}, {\"after\": 50, \"before\": 50, \"degree\": 43}, {\"after\": 40, \"before\": 40, \"degree\": 44}, {\"after\": 28, \"before\": 28, \"degree\": 45}, {\"after\": 26, \"before\": 26, \"degree\": 46}, {\"after\": 37, \"before\": 37, \"degree\": 47}, {\"after\": 27, \"before\": 27, \"degree\": 48}, {\"after\": 32, \"before\": 32, \"degree\": 49}, {\"after\": 31, \"before\": 31, \"degree\": 50}, {\"after\": 30, \"before\": 30, \"degree\": 51}, {\"after\": 24, \"before\": 24, \"degree\": 52}, {\"after\": 25, \"before\": 25, \"degree\": 53}, {\"after\": 33, \"before\": 33, \"degree\": 54}, {\"after\": 23, \"before\": 23, \"degree\": 55}, {\"after\": 16, \"before\": 16, \"degree\": 56}, {\"after\": 23, \"before\": 23, \"degree\": 57}, {\"after\": 21, \"before\": 21, \"degree\": 58}, {\"after\": 27, \"before\": 27, \"degree\": 59}, {\"after\": 31, \"before\": 31, \"degree\": 60}, {\"after\": 20, \"before\": 20, \"degree\": 61}, {\"after\": 26, \"before\": 26, \"degree\": 62}, {\"after\": 19, \"before\": 19, \"degree\": 63}, {\"after\": 17, \"before\": 17, \"degree\": 64}, {\"after\": 18, \"before\": 18, \"degree\": 65}, {\"after\": 18, \"before\": 18, \"degree\": 66}, {\"after\": 15, \"before\": 15, \"degree\": 67}, {\"after\": 20, \"before\": 20, \"degree\": 68}, {\"after\": 21, \"before\": 21, \"degree\": 69}, {\"after\": 14, \"before\": 14, \"degree\": 70}, {\"after\": 12, \"before\": 12, \"degree\": 71}, {\"after\": 20, \"before\": 20, \"degree\": 72}, {\"after\": 19, \"before\": 19, \"degree\": 73}, {\"after\": 20, \"before\": 20, \"degree\": 74}, {\"after\": 19, \"before\": 19, \"degree\": 75}, {\"after\": 12, \"before\": 12, \"degree\": 76}, {\"after\": 13, \"before\": 13, \"degree\": 77}, {\"after\": 9, \"before\": 9, \"degree\": 78}, {\"after\": 9, \"before\": 9, \"degree\": 79}, {\"after\": 14, \"before\": 14, \"degree\": 80}, {\"after\": 20, \"before\": 20, \"degree\": 81}, {\"after\": 9, \"before\": 9, \"degree\": 82}, {\"after\": 5, \"before\": 5, \"degree\": 83}, {\"after\": 17, \"before\": 17, \"degree\": 84}, {\"after\": 9, \"before\": 9, \"degree\": 85}, {\"after\": 14, \"before\": 14, \"degree\": 86}, {\"after\": 8, \"before\": 8, \"degree\": 87}, {\"after\": 9, \"before\": 9, \"degree\": 88}, {\"after\": 7, \"before\": 7, \"degree\": 89}, {\"after\": 11, \"before\": 11, \"degree\": 90}, {\"after\": 7, \"before\": 7, \"degree\": 91}, {\"after\": 11, \"before\": 11, \"degree\": 92}, {\"after\": 10, \"before\": 10, \"degree\": 93}, {\"after\": 10, \"before\": 10, \"degree\": 94}, {\"after\": 5, \"before\": 5, \"degree\": 95}, {\"after\": 8, \"before\": 8, \"degree\": 96}, {\"after\": 4, \"before\": 4, \"degree\": 97}, {\"after\": 8, \"before\": 8, \"degree\": 98}, {\"after\": 7, \"before\": 7, \"degree\": 99}, {\"after\": 9, \"before\": 9, \"degree\": 100}, {\"after\": 7, \"before\": 7, \"degree\": 101}, {\"after\": 6, \"before\": 6, \"degree\": 102}, {\"after\": 7, \"before\": 7, \"degree\": 103}, {\"after\": 7, \"before\": 7, \"degree\": 104}, {\"after\": 11, \"before\": 11, \"degree\": 105}, {\"after\": 8, \"before\": 8, \"degree\": 106}, {\"after\": 6, \"before\": 6, \"degree\": 107}, {\"after\": 8, \"before\": 8, \"degree\": 108}, {\"after\": 6, \"before\": 6, \"degree\": 109}, {\"after\": 5, \"before\": 5, \"degree\": 110}, {\"after\": 5, \"before\": 5, \"degree\": 111}, {\"after\": 7, \"before\": 7, \"degree\": 112}, {\"after\": 4, \"before\": 4, \"degree\": 113}, {\"after\": 6, \"before\": 6, \"degree\": 114}, {\"after\": 6, \"before\": 6, \"degree\": 115}, {\"after\": 4, \"before\": 4, \"degree\": 116}, {\"after\": 3, \"before\": 3, \"degree\": 117}, {\"after\": 4, \"before\": 4, \"degree\": 118}, {\"after\": 9, \"before\": 9, \"degree\": 119}, {\"after\": 4, \"before\": 4, \"degree\": 120}, {\"after\": 8, \"before\": 8, \"degree\": 121}, {\"after\": 3, \"before\": 3, \"degree\": 122}, {\"after\": 9, \"before\": 9, \"degree\": 123}, {\"after\": 4, \"before\": 4, \"degree\": 124}, {\"after\": 4, \"before\": 4, \"degree\": 125}, {\"after\": 4, \"before\": 4, \"degree\": 126}, {\"after\": 5, \"before\": 5, \"degree\": 127}, {\"after\": 1, \"before\": 1, \"degree\": 128}, {\"after\": 2, \"before\": 2, \"degree\": 129}, {\"after\": 4, \"before\": 4, \"degree\": 130}, {\"after\": 2, \"before\": 2, \"degree\": 131}, {\"after\": 3, \"before\": 3, \"degree\": 132}, {\"after\": 6, \"before\": 6, \"degree\": 133}, {\"after\": 3, \"before\": 3, \"degree\": 134}, {\"after\": 5, \"before\": 5, \"degree\": 135}, {\"after\": 5, \"before\": 5, \"degree\": 136}, {\"after\": 8, \"before\": 8, \"degree\": 137}, {\"after\": 6, \"before\": 6, \"degree\": 138}, {\"after\": 4, \"before\": 4, \"degree\": 139}, {\"after\": 3, \"before\": 3, \"degree\": 140}, {\"after\": 4, \"before\": 4, \"degree\": 141}, {\"after\": 3, \"before\": 3, \"degree\": 142}, {\"after\": 4, \"before\": 4, \"degree\": 143}, {\"after\": 5, \"before\": 5, \"degree\": 144}, {\"after\": 4, \"before\": 4, \"degree\": 145}, {\"after\": 4, \"before\": 4, \"degree\": 146}, {\"after\": 8, \"before\": 8, \"degree\": 147}, {\"after\": 1, \"before\": 1, \"degree\": 148}, {\"after\": 4, \"before\": 4, \"degree\": 149}, {\"after\": 2, \"before\": 2, \"degree\": 150}, {\"after\": 2, \"before\": 2, \"degree\": 151}, {\"after\": 3, \"before\": 3, \"degree\": 155}, {\"after\": 2, \"before\": 2, \"degree\": 156}, {\"after\": 4, \"before\": 4, \"degree\": 157}, {\"after\": 4, \"before\": 4, \"degree\": 158}, {\"after\": 2, \"before\": 2, \"degree\": 159}, {\"after\": 3, \"before\": 3, \"degree\": 160}, {\"after\": 1, \"before\": 1, \"degree\": 161}, {\"after\": 5, \"before\": 5, \"degree\": 162}, {\"after\": 4, \"before\": 4, \"degree\": 163}, {\"after\": 2, \"before\": 2, \"degree\": 164}, {\"after\": 3, \"before\": 3, \"degree\": 165}, {\"after\": 2, \"before\": 2, \"degree\": 166}, {\"after\": 4, \"before\": 4, \"degree\": 167}, {\"after\": 5, \"before\": 5, \"degree\": 168}, {\"after\": 2, \"before\": 2, \"degree\": 169}, {\"after\": 2, \"before\": 2, \"degree\": 170}, {\"after\": 2, \"before\": 2, \"degree\": 171}, {\"after\": 5, \"before\": 5, \"degree\": 172}, {\"after\": 2, \"before\": 2, \"degree\": 173}, {\"after\": 4, \"before\": 4, \"degree\": 174}, {\"after\": 2, \"before\": 2, \"degree\": 175}, {\"after\": 1, \"before\": 1, \"degree\": 176}, {\"after\": 1, \"before\": 1, \"degree\": 177}, {\"after\": 5, \"before\": 5, \"degree\": 178}, {\"after\": 3, \"before\": 3, \"degree\": 180}, {\"after\": 6, \"before\": 6, \"degree\": 181}, {\"after\": 1, \"before\": 1, \"degree\": 183}, {\"after\": 2, \"before\": 2, \"degree\": 184}, {\"after\": 1, \"before\": 1, \"degree\": 185}, {\"after\": 2, \"before\": 2, \"degree\": 186}, {\"after\": 1, \"before\": 1, \"degree\": 187}, {\"after\": 4, \"before\": 4, \"degree\": 190}, {\"after\": 1, \"before\": 1, \"degree\": 191}, {\"after\": 1, \"before\": 1, \"degree\": 192}, {\"after\": 1, \"before\": 1, \"degree\": 197}, {\"after\": 1, \"before\": 1, \"degree\": 198}, {\"after\": 1, \"before\": 1, \"degree\": 200}, {\"after\": 1, \"before\": 1, \"degree\": 201}, {\"after\": 2, \"before\": 2, \"degree\": 203}, {\"after\": 1, \"before\": 1, \"degree\": 204}, {\"after\": 2, \"before\": 2, \"degree\": 205}, {\"after\": 1, \"before\": 1, \"degree\": 206}, {\"after\": 4, \"before\": 4, \"degree\": 207}, {\"after\": 1, \"before\": 1, \"degree\": 209}, {\"after\": 1, \"before\": 1, \"degree\": 210}, {\"after\": 1, \"before\": 1, \"degree\": 211}, {\"after\": 3, \"before\": 3, \"degree\": 212}, {\"after\": 1, \"before\": 1, \"degree\": 213}, {\"after\": 2, \"before\": 2, \"degree\": 214}, {\"after\": 1, \"before\": 1, \"degree\": 215}, {\"after\": 1, \"before\": 1, \"degree\": 216}, {\"after\": 3, \"before\": 3, \"degree\": 217}, {\"after\": 2, \"before\": 2, \"degree\": 218}, {\"after\": 3, \"before\": 3, \"degree\": 219}, {\"after\": 1, \"before\": 1, \"degree\": 220}, {\"after\": 2, \"before\": 2, \"degree\": 221}, {\"after\": 2, \"before\": 2, \"degree\": 223}, {\"after\": 1, \"before\": 1, \"degree\": 225}, {\"after\": 1, \"before\": 1, \"degree\": 226}, {\"after\": 3, \"before\": 3, \"degree\": 227}, {\"after\": 3, \"before\": 3, \"degree\": 228}, {\"after\": 3, \"before\": 3, \"degree\": 229}, {\"after\": 2, \"before\": 2, \"degree\": 230}, {\"after\": 1, \"before\": 1, \"degree\": 231}, {\"after\": 2, \"before\": 2, \"degree\": 232}, {\"after\": 1, \"before\": 1, \"degree\": 233}, {\"after\": 2, \"before\": 2, \"degree\": 234}, {\"after\": 1, \"before\": 1, \"degree\": 235}, {\"after\": 1, \"before\": 1, \"degree\": 239}, {\"after\": 1, \"before\": 1, \"degree\": 240}, {\"after\": 4, \"before\": 4, \"degree\": 243}, {\"after\": 2, \"before\": 2, \"degree\": 244}, {\"after\": 1, \"before\": 1, \"degree\": 246}, {\"after\": 1, \"before\": 1, \"degree\": 247}, {\"after\": 1, \"before\": 1, \"degree\": 249}, {\"after\": 2, \"before\": 2, \"degree\": 253}, {\"after\": 1, \"before\": 1, \"degree\": 257}, {\"after\": 3, \"before\": 3, \"degree\": 258}, {\"after\": 1, \"before\": 1, \"degree\": 261}, {\"after\": 1, \"before\": 1, \"degree\": 262}, {\"after\": 3, \"before\": 3, \"degree\": 263}, {\"after\": 1, \"before\": 1, \"degree\": 264}, {\"after\": 1, \"before\": 1, \"degree\": 269}, {\"after\": 1, \"before\": 1, \"degree\": 270}, {\"after\": 1, \"before\": 1, \"degree\": 271}, {\"after\": 2, \"before\": 2, \"degree\": 275}, {\"after\": 1, \"before\": 1, \"degree\": 277}, {\"after\": 1, \"before\": 1, \"degree\": 278}, {\"after\": 1, \"before\": 1, \"degree\": 279}, {\"after\": 2, \"before\": 2, \"degree\": 280}, {\"after\": 1, \"before\": 1, \"degree\": 281}, {\"after\": 1, \"before\": 1, \"degree\": 282}, {\"after\": 1, \"before\": 1, \"degree\": 283}, {\"after\": 1, \"before\": 1, \"degree\": 284}, {\"after\": 1, \"before\": 1, \"degree\": 285}, {\"after\": 1, \"before\": 1, \"degree\": 286}, {\"after\": 1, \"before\": 1, \"degree\": 292}, {\"after\": 1, \"before\": 1, \"degree\": 293}, {\"after\": 1, \"before\": 1, \"degree\": 295}, {\"after\": 1, \"before\": 1, \"degree\": 296}, {\"after\": 2, \"before\": 2, \"degree\": 297}, {\"after\": 1, \"before\": 1, \"degree\": 298}, {\"after\": 1, \"before\": 1, \"degree\": 299}, {\"after\": 1, \"before\": 1, \"degree\": 300}, {\"after\": 1, \"before\": 1, \"degree\": 302}, {\"after\": 1, \"before\": 1, \"degree\": 304}, {\"after\": 1, \"before\": 1, \"degree\": 305}, {\"after\": 1, \"before\": 1, \"degree\": 306}, {\"after\": 1, \"before\": 1, \"degree\": 307}, {\"after\": 2, \"before\": 2, \"degree\": 308}, {\"after\": 1, \"before\": 1, \"degree\": 309}, {\"after\": 3, \"before\": 3, \"degree\": 310}, {\"after\": 1, \"before\": 1, \"degree\": 312}, {\"after\": 1, \"before\": 1, \"degree\": 314}, {\"after\": 1, \"before\": 1, \"degree\": 322}, {\"after\": 1, \"before\": 1, \"degree\": 327}, {\"after\": 1, \"before\": 1, \"degree\": 330}, {\"after\": 1, \"before\": 1, \"degree\": 332}, {\"after\": 1, \"before\": 1, \"degree\": 338}, {\"after\": 3, \"before\": 3, \"degree\": 339}, {\"after\": 2, \"before\": 2, \"degree\": 343}, {\"after\": 1, \"before\": 1, \"degree\": 344}, {\"after\": 1, \"before\": 1, \"degree\": 361}, {\"after\": 1, \"before\": 1, \"degree\": 363}, {\"after\": 1, \"before\": 1, \"degree\": 364}, {\"after\": 2, \"before\": 2, \"degree\": 365}, {\"after\": 1, \"before\": 1, \"degree\": 366}, {\"after\": 2, \"before\": 2, \"degree\": 377}, {\"after\": 1, \"before\": 1, \"degree\": 383}, {\"after\": 2, \"before\": 2, \"degree\": 386}, {\"after\": 1, \"before\": 1, \"degree\": 389}, {\"after\": 1, \"before\": 1, \"degree\": 396}, {\"after\": 1, \"before\": 1, \"degree\": 397}, {\"after\": 1, \"before\": 1, \"degree\": 399}, {\"after\": 2, \"before\": 2, \"degree\": 405}, {\"after\": 1, \"before\": 1, \"degree\": 417}, {\"after\": 1, \"before\": 1, \"degree\": 421}, {\"after\": 1, \"before\": 1, \"degree\": 422}, {\"after\": 1, \"before\": 1, \"degree\": 423}, {\"after\": 1, \"before\": 1, \"degree\": 424}, {\"after\": 1, \"before\": 1, \"degree\": 446}, {\"after\": 1, \"before\": 1, \"degree\": 449}, {\"after\": 1, \"before\": 1, \"degree\": 455}, {\"after\": 1, \"before\": 1, \"degree\": 459}, {\"after\": 1, \"before\": 1, \"degree\": 463}, {\"after\": 1, \"before\": 1, \"degree\": 468}, {\"after\": 1, \"before\": 1, \"degree\": 479}, {\"after\": 1, \"before\": 1, \"degree\": 481}, {\"after\": 1, \"before\": 1, \"degree\": 486}, {\"after\": 1, \"before\": 1, \"degree\": 496}, {\"after\": 1, \"before\": 1, \"degree\": 497}, {\"after\": 1, \"before\": 1, \"degree\": 505}, {\"after\": 1, \"before\": 1, \"degree\": 514}, {\"after\": 1, \"before\": 1, \"degree\": 521}, {\"after\": 1, \"before\": 1, \"degree\": 537}, {\"after\": 1, \"before\": 1, \"degree\": 538}, {\"after\": 1, \"before\": 1, \"degree\": 539}, {\"after\": 1, \"before\": 1, \"degree\": 540}, {\"after\": 1, \"before\": 1, \"degree\": 542}, {\"after\": 1, \"before\": 1, \"degree\": 552}, {\"after\": 1, \"before\": 1, \"degree\": 591}, {\"after\": 1, \"before\": 1, \"degree\": 597}, {\"after\": 1, \"before\": 1, \"degree\": 607}, {\"after\": 1, \"before\": 1, \"degree\": 609}, {\"after\": 1, \"before\": 1, \"degree\": 666}, {\"after\": 1, \"before\": 1, \"degree\": 686}, {\"after\": 1, \"before\": 1, \"degree\": 705}, {\"after\": 1, \"before\": 1, \"degree\": 711}, {\"after\": 1, \"before\": 1, \"degree\": 791}, {\"after\": 1, \"before\": 1, \"degree\": 815}, {\"after\": 1, \"before\": 1, \"degree\": 829}, {\"after\": 1, \"before\": 1, \"degree\": 834}, {\"after\": 1, \"before\": 1, \"degree\": 908}, {\"after\": 1, \"before\": 1, \"degree\": 924}, {\"after\": 1, \"before\": 1, \"degree\": 1026}, {\"after\": 1, \"before\": 1, \"degree\": 1068}, {\"after\": 1, \"before\": 1, \"degree\": 1099}, {\"after\": 1, \"before\": 1, \"degree\": 1143}, {\"after\": 1, \"before\": 1, \"degree\": 1244}, {\"after\": 1, \"before\": 1, \"degree\": 1245}, {\"after\": 1, \"before\": 1, \"degree\": 1261}, {\"after\": 1, \"before\": 1, \"degree\": 1367}, {\"after\": 1, \"before\": 1, \"degree\": 1383}], \"mean_after\": 10.020222391802028, \"mean_before\": 10.020222391802028, \"ks_statistic\": 0.0}, \"all_relations\": {\"added\": 0, \"after\": 367662, \"before\": 367662, \"removed\": 0}}"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 87834624,
+   "peak_rss_anon": 87834624,
+   "vm_hwm": 249307136,
+   "rss_anon_after": 87834624,
+   "rss_shmem_after": 96800768
+  }
+ },
+ "version": {
+  "seq": 1,
+  "bytes": 4120164,
+  "label": null,
+  "staged": false,
+  "current": true,
+  "vectors": 0,
+  "version": 1,
+  "built_at": "2026-10-24T15:04:34.325151+00:00",
+  "id_space": 36692,
+  "built_lsn": "0/5ACA000",
+  "staleness": "00:00:00.133214",
+  "edge_count": 367662,
+  "node_count": 36692,
+  "label_vector": null,
+  "parent_graph": null,
+  "target_width": 4,
+  "dropped_edges": 0,
+  "compacted_from": null,
+  "parent_version": null,
+  "deduplicated_edges": 367662
+ },
+ "settings": [
+  "fsync=off",
+  "full_page_writes=off",
+  "jit=on",
+  "maintenance_work_mem=1GB",
+  "max_parallel_workers_per_gather=2",
+  "max_wal_size=1GB",
+  "shared_buffers=1GB",
+  "shared_preload_libraries=",
+  "statement_timeout=10min",
+  "synchronous_commit=off",
+  "wal_level=minimal",
+  "warren.max_build_memory=4GB",
+  "warren.max_cache_memory=4GB",
+  "warren.max_compute_memory=4GB",
+  "warren.shared_cache_memory=4GB",
+  "warren.threads=4",
+  "work_mem=64MB"
+ ],
+ "reachable_set_edges_per_second": 78965206.185567
+}

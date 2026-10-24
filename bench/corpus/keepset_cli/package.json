@@ -1,0 +1,8 @@
+{
+  "name": "warren-corpus-keepset",
+  "private": true,
+  "description": "The keepset CLI the corpus suite fetches with, pinned with its whole dependency tree by package-lock.json (bench/corpus/keepset.py installs it with npm ci).",
+  "dependencies": {
+    "keepset": "0.57.0"
+  }
+}
