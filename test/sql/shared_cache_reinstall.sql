@@ -29,7 +29,7 @@ SELECT assert.equal(degree, 2::bigint, 'a reads the new installation''s version'
 FROM dblink('a', $$SELECT warren.degree('g', 1::bigint)$$) AS t(degree bigint);
 SELECT assert.equal(degree, 2::bigint, 'and so does a backend new to it')
 FROM dblink('b', $$SELECT warren.degree('g', 1::bigint)$$) AS t(degree bigint);
-SELECT assert.equal(shared_segments(:new), :one,
-                    'one segment holds the version id: the old installation''s was pruned');
+SELECT assert.equal(shared_segments(:new), :one, 'the new installation''s version is shared');
+SELECT assert.equal(unnamed_shared_bytes(), :unnamed, 'the old installation''s was pruned');
 
 SELECT dblink_disconnect(session) FROM unnest(ARRAY['a', 'b']) AS session;

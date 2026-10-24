@@ -12,6 +12,24 @@ name: Release (publish)
 # if a tag of that name is on any other. workflow_dispatch publishes a given
 # release (or the latest) again.
 #
+# Packages (CONTRIBUTING.md, "Packages"): before the gate, read-only jobs
+# with no secrets build them from the recorded commit's source with the
+# tooling of github.sha, and test each: the .deb packages of the apt
+# repository (each distribution x arch in its own container, against
+# PGDG), the Docker images made from them and the Homebrew bottle and
+# formula. After approval the publish job, which runs no build code,
+# treats what they built as data: it checks each .deb (release/assets.py:
+# only pg_warren's files, root's and 0644 in 0755 directories, our postinst,
+# control.in's fields, this release's version), makes the tarballs and the
+# Docker images again from the checked packages (unpacking them; the
+# image's build runs nothing), renders the formula again keeping only the
+# bottle block, signs SHA256SUMS, attaches them to the GitHub Release, and
+# assembles and signs the apt repository (aptly) from this release's
+# checked packages and earlier releases' that their signed SHA256SUMS
+# list; it pushes the images to GHCR with the environment's GHCR_TOKEN and
+# the formula to the tap with the tap's deploy key; the pages job deploys
+# the apt repository to GitHub Pages.
+#
 # Both jobs check out the same commit, github.sha: the push (or dispatch)
 # that started the run. What the approver sees, "vX.Y.Z → <commit>" and the
 # notes, is read from that commit, and the publish job tags from it; a
@@ -44,6 +62,7 @@ jobs:
     outputs:
       version: ${{ steps.release.outputs.version }}
       commit: ${{ steps.release.outputs.commit }}
+      latest: ${{ steps.release.outputs.latest }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -72,17 +91,147 @@ jobs:
           } >>"$GITHUB_STEP_SUMMARY"
           echo "version=$version" >>"$GITHUB_OUTPUT"
           echo "commit=$commit" >>"$GITHUB_OUTPUT"
+          # Only the latest release moves the images' pgNN tags and the tap.
+          if [[ "$version" == "$(python3 release/publish.py latest)" ]]; then latest=true; else latest=false; fi
+          echo "latest=$latest" >>"$GITHUB_OUTPUT"
+      - name: The source tarball, pg_warren-${{ steps.release.outputs.version }}.tar.gz
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          COMMIT: ${{ steps.release.outputs.commit }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/source"
+          git archive --format=tar.gz --prefix="pg_warren-$VERSION/" \
+            -o "$RUNNER_TEMP/source/pg_warren-$VERSION.tar.gz" "$COMMIT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: source
+          path: ${{ runner.temp }}/source
+          if-no-files-found: error
+          retention-days: 7
+
+  debs:
+    # Read-only and without secrets: this runs the release's build. Four
+    # packages (PG 15-18) per distribution and arch, built in that
+    # distribution's container (release/packages.py deb), each installed
+    # with apt into a clean one and smoke-tested; on trixie (the postgres
+    # images' base) the Docker images made from them, smoke-tested on
+    # their own arch. Only the packages are kept: the publish job makes
+    # the tarballs and images again from them once they are checked.
+    name: .deb ${{ matrix.codename }} ${{ matrix.arch }}
+    needs: verify
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        codename: [bookworm, trixie, jammy, noble]
+        arch: [amd64, arm64]
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+      CODENAME: ${{ matrix.codename }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ needs.verify.outputs.commit }}
+          path: source
+          # The changelog's date is the release commit's.
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Build postgresql-{15..18}-pg-warren
+        run: python3 release/packages.py deb "$CODENAME" source "$RUNNER_TEMP/debs"
+      - name: Install each with apt, preload, restart, smoke test
+        run: |
+          set -euo pipefail
+          for deb in "$RUNNER_TEMP"/debs/*.deb; do python3 release/packages.py check "$deb"; done
+      - name: Docker images, each smoke-tested
+        if: matrix.codename == 'trixie'
+        run: |
+          set -euo pipefail
+          for major in 15 16 17 18; do
+            python3 release/packages.py image "$RUNNER_TEMP"/debs/postgresql-"$major"-pg-warren_*.deb \
+              "pg_warren:$VERSION-pg$major-$ARCH"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: debs-${{ matrix.codename }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/debs/*.deb
+          if-no-files-found: error
+          retention-days: 7
+
+  homebrew:
+    # Read-only and without secrets: the tap's formula rendered for the
+    # release (release/homebrew.py), built from the source tarball as a
+    # bottle for Apple silicon, tested (brew test), and the bottle block
+    # written into the formula (brew bottle --merge --write).
+    name: Homebrew bottle (arm64 macOS)
+    needs: verify
+    runs-on: macos-15
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: source
+          path: ${{ runner.temp }}/source
+      - name: Build, test and bottle exadev/tap/pg_warren ${{ env.VERSION }}
+        run: |
+          set -euo pipefail
+          tarball="$RUNNER_TEMP/source/pg_warren-$VERSION.tar.gz"
+          brew tap-new --no-git exadev/tap
+          formula="$(brew --repo exadev/tap)/Formula/pg_warren.rb"
+          python3 release/homebrew.py "$tarball" >"$formula"
+          brew style exadev/tap/pg_warren
+          brew audit --strict --formula exadev/tap/pg_warren
+          # The release's asset is not uploaded yet: seed brew's download
+          # cache with the same bytes, which it checks against the sha256.
+          cp "$tarball" "$(brew --cache --build-from-source exadev/tap/pg_warren)"
+          brew install --build-bottle exadev/tap/pg_warren
+          brew test exadev/tap/pg_warren
+          mkdir -p "$RUNNER_TEMP/homebrew" && cd "$RUNNER_TEMP/homebrew"
+          brew bottle --json --root-url "https://github.com/$GITHUB_REPOSITORY/releases/download/v$VERSION" \
+            exadev/tap/pg_warren
+          brew bottle --merge --write --no-commit ./*.bottle.json
+          # brew writes pg_warren--X.Y.Z.<tag>.bottle.tar.gz and downloads
+          # pg_warren-X.Y.Z.<tag>.bottle.tar.gz from the root URL.
+          for bottle in ./*--*.bottle.tar.gz; do mv "$bottle" "${bottle/--/-}"; done
+          cp "$formula" pg_warren.rb
+          rm ./*.bottle.json
+          ls -l
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: homebrew
+          path: ${{ runner.temp }}/homebrew
+          if-no-files-found: error
+          retention-days: 7
 
   publish:
     name: Tag v${{ needs.verify.outputs.version }} → ${{ needs.verify.outputs.commit }}
-    needs: verify
-    runs-on: ubuntu-latest
+    needs: [verify, debs, homebrew]
+    runs-on: ubuntu-24.04
     environment: release
+    # No packages: write: this repository's GITHUB_TOKEN cannot push the
+    # images, as their package is linked to no repository (checked before
+    # the push), so no branch workflow can; the environment's GHCR_TOKEN
+    # does.
     permissions:
       contents: write
+      actions: read
     env:
       VERSION: ${{ needs.verify.outputs.version }}
       COMMIT: ${{ needs.verify.outputs.commit }}
+      LATEST: ${{ needs.verify.outputs.latest }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -115,6 +264,163 @@ jobs:
           echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" >"$hosts"
           GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$hosts" \
             git push "git@github.com:$GITHUB_REPOSITORY.git" "refs/tags/v$VERSION:refs/tags/v$VERSION"
+      # From here on, what the read-only jobs built is data: it is checked
+      # (release/assets.py, release/homebrew.py, from github.sha) before it
+      # is signed or published, and none of it runs.
+      - name: The build's artifacts, by name
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          names=(source homebrew)
+          for codename in bookworm trixie jammy noble; do
+            for arch in amd64 arm64; do names+=("debs-$codename-$arch"); done
+          done
+          args=()
+          for name in "${names[@]}"; do args+=(-n "$name"); done
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/artifacts" "${args[@]}"
+      - name: Check the packages and render the formula
+        run: |
+          set -euo pipefail
+          artifacts="$RUNNER_TEMP/artifacts"
+          assets="$RUNNER_TEMP/assets"
+          mkdir -p "$assets"
+          # The .deb files as Release assets (GitHub would turn "1~deb12"
+          # into "1.deb12"), each checked: pg_warren's files only, with
+          # their modes and owner, our postinst, control.in's fields, Version
+          # $VERSION-1~<distribution>, its own file name.
+          for deb in "$artifacts"/debs-*/*.deb; do
+            name="$(basename "$deb")"
+            cp -- "$deb" "$assets/${name//\~/.}"
+            python3 release/assets.py check-deb "$assets/${name//\~/.}" "$VERSION"
+          done
+          count="$(find "$assets" -name '*.deb' | wc -l)"
+          [[ "$count" == 32 ]] || { echo "::error::$count packages, not 32 (4 distributions x 2 arches x PG 15-18)"; exit 1; }
+          # The tarballs, from the checked jammy packages (the oldest
+          # glibc), dated by the release commit: dpkg-deb -x and Python.
+          epoch="$(git log -1 --format=%ct "$COMMIT")"
+          for deb in "$assets"/postgresql-*-pg-warren_"$VERSION"-1.ubuntu22.04_*.deb; do
+            SOURCE_DATE_EPOCH="$epoch" python3 release/packages.py tarball "$deb" "$assets"
+          done
+          count="$(find "$assets" -name 'pg_warren-*-linux-*.tar.gz' | wc -l)"
+          [[ "$count" == 8 ]] || { echo "::error::$count tarballs, not 8 (2 arches x PG 15-18)"; exit 1; }
+          cp -- "$artifacts/source/pg_warren-$VERSION.tar.gz" "$assets/"
+          bottles=("$artifacts"/homebrew/pg_warren-"$VERSION".arm64_*.bottle.tar.gz)
+          [[ "${#bottles[@]}" == 1 && -f "${bottles[0]}" ]] || { echo "::error::not one arm64 bottle"; exit 1; }
+          cp -- "${bottles[0]}" "$assets/"
+          # The tap's formula, rendered again from the source tarball; only
+          # the bottle block, of the expected shape, is the bottle job's.
+          python3 release/homebrew.py "$assets/pg_warren-$VERSION.tar.gz" \
+            --bottle-from "$artifacts/homebrew/pg_warren.rb" >"$RUNNER_TEMP/pg_warren.rb"
+          grep -qF "$(cut -d' ' -f1 < <(sha256sum "${bottles[0]}"))" "$RUNNER_TEMP/pg_warren.rb" \
+            || { echo "::error::the formula's bottle sha256 is not the bottle's"; exit 1; }
+          (cd "$assets" && sha256sum -- * >SHA256SUMS)
+          ls -l "$assets"
+      - name: Docker images from the checked trixie packages
+        run: |
+          set -euo pipefail
+          # PGDG's postgres:NN-trixie, pinned by digest, with the checked
+          # package's files: the build runs nothing (no RUN), so both arches
+          # build here without emulation. The debs job smoke-tested the
+          # same build on each arch.
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          for major in 15 16 17 18; do
+            for arch in amd64 arm64; do
+              python3 release/packages.py image --no-smoke \
+                "$RUNNER_TEMP/assets/postgresql-$major-pg-warren_$VERSION-1.deb13_$arch.deb" \
+                "$image:$VERSION-pg$major-$arch"
+            done
+          done
+      - name: Sign SHA256SUMS and the apt repository (every release's checked packages)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIGNING_KEY: ${{ secrets.RELEASE_APT_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SIGNING_KEY" ]]; then
+            echo "::error::the release environment has no RELEASE_APT_SIGNING_KEY secret (CONTRIBUTING.md, owner setup)"
+            exit 1
+          fi
+          # aptly, not reprepro: noble's reprepro (5.3) keeps one version of
+          # a package per distribution, and the repository keeps them all.
+          sudo apt-get install -y -qq --no-install-recommends aptly >/dev/null
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          (umask 077 && mkdir -p "$GNUPGHOME")
+          trap 'gpgconf --kill gpg-agent; rm -rf "$GNUPGHOME"' EXIT
+          gpg --batch --quiet --import <<<"$SIGNING_KEY"
+          fingerprint="$(gpg --batch --with-colons --list-secret-keys | awk -F: '/^fpr:/{print $10; exit}')"
+          # The key is the one README.md states, so a new key needs a
+          # reviewed change to main, and users can check what they fetch.
+          stated="$(python3 release/assets.py readme-fingerprint)"
+          if [[ "$fingerprint" != "$stated" ]]; then
+            echo "::error::the signing key is $fingerprint, but README.md states $stated"
+            exit 1
+          fi
+          keyring="$RUNNER_TEMP/apt-key.gpg"
+          gpg --batch --export "$fingerprint" >"$keyring"
+          assets="$RUNNER_TEMP/assets"
+          gpg --batch --yes --armor --local-user "$fingerprint" --detach-sign -o "$assets/SHA256SUMS.asc" "$assets/SHA256SUMS"
+          gpgv --keyring "$keyring" "$assets/SHA256SUMS.asc" "$assets/SHA256SUMS"
+          # This release's packages are the checked local files. An earlier
+          # release's are taken only if it is recorded in
+          # sql/released.commits, is not a draft, and has a SHA256SUMS
+          # signed by this key, and only the .deb files that lists, each
+          # matching it and checked as this release's are; a release from
+          # before signed sums contributes nothing.
+          debs="$RUNNER_TEMP/repo-debs"
+          mkdir -p "$debs"
+          cp -- "$assets"/*.deb "$debs/"
+          awk '{print $2}' sql/released.commits | while read -r earlier; do
+            [[ "$earlier" == "$VERSION" ]] && continue
+            view="$(gh release view "v$earlier" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,assets 2>/dev/null)" || continue
+            [[ "$(jq -r '.tagName' <<<"$view")" == "v$earlier" && "$(jq -r '.isDraft' <<<"$view")" == false ]] || continue
+            jq -e '[.assets[].name] | index("SHA256SUMS") and index("SHA256SUMS.asc")' <<<"$view" >/dev/null || continue
+            dir="$RUNNER_TEMP/earlier/$earlier"
+            mkdir -p "$dir"
+            gh release download "v$earlier" --repo "$GITHUB_REPOSITORY" --dir "$dir" -p SHA256SUMS -p SHA256SUMS.asc
+            gpgv --keyring "$keyring" "$dir/SHA256SUMS.asc" "$dir/SHA256SUMS"
+            grep -oE '[^ ]+\.deb$' "$dir/SHA256SUMS" | while read -r name; do
+              gh release download "v$earlier" --repo "$GITHUB_REPOSITORY" --dir "$dir" -p "$name"
+            done
+            python3 release/assets.py listed-debs "$dir" | while read -r deb; do
+              python3 release/assets.py check-deb "$deb" "$earlier"
+              cp -- "$deb" "$debs/"
+            done
+          done
+          aptly_root="$RUNNER_TEMP/aptly"
+          printf '{"rootDir": "%s", "gpgProvider": "gpg2"}\n' "$aptly_root" >"$RUNNER_TEMP/aptly.conf"
+          aptly() { command aptly -config="$RUNNER_TEMP/aptly.conf" "$@"; }
+          while read -r codename suffix name; do
+            aptly repo create -distribution="$codename" -component=main "$codename" >/dev/null
+            # The distribution is the Debian revision's suffix (1~deb12).
+            for deb in "$debs"/*.deb; do
+              if [[ "$(dpkg-deb --field "$deb" Version)" == *"~$suffix" ]]; then
+                aptly repo add -remove-files=false "$codename" "$deb" >/dev/null
+              fi
+            done
+            aptly publish repo -batch -gpg-key="$fingerprint" -architectures=amd64,arm64 \
+              -origin=pg_warren -label=pg_warren "$codename" >/dev/null
+            echo "$codename ($name): $(aptly repo show "$codename" | awk '/^Number of packages:/{print $4}') packages"
+          done <<'EOF'
+          bookworm deb12 Debian 12
+          trixie deb13 Debian 13
+          jammy ubuntu22.04 Ubuntu 22.04
+          noble ubuntu24.04 Ubuntu 24.04
+          EOF
+          site="$RUNNER_TEMP/site"
+          mkdir -p "$site"
+          cp -a "$aptly_root/public" "$site/apt"
+          gpg --batch --armor --export "$fingerprint" >"$site/apt/pg_warren.asc"
+          # Each distribution's index verifies with the published key alone.
+          for codename in bookworm trixie jammy noble; do
+            gpgv --keyring "$keyring" "$site/apt/dists/$codename/InRelease"
+          done
+          echo "$fingerprint" >"$RUNNER_TEMP/fingerprint"
+          {
+            echo "## apt repository"
+            echo
+            echo "Signed by \`$fingerprint\`; $(find "$site/apt/pool" -name '*.deb' | wc -l) packages."
+          } >>"$GITHUB_STEP_SUMMARY"
       - name: GitHub Release v${{ env.VERSION }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -124,6 +430,111 @@ jobs:
             echo "GitHub Release v$VERSION already exists"
             exit 0
           fi
-          python3 release/changelog.py notes "$VERSION" >"$RUNNER_TEMP/notes.md"
+          {
+            python3 release/changelog.py notes "$VERSION"
+            echo
+            echo "The apt repository's signing key has the fingerprint \`$(cat "$RUNNER_TEMP/fingerprint")\`;"
+            echo "check the key you fetched with \`gpg --show-keys /etc/apt/keyrings/pg_warren.asc\`."
+          } >"$RUNNER_TEMP/notes.md"
           gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "pg_warren $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+      - name: Attach the packages to v${{ env.VERSION }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/assets"
+          # A published asset is never replaced: a re-run attaches only
+          # what is missing.
+          present="$(gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          for asset in *; do
+            if grep -qxF -- "$asset" <<<"$present"; then echo "already attached: $asset"; continue; fi
+            gh release upload "v$VERSION" --repo "$GITHUB_REPOSITORY" -- "$asset"
+          done
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/site
+      - name: Docker images to ghcr.io (with the environment's GHCR_TOKEN)
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          GHCR_USERNAME: ${{ vars.GHCR_USERNAME }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$GHCR_TOKEN" || -z "$GHCR_USERNAME" ]]; then
+            echo "::error::the release environment has no GHCR_TOKEN secret or GHCR_USERNAME variable (CONTRIBUTING.md, owner setup)"
+            exit 1
+          fi
+          # The package must be linked to no repository: a linked one
+          # inherits the repository's access by default, so any of its
+          # workflows given packages: write could push the images. GitHub's
+          # API shows the link (.repository), not the inheritance setting.
+          # Not found: the first push creates it, unlinked (the Dockerfile
+          # has no org.opencontainers.image.source label).
+          package="$RUNNER_TEMP/ghcr-package.json"
+          status="$(curl -sS -o "$package" -w '%{http_code}' -H "Authorization: Bearer $GHCR_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/orgs/$GITHUB_REPOSITORY_OWNER/packages/container/${GITHUB_REPOSITORY#*/}")"
+          case "$status" in
+            404) echo "the first push creates the package" ;;
+            200) jq -e '.repository == null' "$package" >/dev/null || {
+                   echo "::error::the GHCR package is linked to $(jq -r '.repository.full_name' "$package"), whose workflows may then write to it: delete the package, since its workflows may already have pushed tags this release would not overwrite (CONTRIBUTING.md, owner setup)"
+                   exit 1
+                 } ;;
+            *) echo "::error::GitHub's API answered $status for the GHCR package"; exit 1 ;;
+          esac
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker"
+          trap 'docker logout ghcr.io; rm -rf "$DOCKER_CONFIG"' EXIT
+          docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin <<<"$GHCR_TOKEN"
+          for major in 15 16 17 18; do
+            for arch in amd64 arm64; do
+              docker push -q "$image:$VERSION-pg$major-$arch"
+            done
+            tags=(-t "$image:$VERSION-pg$major")
+            if [[ "$LATEST" == true ]]; then tags+=(-t "$image:pg$major"); fi
+            docker buildx imagetools create "${tags[@]}" "$image:$VERSION-pg$major-amd64" "$image:$VERSION-pg$major-arm64"
+          done
+      - name: The formula to exadev/homebrew-tap
+        if: needs.verify.outputs.latest == 'true'
+        env:
+          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DEPLOY_KEY" ]]; then
+            echo "::warning::the release environment has no HOMEBREW_TAP_DEPLOY_KEY secret: the tap is not updated (CONTRIBUTING.md, owner setup)"
+            exit 0
+          fi
+          key="$RUNNER_TEMP/tap_deploy_key"
+          hosts="$RUNNER_TEMP/known_hosts"
+          trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s\n' "$DEPLOY_KEY" >"$key")
+          echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" >"$hosts"
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$hosts"
+          tap="$RUNNER_TEMP/homebrew-tap"
+          git clone --depth 1 git@github.com:ExaDev/homebrew-tap.git "$tap"
+          mkdir -p "$tap/Formula"
+          cp "$RUNNER_TEMP/pg_warren.rb" "$tap/Formula/pg_warren.rb"
+          cd "$tap"
+          git add Formula/pg_warren.rb
+          if git diff --cached --quiet; then echo "the tap already has pg_warren $VERSION"; exit 0; fi
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "pg_warren $VERSION"
+          git push origin HEAD
+
+  pages:
+    # Deploys the apt repository the publish job assembled and signed, so
+    # only after the release environment's approval. Runs no repository
+    # code. The github-pages environment (created by enabling Pages from
+    # Actions) admits only main.
+    name: Deploy the apt repository to GitHub Pages
+    needs: publish
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}apt/
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
