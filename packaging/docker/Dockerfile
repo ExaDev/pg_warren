@@ -6,9 +6,9 @@
 #
 #   docker run --rm --shm-size=1g -e POSTGRES_PASSWORD=postgres -p 5432:5432 \
 #     ghcr.io/exadev/pg_warren:pg17
-ARG PG_MAJOR=17
-ARG CODENAME=trixie
-FROM postgres:${PG_MAJOR}-${CODENAME}
+# BASE: postgres:<NN>-<codename>@sha256:<digest>, pinned in release/packages.py.
+ARG BASE
+FROM ${BASE}
 COPY pg_warren.deb /tmp/pg_warren.deb
 RUN apt-get update \
  && apt-get install -y --no-install-recommends /tmp/pg_warren.deb \

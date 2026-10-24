@@ -18,11 +18,14 @@ name: Release (publish)
 # repository (each distribution x arch in its own container, against
 # PGDG), the tarballs, the Docker images and the Homebrew bottle and
 # formula. After approval the publish job, which runs no build code,
-# attaches them to the GitHub Release, assembles and signs the apt
-# repository (aptly, every release's packages, with the environment's
-# signing key), pushes the images to GHCR and the formula to the tap with
-# the tap's deploy key; the pages job deploys the apt repository to GitHub
-# Pages.
+# treats what they built as data: it checks each .deb (release/assets.py:
+# only pg_warren's files and postinst, this release's version), renders the
+# formula again keeping only the bottle block, signs SHA256SUMS, attaches
+# them to the GitHub Release, and assembles and signs the apt repository
+# (aptly) from this release's checked packages and earlier releases' that
+# their signed SHA256SUMS list; it pushes the images to GHCR with the
+# environment's GHCR_TOKEN and the formula to the tap with the tap's deploy
+# key; the pages job deploys the apt repository to GitHub Pages.
 #
 # Both jobs check out the same commit, github.sha: the push (or dispatch)
 # that started the run. What the approver sees, "vX.Y.Z → <commit>" and the
@@ -207,12 +210,9 @@ jobs:
         run: |
           set -euo pipefail
           tarball="$RUNNER_TEMP/source/pg_warren-$VERSION.tar.gz"
-          sha="$(shasum -a 256 "$tarball" | cut -d' ' -f1)"
-          pgrx="$(tar -xzOf "$tarball" "pg_warren-$VERSION/Cargo.lock" \
-            | awk '/^name = "pgrx"$/{getline; gsub(/"/, "", $3); print $3; exit}')"
           brew tap-new --no-git exadev/tap
           formula="$(brew --repo exadev/tap)/Formula/pg_warren.rb"
-          python3 release/homebrew.py "$VERSION" "$sha" "$pgrx" >"$formula"
+          python3 release/homebrew.py "$tarball" >"$formula"
           brew style exadev/tap/pg_warren
           brew audit --strict --formula exadev/tap/pg_warren
           # The release's asset is not uploaded yet: seed brew's download
@@ -242,9 +242,11 @@ jobs:
     needs: [verify, debs, homebrew]
     runs-on: ubuntu-24.04
     environment: release
+    # No packages: write: this repository's GITHUB_TOKEN cannot push the
+    # images, so no branch workflow can; the environment's GHCR_TOKEN does.
     permissions:
       contents: write
-      packages: write
+      actions: read
     env:
       VERSION: ${{ needs.verify.outputs.version }}
       COMMIT: ${{ needs.verify.outputs.commit }}
@@ -281,45 +283,55 @@ jobs:
           echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" >"$hosts"
           GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$hosts" \
             git push "git@github.com:$GITHUB_REPOSITORY.git" "refs/tags/v$VERSION:refs/tags/v$VERSION"
-      - name: GitHub Release v${{ env.VERSION }}
+      # From here on, what the read-only jobs built is data: it is checked
+      # (release/assets.py, release/homebrew.py, from github.sha) before it
+      # is signed or published, and none of it runs.
+      - name: The build's artifacts, by name
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "GitHub Release v$VERSION already exists"
-            exit 0
-          fi
-          python3 release/changelog.py notes "$VERSION" >"$RUNNER_TEMP/notes.md"
-          gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --verify-tag \
-            --title "pg_warren $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
-      # Everything below runs no repository code: the read-only jobs' files,
-      # and system tools.
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          path: ${{ runner.temp }}/artifacts
-      - name: Attach the packages to v${{ env.VERSION }}
-        env:
-          GH_TOKEN: ${{ github.token }}
+          names=(source homebrew tarballs-amd64 tarballs-arm64 images-amd64 images-arm64)
+          for codename in bookworm trixie jammy noble; do
+            for arch in amd64 arm64; do names+=("debs-$codename-$arch"); done
+          done
+          args=()
+          for name in "${names[@]}"; do args+=(-n "$name"); done
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/artifacts" "${args[@]}"
+      - name: Check the packages and render the formula
         run: |
           set -euo pipefail
+          artifacts="$RUNNER_TEMP/artifacts"
           assets="$RUNNER_TEMP/assets"
           mkdir -p "$assets"
-          cd "$RUNNER_TEMP/artifacts"
-          cp source/*.tar.gz debs-*/*.deb tarballs-*/*.tar.gz homebrew/*.bottle.tar.gz "$assets/"
-          cd "$assets"
-          # GitHub would rename a .deb's "1~deb12" to "1.deb12"; name it so
-          # first, so that SHA256SUMS names the assets as attached.
-          for deb in ./*~*.deb; do mv -- "$deb" "${deb//\~/.}"; done
-          sha256sum -- * >SHA256SUMS
-          # A published asset is never replaced: a re-run attaches only
-          # what is missing.
-          present="$(gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
-          for asset in *; do
-            if grep -qxF -- "$asset" <<<"$present"; then echo "already attached: $asset"; continue; fi
-            gh release upload "v$VERSION" --repo "$GITHUB_REPOSITORY" -- "$asset"
+          # The .deb files as Release assets (GitHub would turn "1~deb12"
+          # into "1.deb12"), each checked: pg_warren's files only, our
+          # postinst, Version $VERSION-1~<distribution>, its own file name.
+          for deb in "$artifacts"/debs-*/*.deb; do
+            name="$(basename "$deb")"
+            cp -- "$deb" "$assets/${name//\~/.}"
+            python3 release/assets.py check-deb "$assets/${name//\~/.}" "$VERSION"
           done
-      - name: The apt repository, signed (every release's packages)
+          count="$(find "$assets" -name '*.deb' | wc -l)"
+          [[ "$count" == 32 ]] || { echo "::error::$count packages, not 32 (4 distributions x 2 arches x PG 15-18)"; exit 1; }
+          for pair in amd64:x86_64 arm64:aarch64; do
+            for major in 15 16 17 18; do
+              cp -- "$artifacts/tarballs-${pair%:*}/pg_warren-$VERSION-pg$major-linux-${pair#*:}.tar.gz" "$assets/"
+            done
+          done
+          cp -- "$artifacts/source/pg_warren-$VERSION.tar.gz" "$assets/"
+          bottles=("$artifacts"/homebrew/pg_warren-"$VERSION".arm64_*.bottle.tar.gz)
+          [[ "${#bottles[@]}" == 1 && -f "${bottles[0]}" ]] || { echo "::error::not one arm64 bottle"; exit 1; }
+          cp -- "${bottles[0]}" "$assets/"
+          # The tap's formula, rendered again from the source tarball; only
+          # the bottle block, of the expected shape, is the bottle job's.
+          python3 release/homebrew.py "$assets/pg_warren-$VERSION.tar.gz" \
+            --bottle-from "$artifacts/homebrew/pg_warren.rb" >"$RUNNER_TEMP/pg_warren.rb"
+          grep -qF "$(cut -d' ' -f1 < <(sha256sum "${bottles[0]}"))" "$RUNNER_TEMP/pg_warren.rb" \
+            || { echo "::error::the formula's bottle sha256 is not the bottle's"; exit 1; }
+          (cd "$assets" && sha256sum -- * >SHA256SUMS)
+          ls -l "$assets"
+      - name: Sign SHA256SUMS and the apt repository (every release's checked packages)
         env:
           GH_TOKEN: ${{ github.token }}
           SIGNING_KEY: ${{ secrets.RELEASE_APT_SIGNING_KEY }}
@@ -334,21 +346,50 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends aptly >/dev/null
           export GNUPGHOME="$RUNNER_TEMP/gnupg"
           (umask 077 && mkdir -p "$GNUPGHOME")
-          trap 'rm -rf "$GNUPGHOME"' EXIT
+          trap 'gpgconf --kill gpg-agent; rm -rf "$GNUPGHOME"' EXIT
           gpg --batch --quiet --import <<<"$SIGNING_KEY"
           fingerprint="$(gpg --batch --with-colons --list-secret-keys | awk -F: '/^fpr:/{print $10; exit}')"
+          # The key is the one README.md states, so a new key needs a
+          # reviewed change to main, and users can check what they fetch.
+          stated="$(python3 release/assets.py readme-fingerprint)"
+          if [[ "$fingerprint" != "$stated" ]]; then
+            echo "::error::the signing key is $fingerprint, but README.md states $stated"
+            exit 1
+          fi
+          keyring="$RUNNER_TEMP/apt-key.gpg"
+          gpg --batch --export "$fingerprint" >"$keyring"
+          assets="$RUNNER_TEMP/assets"
+          gpg --batch --yes --armor --local-user "$fingerprint" --detach-sign -o "$assets/SHA256SUMS.asc" "$assets/SHA256SUMS"
+          gpgv --keyring "$keyring" "$assets/SHA256SUMS.asc" "$assets/SHA256SUMS"
+          # This release's packages are the checked local files. An earlier
+          # release's are taken only if it is recorded in
+          # sql/released.commits, is not a draft, and has a SHA256SUMS
+          # signed by this key, and only the .deb files that lists, each
+          # matching it and checked as this release's are; a release from
+          # before signed sums contributes nothing.
+          debs="$RUNNER_TEMP/repo-debs"
+          mkdir -p "$debs"
+          cp -- "$assets"/*.deb "$debs/"
+          awk '{print $2}' sql/released.commits | while read -r earlier; do
+            [[ "$earlier" == "$VERSION" ]] && continue
+            view="$(gh release view "v$earlier" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,assets 2>/dev/null)" || continue
+            [[ "$(jq -r '.tagName' <<<"$view")" == "v$earlier" && "$(jq -r '.isDraft' <<<"$view")" == false ]] || continue
+            jq -e '[.assets[].name] | index("SHA256SUMS") and index("SHA256SUMS.asc")' <<<"$view" >/dev/null || continue
+            dir="$RUNNER_TEMP/earlier/$earlier"
+            mkdir -p "$dir"
+            gh release download "v$earlier" --repo "$GITHUB_REPOSITORY" --dir "$dir" -p SHA256SUMS -p SHA256SUMS.asc
+            gpgv --keyring "$keyring" "$dir/SHA256SUMS.asc" "$dir/SHA256SUMS"
+            grep -oE '[^ ]+\.deb$' "$dir/SHA256SUMS" | while read -r name; do
+              gh release download "v$earlier" --repo "$GITHUB_REPOSITORY" --dir "$dir" -p "$name"
+            done
+            python3 release/assets.py listed-debs "$dir" | while read -r deb; do
+              python3 release/assets.py check-deb "$deb" "$earlier"
+              cp -- "$deb" "$debs/"
+            done
+          done
           aptly_root="$RUNNER_TEMP/aptly"
           printf '{"rootDir": "%s", "gpgProvider": "gpg2"}\n' "$aptly_root" >"$RUNNER_TEMP/aptly.conf"
           aptly() { command aptly -config="$RUNNER_TEMP/aptly.conf" "$@"; }
-          # Every release's .deb assets, this one's included (attached above).
-          debs="$RUNNER_TEMP/all-debs"
-          mkdir -p "$debs"
-          gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName --jq '.[].tagName' \
-            | while read -r tag; do
-                gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' \
-                  | grep -q '\.deb$' || continue
-                gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern '*.deb' --dir "$debs" --skip-existing
-              done
           while read -r codename suffix name; do
             aptly repo create -distribution="$codename" -component=main "$codename" >/dev/null
             # The distribution is the Debian revision's suffix (1~deb12).
@@ -371,26 +412,62 @@ jobs:
           cp -a "$aptly_root/public" "$site/apt"
           gpg --batch --armor --export "$fingerprint" >"$site/apt/pg_warren.asc"
           # Each distribution's index verifies with the published key alone.
-          gpg --batch --export "$fingerprint" >"$RUNNER_TEMP/apt-key.gpg"
           for codename in bookworm trixie jammy noble; do
-            gpgv --keyring "$RUNNER_TEMP/apt-key.gpg" "$site/apt/dists/$codename/InRelease"
+            gpgv --keyring "$keyring" "$site/apt/dists/$codename/InRelease"
           done
+          echo "$fingerprint" >"$RUNNER_TEMP/fingerprint"
           {
             echo "## apt repository"
             echo
             echo "Signed by \`$fingerprint\`; $(find "$site/apt/pool" -name '*.deb' | wc -l) packages."
           } >>"$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
-        with:
-          path: ${{ runner.temp }}/site
-      - name: Docker images to ghcr.io
+      - name: GitHub Release v${{ env.VERSION }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "GitHub Release v$VERSION already exists"
+            exit 0
+          fi
+          {
+            python3 release/changelog.py notes "$VERSION"
+            echo
+            echo "The apt repository's signing key has the fingerprint \`$(cat "$RUNNER_TEMP/fingerprint")\`;"
+            echo "check the key you fetched with \`gpg --show-keys /etc/apt/keyrings/pg_warren.asc\`."
+          } >"$RUNNER_TEMP/notes.md"
+          gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "pg_warren $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+      - name: Attach the packages to v${{ env.VERSION }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/assets"
+          # A published asset is never replaced: a re-run attaches only
+          # what is missing.
+          present="$(gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          for asset in *; do
+            if grep -qxF -- "$asset" <<<"$present"; then echo "already attached: $asset"; continue; fi
+            gh release upload "v$VERSION" --repo "$GITHUB_REPOSITORY" -- "$asset"
+          done
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/site
+      - name: Docker images to ghcr.io (with the environment's GHCR_TOKEN)
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          GHCR_USERNAME: ${{ vars.GHCR_USERNAME }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$GHCR_TOKEN" || -z "$GHCR_USERNAME" ]]; then
+            echo "::error::the release environment has no GHCR_TOKEN secret or GHCR_USERNAME variable (CONTRIBUTING.md, owner setup)"
+            exit 1
+          fi
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
-          docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin <<<"$GH_TOKEN"
-          trap 'docker logout ghcr.io' EXIT
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker"
+          trap 'docker logout ghcr.io; rm -rf "$DOCKER_CONFIG"' EXIT
+          docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin <<<"$GHCR_TOKEN"
           for major in 15 16 17 18; do
             for arch in amd64 arm64; do
               docker load -i "$RUNNER_TEMP/artifacts/images-$arch/pg$major-$arch.tar.gz"
@@ -420,7 +497,7 @@ jobs:
           tap="$RUNNER_TEMP/homebrew-tap"
           git clone --depth 1 git@github.com:ExaDev/homebrew-tap.git "$tap"
           mkdir -p "$tap/Formula"
-          cp "$RUNNER_TEMP/artifacts/homebrew/pg_warren.rb" "$tap/Formula/pg_warren.rb"
+          cp "$RUNNER_TEMP/pg_warren.rb" "$tap/Formula/pg_warren.rb"
           cd "$tap"
           git add Formula/pg_warren.rb
           if git diff --cached --quiet; then echo "the tap already has pg_warren $VERSION"; exit 0; fi

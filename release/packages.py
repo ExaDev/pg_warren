@@ -55,12 +55,31 @@ class Distribution:
     suffix: str
 
 
+# Docker Hub images by digest (each a multi-arch index; the tag says which),
+# so a moved tag cannot change what the release builds on. Bump them
+# deliberately: CONTRIBUTING.md, "Packages".
 DISTRIBUTIONS = (
-    Distribution("bookworm", "Debian 12", "debian:bookworm", "deb12"),
-    Distribution("trixie", "Debian 13", "debian:trixie", "deb13"),
-    Distribution("jammy", "Ubuntu 22.04", "ubuntu:22.04", "ubuntu22.04"),
-    Distribution("noble", "Ubuntu 24.04", "ubuntu:24.04", "ubuntu24.04"),
+    Distribution("bookworm", "Debian 12",
+                 "debian:bookworm@sha256:854dd8ab51d62866dbd8f5431d15ce77b12983a2a4a1e1fe43a2395dc7ef9f61", "deb12"),
+    Distribution("trixie", "Debian 13",
+                 "debian:trixie@sha256:4c25275446ca371766b8b093c696782eabce06263fccacb8d5d813b3dc44b308", "deb13"),
+    Distribution("jammy", "Ubuntu 22.04",
+                 "ubuntu:22.04@sha256:0a9887931b0e38af2e3487ed39e29436b0535c4f3f52e57745baaf79d1898956", "ubuntu22.04"),
+    Distribution("noble", "Ubuntu 24.04",
+                 "ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac", "ubuntu24.04"),
 )
+
+# PGDG's official postgres images, the Docker image's base.
+POSTGRES_IMAGES = {
+    ("15", "bookworm"): "sha256:22c6356b2897cb0b4be6ad550b44ff97a0f29df7dbe327c01bc3c84bd457694d",
+    ("15", "trixie"): "sha256:baa22e6286bf832cb147b8bb5aa9d8bc999846d69c21d11bf63f58fbeed1fa48",
+    ("16", "bookworm"): "sha256:d81f7b51697014367236d07ec58b54153fc28f828b72bf247fe5c7487520bcb0",
+    ("16", "trixie"): "sha256:9e2cf6287f25c3151f4c9421ccce2b17f3e60061c111a29165e0d2cdd9ff0a97",
+    ("17", "bookworm"): "sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27",
+    ("17", "trixie"): "sha256:b8faeff7712663c2773a190181e1246e37e364b887611c04658c28b44e2408fe",
+    ("18", "bookworm"): "sha256:bbf83594798e144bff365a9c191c5d779f181fb3135902064ab8ff11918020fc",
+    ("18", "trixie"): "sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6",
+}
 
 
 def distribution(codename):
@@ -68,6 +87,13 @@ def distribution(codename):
         if known.codename == codename:
             return known
     raise PackagingError(f"no packages are built for {codename}: {', '.join(d.codename for d in DISTRIBUTIONS)}")
+
+
+def postgres_image(major, codename):
+    digest = POSTGRES_IMAGES.get((major, codename))
+    if digest is None:
+        raise PackagingError(f"no postgres image for PG {major} on {codename}")
+    return f"postgres:{major}-{codename}@{digest}"
 
 
 def debian_version(version, codename):
@@ -210,13 +236,13 @@ def check(deb):
 
 
 def image(deb, tag):
-    """PGDG's postgres:NN-CODENAME image with the package, and its check."""
+    """PGDG's postgres:NN-CODENAME image (by digest) with the package, and its check."""
     major, codename, _ = major_and_codename(deb)
     deb = Path(deb).resolve()
     with tempfile.TemporaryDirectory() as context:
         shutil.copy(deb, Path(context) / "pg_warren.deb")
-        docker("build", "-f", PACKAGING / "docker" / "Dockerfile", "--build-arg", f"PG_MAJOR={major}",
-               "--build-arg", f"CODENAME={codename}", "-t", tag, context)
+        docker("build", "-f", PACKAGING / "docker" / "Dockerfile",
+               "--build-arg", f"BASE={postgres_image(major, codename)}", "-t", tag, context)
     subprocess.run(["bash", str(PACKAGING / "check-image.sh"), tag], check=True)
 
 

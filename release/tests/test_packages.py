@@ -3,6 +3,7 @@ repository and the tarballs (CONTRIBUTING.md, "Packages"): Debian
 versions per distribution, the generated debian/changelog, the pgrx a
 source pins, and the tarball laid out from a built package."""
 
+import re
 import shutil
 import subprocess
 import tarfile
@@ -10,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from packages import (DISTRIBUTIONS, PackagingError, changelog, debian_version, distribution, pgrx_version,
-                      tarball, tarball_name)
+from packages import (DISTRIBUTIONS, MAJORS, PackagingError, changelog, debian_version, distribution,
+                      pgrx_version, postgres_image, tarball, tarball_name)
 
 needs_dpkg = pytest.mark.skipif(shutil.which("dpkg-deb") is None or shutil.which("dpkg-parsechangelog") is None,
                                 reason="needs dpkg-deb and dpkg-parsechangelog (dpkg-dev)")
@@ -30,13 +31,26 @@ version = "0.19.3"
 """
 
 
-def test_each_distribution_is_built_in_its_own_image():
-    assert {d.codename: d.image for d in DISTRIBUTIONS} == {
+def test_each_distribution_is_built_in_its_own_image_pinned_by_digest():
+    images = {d.codename: d.image for d in DISTRIBUTIONS}
+    assert {codename: image.partition("@")[0] for codename, image in images.items()} == {
         "bookworm": "debian:bookworm",
         "trixie": "debian:trixie",
         "jammy": "ubuntu:22.04",
         "noble": "ubuntu:24.04",
     }
+    assert all(re.fullmatch(r"[a-z]+:[0-9a-z.]+@sha256:[0-9a-f]{64}", image) for image in images.values())
+
+
+@pytest.mark.parametrize("major", MAJORS)
+@pytest.mark.parametrize("codename", ["bookworm", "trixie"])
+def test_the_image_s_base_is_pgdg_s_postgres_pinned_by_digest(major, codename):
+    assert re.fullmatch(rf"postgres:{major}-{codename}@sha256:[0-9a-f]{{64}}", postgres_image(major, codename))
+
+
+def test_there_is_no_postgres_image_for_ubuntu():
+    with pytest.raises(PackagingError, match="noble"):
+        postgres_image("16", "noble")
 
 
 def test_an_unknown_distribution_is_refused():

@@ -18,8 +18,18 @@ majors=()
 for major in $PG_MAJORS; do majors+=("postgresql-server-dev-$major"); done
 apt-get install -y -qq --no-install-recommends postgresql-common-dev "${majors[@]}" >/dev/null
 
+# rustup-init 1.29.2, checked against its sha256 (static.rust-lang.org's
+# .sha256 beside each); rustup then checks each toolchain download.
 export RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:$PATH
-curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal --default-toolchain none
+case "$(uname -m)" in
+  x86_64) rustup_sha=5be191e8c70a5007074254cb74d78dbfdd25cd5a61c27de7b8e5410122ec24f4 ;;
+  aarch64) rustup_sha=a9c168dbea81a84671c6b7a5c1795cb0eb699020110d107ddfca427bd797e697 ;;
+  *) echo "no rustup-init pinned for $(uname -m)"; exit 1 ;;
+esac
+curl -fsSLo /tmp/rustup-init "https://static.rust-lang.org/rustup/archive/1.29.2/$(uname -m)-unknown-linux-gnu/rustup-init"
+echo "$rustup_sha  /tmp/rustup-init" | sha256sum --check --quiet
+chmod +x /tmp/rustup-init
+/tmp/rustup-init -y -q --profile minimal --default-toolchain none --no-modify-path
 
 build=/build/pg-warren
 mkdir -p "$build"
