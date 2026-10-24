@@ -1,13 +1,15 @@
 //! `warren.components`: weakly connected components (DESIGN.md §9.3).
 
+use std::sync::Arc;
+
 use pgrx::prelude::*;
 use pgrx::AnyElement;
-use warren_core::graph::GraphError;
-use warren_core::traversal::{components as label_components, TraversalError};
+use warren_core::graph::DenseId;
+use warren_core::traversal::components as label_components;
 
 use super::stats::Recorder;
 use super::{entry, TraversalSqlError};
-use crate::cache::{cached, resolve};
+use crate::cache::{cached, resolve, CachedIds, LoadedVersion};
 use crate::external_ids::{check_type, external};
 use crate::interrupts::PostgresInterrupts;
 use crate::source::with_id_type;
@@ -36,29 +38,37 @@ fn components(
         let graph = graph.ok_or(TraversalSqlError::NullArgument("graph"))?;
         let resolved = resolve(graph, version, "read")?;
         let mut recorder = Recorder::start("components", graph, resolved.version);
-        let rows = with_id_type!(resolved.graph.id_type, E => {
+        let rows: Box<dyn Iterator<Item = Row>> = with_id_type!(resolved.graph.id_type, E => {
             // SAFETY: fcinfo is this call's, and argument 1 exists.
             let witness = unsafe { pgrx::fcinfo::pg_getarg_type(fcinfo, 1) };
             check_type::<E>(graph, "id_type", witness, false)?;
             let loaded = cached::<E>(&resolved)?;
             let labelled = label_components(&loaded.graph, &mut PostgresInterrupts)?;
             recorder.record(labelled.stats);
-            let tombstones = loaded.id_map.tombstones();
-            let mut rows = Vec::new();
-            let live = usize::try_from(loaded.id_map.node_count()).unwrap_or(usize::MAX);
-            rows.try_reserve_exact(live)
-                .map_err(|_| TraversalError::from(GraphError::OutOfMemory { elements: live }))?;
-            for (node, &component) in (0..).zip(&labelled.result) {
-                if tombstones.contains(node) {
-                    continue;
-                }
-                if let Some(id) = external(&loaded.id_map, node) {
-                    rows.push((id, i64::try_from(component).unwrap_or(i64::MAX)));
-                }
-            }
-            rows
+            Box::new(live_rows(loaded, labelled.result))
         });
         Ok(TableIterator::new(rows))
+    })
+}
+
+/// A row of the result: a node's external id and its component.
+type Row = (AnyElement, i64);
+
+/// The rows of each live node in dense id order, each made when it is
+/// returned (DESIGN.md §12): the labels stay in the extension's buffer,
+/// and only the current row's external id is palloc'd, in the context
+/// Postgres resets between rows. The rows hold the loaded version, which
+/// keeps it mapped until the call ends, however it ends.
+fn live_rows<E: CachedIds>(
+    loaded: Arc<LoadedVersion<E>>,
+    labels: Vec<DenseId>,
+) -> impl Iterator<Item = Row> {
+    (0..).zip(labels).filter_map(move |(node, component)| {
+        if loaded.id_map.tombstones().contains(node) {
+            return None;
+        }
+        let id = external(&loaded.id_map, node)?;
+        Some((id, i64::try_from(component).unwrap_or(i64::MAX)))
     })
 }
 
@@ -69,7 +79,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{refresh, rows, small};
+    use crate::fixture::{held_after_first_row, iri_path, refresh, rows, small};
 
     #[pg_test]
     fn components_label_live_nodes_by_their_smallest_dense_id() -> Result<(), Error> {
@@ -86,6 +96,19 @@ mod tests {
              FROM warren.components('t', NULL::bigint) ORDER BY node_id",
         )?;
         assert_eq!(found.as_deref(), Some("1:0 3:0 4:0 5:4 6:5"));
+        Ok(())
+    }
+
+    /// Each row's text id is made when the row is returned, so a call
+    /// holds no more Postgres memory for 50,000 rows to come than for
+    /// 1,000 (built up front, the ids took about 72 bytes each).
+    #[pg_test]
+    fn components_make_each_rows_id_as_it_is_returned() -> Result<(), Error> {
+        iri_path("few", 1_000)?;
+        iri_path("many", 50_000)?;
+        let few = held_after_first_row("warren.components('few', NULL::text)")?;
+        let many = held_after_first_row("warren.components('many', NULL::text)")?;
+        assert!(many < few + (256 << 10), "{many} bytes held for 50,000 rows, {few} for 1,000");
         Ok(())
     }
 

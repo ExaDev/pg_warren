@@ -5,8 +5,6 @@
 //! on the compute pool within the call's memory budget; all but the last
 //! write a named vector.
 
-use std::mem::size_of;
-
 use pgrx::prelude::*;
 use pgrx::AnyElement;
 use warren_core::compute;
@@ -213,7 +211,7 @@ fn forest_rows<E: CachedIds>(
     resolved: &Resolved,
     rels: Option<&[Option<String>]>,
     weighted: Option<bool>,
-) -> Result<Vec<(AnyElement, AnyElement, f64)>, ComputeSqlError> {
+) -> Result<ForestRows, ComputeSqlError> {
     let loaded = cached::<E>(resolved)?;
     let memory = compute_memory();
     let selected = relations(&loaded.relations, rels);
@@ -225,19 +223,19 @@ fn forest_rows<E: CachedIds>(
         selection(selected.as_deref()),
         weighted,
     )?;
-    let mut rows = Vec::new();
-    let bytes = forest.edges.len().saturating_mul(size_of::<(AnyElement, AnyElement, f64)>());
-    rows.try_reserve_exact(forest.edges.len())
-        .map_err(|_| compute::ComputeError::OutOfMemory { bytes: bytes as u64 })?;
-    for &(source, target, weight) in &forest.edges {
-        if let (Some(source), Some(target)) =
-            (external(&loaded.id_map, source), external(&loaded.id_map, target))
-        {
-            rows.push((source, target, weight));
-        }
-    }
-    Ok(rows)
+    // Each row's external ids are made when it is returned (DESIGN.md
+    // §12): the forest stays in its charged buffer, and only the current
+    // row's ids are palloc'd, in the context Postgres resets between rows.
+    // The rows hold the loaded version, which keeps it mapped until the
+    // call ends, however it ends.
+    Ok(Box::new((0..forest.edges.len()).filter_map(move |edge| {
+        let &(source, target, weight) = forest.edges.get(edge)?;
+        Some((external(&loaded.id_map, source)?, external(&loaded.id_map, target)?, weight))
+    })))
 }
+
+/// The rows of a minimum spanning forest, made one at a time.
+type ForestRows = Box<dyn Iterator<Item = (AnyElement, AnyElement, f64)>>;
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
@@ -246,7 +244,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{failure, refresh, rows, small};
+    use crate::fixture::{failure, held_after_first_row, iri_path, refresh, rows, small};
 
     /// The live rows of vector `name` of graph `graph`, as `id:value`.
     fn values(graph: &str, name: &str) -> Result<Option<String>, Error> {
@@ -271,6 +269,19 @@ mod tests {
                                         build_reverse := false);
              SELECT warren.refresh('k')",
         )
+    }
+
+    /// Each forest edge's text ids are made when its row is returned, so a
+    /// call holds no more Postgres memory for 49,999 rows to come than for
+    /// 999 (built up front, the ids took about 72 bytes each).
+    #[pg_test]
+    fn the_forest_makes_each_rows_ids_as_it_is_returned() -> Result<(), Error> {
+        iri_path("few", 1_000)?;
+        iri_path("many", 50_000)?;
+        let few = held_after_first_row("warren.minimum_spanning_forest('few', NULL::text)")?;
+        let many = held_after_first_row("warren.minimum_spanning_forest('many', NULL::text)")?;
+        assert!(many < few + (256 << 10), "{many} bytes held for 49,999 rows, {few} for 999");
+        Ok(())
     }
 
     #[pg_test]

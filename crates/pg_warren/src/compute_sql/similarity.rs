@@ -203,11 +203,11 @@ fn most_similar(
         let k = rank_k(k)?;
         let measure = measure(measure_name)?;
         let resolved = resolve(graph, version, "read")?;
-        let rows: Vec<(AnyElement, f64)> = with_id_type!(resolved.graph.id_type, E => {
+        let rows: Box<dyn Iterator<Item = (AnyElement, f64)>> = with_id_type!(resolved.graph.id_type, E => {
             let id = element::<E>(graph, "node", node)?;
             let loaded = cached::<E>(&resolved)?;
             match loaded.id_map.dense_id(id.borrow()) {
-                None => Vec::new(),
+                None => Box::new(std::iter::empty()),
                 Some(dense) => {
                     let selected = relations(&loaded.relations, rels.as_deref());
                     let neighbourhood =
@@ -225,10 +225,11 @@ fn most_similar(
                         dense,
                         k,
                     )?;
-                    similar
-                        .into_iter()
-                        .filter_map(|s| Some((external(&loaded.id_map, s.node)?, s.score)))
-                        .collect()
+                    // Each row's external id is made when it is returned
+                    // (DESIGN.md §12), the ranking staying in its buffer.
+                    Box::new(similar.into_iter().filter_map(move |s| {
+                        Some((external(&loaded.id_map, s.node)?, s.score))
+                    }))
                 }
             }
         });
@@ -310,7 +311,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{failure, rows, small};
+    use crate::fixture::{failure, held_after_first_row, iri_star, rows, small};
 
     /// Graph `t` (`small`) and `n`, the same without reverse CSRs: the
     /// undirected simple graph of both is the square 1–2–3–4–1, with 5
@@ -326,6 +327,22 @@ mod tests {
 
     const PAIRS: &str =
         "SELECT * FROM (VALUES (1, 3), (2, 4), (1, 2), (5, 6), (1, 99), (NULL, 2)) v";
+
+    /// Each similar node's text id is made when its row is returned, so a
+    /// call holds no more Postgres memory for 49,999 rows to come than for
+    /// 999 (a star's leaves are all alike).
+    #[pg_test]
+    fn the_most_similar_make_each_rows_id_as_it_is_returned() -> Result<(), Error> {
+        iri_star("few", 1_000)?;
+        iri_star("many", 50_000)?;
+        let call = |graph: &str| {
+            format!("warren.most_similar('{graph}', 'https://example.org/resource/1'::text, k := 100000)")
+        };
+        let few = held_after_first_row(&call("few"))?;
+        let many = held_after_first_row(&call("many"))?;
+        assert!(many < few + (256 << 10), "{many} bytes held for 49,999 rows, {few} for 999");
+        Ok(())
+    }
 
     #[pg_test]
     fn pairs_are_scored_in_the_query_s_order_skipping_unknown_ids() -> Result<(), Error> {

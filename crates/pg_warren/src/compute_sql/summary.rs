@@ -1,6 +1,8 @@
 //! Summaries of a vector's live nodes (DESIGN.md §6.2): `vector_topk` and
 //! `vector_stats`.
 
+use std::sync::Arc;
+
 use pgrx::prelude::*;
 use pgrx::{AnyElement, JsonB};
 use serde_json::{json, Value};
@@ -43,7 +45,7 @@ fn vector_topk(
             .map_err(|_| ComputeSqlError::InvalidArgument("k must not be negative".into()))?;
         let descending = descending.ok_or(ComputeSqlError::NullArgument("descending"))?;
         let resolved = resolve(graph, version, "read")?;
-        let rows = with_id_type!(resolved.graph.id_type, E => {
+        let rows: Box<dyn Iterator<Item = (AnyElement, f64)>> = with_id_type!(resolved.graph.id_type, E => {
             // SAFETY: fcinfo is this call's, and argument 3 exists.
             let oid = unsafe { pgrx::fcinfo::pg_getarg_type(fcinfo, 3) };
             check_type::<E>(graph, "id_type", oid, false)?;
@@ -57,12 +59,12 @@ fn vector_topk(
                 k,
                 descending,
             )?;
-            ranked
-                .into_iter()
-                .filter_map(|(node, value)| {
-                    external(&vectors.loaded.id_map, node).map(|id| (id, value))
-                })
-                .collect::<Vec<_>>()
+            // Each row's external id is made when it is returned (DESIGN.md
+            // §12), the ranking staying in its buffer.
+            let loaded = Arc::clone(&vectors.loaded);
+            Box::new(ranked.into_iter().filter_map(move |(node, value)| {
+                external(&loaded.id_map, node).map(|id| (id, value))
+            }))
         });
         Ok(TableIterator::new(rows))
     })
@@ -118,7 +120,24 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{refresh, rows, small};
+    use crate::fixture::{held_after_first_row, iri_path, refresh, rows, small};
+
+    /// Each ranked node's text id is made when its row is returned, so a
+    /// call holds no more Postgres memory for 50,000 rows to come than for
+    /// 1,000.
+    #[pg_test]
+    fn the_top_k_makes_each_rows_id_as_it_is_returned() -> Result<(), Error> {
+        for (graph, nodes) in [("few", 1_000), ("many", 50_000)] {
+            iri_path(graph, nodes)?;
+            Spi::run(&format!(
+                "SELECT warren.vector_from_query('{graph}', 'v', 'SELECT id, n::float8 FROM {graph}_nodes')"
+            ))?;
+        }
+        let few = held_after_first_row("warren.vector_topk('few', 'v', 50000, NULL::text)")?;
+        let many = held_after_first_row("warren.vector_topk('many', 'v', 50000, NULL::text)")?;
+        assert!(many < few + (256 << 10), "{many} bytes held for 50,000 rows, {few} for 1,000");
+        Ok(())
+    }
 
     #[pg_test]
     fn top_k_ranks_live_nodes_with_ties_by_dense_id() -> Result<(), Error> {

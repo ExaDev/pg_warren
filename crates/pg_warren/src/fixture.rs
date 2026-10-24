@@ -346,3 +346,44 @@ pub(crate) fn ownership() -> Result<Option<String>, Error> {
                           FROM warren.vectors v JOIN warren.graphs g USING (graph_id)), '')",
     )
 }
+
+/// Graph `name`: a path `1 → 2 → … → nodes` over IRIs
+/// (`https://example.org/resource/<n>`), refreshed.
+pub(crate) fn iri_path(name: &str, nodes: i64) -> Result<(), Error> {
+    Spi::run(&format!(
+        "CREATE TABLE {name}_nodes AS
+           SELECT n, 'https://example.org/resource/' || n AS id FROM generate_series(1, {nodes}) n;
+         SELECT warren.create_graph('{name}', 'SELECT id FROM {name}_nodes',
+                                    'SELECT a.id, b.id FROM {name}_nodes a JOIN {name}_nodes b ON b.n = a.n + 1');
+         SELECT warren.refresh('{name}')"
+    ))
+}
+
+/// The Postgres memory a set-returning `query` (a call in the select
+/// list, so that its rows are made one at a time) holds once it has
+/// returned its first row, past what the backend held before: what the
+/// call keeps for the rows it has yet to return. Runs `query` to the end
+/// once first, so that its version is cached and every later row checked.
+pub(crate) fn held_after_first_row(query: &str) -> Result<usize, Error> {
+    Spi::run(&format!("SELECT count(*) FROM (SELECT {query}) q"))?;
+    Spi::connect(|client| {
+        let before = allocated();
+        let mut cursor = client.try_open_cursor(&format!("SELECT {query}"), &[])?;
+        let first = cursor.fetch(1)?;
+        let held = allocated().saturating_sub(before);
+        assert_eq!(first.len(), 1, "the call returns a row");
+        Ok(held)
+    })
+}
+
+/// Graph `name`: a star over IRIs (`https://example.org/resource/<n>`),
+/// hub 0 with an edge to each of leaves 1 to `leaves`, refreshed.
+pub(crate) fn iri_star(name: &str, leaves: i64) -> Result<(), Error> {
+    Spi::run(&format!(
+        "CREATE TABLE {name}_nodes AS
+           SELECT n, 'https://example.org/resource/' || n AS id FROM generate_series(0, {leaves}) n;
+         SELECT warren.create_graph('{name}', 'SELECT id FROM {name}_nodes',
+                                    'SELECT a.id, b.id FROM {name}_nodes a JOIN {name}_nodes b ON a.n = 0 AND b.n > 0');
+         SELECT warren.refresh('{name}')"
+    ))
+}
