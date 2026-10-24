@@ -1,0 +1,87 @@
+{
+ "celegans": {
+  "sha256": "55b542a8a49c267d3ff060e2afcbe4af22faea6c17dc46f29a5fbc8973bb712a",
+  "bytes": 1897,
+  "url": "https://snap.stanford.edu/data/C-elegans-frontal.txt.gz"
+ },
+ "cit-hepth": {
+  "sha256": "7df944b502bd7b687b0e7e94ba9b0a87f202693254558ae5f8ea45657697eb32",
+  "bytes": 1317497,
+  "url": "https://snap.stanford.edu/data/cit-HepTh.txt.gz"
+ },
+ "dblp": {
+  "sha256": "9eb0bd30312ddd04e2624f7c36c0983a2e99b116f0385be5a7fce6d6170f4cb3",
+  "bytes": 4138463,
+  "url": "https://snap.stanford.edu/data/bigdata/communities/com-dblp.ungraph.txt.gz"
+ },
+ "email-enron": {
+  "sha256": "55cfead79b1f0161786179a48796c2a119bd7026a246238b257b6be9d8b69b68",
+  "bytes": 1055993,
+  "url": "https://snap.stanford.edu/data/email-Enron.txt.gz"
+ },
+ "facebook": {
+  "sha256": "125e84db872eeba443d270c70315c256b0af43a502fcfe51f50621166ad035d7",
+  "bytes": 218576,
+  "url": "https://snap.stanford.edu/data/facebook_combined.txt.gz"
+ },
+ "fb15k-237": {
+  "sha256": "eb851e61cac226db18ab251f0e52df43dfa8701c1d5f16eb34fb28de968e474c",
+  "bytes": 3899580,
+  "url": "https://web.informatik.uni-mannheim.de/pi1/kge-datasets/fb15k-237.tar.gz"
+ },
+ "hetionet": {
+  "sha256": "611f0411ac666be4e0270e54bbca67407e14720bfc3099311f0f5eec25c5a947",
+  "bytes": 12401407,
+  "url": "https://media.githubusercontent.com/media/hetio/hetionet/main/hetnet/tsv/hetionet-v1.0-edges.sif.gz"
+ },
+ "karate": {
+  "sha256": "e182d7fabbd44f3c75d307c1cf5259f0c4506954d63c37b9f30e629c78c578f6",
+  "bytes": 970,
+  "url": "https://websites.umich.edu/~mejn/netdata/karate.zip"
+ },
+ "kg-codex-s": {
+  "sha256": "64f93b7f314f3936a6f65739721429db3f6a7c8f5a1e1104ec3bb544f7434f59",
+  "bytes": 615428,
+  "url": "https://github.com/tsafavi/codex/raw/master/data/triples/codex-s/train.txt"
+ },
+ "lesmis": {
+  "sha256": "04f8ed2c517fbda9c60d244041837a08328ee13c3102efe847e911dc97a27fbe",
+  "bytes": 2301,
+  "url": "http://konect.cc/files/download.tsv.moreno_lesmis.tar.bz2"
+ },
+ "london_transport": {
+  "sha256": "37af686b9e8acc5b15f720700db46feb79e560a2ec54172c6591ab35065fbdf5",
+  "bytes": 17529,
+  "url": "https://networks.skewed.de/net/london_transport/files/london_transport.csv.zip"
+ },
+ "polblogs": {
+  "sha256": "e047df21736fef9037f0450f7d3756ecb16a8e347417723181c0f7e493021ddb",
+  "bytes": 94090,
+  "url": "https://websites.umich.edu/~mejn/netdata/polblogs.zip"
+ },
+ "roadnet-tx": {
+  "sha256": "1bc0ce058546ae66101d57af7c16de37225e37778ad2e3781b4f7bf3a28cb41f",
+  "bytes": 12442024,
+  "url": "https://snap.stanford.edu/data/roadNet-TX.txt.gz"
+ },
+ "ss-gleich-usroads-48": {
+  "sha256": "7118d65446f868f6803f77dcd422935b0c480e2445d25e37f2cf05aa269d2d0e",
+  "bytes": 990717,
+  "url": "https://www.cise.ufl.edu/research/sparse/MM/Gleich/usroads-48.tar.gz"
+ },
+ "transport-airline": {
+  "sha256": "bd373706238134f619c624c606dccc74c05c2582a977c489c81de501735f2390",
+  "bytes": 2377148,
+  "url": "https://raw.githubusercontent.com/jpatokal/openflights/master/data/routes.dat"
+ },
+ "wn18rr": {
+  "sha256": "db1f5ce41e3d753c902f52af4e6e75dfe1890eb67ecacec8eea346013c596aa8",
+  "bytes": 1297906,
+  "url": "https://web.informatik.uni-mannheim.de/pi1/kge-datasets/wnrr.tar.gz"
+ },
+ "yago3-10": {
+  "sha256": "f2fc0a6e5e47f09b8435c52cefcf0735f62b103f274725c4ae4c0a45a8357159",
+  "bytes": 19314355,
+  "url": "https://web.informatik.uni-mannheim.de/pi1/kge-datasets/yago3-10.tar.gz"
+ }
+}
