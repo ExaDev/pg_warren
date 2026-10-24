@@ -1,0 +1,598 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "time",
+   "--tier",
+   "medium",
+   "--pg-config",
+   "/var/tmp/warren-corpus/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "1ffdcd9",
+   "--extension-profile",
+   "release"
+  ],
+  "harness": {
+   "revision": "1ccaf3068d975dd471173d9ccc5ee60a940c9809",
+   "dirty": true
+  },
+  "extension": {
+   "revision": "1ffdcd9",
+   "profile": "release",
+   "library": "/var/tmp/warren-corpus/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "5499e8bca4b5710e1b28f9addaf05fe9538a6100b34dcf8406c30e2ff4ac2174"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872804352,
+  "kernel": "6.18.44-fc-v153",
+  "load_average": [
+   5.22265625,
+   3.29052734375,
+   2.37646484375
+  ]
+ },
+ "dataset": "dblp",
+ "tier": "medium",
+ "fetched": {
+  "tables": {
+   "nodes": 317080,
+   "edges": 1049866,
+   "ids": "integer",
+   "relations": 0,
+   "self_loops": 0
+  },
+  "provenance": {
+   "entryId": "dblp",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-24T13:48:48.894Z",
+   "source": {
+    "url": "https://snap.stanford.edu/data/bigdata/communities/com-dblp.ungraph.txt.gz",
+    "status": "live"
+   },
+   "fetchedUrl": "https://snap.stanford.edu/data/bigdata/communities/com-dblp.ungraph.txt.gz",
+   "sha256": "9eb0bd30312ddd04e2624f7c36c0983a2e99b116f0385be5a7fce6d6170f4cb3",
+   "byteLength": 4138463
+  }
+ },
+ "source": "'38868'::bigint",
+ "stages": {
+  "refresh": {
+   "sql": "SELECT warren.refresh('g')",
+   "seconds": [
+    0.4353
+   ],
+   "median_seconds": 0.4353,
+   "rows": [
+    "1"
+   ],
+   "first_rows": [
+    "1"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 3207168,
+   "peak_rss_anon": 67600384,
+   "vm_hwm": 188039168,
+   "rss_anon_after": 7258112,
+   "rss_shmem_after": 118525952
+  },
+  "cold load": {
+   "sql": "SELECT warren.evict('g'), warren.prewarm('g')",
+   "seconds": [
+    0.0357
+   ],
+   "median_seconds": 0.0357,
+   "rows": [
+    "0|1"
+   ],
+   "first_rows": [
+    "0|1"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 7258112,
+   "peak_rss_anon": 45064192,
+   "vm_hwm": 181043200,
+   "rss_anon_after": 45064192,
+   "rss_shmem_after": 118525952
+  },
+  "bfs depth 6": {
+   "sql": "SELECT bench_seconds($soak$SELECT count(*) FROM warren.bfs('g', ARRAY['38868'::bigint], 6)$soak$)",
+   "seconds": [
+    0.1026,
+    0.1046,
+    0.1043
+   ],
+   "median_seconds": 0.1043,
+   "rows": [
+    "0.103881"
+   ],
+   "first_rows": [
+    "0.102077",
+    "0.104205",
+    "0.103881"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 45064192,
+   "peak_rss_anon": 69840896,
+   "vm_hwm": 208097280,
+   "rss_anon_after": 36827136,
+   "rss_shmem_after": 118525952,
+   "server_seconds": [
+    0.102077,
+    0.104205,
+    0.103881
+   ],
+   "server_median_seconds": 0.103881
+  },
+  "bfs depth 6 rows": {
+   "sql": "SELECT count(*) FROM warren.bfs('g', ARRAY['38868'::bigint], 6)",
+   "seconds": [
+    0.1042
+   ],
+   "median_seconds": 0.1042,
+   "rows": [
+    "303357"
+   ],
+   "first_rows": [
+    "303357"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 36827136,
+   "peak_rss_anon": 66928640,
+   "vm_hwm": 205946880,
+   "rss_anon_after": 36827136,
+   "rss_shmem_after": 118525952
+  },
+  "bfs depth 6 recursive CTE": {
+   "sql": "WITH RECURSIVE r (id, depth) AS (SELECT '38868'::bigint, 0 UNION SELECT n.id, r.depth + 1 FROM r CROSS JOIN LATERAL (SELECT dst FROM edges WHERE src = r.id UNION ALL SELECT src FROM edges WHERE dst = r.id) n (id) WHERE r.depth < 6) SELECT count(DISTINCT id) FROM r",
+   "seconds": [
+    4.1523
+   ],
+   "median_seconds": 4.1523,
+   "rows": [
+    "303357"
+   ],
+   "first_rows": [
+    "303357"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 36827136,
+   "peak_rss_anon": 193536000,
+   "vm_hwm": 355422208,
+   "rss_anon_after": 56496128,
+   "rss_shmem_after": 144429056
+  },
+  "neighbours": {
+   "sql": "SELECT bench_seconds($soak$SELECT count(*) FROM warren.neighbours('g', '38868'::bigint)$soak$)",
+   "seconds": [
+    0.0008,
+    0.0003,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002,
+    0.0002
+   ],
+   "median_seconds": 0.0002,
+   "rows": [
+    "9.3e-05"
+   ],
+   "first_rows": [
+    "0.000477",
+    "0.000134",
+    "0.000108",
+    "0.000102",
+    "9.9e-05",
+    "9.4e-05",
+    "8.1e-05",
+    "9.4e-05",
+    "9.4e-05",
+    "9.5e-05",
+    "8.8e-05",
+    "9.4e-05",
+    "9.4e-05",
+    "7.9e-05",
+    "7.9e-05",
+    "9.1e-05",
+    "8.2e-05",
+    "7.7e-05",
+    "8.4e-05",
+    "9.3e-05"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 56496128,
+   "peak_rss_anon": 56496128,
+   "vm_hwm": 219029504,
+   "rss_anon_after": 56496128,
+   "rss_shmem_after": 144429056,
+   "server_seconds": [
+    0.000477,
+    0.000134,
+    0.000108,
+    0.000102,
+    9.9e-05,
+    9.4e-05,
+    8.1e-05,
+    9.4e-05,
+    9.4e-05,
+    9.5e-05,
+    8.8e-05,
+    9.4e-05,
+    9.4e-05,
+    7.9e-05,
+    7.9e-05,
+    9.1e-05,
+    8.2e-05,
+    7.7e-05,
+    8.4e-05,
+    9.3e-05
+   ],
+   "server_median_seconds": 9.4e-05
+  },
+  "reachable_set": {
+   "sql": "SELECT bench_seconds($soak$SELECT count(*) FROM warren.reachable_set('g', ARRAY['38868'::bigint])$soak$)",
+   "seconds": [
+    0.0681,
+    0.0584,
+    0.06
+   ],
+   "median_seconds": 0.06,
+   "rows": [
+    "0.059559"
+   ],
+   "first_rows": [
+    "0.067839",
+    "0.057995",
+    "0.059559"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 56496128,
+   "peak_rss_anon": 61251584,
+   "vm_hwm": 223784960,
+   "rss_anon_after": 61251584,
+   "rss_shmem_after": 144429056,
+   "server_seconds": [
+    0.067839,
+    0.057995,
+    0.059559
+   ],
+   "server_median_seconds": 0.059559
+  },
+  "reachable_set stats": {
+   "graph": "g",
+   "version": 1,
+   "function": "reachable_set",
+   "truncated": false,
+   "nodes_visited": 317080,
+   "edges_traversed": 1130558
+  },
+  "reachable_set rows": {
+   "sql": "SELECT count(*) FROM warren.reachable_set('g', ARRAY['38868'::bigint])",
+   "seconds": [
+    0.0599
+   ],
+   "median_seconds": 0.0599,
+   "rows": [
+    "317080"
+   ],
+   "first_rows": [
+    "317080"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 61251584,
+   "peak_rss_anon": 61255680,
+   "vm_hwm": 223789056,
+   "rss_anon_after": 61255680,
+   "rss_shmem_after": 144429056
+  },
+  "components": {
+   "sql": "SELECT count(DISTINCT component_id) FROM warren.components('g', NULL::bigint)",
+   "seconds": [
+    0.072
+   ],
+   "median_seconds": 0.072,
+   "rows": [
+    "1"
+   ],
+   "first_rows": [
+    "1"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 61255680,
+   "peak_rss_anon": 69496832,
+   "vm_hwm": 232095744,
+   "rss_anon_after": 69496832,
+   "rss_shmem_after": 144429056
+  },
+  "pagerank 20 iterations": {
+   "sql": "SELECT warren.pagerank('g', 'pr', tol := 0, max_iter := 20)",
+   "seconds": [
+    0.3803
+   ],
+   "median_seconds": 0.3803,
+   "rows": [
+    "20"
+   ],
+   "first_rows": [
+    "20"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 69496832,
+   "peak_rss_anon": 84193280,
+   "vm_hwm": 251322368,
+   "rss_anon_after": 84193280,
+   "rss_shmem_after": 147492864
+  },
+  "eigen k=20": {
+   "sql": "SELECT count(*), max(residual) FROM warren.eigen('g', 20, 'normalized_laplacian', 'smallest', tol := 1e-06)",
+   "seconds": [
+    21.3463
+   ],
+   "median_seconds": 21.3463,
+   "rows": [
+    "20|1.8209196434917016e-06"
+   ],
+   "first_rows": [
+    "20|1.8209196434917016e-06"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 84193280,
+   "peak_rss_anon": 142458880,
+   "vm_hwm": 309645312,
+   "rss_anon_after": 90058752,
+   "rss_shmem_after": 147492864
+  },
+  "embedding d=64 load": {
+   "sql": "SELECT warren.vector_from_query('g', 'emb', $q$SELECT id, (SELECT array_agg(sin(k * (hashtext(id::text) % 1000))::real ORDER BY k) FROM generate_series(1, 64) k) FROM nodes$q$, 'f32')",
+   "seconds": [
+    3.9514
+   ],
+   "median_seconds": 3.9514,
+   "rows": [
+    "2"
+   ],
+   "first_rows": [
+    "2"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 90058752,
+   "peak_rss_anon": 242884608,
+   "vm_hwm": 544931840,
+   "rss_anon_after": 189722624,
+   "rss_shmem_after": 232751104
+  },
+  "aggregate_neighbours d=64": {
+   "sql": "SELECT warren.aggregate_neighbours('g', 'emb', 'emb_nbr')",
+   "seconds": [
+    0.657
+   ],
+   "median_seconds": 0.657,
+   "rows": [
+    ""
+   ],
+   "first_rows": [
+    ""
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 189722624,
+   "peak_rss_anon": 402305024,
+   "vm_hwm": 792571904,
+   "rss_anon_after": 270925824,
+   "rss_shmem_after": 318038016
+  },
+  "triangles": {
+   "sql": "SELECT warren.triangles('g', 'tri')",
+   "seconds": [
+    0.3976
+   ],
+   "median_seconds": 0.3976,
+   "rows": [
+    "4"
+   ],
+   "first_rows": [
+    "4"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 270925824,
+   "peak_rss_anon": 306069504,
+   "vm_hwm": 693481472,
+   "rss_anon_after": 272470016,
+   "rss_shmem_after": 320688128
+  },
+  "clustering": {
+   "sql": "SELECT warren.clustering('g', 'cc')",
+   "seconds": [
+    0.4118
+   ],
+   "median_seconds": 0.4118,
+   "rows": [
+    ""
+   ],
+   "first_rows": [
+    ""
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 272470016,
+   "peak_rss_anon": 306073600,
+   "vm_hwm": 696098816,
+   "rss_anon_after": 272486400,
+   "rss_shmem_after": 323330048
+  },
+  "core_number": {
+   "sql": "SELECT warren.core_number('g', 'core')",
+   "seconds": [
+    0.1823
+   ],
+   "median_seconds": 0.1823,
+   "rows": [
+    "113"
+   ],
+   "first_rows": [
+    "113"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 272486400,
+   "peak_rss_anon": 311156736,
+   "vm_hwm": 703832064,
+   "rss_anon_after": 277557248,
+   "rss_shmem_after": 325984256
+  },
+  "louvain": {
+   "sql": "SELECT warren.louvain('g', 'louvain')",
+   "seconds": [
+    1.3188
+   ],
+   "median_seconds": 1.3188,
+   "rows": [
+    "0.8212267122797173"
+   ],
+   "first_rows": [
+    "0.8212267122797173"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 277557248,
+   "peak_rss_anon": 332599296,
+   "vm_hwm": 756469760,
+   "rss_anon_after": 298999808,
+   "rss_shmem_after": 354234368
+  },
+  "leiden": {
+   "sql": "SELECT warren.leiden('g', 'leiden')",
+   "seconds": [
+    2.9573
+   ],
+   "median_seconds": 2.9573,
+   "rows": [
+    "0.829871557275776"
+   ],
+   "first_rows": [
+    "0.829871557275776"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 298999808,
+   "peak_rss_anon": 401203200,
+   "vm_hwm": 912109568,
+   "rss_anon_after": 367603712,
+   "rss_shmem_after": 441147392
+  },
+  "second refresh": {
+   "sql": "SELECT warren.refresh('g')",
+   "seconds": [
+    0.4122
+   ],
+   "median_seconds": 0.4122,
+   "rows": [
+    "22"
+   ],
+   "first_rows": [
+    "22"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 367611904,
+   "peak_rss_anon": 386514944,
+   "vm_hwm": 920633344,
+   "rss_anon_after": 353927168,
+   "rss_shmem_after": 469663744
+  },
+  "diff": {
+   "sql": "SELECT warren.diff('g', 1, 22)",
+   "seconds": [
+    0.1194
+   ],
+   "median_seconds": 0.1194,
+   "rows": [
+    "{\"to\": 22, \"from\": 1, \"nodes\": {\"added\": 0, \"after\": 317080, \"before\": 317080, \"removed\": 0}, \"in_degree\": {\"histogram\": [{\"after\": 17, \"before\": 0, \"degree\": 0}, {\"after\": 43217, \"before\": 43181, \"degree\": 1}, {\"after\": 58891, \"before\": 58858, \"degree\": 2}, {\"after\": 49639, \"before\": 49657, \"degree\": 3}, {\"after\": 35111, \"before\": 35130, \"degree\": 4}, {\"after\": 25547, \"before\": 25544, \"degree\": 5}, {\"after\": 18381, \"before\": 18378, \"degree\": 6}, {\"after\": 13691, \"before\": 13704, \"degree\": 7}, {\"after\": 10377, \"before\": 10375, \"degree\": 8}, {\"after\": 8357, \"before\": 8371, \"degree\": 9}, {\"after\": 6598, \"before\": 6601, \"degree\": 10}, {\"after\": 5395, \"before\": 5398, \"degree\": 11}, {\"after\": 4665, \"before\": 4662, \"degree\": 12}, {\"after\": 3863, \"before\": 3858, \"degree\": 13}, {\"after\": 3340, \"before\": 3357, \"degree\": 14}, {\"after\": 2920, \"before\": 2912, \"degree\": 15}, {\"after\": 2462, \"before\": 2468, \"degree\": 16}, {\"after\": 2246, \"before\": 2251, \"degree\": 17}, {\"after\": 1818, \"before\": 1816, \"degree\": 18}, {\"after\": 1669, \"before\": 1670, \"degree\": 19}, {\"after\": 1484, \"before\": 1487, \"degree\": 20}, {\"after\": 1287, \"before\": 1287, \"degree\": 21}, {\"after\": 1117, \"before\": 1111, \"degree\": 22}, {\"after\": 1026, \"before\": 1035, \"degree\": 23}, {\"after\": 929, \"before\": 928, \"degree\": 24}, {\"after\": 855, \"before\": 855, \"degree\": 25}, {\"after\": 753, \"before\": 750, \"degree\": 26}, {\"after\": 703, \"before\": 710, \"degree\": 27}, {\"after\": 684, \"before\": 680, \"degree\": 28}, {\"after\": 664, \"before\": 668, \"degree\": 29}, {\"after\": 624, \"before\": 623, \"degree\": 30}, {\"after\": 545, \"before\": 548, \"degree\": 31}, {\"after\": 542, \"before\": 534, \"degree\": 32}, {\"after\": 439, \"before\": 444, \"degree\": 33}, {\"after\": 414, \"before\": 415, \"degree\": 34}, {\"after\": 401, \"before\": 398, \"degree\": 35}, {\"after\": 353, \"before\": 357, \"degree\": 36}, {\"after\": 320, \"before\": 316, \"degree\": 37}, {\"after\": 328, \"before\": 329, \"degree\": 38}, {\"after\": 298, \"before\": 295, \"degree\": 39}, {\"after\": 232, \"before\": 240, \"degree\": 40}, {\"after\": 243, \"before\": 241, \"degree\": 41}, {\"after\": 242, \"before\": 242, \"degree\": 42}, {\"after\": 271, \"before\": 270, \"degree\": 43}, {\"after\": 208, \"before\": 207, \"degree\": 44}, {\"after\": 187, \"before\": 190, \"degree\": 45}, {\"after\": 170, \"before\": 167, \"degree\": 46}, {\"after\": 189, \"before\": 190, \"degree\": 47}, {\"after\": 163, \"before\": 164, \"degree\": 48}, {\"after\": 116, \"before\": 118, \"degree\": 49}, {\"after\": 134, \"before\": 132, \"degree\": 50}, {\"after\": 130, \"before\": 130, \"degree\": 51}, {\"after\": 119, \"before\": 121, \"degree\": 52}, {\"after\": 145, \"before\": 143, \"degree\": 53}, {\"after\": 107, \"before\": 109, \"degree\": 54}, {\"after\": 118, \"before\": 117, \"degree\": 55}, {\"after\": 94, \"before\": 92, \"degree\": 56}, {\"after\": 91, \"before\": 95, \"degree\": 57}, {\"after\": 99, \"before\": 98, \"degree\": 58}, {\"after\": 83, \"before\": 83, \"degree\": 59}, {\"after\": 67, \"before\": 68, \"degree\": 60}, {\"after\": 70, \"before\": 68, \"degree\": 61}, {\"after\": 109, \"before\": 108, \"degree\": 62}, {\"after\": 75, \"before\": 72, \"degree\": 63}, {\"after\": 63, \"before\": 69, \"degree\": 64}, {\"after\": 64, \"before\": 64, \"degree\": 65}, {\"after\": 61, \"before\": 58, \"degree\": 66}, {\"after\": 83, \"before\": 83, \"degree\": 67}, {\"after\": 43, \"before\": 45, \"degree\": 68}, {\"after\": 52, \"before\": 52, \"degree\": 69}, {\"after\": 46, \"before\": 46, \"degree\": 70}, {\"after\": 40, \"before\": 41, \"degree\": 71}, {\"after\": 51, \"before\": 48, \"degree\": 72}, {\"after\": 37, \"before\": 40, \"degree\": 73}, {\"after\": 38, \"before\": 37, \"degree\": 74}, {\"after\": 32, \"before\": 32, \"degree\": 75}, {\"after\": 36, \"before\": 37, \"degree\": 76}, {\"after\": 19, \"before\": 18, \"degree\": 77}, {\"after\": 31, \"before\": 31, \"degree\": 78}, {\"after\": 30, \"before\": 31, \"degree\": 79}, {\"after\": 33, \"before\": 33, \"degree\": 80}, {\"after\": 26, \"before\": 25, \"degree\": 81}, {\"after\": 23, \"before\": 24, \"degree\": 82}, {\"after\": 37, \"before\": 36, \"degree\": 83}, {\"after\": 22, \"before\": 23, \"degree\": 84}, {\"after\": 22, \"before\": 22, \"degree\": 85}, {\"after\": 14, \"before\": 14, \"degree\": 86}, {\"after\": 27, \"before\": 26, \"degree\": 87}, {\"after\": 16, \"before\": 16, \"degree\": 88}, {\"after\": 25, \"before\": 25, \"degree\": 89}, {\"after\": 17, \"before\": 18, \"degree\": 90}, {\"after\": 16, \"before\": 16, \"degree\": 91}, {\"after\": 9, \"before\": 8, \"degree\": 92}, {\"after\": 12, \"before\": 12, \"degree\": 93}, {\"after\": 11, \"before\": 12, \"degree\": 94}, {\"after\": 17, \"before\": 16, \"degree\": 95}, {\"after\": 11, \"before\": 11, \"degree\": 96}, {\"after\": 15, \"before\": 14, \"degree\": 97}, {\"after\": 10, \"before\": 12, \"degree\": 98}, {\"after\": 11, \"before\": 10, \"degree\": 99}, {\"after\": 11, \"before\": 10, \"degree\": 100}, {\"after\": 53, \"before\": 54, \"degree\": 101}, {\"after\": 13, \"before\": 14, \"degree\": 102}, {\"after\": 21, \"before\": 21, \"degree\": 103}, {\"after\": 16, \"before\": 14, \"degree\": 104}, {\"after\": 19, \"before\": 20, \"degree\": 105}, {\"after\": 9, \"before\": 10, \"degree\": 106}, {\"after\": 10, \"before\": 9, \"degree\": 107}, {\"after\": 7, \"before\": 8, \"degree\": 108}, {\"after\": 11, \"before\": 11, \"degree\": 109}, {\"after\": 6, \"before\": 5, \"degree\": 110}, {\"after\": 14, \"before\": 14, \"degree\": 111}, {\"after\": 7, \"before\": 7, \"degree\": 112}, {\"after\": 31, \"before\": 32, \"degree\": 113}, {\"after\": 20, \"before\": 20, \"degree\": 114}, {\"after\": 13, \"before\": 12, \"degree\": 115}, {\"after\": 15, \"before\": 16, \"degree\": 116}, {\"after\": 6, \"before\": 6, \"degree\": 117}, {\"after\": 11, \"before\": 10, \"degree\": 118}, {\"after\": 11, \"before\": 11, \"degree\": 119}, {\"after\": 8, \"before\": 8, \"degree\": 120}, {\"after\": 6, \"before\": 7, \"degree\": 121}, {\"after\": 8, \"before\": 8, \"degree\": 122}, {\"after\": 8, \"before\": 7, \"degree\": 123}, {\"after\": 4, \"before\": 5, \"degree\": 124}, {\"after\": 6, \"before\": 6, \"degree\": 125}, {\"after\": 6, \"before\": 6, \"degree\": 126}, {\"after\": 5, \"before\": 5, \"degree\": 127}, {\"after\": 6, \"before\": 6, \"degree\": 128}, {\"after\": 9, \"before\": 9, \"degree\": 129}, {\"after\": 8, \"before\": 8, \"degree\": 130}, {\"after\": 4, \"before\": 4, \"degree\": 131}, {\"after\": 8, \"before\": 8, \"degree\": 132}, {\"after\": 4, \"before\": 4, \"degree\": 133}, {\"after\": 5, \"before\": 5, \"degree\": 134}, {\"after\": 3, \"before\": 3, \"degree\": 135}, {\"after\": 6, \"before\": 6, \"degree\": 136}, {\"after\": 6, \"before\": 5, \"degree\": 137}, {\"after\": 3, \"before\": 4, \"degree\": 138}, {\"after\": 4, \"before\": 3, \"degree\": 139}, {\"after\": 4, \"before\": 5, \"degree\": 140}, {\"after\": 2, \"before\": 2, \"degree\": 141}, {\"after\": 3, \"before\": 3, \"degree\": 142}, {\"after\": 2, \"before\": 2, \"degree\": 143}, {\"after\": 3, \"before\": 3, \"degree\": 144}, {\"after\": 6, \"before\": 6, \"degree\": 145}, {\"after\": 5, \"before\": 4, \"degree\": 146}, {\"after\": 4, \"before\": 4, \"degree\": 147}, {\"after\": 2, \"before\": 3, \"degree\": 148}, {\"after\": 4, \"before\": 3, \"degree\": 149}, {\"after\": 3, \"before\": 4, \"degree\": 150}, {\"after\": 3, \"before\": 3, \"degree\": 151}, {\"after\": 3, \"before\": 3, \"degree\": 152}, {\"after\": 5, \"before\": 5, \"degree\": 153}, {\"after\": 5, \"before\": 4, \"degree\": 155}, {\"after\": 4, \"before\": 5, \"degree\": 156}, {\"after\": 4, \"before\": 3, \"degree\": 157}, {\"after\": 0, \"before\": 1, \"degree\": 158}, {\"after\": 2, \"before\": 1, \"degree\": 159}, {\"after\": 5, \"before\": 5, \"degree\": 160}, {\"after\": 2, \"before\": 3, \"degree\": 161}, {\"after\": 2, \"before\": 2, \"degree\": 162}, {\"after\": 3, \"before\": 3, \"degree\": 163}, {\"after\": 3, \"before\": 3, \"degree\": 164}, {\"after\": 1, \"before\": 1, \"degree\": 165}, {\"after\": 2, \"before\": 2, \"degree\": 168}, {\"after\": 1, \"before\": 0, \"degree\": 169}, {\"after\": 1, \"before\": 2, \"degree\": 170}, {\"after\": 3, \"before\": 3, \"degree\": 172}, {\"after\": 2, \"before\": 2, \"degree\": 174}, {\"after\": 1, \"before\": 1, \"degree\": 175}, {\"after\": 1, \"before\": 1, \"degree\": 176}, {\"after\": 1, \"before\": 1, \"degree\": 177}, {\"after\": 1, \"before\": 1, \"degree\": 178}, {\"after\": 2, \"before\": 2, \"degree\": 179}, {\"after\": 1, \"before\": 1, \"degree\": 180}, {\"after\": 1, \"before\": 1, \"degree\": 181}, {\"after\": 2, \"before\": 2, \"degree\": 182}, {\"after\": 1, \"before\": 1, \"degree\": 183}, {\"after\": 1, \"before\": 1, \"degree\": 184}, {\"after\": 1, \"before\": 1, \"degree\": 188}, {\"after\": 1, \"before\": 1, \"degree\": 190}, {\"after\": 1, \"before\": 1, \"degree\": 191}, {\"after\": 1, \"before\": 1, \"degree\": 195}, {\"after\": 1, \"before\": 1, \"degree\": 200}, {\"after\": 3, \"before\": 3, \"degree\": 201}, {\"after\": 1, \"before\": 1, \"degree\": 207}, {\"after\": 1, \"before\": 1, \"degree\": 208}, {\"after\": 3, \"before\": 3, \"degree\": 215}, {\"after\": 2, \"before\": 2, \"degree\": 218}, {\"after\": 1, \"before\": 1, \"degree\": 219}, {\"after\": 1, \"before\": 1, \"degree\": 221}, {\"after\": 1, \"before\": 1, \"degree\": 225}, {\"after\": 1, \"before\": 1, \"degree\": 227}, {\"after\": 1, \"before\": 0, \"degree\": 229}, {\"after\": 0, \"before\": 1, \"degree\": 230}, {\"after\": 1, \"before\": 0, \"degree\": 243}, {\"after\": 0, \"before\": 1, \"degree\": 244}, {\"after\": 1, \"before\": 1, \"degree\": 264}, {\"after\": 1, \"before\": 1, \"degree\": 269}, {\"after\": 1, \"before\": 1, \"degree\": 290}, {\"after\": 1, \"before\": 1, \"degree\": 296}, {\"after\": 1, \"before\": 1, \"degree\": 343}], \"mean_after\": 6.619061435599849, \"mean_before\": 6.622089062697111, \"ks_statistic\": 0.0002712249274631008}, \"relations\": [{\"added\": 0, \"after\": 2098772, \"before\": 2099732, \"removed\": 960, \"relation\": \"\"}], \"out_degree\": {\"histogram\": [{\"after\": 17, \"before\": 0, \"degree\": 0}, {\"after\": 43217, \"before\": 43181, \"degree\": 1}, {\"after\": 58891, \"before\": 58858, \"degree\": 2}, {\"after\": 49639, \"before\": 49657, \"degree\": 3}, {\"after\": 35111, \"before\": 35130, \"degree\": 4}, {\"after\": 25547, \"before\": 25544, \"degree\": 5}, {\"after\": 18381, \"before\": 18378, \"degree\": 6}, {\"after\": 13691, \"before\": 13704, \"degree\": 7}, {\"after\": 10377, \"before\": 10375, \"degree\": 8}, {\"after\": 8357, \"before\": 8371, \"degree\": 9}, {\"after\": 6598, \"before\": 6601, \"degree\": 10}, {\"after\": 5395, \"before\": 5398, \"degree\": 11}, {\"after\": 4665, \"before\": 4662, \"degree\": 12}, {\"after\": 3863, \"before\": 3858, \"degree\": 13}, {\"after\": 3340, \"before\": 3357, \"degree\": 14}, {\"after\": 2920, \"before\": 2912, \"degree\": 15}, {\"after\": 2462, \"before\": 2468, \"degree\": 16}, {\"after\": 2246, \"before\": 2251, \"degree\": 17}, {\"after\": 1818, \"before\": 1816, \"degree\": 18}, {\"after\": 1669, \"before\": 1670, \"degree\": 19}, {\"after\": 1484, \"before\": 1487, \"degree\": 20}, {\"after\": 1287, \"before\": 1287, \"degree\": 21}, {\"after\": 1117, \"before\": 1111, \"degree\": 22}, {\"after\": 1026, \"before\": 1035, \"degree\": 23}, {\"after\": 929, \"before\": 928, \"degree\": 24}, {\"after\": 855, \"before\": 855, \"degree\": 25}, {\"after\": 753, \"before\": 750, \"degree\": 26}, {\"after\": 703, \"before\": 710, \"degree\": 27}, {\"after\": 684, \"before\": 680, \"degree\": 28}, {\"after\": 664, \"before\": 668, \"degree\": 29}, {\"after\": 624, \"before\": 623, \"degree\": 30}, {\"after\": 545, \"before\": 548, \"degree\": 31}, {\"after\": 542, \"before\": 534, \"degree\": 32}, {\"after\": 439, \"before\": 444, \"degree\": 33}, {\"after\": 414, \"before\": 415, \"degree\": 34}, {\"after\": 401, \"before\": 398, \"degree\": 35}, {\"after\": 353, \"before\": 357, \"degree\": 36}, {\"after\": 320, \"before\": 316, \"degree\": 37}, {\"after\": 328, \"before\": 329, \"degree\": 38}, {\"after\": 298, \"before\": 295, \"degree\": 39}, {\"after\": 232, \"before\": 240, \"degree\": 40}, {\"after\": 243, \"before\": 241, \"degree\": 41}, {\"after\": 242, \"before\": 242, \"degree\": 42}, {\"after\": 271, \"before\": 270, \"degree\": 43}, {\"after\": 208, \"before\": 207, \"degree\": 44}, {\"after\": 187, \"before\": 190, \"degree\": 45}, {\"after\": 170, \"before\": 167, \"degree\": 46}, {\"after\": 189, \"before\": 190, \"degree\": 47}, {\"after\": 163, \"before\": 164, \"degree\": 48}, {\"after\": 116, \"before\": 118, \"degree\": 49}, {\"after\": 134, \"before\": 132, \"degree\": 50}, {\"after\": 130, \"before\": 130, \"degree\": 51}, {\"after\": 119, \"before\": 121, \"degree\": 52}, {\"after\": 145, \"before\": 143, \"degree\": 53}, {\"after\": 107, \"before\": 109, \"degree\": 54}, {\"after\": 118, \"before\": 117, \"degree\": 55}, {\"after\": 94, \"before\": 92, \"degree\": 56}, {\"after\": 91, \"before\": 95, \"degree\": 57}, {\"after\": 99, \"before\": 98, \"degree\": 58}, {\"after\": 83, \"before\": 83, \"degree\": 59}, {\"after\": 67, \"before\": 68, \"degree\": 60}, {\"after\": 70, \"before\": 68, \"degree\": 61}, {\"after\": 109, \"before\": 108, \"degree\": 62}, {\"after\": 75, \"before\": 72, \"degree\": 63}, {\"after\": 63, \"before\": 69, \"degree\": 64}, {\"after\": 64, \"before\": 64, \"degree\": 65}, {\"after\": 61, \"before\": 58, \"degree\": 66}, {\"after\": 83, \"before\": 83, \"degree\": 67}, {\"after\": 43, \"before\": 45, \"degree\": 68}, {\"after\": 52, \"before\": 52, \"degree\": 69}, {\"after\": 46, \"before\": 46, \"degree\": 70}, {\"after\": 40, \"before\": 41, \"degree\": 71}, {\"after\": 51, \"before\": 48, \"degree\": 72}, {\"after\": 37, \"before\": 40, \"degree\": 73}, {\"after\": 38, \"before\": 37, \"degree\": 74}, {\"after\": 32, \"before\": 32, \"degree\": 75}, {\"after\": 36, \"before\": 37, \"degree\": 76}, {\"after\": 19, \"before\": 18, \"degree\": 77}, {\"after\": 31, \"before\": 31, \"degree\": 78}, {\"after\": 30, \"before\": 31, \"degree\": 79}, {\"after\": 33, \"before\": 33, \"degree\": 80}, {\"after\": 26, \"before\": 25, \"degree\": 81}, {\"after\": 23, \"before\": 24, \"degree\": 82}, {\"after\": 37, \"before\": 36, \"degree\": 83}, {\"after\": 22, \"before\": 23, \"degree\": 84}, {\"after\": 22, \"before\": 22, \"degree\": 85}, {\"after\": 14, \"before\": 14, \"degree\": 86}, {\"after\": 27, \"before\": 26, \"degree\": 87}, {\"after\": 16, \"before\": 16, \"degree\": 88}, {\"after\": 25, \"before\": 25, \"degree\": 89}, {\"after\": 17, \"before\": 18, \"degree\": 90}, {\"after\": 16, \"before\": 16, \"degree\": 91}, {\"after\": 9, \"before\": 8, \"degree\": 92}, {\"after\": 12, \"before\": 12, \"degree\": 93}, {\"after\": 11, \"before\": 12, \"degree\": 94}, {\"after\": 17, \"before\": 16, \"degree\": 95}, {\"after\": 11, \"before\": 11, \"degree\": 96}, {\"after\": 15, \"before\": 14, \"degree\": 97}, {\"after\": 10, \"before\": 12, \"degree\": 98}, {\"after\": 11, \"before\": 10, \"degree\": 99}, {\"after\": 11, \"before\": 10, \"degree\": 100}, {\"after\": 53, \"before\": 54, \"degree\": 101}, {\"after\": 13, \"before\": 14, \"degree\": 102}, {\"after\": 21, \"before\": 21, \"degree\": 103}, {\"after\": 16, \"before\": 14, \"degree\": 104}, {\"after\": 19, \"before\": 20, \"degree\": 105}, {\"after\": 9, \"before\": 10, \"degree\": 106}, {\"after\": 10, \"before\": 9, \"degree\": 107}, {\"after\": 7, \"before\": 8, \"degree\": 108}, {\"after\": 11, \"before\": 11, \"degree\": 109}, {\"after\": 6, \"before\": 5, \"degree\": 110}, {\"after\": 14, \"before\": 14, \"degree\": 111}, {\"after\": 7, \"before\": 7, \"degree\": 112}, {\"after\": 31, \"before\": 32, \"degree\": 113}, {\"after\": 20, \"before\": 20, \"degree\": 114}, {\"after\": 13, \"before\": 12, \"degree\": 115}, {\"after\": 15, \"before\": 16, \"degree\": 116}, {\"after\": 6, \"before\": 6, \"degree\": 117}, {\"after\": 11, \"before\": 10, \"degree\": 118}, {\"after\": 11, \"before\": 11, \"degree\": 119}, {\"after\": 8, \"before\": 8, \"degree\": 120}, {\"after\": 6, \"before\": 7, \"degree\": 121}, {\"after\": 8, \"before\": 8, \"degree\": 122}, {\"after\": 8, \"before\": 7, \"degree\": 123}, {\"after\": 4, \"before\": 5, \"degree\": 124}, {\"after\": 6, \"before\": 6, \"degree\": 125}, {\"after\": 6, \"before\": 6, \"degree\": 126}, {\"after\": 5, \"before\": 5, \"degree\": 127}, {\"after\": 6, \"before\": 6, \"degree\": 128}, {\"after\": 9, \"before\": 9, \"degree\": 129}, {\"after\": 8, \"before\": 8, \"degree\": 130}, {\"after\": 4, \"before\": 4, \"degree\": 131}, {\"after\": 8, \"before\": 8, \"degree\": 132}, {\"after\": 4, \"before\": 4, \"degree\": 133}, {\"after\": 5, \"before\": 5, \"degree\": 134}, {\"after\": 3, \"before\": 3, \"degree\": 135}, {\"after\": 6, \"before\": 6, \"degree\": 136}, {\"after\": 6, \"before\": 5, \"degree\": 137}, {\"after\": 3, \"before\": 4, \"degree\": 138}, {\"after\": 4, \"before\": 3, \"degree\": 139}, {\"after\": 4, \"before\": 5, \"degree\": 140}, {\"after\": 2, \"before\": 2, \"degree\": 141}, {\"after\": 3, \"before\": 3, \"degree\": 142}, {\"after\": 2, \"before\": 2, \"degree\": 143}, {\"after\": 3, \"before\": 3, \"degree\": 144}, {\"after\": 6, \"before\": 6, \"degree\": 145}, {\"after\": 5, \"before\": 4, \"degree\": 146}, {\"after\": 4, \"before\": 4, \"degree\": 147}, {\"after\": 2, \"before\": 3, \"degree\": 148}, {\"after\": 4, \"before\": 3, \"degree\": 149}, {\"after\": 3, \"before\": 4, \"degree\": 150}, {\"after\": 3, \"before\": 3, \"degree\": 151}, {\"after\": 3, \"before\": 3, \"degree\": 152}, {\"after\": 5, \"before\": 5, \"degree\": 153}, {\"after\": 5, \"before\": 4, \"degree\": 155}, {\"after\": 4, \"before\": 5, \"degree\": 156}, {\"after\": 4, \"before\": 3, \"degree\": 157}, {\"after\": 0, \"before\": 1, \"degree\": 158}, {\"after\": 2, \"before\": 1, \"degree\": 159}, {\"after\": 5, \"before\": 5, \"degree\": 160}, {\"after\": 2, \"before\": 3, \"degree\": 161}, {\"after\": 2, \"before\": 2, \"degree\": 162}, {\"after\": 3, \"before\": 3, \"degree\": 163}, {\"after\": 3, \"before\": 3, \"degree\": 164}, {\"after\": 1, \"before\": 1, \"degree\": 165}, {\"after\": 2, \"before\": 2, \"degree\": 168}, {\"after\": 1, \"before\": 0, \"degree\": 169}, {\"after\": 1, \"before\": 2, \"degree\": 170}, {\"after\": 3, \"before\": 3, \"degree\": 172}, {\"after\": 2, \"before\": 2, \"degree\": 174}, {\"after\": 1, \"before\": 1, \"degree\": 175}, {\"after\": 1, \"before\": 1, \"degree\": 176}, {\"after\": 1, \"before\": 1, \"degree\": 177}, {\"after\": 1, \"before\": 1, \"degree\": 178}, {\"after\": 2, \"before\": 2, \"degree\": 179}, {\"after\": 1, \"before\": 1, \"degree\": 180}, {\"after\": 1, \"before\": 1, \"degree\": 181}, {\"after\": 2, \"before\": 2, \"degree\": 182}, {\"after\": 1, \"before\": 1, \"degree\": 183}, {\"after\": 1, \"before\": 1, \"degree\": 184}, {\"after\": 1, \"before\": 1, \"degree\": 188}, {\"after\": 1, \"before\": 1, \"degree\": 190}, {\"after\": 1, \"before\": 1, \"degree\": 191}, {\"after\": 1, \"before\": 1, \"degree\": 195}, {\"after\": 1, \"before\": 1, \"degree\": 200}, {\"after\": 3, \"before\": 3, \"degree\": 201}, {\"after\": 1, \"before\": 1, \"degree\": 207}, {\"after\": 1, \"before\": 1, \"degree\": 208}, {\"after\": 3, \"before\": 3, \"degree\": 215}, {\"after\": 2, \"before\": 2, \"degree\": 218}, {\"after\": 1, \"before\": 1, \"degree\": 219}, {\"after\": 1, \"before\": 1, \"degree\": 221}, {\"after\": 1, \"before\": 1, \"degree\": 225}, {\"after\": 1, \"before\": 1, \"degree\": 227}, {\"after\": 1, \"before\": 0, \"degree\": 229}, {\"after\": 0, \"before\": 1, \"degree\": 230}, {\"after\": 1, \"before\": 0, \"degree\": 243}, {\"after\": 0, \"before\": 1, \"degree\": 244}, {\"after\": 1, \"before\": 1, \"degree\": 264}, {\"after\": 1, \"before\": 1, \"degree\": 269}, {\"after\": 1, \"before\": 1, \"degree\": 290}, {\"after\": 1, \"before\": 1, \"degree\": 296}, {\"after\": 1, \"before\": 1, \"degree\": 343}], \"mean_after\": 6.619061435599849, \"mean_before\": 6.622089062697111, \"ks_statistic\": 0.0002712249274631008}, \"all_relations\": {\"added\": 0, \"after\": 2098772, \"before\": 2099732, \"removed\": 960}}"
+   ],
+   "first_rows": [
+    "{\"to\": 22, \"from\": 1, \"nodes\": {\"added\": 0, \"after\": 317080, \"before\": 317080, \"removed\": 0}, \"in_degree\": {\"histogram\": [{\"after\": 17, \"before\": 0, \"degree\": 0}, {\"after\": 43217, \"before\": 43181, \"degree\": 1}, {\"after\": 58891, \"before\": 58858, \"degree\": 2}, {\"after\": 49639, \"before\": 49657, \"degree\": 3}, {\"after\": 35111, \"before\": 35130, \"degree\": 4}, {\"after\": 25547, \"before\": 25544, \"degree\": 5}, {\"after\": 18381, \"before\": 18378, \"degree\": 6}, {\"after\": 13691, \"before\": 13704, \"degree\": 7}, {\"after\": 10377, \"before\": 10375, \"degree\": 8}, {\"after\": 8357, \"before\": 8371, \"degree\": 9}, {\"after\": 6598, \"before\": 6601, \"degree\": 10}, {\"after\": 5395, \"before\": 5398, \"degree\": 11}, {\"after\": 4665, \"before\": 4662, \"degree\": 12}, {\"after\": 3863, \"before\": 3858, \"degree\": 13}, {\"after\": 3340, \"before\": 3357, \"degree\": 14}, {\"after\": 2920, \"before\": 2912, \"degree\": 15}, {\"after\": 2462, \"before\": 2468, \"degree\": 16}, {\"after\": 2246, \"before\": 2251, \"degree\": 17}, {\"after\": 1818, \"before\": 1816, \"degree\": 18}, {\"after\": 1669, \"before\": 1670, \"degree\": 19}, {\"after\": 1484, \"before\": 1487, \"degree\": 20}, {\"after\": 1287, \"before\": 1287, \"degree\": 21}, {\"after\": 1117, \"before\": 1111, \"degree\": 22}, {\"after\": 1026, \"before\": 1035, \"degree\": 23}, {\"after\": 929, \"before\": 928, \"degree\": 24}, {\"after\": 855, \"before\": 855, \"degree\": 25}, {\"after\": 753, \"before\": 750, \"degree\": 26}, {\"after\": 703, \"before\": 710, \"degree\": 27}, {\"after\": 684, \"before\": 680, \"degree\": 28}, {\"after\": 664, \"before\": 668, \"degree\": 29}, {\"after\": 624, \"before\": 623, \"degree\": 30}, {\"after\": 545, \"before\": 548, \"degree\": 31}, {\"after\": 542, \"before\": 534, \"degree\": 32}, {\"after\": 439, \"before\": 444, \"degree\": 33}, {\"after\": 414, \"before\": 415, \"degree\": 34}, {\"after\": 401, \"before\": 398, \"degree\": 35}, {\"after\": 353, \"before\": 357, \"degree\": 36}, {\"after\": 320, \"before\": 316, \"degree\": 37}, {\"after\": 328, \"before\": 329, \"degree\": 38}, {\"after\": 298, \"before\": 295, \"degree\": 39}, {\"after\": 232, \"before\": 240, \"degree\": 40}, {\"after\": 243, \"before\": 241, \"degree\": 41}, {\"after\": 242, \"before\": 242, \"degree\": 42}, {\"after\": 271, \"before\": 270, \"degree\": 43}, {\"after\": 208, \"before\": 207, \"degree\": 44}, {\"after\": 187, \"before\": 190, \"degree\": 45}, {\"after\": 170, \"before\": 167, \"degree\": 46}, {\"after\": 189, \"before\": 190, \"degree\": 47}, {\"after\": 163, \"before\": 164, \"degree\": 48}, {\"after\": 116, \"before\": 118, \"degree\": 49}, {\"after\": 134, \"before\": 132, \"degree\": 50}, {\"after\": 130, \"before\": 130, \"degree\": 51}, {\"after\": 119, \"before\": 121, \"degree\": 52}, {\"after\": 145, \"before\": 143, \"degree\": 53}, {\"after\": 107, \"before\": 109, \"degree\": 54}, {\"after\": 118, \"before\": 117, \"degree\": 55}, {\"after\": 94, \"before\": 92, \"degree\": 56}, {\"after\": 91, \"before\": 95, \"degree\": 57}, {\"after\": 99, \"before\": 98, \"degree\": 58}, {\"after\": 83, \"before\": 83, \"degree\": 59}, {\"after\": 67, \"before\": 68, \"degree\": 60}, {\"after\": 70, \"before\": 68, \"degree\": 61}, {\"after\": 109, \"before\": 108, \"degree\": 62}, {\"after\": 75, \"before\": 72, \"degree\": 63}, {\"after\": 63, \"before\": 69, \"degree\": 64}, {\"after\": 64, \"before\": 64, \"degree\": 65}, {\"after\": 61, \"before\": 58, \"degree\": 66}, {\"after\": 83, \"before\": 83, \"degree\": 67}, {\"after\": 43, \"before\": 45, \"degree\": 68}, {\"after\": 52, \"before\": 52, \"degree\": 69}, {\"after\": 46, \"before\": 46, \"degree\": 70}, {\"after\": 40, \"before\": 41, \"degree\": 71}, {\"after\": 51, \"before\": 48, \"degree\": 72}, {\"after\": 37, \"before\": 40, \"degree\": 73}, {\"after\": 38, \"before\": 37, \"degree\": 74}, {\"after\": 32, \"before\": 32, \"degree\": 75}, {\"after\": 36, \"before\": 37, \"degree\": 76}, {\"after\": 19, \"before\": 18, \"degree\": 77}, {\"after\": 31, \"before\": 31, \"degree\": 78}, {\"after\": 30, \"before\": 31, \"degree\": 79}, {\"after\": 33, \"before\": 33, \"degree\": 80}, {\"after\": 26, \"before\": 25, \"degree\": 81}, {\"after\": 23, \"before\": 24, \"degree\": 82}, {\"after\": 37, \"before\": 36, \"degree\": 83}, {\"after\": 22, \"before\": 23, \"degree\": 84}, {\"after\": 22, \"before\": 22, \"degree\": 85}, {\"after\": 14, \"before\": 14, \"degree\": 86}, {\"after\": 27, \"before\": 26, \"degree\": 87}, {\"after\": 16, \"before\": 16, \"degree\": 88}, {\"after\": 25, \"before\": 25, \"degree\": 89}, {\"after\": 17, \"before\": 18, \"degree\": 90}, {\"after\": 16, \"before\": 16, \"degree\": 91}, {\"after\": 9, \"before\": 8, \"degree\": 92}, {\"after\": 12, \"before\": 12, \"degree\": 93}, {\"after\": 11, \"before\": 12, \"degree\": 94}, {\"after\": 17, \"before\": 16, \"degree\": 95}, {\"after\": 11, \"before\": 11, \"degree\": 96}, {\"after\": 15, \"before\": 14, \"degree\": 97}, {\"after\": 10, \"before\": 12, \"degree\": 98}, {\"after\": 11, \"before\": 10, \"degree\": 99}, {\"after\": 11, \"before\": 10, \"degree\": 100}, {\"after\": 53, \"before\": 54, \"degree\": 101}, {\"after\": 13, \"before\": 14, \"degree\": 102}, {\"after\": 21, \"before\": 21, \"degree\": 103}, {\"after\": 16, \"before\": 14, \"degree\": 104}, {\"after\": 19, \"before\": 20, \"degree\": 105}, {\"after\": 9, \"before\": 10, \"degree\": 106}, {\"after\": 10, \"before\": 9, \"degree\": 107}, {\"after\": 7, \"before\": 8, \"degree\": 108}, {\"after\": 11, \"before\": 11, \"degree\": 109}, {\"after\": 6, \"before\": 5, \"degree\": 110}, {\"after\": 14, \"before\": 14, \"degree\": 111}, {\"after\": 7, \"before\": 7, \"degree\": 112}, {\"after\": 31, \"before\": 32, \"degree\": 113}, {\"after\": 20, \"before\": 20, \"degree\": 114}, {\"after\": 13, \"before\": 12, \"degree\": 115}, {\"after\": 15, \"before\": 16, \"degree\": 116}, {\"after\": 6, \"before\": 6, \"degree\": 117}, {\"after\": 11, \"before\": 10, \"degree\": 118}, {\"after\": 11, \"before\": 11, \"degree\": 119}, {\"after\": 8, \"before\": 8, \"degree\": 120}, {\"after\": 6, \"before\": 7, \"degree\": 121}, {\"after\": 8, \"before\": 8, \"degree\": 122}, {\"after\": 8, \"before\": 7, \"degree\": 123}, {\"after\": 4, \"before\": 5, \"degree\": 124}, {\"after\": 6, \"before\": 6, \"degree\": 125}, {\"after\": 6, \"before\": 6, \"degree\": 126}, {\"after\": 5, \"before\": 5, \"degree\": 127}, {\"after\": 6, \"before\": 6, \"degree\": 128}, {\"after\": 9, \"before\": 9, \"degree\": 129}, {\"after\": 8, \"before\": 8, \"degree\": 130}, {\"after\": 4, \"before\": 4, \"degree\": 131}, {\"after\": 8, \"before\": 8, \"degree\": 132}, {\"after\": 4, \"before\": 4, \"degree\": 133}, {\"after\": 5, \"before\": 5, \"degree\": 134}, {\"after\": 3, \"before\": 3, \"degree\": 135}, {\"after\": 6, \"before\": 6, \"degree\": 136}, {\"after\": 6, \"before\": 5, \"degree\": 137}, {\"after\": 3, \"before\": 4, \"degree\": 138}, {\"after\": 4, \"before\": 3, \"degree\": 139}, {\"after\": 4, \"before\": 5, \"degree\": 140}, {\"after\": 2, \"before\": 2, \"degree\": 141}, {\"after\": 3, \"before\": 3, \"degree\": 142}, {\"after\": 2, \"before\": 2, \"degree\": 143}, {\"after\": 3, \"before\": 3, \"degree\": 144}, {\"after\": 6, \"before\": 6, \"degree\": 145}, {\"after\": 5, \"before\": 4, \"degree\": 146}, {\"after\": 4, \"before\": 4, \"degree\": 147}, {\"after\": 2, \"before\": 3, \"degree\": 148}, {\"after\": 4, \"before\": 3, \"degree\": 149}, {\"after\": 3, \"before\": 4, \"degree\": 150}, {\"after\": 3, \"before\": 3, \"degree\": 151}, {\"after\": 3, \"before\": 3, \"degree\": 152}, {\"after\": 5, \"before\": 5, \"degree\": 153}, {\"after\": 5, \"before\": 4, \"degree\": 155}, {\"after\": 4, \"before\": 5, \"degree\": 156}, {\"after\": 4, \"before\": 3, \"degree\": 157}, {\"after\": 0, \"before\": 1, \"degree\": 158}, {\"after\": 2, \"before\": 1, \"degree\": 159}, {\"after\": 5, \"before\": 5, \"degree\": 160}, {\"after\": 2, \"before\": 3, \"degree\": 161}, {\"after\": 2, \"before\": 2, \"degree\": 162}, {\"after\": 3, \"before\": 3, \"degree\": 163}, {\"after\": 3, \"before\": 3, \"degree\": 164}, {\"after\": 1, \"before\": 1, \"degree\": 165}, {\"after\": 2, \"before\": 2, \"degree\": 168}, {\"after\": 1, \"before\": 0, \"degree\": 169}, {\"after\": 1, \"before\": 2, \"degree\": 170}, {\"after\": 3, \"before\": 3, \"degree\": 172}, {\"after\": 2, \"before\": 2, \"degree\": 174}, {\"after\": 1, \"before\": 1, \"degree\": 175}, {\"after\": 1, \"before\": 1, \"degree\": 176}, {\"after\": 1, \"before\": 1, \"degree\": 177}, {\"after\": 1, \"before\": 1, \"degree\": 178}, {\"after\": 2, \"before\": 2, \"degree\": 179}, {\"after\": 1, \"before\": 1, \"degree\": 180}, {\"after\": 1, \"before\": 1, \"degree\": 181}, {\"after\": 2, \"before\": 2, \"degree\": 182}, {\"after\": 1, \"before\": 1, \"degree\": 183}, {\"after\": 1, \"before\": 1, \"degree\": 184}, {\"after\": 1, \"before\": 1, \"degree\": 188}, {\"after\": 1, \"before\": 1, \"degree\": 190}, {\"after\": 1, \"before\": 1, \"degree\": 191}, {\"after\": 1, \"before\": 1, \"degree\": 195}, {\"after\": 1, \"before\": 1, \"degree\": 200}, {\"after\": 3, \"before\": 3, \"degree\": 201}, {\"after\": 1, \"before\": 1, \"degree\": 207}, {\"after\": 1, \"before\": 1, \"degree\": 208}, {\"after\": 3, \"before\": 3, \"degree\": 215}, {\"after\": 2, \"before\": 2, \"degree\": 218}, {\"after\": 1, \"before\": 1, \"degree\": 219}, {\"after\": 1, \"before\": 1, \"degree\": 221}, {\"after\": 1, \"before\": 1, \"degree\": 225}, {\"after\": 1, \"before\": 1, \"degree\": 227}, {\"after\": 1, \"before\": 0, \"degree\": 229}, {\"after\": 0, \"before\": 1, \"degree\": 230}, {\"after\": 1, \"before\": 0, \"degree\": 243}, {\"after\": 0, \"before\": 1, \"degree\": 244}, {\"after\": 1, \"before\": 1, \"degree\": 264}, {\"after\": 1, \"before\": 1, \"degree\": 269}, {\"after\": 1, \"before\": 1, \"degree\": 290}, {\"after\": 1, \"before\": 1, \"degree\": 296}, {\"after\": 1, \"before\": 1, \"degree\": 343}], \"mean_after\": 6.619061435599849, \"mean_before\": 6.622089062697111, \"ks_statistic\": 0.0002712249274631008}, \"relations\": [{\"added\": 0, \"after\": 2098772, \"before\": 2099732, \"removed\": 960, \"relation\": \"\"}], \"out_degree\": {\"histogram\": [{\"after\": 17, \"before\": 0, \"degree\": 0}, {\"after\": 43217, \"before\": 43181, \"degree\": 1}, {\"after\": 58891, \"before\": 58858, \"degree\": 2}, {\"after\": 49639, \"before\": 49657, \"degree\": 3}, {\"after\": 35111, \"before\": 35130, \"degree\": 4}, {\"after\": 25547, \"before\": 25544, \"degree\": 5}, {\"after\": 18381, \"before\": 18378, \"degree\": 6}, {\"after\": 13691, \"before\": 13704, \"degree\": 7}, {\"after\": 10377, \"before\": 10375, \"degree\": 8}, {\"after\": 8357, \"before\": 8371, \"degree\": 9}, {\"after\": 6598, \"before\": 6601, \"degree\": 10}, {\"after\": 5395, \"before\": 5398, \"degree\": 11}, {\"after\": 4665, \"before\": 4662, \"degree\": 12}, {\"after\": 3863, \"before\": 3858, \"degree\": 13}, {\"after\": 3340, \"before\": 3357, \"degree\": 14}, {\"after\": 2920, \"before\": 2912, \"degree\": 15}, {\"after\": 2462, \"before\": 2468, \"degree\": 16}, {\"after\": 2246, \"before\": 2251, \"degree\": 17}, {\"after\": 1818, \"before\": 1816, \"degree\": 18}, {\"after\": 1669, \"before\": 1670, \"degree\": 19}, {\"after\": 1484, \"before\": 1487, \"degree\": 20}, {\"after\": 1287, \"before\": 1287, \"degree\": 21}, {\"after\": 1117, \"before\": 1111, \"degree\": 22}, {\"after\": 1026, \"before\": 1035, \"degree\": 23}, {\"after\": 929, \"before\": 928, \"degree\": 24}, {\"after\": 855, \"before\": 855, \"degree\": 25}, {\"after\": 753, \"before\": 750, \"degree\": 26}, {\"after\": 703, \"before\": 710, \"degree\": 27}, {\"after\": 684, \"before\": 680, \"degree\": 28}, {\"after\": 664, \"before\": 668, \"degree\": 29}, {\"after\": 624, \"before\": 623, \"degree\": 30}, {\"after\": 545, \"before\": 548, \"degree\": 31}, {\"after\": 542, \"before\": 534, \"degree\": 32}, {\"after\": 439, \"before\": 444, \"degree\": 33}, {\"after\": 414, \"before\": 415, \"degree\": 34}, {\"after\": 401, \"before\": 398, \"degree\": 35}, {\"after\": 353, \"before\": 357, \"degree\": 36}, {\"after\": 320, \"before\": 316, \"degree\": 37}, {\"after\": 328, \"before\": 329, \"degree\": 38}, {\"after\": 298, \"before\": 295, \"degree\": 39}, {\"after\": 232, \"before\": 240, \"degree\": 40}, {\"after\": 243, \"before\": 241, \"degree\": 41}, {\"after\": 242, \"before\": 242, \"degree\": 42}, {\"after\": 271, \"before\": 270, \"degree\": 43}, {\"after\": 208, \"before\": 207, \"degree\": 44}, {\"after\": 187, \"before\": 190, \"degree\": 45}, {\"after\": 170, \"before\": 167, \"degree\": 46}, {\"after\": 189, \"before\": 190, \"degree\": 47}, {\"after\": 163, \"before\": 164, \"degree\": 48}, {\"after\": 116, \"before\": 118, \"degree\": 49}, {\"after\": 134, \"before\": 132, \"degree\": 50}, {\"after\": 130, \"before\": 130, \"degree\": 51}, {\"after\": 119, \"before\": 121, \"degree\": 52}, {\"after\": 145, \"before\": 143, \"degree\": 53}, {\"after\": 107, \"before\": 109, \"degree\": 54}, {\"after\": 118, \"before\": 117, \"degree\": 55}, {\"after\": 94, \"before\": 92, \"degree\": 56}, {\"after\": 91, \"before\": 95, \"degree\": 57}, {\"after\": 99, \"before\": 98, \"degree\": 58}, {\"after\": 83, \"before\": 83, \"degree\": 59}, {\"after\": 67, \"before\": 68, \"degree\": 60}, {\"after\": 70, \"before\": 68, \"degree\": 61}, {\"after\": 109, \"before\": 108, \"degree\": 62}, {\"after\": 75, \"before\": 72, \"degree\": 63}, {\"after\": 63, \"before\": 69, \"degree\": 64}, {\"after\": 64, \"before\": 64, \"degree\": 65}, {\"after\": 61, \"before\": 58, \"degree\": 66}, {\"after\": 83, \"before\": 83, \"degree\": 67}, {\"after\": 43, \"before\": 45, \"degree\": 68}, {\"after\": 52, \"before\": 52, \"degree\": 69}, {\"after\": 46, \"before\": 46, \"degree\": 70}, {\"after\": 40, \"before\": 41, \"degree\": 71}, {\"after\": 51, \"before\": 48, \"degree\": 72}, {\"after\": 37, \"before\": 40, \"degree\": 73}, {\"after\": 38, \"before\": 37, \"degree\": 74}, {\"after\": 32, \"before\": 32, \"degree\": 75}, {\"after\": 36, \"before\": 37, \"degree\": 76}, {\"after\": 19, \"before\": 18, \"degree\": 77}, {\"after\": 31, \"before\": 31, \"degree\": 78}, {\"after\": 30, \"before\": 31, \"degree\": 79}, {\"after\": 33, \"before\": 33, \"degree\": 80}, {\"after\": 26, \"before\": 25, \"degree\": 81}, {\"after\": 23, \"before\": 24, \"degree\": 82}, {\"after\": 37, \"before\": 36, \"degree\": 83}, {\"after\": 22, \"before\": 23, \"degree\": 84}, {\"after\": 22, \"before\": 22, \"degree\": 85}, {\"after\": 14, \"before\": 14, \"degree\": 86}, {\"after\": 27, \"before\": 26, \"degree\": 87}, {\"after\": 16, \"before\": 16, \"degree\": 88}, {\"after\": 25, \"before\": 25, \"degree\": 89}, {\"after\": 17, \"before\": 18, \"degree\": 90}, {\"after\": 16, \"before\": 16, \"degree\": 91}, {\"after\": 9, \"before\": 8, \"degree\": 92}, {\"after\": 12, \"before\": 12, \"degree\": 93}, {\"after\": 11, \"before\": 12, \"degree\": 94}, {\"after\": 17, \"before\": 16, \"degree\": 95}, {\"after\": 11, \"before\": 11, \"degree\": 96}, {\"after\": 15, \"before\": 14, \"degree\": 97}, {\"after\": 10, \"before\": 12, \"degree\": 98}, {\"after\": 11, \"before\": 10, \"degree\": 99}, {\"after\": 11, \"before\": 10, \"degree\": 100}, {\"after\": 53, \"before\": 54, \"degree\": 101}, {\"after\": 13, \"before\": 14, \"degree\": 102}, {\"after\": 21, \"before\": 21, \"degree\": 103}, {\"after\": 16, \"before\": 14, \"degree\": 104}, {\"after\": 19, \"before\": 20, \"degree\": 105}, {\"after\": 9, \"before\": 10, \"degree\": 106}, {\"after\": 10, \"before\": 9, \"degree\": 107}, {\"after\": 7, \"before\": 8, \"degree\": 108}, {\"after\": 11, \"before\": 11, \"degree\": 109}, {\"after\": 6, \"before\": 5, \"degree\": 110}, {\"after\": 14, \"before\": 14, \"degree\": 111}, {\"after\": 7, \"before\": 7, \"degree\": 112}, {\"after\": 31, \"before\": 32, \"degree\": 113}, {\"after\": 20, \"before\": 20, \"degree\": 114}, {\"after\": 13, \"before\": 12, \"degree\": 115}, {\"after\": 15, \"before\": 16, \"degree\": 116}, {\"after\": 6, \"before\": 6, \"degree\": 117}, {\"after\": 11, \"before\": 10, \"degree\": 118}, {\"after\": 11, \"before\": 11, \"degree\": 119}, {\"after\": 8, \"before\": 8, \"degree\": 120}, {\"after\": 6, \"before\": 7, \"degree\": 121}, {\"after\": 8, \"before\": 8, \"degree\": 122}, {\"after\": 8, \"before\": 7, \"degree\": 123}, {\"after\": 4, \"before\": 5, \"degree\": 124}, {\"after\": 6, \"before\": 6, \"degree\": 125}, {\"after\": 6, \"before\": 6, \"degree\": 126}, {\"after\": 5, \"before\": 5, \"degree\": 127}, {\"after\": 6, \"before\": 6, \"degree\": 128}, {\"after\": 9, \"before\": 9, \"degree\": 129}, {\"after\": 8, \"before\": 8, \"degree\": 130}, {\"after\": 4, \"before\": 4, \"degree\": 131}, {\"after\": 8, \"before\": 8, \"degree\": 132}, {\"after\": 4, \"before\": 4, \"degree\": 133}, {\"after\": 5, \"before\": 5, \"degree\": 134}, {\"after\": 3, \"before\": 3, \"degree\": 135}, {\"after\": 6, \"before\": 6, \"degree\": 136}, {\"after\": 6, \"before\": 5, \"degree\": 137}, {\"after\": 3, \"before\": 4, \"degree\": 138}, {\"after\": 4, \"before\": 3, \"degree\": 139}, {\"after\": 4, \"before\": 5, \"degree\": 140}, {\"after\": 2, \"before\": 2, \"degree\": 141}, {\"after\": 3, \"before\": 3, \"degree\": 142}, {\"after\": 2, \"before\": 2, \"degree\": 143}, {\"after\": 3, \"before\": 3, \"degree\": 144}, {\"after\": 6, \"before\": 6, \"degree\": 145}, {\"after\": 5, \"before\": 4, \"degree\": 146}, {\"after\": 4, \"before\": 4, \"degree\": 147}, {\"after\": 2, \"before\": 3, \"degree\": 148}, {\"after\": 4, \"before\": 3, \"degree\": 149}, {\"after\": 3, \"before\": 4, \"degree\": 150}, {\"after\": 3, \"before\": 3, \"degree\": 151}, {\"after\": 3, \"before\": 3, \"degree\": 152}, {\"after\": 5, \"before\": 5, \"degree\": 153}, {\"after\": 5, \"before\": 4, \"degree\": 155}, {\"after\": 4, \"before\": 5, \"degree\": 156}, {\"after\": 4, \"before\": 3, \"degree\": 157}, {\"after\": 0, \"before\": 1, \"degree\": 158}, {\"after\": 2, \"before\": 1, \"degree\": 159}, {\"after\": 5, \"before\": 5, \"degree\": 160}, {\"after\": 2, \"before\": 3, \"degree\": 161}, {\"after\": 2, \"before\": 2, \"degree\": 162}, {\"after\": 3, \"before\": 3, \"degree\": 163}, {\"after\": 3, \"before\": 3, \"degree\": 164}, {\"after\": 1, \"before\": 1, \"degree\": 165}, {\"after\": 2, \"before\": 2, \"degree\": 168}, {\"after\": 1, \"before\": 0, \"degree\": 169}, {\"after\": 1, \"before\": 2, \"degree\": 170}, {\"after\": 3, \"before\": 3, \"degree\": 172}, {\"after\": 2, \"before\": 2, \"degree\": 174}, {\"after\": 1, \"before\": 1, \"degree\": 175}, {\"after\": 1, \"before\": 1, \"degree\": 176}, {\"after\": 1, \"before\": 1, \"degree\": 177}, {\"after\": 1, \"before\": 1, \"degree\": 178}, {\"after\": 2, \"before\": 2, \"degree\": 179}, {\"after\": 1, \"before\": 1, \"degree\": 180}, {\"after\": 1, \"before\": 1, \"degree\": 181}, {\"after\": 2, \"before\": 2, \"degree\": 182}, {\"after\": 1, \"before\": 1, \"degree\": 183}, {\"after\": 1, \"before\": 1, \"degree\": 184}, {\"after\": 1, \"before\": 1, \"degree\": 188}, {\"after\": 1, \"before\": 1, \"degree\": 190}, {\"after\": 1, \"before\": 1, \"degree\": 191}, {\"after\": 1, \"before\": 1, \"degree\": 195}, {\"after\": 1, \"before\": 1, \"degree\": 200}, {\"after\": 3, \"before\": 3, \"degree\": 201}, {\"after\": 1, \"before\": 1, \"degree\": 207}, {\"after\": 1, \"before\": 1, \"degree\": 208}, {\"after\": 3, \"before\": 3, \"degree\": 215}, {\"after\": 2, \"before\": 2, \"degree\": 218}, {\"after\": 1, \"before\": 1, \"degree\": 219}, {\"after\": 1, \"before\": 1, \"degree\": 221}, {\"after\": 1, \"before\": 1, \"degree\": 225}, {\"after\": 1, \"before\": 1, \"degree\": 227}, {\"after\": 1, \"before\": 0, \"degree\": 229}, {\"after\": 0, \"before\": 1, \"degree\": 230}, {\"after\": 1, \"before\": 0, \"degree\": 243}, {\"after\": 0, \"before\": 1, \"degree\": 244}, {\"after\": 1, \"before\": 1, \"degree\": 264}, {\"after\": 1, \"before\": 1, \"degree\": 269}, {\"after\": 1, \"before\": 1, \"degree\": 290}, {\"after\": 1, \"before\": 1, \"degree\": 296}, {\"after\": 1, \"before\": 1, \"degree\": 343}], \"mean_after\": 6.619061435599849, \"mean_before\": 6.622089062697111, \"ks_statistic\": 0.0002712249274631008}, \"all_relations\": {\"added\": 0, \"after\": 2098772, \"before\": 2099732, \"removed\": 960}}"
+   ],
+   "notices": [],
+   "warnings": [],
+   "rss_anon_before": 353927168,
+   "peak_rss_anon": 383442944,
+   "vm_hwm": 923561984,
+   "rss_anon_after": 383442944,
+   "rss_shmem_after": 469663744
+  }
+ },
+ "version": {
+  "seq": 1,
+  "bytes": 26984188,
+  "label": null,
+  "staged": false,
+  "current": true,
+  "vectors": 0,
+  "version": 1,
+  "built_at": "2026-10-24T15:06:36.829062+00:00",
+  "id_space": 317080,
+  "built_lsn": "0/213A80B0",
+  "staleness": "00:00:00.44201",
+  "edge_count": 2099732,
+  "node_count": 317080,
+  "label_vector": null,
+  "parent_graph": null,
+  "target_width": 4,
+  "dropped_edges": 0,
+  "compacted_from": null,
+  "parent_version": null,
+  "deduplicated_edges": 0
+ },
+ "settings": [
+  "fsync=off",
+  "full_page_writes=off",
+  "jit=on",
+  "maintenance_work_mem=1GB",
+  "max_parallel_workers_per_gather=2",
+  "max_wal_size=1GB",
+  "shared_buffers=1GB",
+  "shared_preload_libraries=",
+  "statement_timeout=10min",
+  "synchronous_commit=off",
+  "wal_level=minimal",
+  "warren.max_build_memory=4GB",
+  "warren.max_cache_memory=4GB",
+  "warren.max_compute_memory=4GB",
+  "warren.shared_cache_memory=4GB",
+  "warren.threads=4",
+  "work_mem=64MB"
+ ],
+ "reachable_set_edges_per_second": 35254655.04793566
+}
