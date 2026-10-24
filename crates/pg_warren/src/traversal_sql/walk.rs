@@ -1,15 +1,11 @@
 //! `warren.walk`: a typed chain of steps executed over the CSR without
 //! leaving the engine (DESIGN.md §9.2), with external ids in and out.
 
-use std::ops::ControlFlow;
+use std::sync::Arc;
 
 use pgrx::prelude::*;
 use pgrx::{AnyArray, AnyElement, Array};
-use warren_core::graph::{DenseId, GraphError};
-use warren_core::traversal::{
-    walk as count_walks, walk_ends_each, walk_paths_each, TraversalError, WalkMode, WalkOptions,
-    WalkPath, WalkResult,
-};
+use warren_core::traversal::{walk as run_walk, WalkMode, WalkOptions, WalkPath, WalkResult};
 
 use super::args::bound;
 use super::stats::Recorder;
@@ -31,8 +27,9 @@ type WalkRow = (Option<AnyElement>, Option<AnyArray>, Option<Vec<String>>, Optio
 /// every walk; `count` returns one row whose `count` is the number of ends
 /// or walks. At most `max_results` rows (truncation: `NOTICE`,
 /// `last_stats()`); a walk that reports a row per walk defaults to 100,000
-/// and may not ask for more than `warren.max_walk_paths`. The rows are
-/// computed before the first is returned.
+/// and may not ask for more than `warren.max_walk_paths`. The walk runs
+/// before the first row is returned; each row's external ids are made as
+/// it is returned.
 #[allow(clippy::too_many_arguments)] // the SQL signature of DESIGN.md §9.2
 #[allow(clippy::type_complexity)] // pgrx reads the column names from name!() in place
 #[pg_extern(
@@ -86,8 +83,10 @@ fn walk<'a>(
                 None => Vec::new(),
             };
             let steps = read_steps::<E>(&loaded, &steps)?;
-            let walked = Walked { loaded: &loaded, starts: &starts, steps: &steps, options };
-            walked.rows(mode, &mut recorder)?
+            let walked =
+                run_walk(&loaded.graph, &starts, &steps, mode, options, &mut PostgresInterrupts)?;
+            recorder.record(walked.stats);
+            walk_rows(loaded, walked.result, options.reverse)?
         });
         Ok(TableIterator::new(rows))
     })
@@ -125,112 +124,51 @@ fn row_limit(
     }
 }
 
-/// A walk over a loaded version.
-struct Walked<'w, E> {
-    loaded: &'w LoadedVersion<E>,
-    starts: &'w [DenseId],
-    steps: &'w [warren_core::traversal::Step],
-    options: WalkOptions,
-}
-
-impl<E: CachedIds> Walked<'_, E> {
-    /// Runs the walk and returns its rows, recording its stats.
-    fn rows(
-        &self,
-        mode: WalkMode,
-        recorder: &mut Recorder,
-    ) -> Result<Vec<WalkRow>, TraversalSqlError> {
-        let mut rows = Rows::default();
-        let graph = &self.loaded.graph;
-        let stats = match mode {
-            WalkMode::Ends => walk_ends_each(
-                graph,
-                self.starts,
-                self.steps,
-                self.options,
-                &mut PostgresInterrupts,
-                |end| rows.push((external(&self.loaded.id_map, end), None, None, None)),
-            )?,
-            WalkMode::Paths => walk_paths_each(
-                graph,
-                self.starts,
-                self.steps,
-                self.options,
-                &mut PostgresInterrupts,
-                |path| rows.push(self.path_row(&path)),
-            )?,
-            WalkMode::Count => {
-                let counted = count_walks(
-                    graph,
-                    self.starts,
-                    self.steps,
-                    WalkMode::Count,
-                    self.options,
-                    &mut PostgresInterrupts,
-                )?;
-                if let WalkResult::Count(count) = counted.result {
-                    let Ok(count) = i64::try_from(count) else {
-                        recorder.record(counted.stats);
-                        return Err(TraversalSqlError::CountOutOfRange(count));
-                    };
-                    // A failed push is reported by `finish`.
-                    let _ = rows.push((None, None, None, Some(count)));
-                }
-                counted.stats
-            }
-        };
-        recorder.record(stats);
-        rows.finish()
-    }
-
-    /// A path's row: its reported node (the end, or in reverse the would-be
-    /// start), its nodes and its hops' relation names.
-    fn path_row(&self, path: &WalkPath) -> WalkRow {
-        let id_map = &self.loaded.id_map;
-        let reported = match self.options.reverse {
-            true => path.nodes.first(),
-            false => path.nodes.last(),
-        };
-        let relations = &self.loaded.relations;
-        let rels = path
-            .relations
-            .iter()
-            .map(|&relation| relations.name(relation).unwrap_or_default().to_owned())
-            .collect();
-        (
-            reported.and_then(|&node| external(id_map, node)),
-            external_array(id_map, &path.nodes),
-            Some(rels),
-            None,
-        )
-    }
-}
-
-/// A walk's rows, reserved one at a time so that running out of memory is
-/// an error, not an abort.
-#[derive(Default)]
-struct Rows {
-    rows: Vec<WalkRow>,
-    out_of_memory: bool,
-}
-
-impl Rows {
-    fn push(&mut self, row: WalkRow) -> ControlFlow<()> {
-        if self.rows.try_reserve(1).is_err() {
-            self.out_of_memory = true;
-            return ControlFlow::Break(());
+/// The rows of a walk's `result`, held as dense ids in the extension's
+/// buffer, each row's external ids made when it is returned (DESIGN.md
+/// §12), in the context Postgres resets between rows. The rows hold the
+/// loaded version, which keeps it mapped until the call ends, however it
+/// ends.
+fn walk_rows<E: CachedIds>(
+    loaded: Arc<LoadedVersion<E>>,
+    result: WalkResult,
+    reverse: bool,
+) -> Result<Box<dyn Iterator<Item = WalkRow>>, TraversalSqlError> {
+    Ok(match result {
+        WalkResult::Ends(ends) => Box::new(
+            ends.into_iter().map(move |end| (external(&loaded.id_map, end), None, None, None)),
+        ),
+        WalkResult::Paths(paths) => {
+            Box::new(paths.into_iter().map(move |path| path_row(&loaded, &path, reverse)))
         }
-        self.rows.push(row);
-        ControlFlow::Continue(())
-    }
-
-    fn finish(self) -> Result<Vec<WalkRow>, TraversalSqlError> {
-        if self.out_of_memory {
-            let elements = self.rows.len() + 1;
-            return Err(TraversalError::from(GraphError::OutOfMemory { elements }).into());
+        WalkResult::Count(count) => {
+            let count =
+                i64::try_from(count).map_err(|_| TraversalSqlError::CountOutOfRange(count))?;
+            Box::new(std::iter::once((None, None, None, Some(count))))
         }
-        Ok(self.rows)
-    }
+    })
+}
+
+/// A path's row: its reported node (the end, or in `reverse` the would-be
+/// start), its nodes and its hops' relation names.
+fn path_row<E: CachedIds>(loaded: &LoadedVersion<E>, path: &WalkPath, reverse: bool) -> WalkRow {
+    let id_map = &loaded.id_map;
+    let reported = match reverse {
+        true => path.nodes.first(),
+        false => path.nodes.last(),
+    };
+    let relations = &loaded.relations;
+    let rels = path
+        .relations
+        .iter()
+        .map(|&relation| relations.name(relation).unwrap_or_default().to_owned())
+        .collect();
+    (
+        reported.and_then(|&node| external(id_map, node)),
+        external_array(id_map, &path.nodes),
+        Some(rels),
+        None,
+    )
 }
 
 #[cfg(test)]
@@ -268,7 +206,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{failure, rows, small};
+    use crate::fixture::{failure, held_after_first_row, iri_star, rows, small};
 
     // small: 1 → 2 (a), 2 → 3 (a), 3 → 4 (b), 1 → 4 (b), 4 → 1 (a), 5 → 5 (b).
 
@@ -319,6 +257,31 @@ mod tests {
                                            distinct_ends := false)",
         )?;
         assert_eq!(count, Some(4), "1→2, 1→4, 1→2→3, 1→4→1");
+        Ok(())
+    }
+
+    /// Each row's text ids are made when the row is returned, so a walk
+    /// holds no more Postgres memory for 50,000 rows to come than for
+    /// 1,000, in either mode that returns ids: the walk's result stays as
+    /// dense ids in the extension's buffer.
+    #[pg_test]
+    fn a_walk_makes_each_rows_ids_as_it_is_returned() -> Result<(), Error> {
+        iri_star("few", 1_000)?;
+        iri_star("many", 50_000)?;
+        for mode in ["ends", "paths"] {
+            let call = |graph: &str| {
+                format!(
+                    "warren.walk('{graph}', ARRAY['https://example.org/resource/0'::text],
+                                 ARRAY[warren.s(NULL)], '{mode}')"
+                )
+            };
+            let few = held_after_first_row(&call("few"))?;
+            let many = held_after_first_row(&call("many"))?;
+            assert!(
+                many < few + (256 << 10),
+                "{mode}: {many} bytes held for 50,000 rows, {few} for 1,000"
+            );
+        }
         Ok(())
     }
 

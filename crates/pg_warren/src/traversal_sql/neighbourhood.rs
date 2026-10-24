@@ -6,12 +6,13 @@
 //! unavailable.
 
 use std::borrow::Borrow;
+use std::sync::Arc;
 
 use pgrx::prelude::*;
 use pgrx::AnyElement;
 use warren_core::graph::DenseId;
 use warren_core::graph::Direction;
-use warren_core::traversal::Adjacency;
+use warren_core::traversal::{Adjacency, TraversalError};
 
 use super::{entry, TraversalSqlError};
 use crate::cache::{cached, resolve, CachedIds, LoadedVersion, Resolved};
@@ -21,7 +22,9 @@ use crate::source::with_id_type;
 
 /// `warren.neighbours`: the distinct nodes one edge from `node` in
 /// `direction` along `rels` (all if NULL), ascending by dense id. None if
-/// `node` is NULL or not a node of the version.
+/// `node` is NULL or not a node of the version. The neighbours are
+/// collected as dense ids, and each row's external id is made when the row
+/// is returned (DESIGN.md §12).
 #[pg_extern(
     schema = "warren",
     sql = r#"
@@ -40,12 +43,13 @@ fn neighbours(
 ) -> SetOfIterator<'static, AnyElement> {
     entry(|| {
         let query = NodeQuery::new(graph, node, direction, rels, version)?;
-        let rows = with_id_type!(query.resolved.graph.id_type, E => {
-            query.adjacent::<E, _>(|loaded, adjacency, node| {
-                adjacency.neighbours(node).filter_map(|n| external(&loaded.id_map, n)).collect()
-            })?
+        let rows: Box<dyn Iterator<Item = AnyElement>> = with_id_type!(query.resolved.graph.id_type, E => {
+            let rows = query.adjacent::<E, _>(|loaded, adjacency, node| {
+                Ok::<_, TraversalError>(neighbour_rows(Arc::clone(loaded), adjacency.collect_neighbours(node)?))
+            })?;
+            Box::new(rows.transpose()?.into_iter().flatten())
         });
-        Ok(SetOfIterator::new(rows.unwrap_or_else(Vec::new)))
+        Ok(SetOfIterator::new(rows))
     })
 }
 
@@ -123,6 +127,17 @@ fn has_edge(
     })
 }
 
+/// The rows of a node's `neighbours`, in the extension's buffer, each
+/// external id made when its row is returned, in the context Postgres
+/// resets between rows. The rows hold the loaded version, which keeps it
+/// mapped until the call ends, however it ends.
+fn neighbour_rows<E: CachedIds>(
+    loaded: Arc<LoadedVersion<E>>,
+    neighbours: Vec<DenseId>,
+) -> impl Iterator<Item = AnyElement> {
+    neighbours.into_iter().filter_map(move |neighbour| external(&loaded.id_map, neighbour))
+}
+
 /// A call about one node.
 struct NodeQuery<'a> {
     graph: &'a str,
@@ -160,7 +175,7 @@ impl<'a> NodeQuery<'a> {
     /// version.
     fn adjacent<E: CachedIds, T>(
         &self,
-        f: impl FnOnce(&LoadedVersion<E>, &Adjacency<'_>, DenseId) -> T,
+        f: impl FnOnce(&Arc<LoadedVersion<E>>, &Adjacency<'_>, DenseId) -> T,
     ) -> Result<Option<T>, TraversalSqlError> {
         let Some(node) = self.node else {
             return Ok(None);
@@ -183,7 +198,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{rows, small};
+    use crate::fixture::{held_after_first_row, iri_star, rows, small};
 
     fn neighbours(args: &str) -> Result<Option<String>, Error> {
         rows(&format!("SELECT n::text FROM warren.neighbours({args}) n"))
@@ -199,6 +214,22 @@ mod tests {
         assert_eq!(neighbours("'t', 5::bigint")?.as_deref(), Some("5"));
         assert_eq!(neighbours("'t', 99::bigint")?.as_deref(), Some(""));
         assert_eq!(neighbours("'t', NULL::bigint")?.as_deref(), Some(""));
+        Ok(())
+    }
+
+    /// Each neighbour's text id is made when its row is returned, so a
+    /// hub's call holds no more Postgres memory for 50,000 rows to come
+    /// than for 1,000.
+    #[pg_test]
+    fn neighbours_make_each_rows_id_as_it_is_returned() -> Result<(), Error> {
+        iri_star("few", 1_000)?;
+        iri_star("many", 50_000)?;
+        let call = |graph: &str| {
+            format!("warren.neighbours('{graph}', 'https://example.org/resource/0'::text)")
+        };
+        let few = held_after_first_row(&call("few"))?;
+        let many = held_after_first_row(&call("many"))?;
+        assert!(many < few + (256 << 10), "{many} bytes held for 50,000 rows, {few} for 1,000");
         Ok(())
     }
 
