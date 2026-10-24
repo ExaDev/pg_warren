@@ -374,3 +374,21 @@ Half scale, without the recursive CTE baseline, because the machine had
 about 8 GB of disk free, shared with other work; the full-scale text run
 needs about 16 GB (DESIGN.md §12). Both private runs skipped their second
 version for the disk floor, so `diff` and `distance` were not run.
+
+## Text node ids at full scale (M10 step 4, §5.7)
+
+`a-text-m10.json` then `a-m10.json`: case a at full scale (10M nodes,
+100M edges) with IRIs and with `bigint` ids, every stage included (the
+recursive CTE baseline, the second version with `diff` and `distance`,
+the library and both community detections). PostgreSQL 16.15 from a
+private tree, a release build of 7934941 (`pg_warren.so` sha256
+a935ebf8…), harness 7934941 (clean), the same 4-vCPU Xeon, one after the
+other on 2026-10-23 with no other agent building: load average 1.0–1.5
+at each run's start and end, the soak's own. About 20 GB of disk was
+free at the start, and neither run came within the floor.
+
+    bench/soak.py a --ids text --label=-m10 --no-eigen-steps --eigen-max-iter 200 \
+        --disk-floor 3221225472 \
+        --pg-config /var/tmp/m10-pgtree/usr/lib/postgresql/16/bin/pg_config --parent /var/tmp/m10-soak \
+        --extension-revision 7934941 --extension-profile release --threads 4 --statement-timeout 20min
+    bench/soak.py a --ids bigint --label=-m10 …   # otherwise as above
