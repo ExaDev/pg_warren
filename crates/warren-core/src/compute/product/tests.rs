@@ -660,3 +660,22 @@ proptest! {
         prop_assert_eq!(found, over_all(&s, &deduplicated, &x, false).unwrap());
     }
 }
+
+#[test]
+fn a_row_scratch_charges_its_hint_per_relation() {
+    // Three relations without the merged CSR; node 3's row is empty in
+    // each, so the entries need nothing and the hints 8 bytes a relation.
+    let edges: Edges = (0..3).map(|r| (r, 0, 1 + r as u64, 1.0)).collect();
+    let layout = CsrLayout { build_reverse: false, store_merged: false };
+    let graph = reference::graph_as(4, 3, &edges, false, layout);
+    let hints = 3 * size_of::<usize>() as u64;
+    for (limit, fits) in [(hints, true), (hints - 1, false)] {
+        let memory = ComputeMemory::new(limit);
+        let all = RelationSelection::All;
+        let matrix = Matrix::new(&graph, all, false, None, false, &memory).unwrap();
+        let mut scratch = matrix.scratch().unwrap();
+        let read = matrix.for_each_entry(3, &mut scratch, |_, _| Ok(()));
+        assert_eq!(read.is_ok(), fits, "{limit}");
+        assert_eq!(memory.in_use(), if fits { hints } else { 0 });
+    }
+}

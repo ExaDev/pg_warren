@@ -19,10 +19,11 @@ pub enum GraphError {
     /// An id space of 2⁶⁴ − 1 leaves no room for its CSR offsets.
     #[error("id space too large")]
     IdSpaceTooLarge,
-    /// A CSR needs `id_space + 1` offsets.
+    /// A CSR needs `id_space + 1` offsets, or with sparse offsets one per
+    /// stored row plus one.
     #[error("CSR has {found} offsets, expected {expected}")]
     OffsetsLength {
-        /// `id_space + 1`.
+        /// `id_space + 1`, or the stored rows plus one.
         expected: u64,
         /// The number of offsets given.
         found: u64,
@@ -58,6 +59,24 @@ pub enum GraphError {
         /// The offending row.
         row: DenseId,
     },
+    /// A CSR with sparse offsets stores its rows' ids strictly ascending.
+    #[error("CSR stored row {index} is not above the one before it")]
+    StoredRowsNotAscending {
+        /// The position of the offending row id among the stored rows.
+        index: u64,
+    },
+    /// A CSR with sparse offsets stores only rows inside the id space.
+    #[error("CSR stores row {row}, outside the id space")]
+    StoredRowOutsideIdSpace {
+        /// The offending row id.
+        row: DenseId,
+    },
+    /// A CSR with sparse offsets stores only rows that have targets.
+    #[error("CSR stores row {row} without targets")]
+    StoredRowEmpty {
+        /// The offending row id.
+        row: DenseId,
+    },
     /// A weighted CSR needs one weight per target.
     #[error("CSR has {found} weights, expected {expected}")]
     WeightsLength {
@@ -90,7 +109,10 @@ pub enum GraphError {
     #[error("not a pg_warren segment")]
     SegmentMagic,
     /// A segment's format is not one this build reads.
-    #[error("unsupported segment format {found}")]
+    #[error(
+        "unsupported segment format {found}: a version built by an earlier pg_warren must be \
+         built again with warren.refresh"
+    )]
     SegmentFormat {
         /// The format in the header.
         found: u8,
@@ -204,10 +226,11 @@ pub enum GraphError {
         /// The number of relations.
         relations: usize,
     },
-    /// The offsets arrays of a version would exceed the build's budget.
-    #[error("CSR offsets need {required} bytes, over the budget of {budget}")]
+    /// The offsets arrays of a version, and the row cursors of its build,
+    /// would exceed the build's budget.
+    #[error("CSR offsets and row cursors need {required} bytes, over the budget of {budget}")]
     OffsetsOverBudget {
-        /// Bytes the offsets arrays need.
+        /// Bytes the offsets arrays and row cursors need.
         required: u64,
         /// The caller's budget in bytes.
         budget: u64,

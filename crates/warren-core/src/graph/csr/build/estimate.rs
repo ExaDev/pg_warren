@@ -1,10 +1,13 @@
 //! The peak memory of a build, estimated before it starts by following the
 //! build's own allocations in order (see `columns` and `deduplication`),
-//! with every relation at its edge count before deduplication. It is an
-//! upper bound: deduplication only shrinks what follows it.
+//! with every relation at its edge count before deduplication, and its
+//! offsets at the most its edges allow (a relation's stored rows are at
+//! most its edges, DESIGN.md §5.3; a graph's only relation's are dense). It is an upper bound: deduplication
+//! only shrinks what follows it.
 
 use std::mem::size_of;
 
+use super::super::sparse::{dense_bytes, offsets_bound};
 use super::columns::Rows;
 use super::deduplication::{merged_entry, relation_entry};
 use super::{target_bytes, BuildPlan};
@@ -37,31 +40,66 @@ impl BuildPlan {
     /// The most bytes the build holds at once, the edge list included.
     pub(super) fn peak_bytes(&self) -> u64 {
         let edges = self.edges;
-        let offsets = self.id_space.saturating_add(1).saturating_mul(8);
-        let target = target_bytes(self.id_space);
+        let id_space = self.id_space;
+        let offsets = dense_bytes(id_space);
+        let target = target_bytes(id_space);
         let weight = if self.weighted { 8 } else { 0 };
         let endpoint_column = edges.saturating_mul(self.endpoint_bytes);
         let relation_column = edges.saturating_mul(size_of::<RelationIndex>() as u64);
         let weight_column = edges.saturating_mul(weight);
-        let csr = |edges: u64| offsets.saturating_add(edges.saturating_mul(target + weight));
-        let mut ledger = Ledger { held: self.edge_bytes, peak: self.edge_bytes };
+        let entries = |edges: u64| edges.saturating_mul(target + weight);
         let several = self.relation_edges.len() > 1;
+        // A relation's offsets: at most what its edges allow among several
+        // relations; a graph's only relation's are dense, as the merged
+        // CSR's, and it needs no row cursors.
+        let relation_offsets = |edges: u64| match several {
+            true => offsets_bound(edges, id_space),
+            false => offsets,
+        };
+        let relation_csr = |edges: u64| relation_offsets(edges).saturating_add(entries(edges));
+        let merged_csr = |edges: u64| offsets.saturating_add(entries(edges));
+        let order_index = if edges <= u64::from(u32::MAX) { 4 } else { 8 };
+        let mut ledger = Ledger { held: self.edge_bytes, peak: self.edge_bytes };
         if !several {
             ledger.free(relation_column);
         }
+        let cursors = if several { id_space.saturating_mul(8) } else { 0 };
+        ledger.hold(cursors);
         for (index, group) in self.groups.iter().enumerate() {
             let release = !self.store_merged && index + 1 == self.groups.len();
+            let together = self.weighted && !release;
             let group_edges = &self.relation_edges[group.clone()];
-            ledger.hold(rows_headers(group_edges.len()));
+            // A graph's only relation is built as the merged CSR is, with
+            // no headers.
+            let headers = if several { rows_headers(group_edges.len()) } else { 0 };
+            ledger.hold(headers);
+            let order = match group_edges.len() {
+                0 | 1 => 0,
+                relations => {
+                    let total = group_edges.iter().fold(0u64, |sum, &e| sum.saturating_add(e));
+                    let starts = (relations as u64 + 1).saturating_mul(8);
+                    // The relations' cursors while the order is made.
+                    ledger.pass(
+                        starts.saturating_add(total.saturating_mul(order_index))
+                            + relations as u64 * 8,
+                    );
+                    starts.saturating_add(total.saturating_mul(order_index))
+                }
+            };
+            ledger.hold(order);
             for &edges in group_edges {
-                ledger.hold(offsets.saturating_add(edges.saturating_mul(target)));
+                let entry = target + if together { weight } else { 0 };
+                ledger.hold(relation_offsets(edges).saturating_add(edges.saturating_mul(entry)));
             }
             if release {
                 ledger.free(endpoint_column);
             }
-            for &edges in group_edges {
-                ledger.hold(edges.saturating_mul(weight));
+            if !together {
+                for &edges in group_edges {
+                    ledger.hold(edges.saturating_mul(weight));
+                }
             }
+            ledger.free(order);
             if release {
                 let relations = if several { relation_column } else { 0 };
                 ledger
@@ -72,15 +110,15 @@ impl BuildPlan {
                     ledger.pass(self.longest_row.saturating_mul(2 * relation_entry_bytes(target)));
                 }
                 if self.build_reverse {
-                    ledger.hold(csr(edges));
-                    ledger.free(csr(edges));
+                    ledger.pass(relation_csr(edges));
                 }
-                ledger.free(csr(edges));
+                ledger.free(relation_csr(edges));
             }
-            ledger.free(rows_headers(group_edges.len()));
+            ledger.free(headers);
         }
+        ledger.free(cursors);
         if self.store_merged {
-            ledger.hold(csr(edges).saturating_sub(edges.saturating_mul(weight)));
+            ledger.hold(merged_csr(edges).saturating_sub(edges.saturating_mul(weight)));
             ledger.free(endpoint_column);
             if self.weighted {
                 if several {
@@ -100,7 +138,7 @@ impl BuildPlan {
                 }
             }
             if self.build_reverse {
-                ledger.hold(csr(edges));
+                ledger.hold(merged_csr(edges));
             }
         }
         ledger.peak

@@ -167,11 +167,17 @@ impl<T: Target> Rows<T> {
         }
     }
 
-    /// The CSR of the rewritten rows, its buffers shrunk to fit.
+    /// The CSR of the rewritten rows, its buffers shrunk to fit; deduplication
+    /// empties no row, so sparse offsets still store only non-empty rows.
     fn into_csr(self, id_space: u64) -> Result<(Csr<T>, BuildCharge), GraphError> {
-        let Self { offsets, mut targets, weights, .. } = self;
+        let Self { rows, offsets, mut targets, weights, .. } = self;
         targets.shrink_to_fit();
         let (offsets, mut charge) = offsets.into_parts();
+        let rows = rows.map(|rows| {
+            let (rows, rows_charge) = rows.into_parts();
+            charge.absorb(rows_charge);
+            rows
+        });
         let (targets, targets_charge) = targets.into_parts();
         charge.absorb(targets_charge);
         let weights = match weights {
@@ -183,7 +189,11 @@ impl<T: Target> Rows<T> {
             }
             None => None,
         };
-        Ok((Csr::from_parts(id_space, offsets, targets, weights)?, charge))
+        let csr = match rows {
+            Some(rows) => Csr::from_sparse_parts(id_space, rows, offsets, targets, weights),
+            None => Csr::from_parts(id_space, offsets, targets, weights),
+        };
+        Ok((csr?, charge))
     }
 }
 

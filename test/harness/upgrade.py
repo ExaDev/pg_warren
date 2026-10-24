@@ -254,6 +254,29 @@ MERGED = """
 EXPECTED_MERGED = "upgrade:true:0 upgrade_new:false:0 upgrade_typed:true:6"
 
 
+# Runs `{statement}`, keeping the SQLSTATE and message of its error in
+# table upgrade_refusal.
+REFUSAL = """
+    CREATE TABLE upgrade_refusal (state text, message text);
+    DO $$ BEGIN
+        PERFORM {statement};
+    EXCEPTION WHEN OTHERS THEN
+        INSERT INTO upgrade_refusal VALUES (SQLSTATE, SQLERRM);
+    END $$;
+"""
+REFUSED = "SELECT coalesce(string_agg(state || ':' || (message LIKE '%warren.refresh%'), ' '), '') FROM upgrade_refusal"
+
+
+def old_format_problem(upgraded, statement, what):
+    """None if `statement`, which reads a version built before the update,
+    is refused as a version to refresh (its CSRs are in the segment format
+    before sparse offsets, 0.7.0, DESIGN.md §5.3), else what is wrong."""
+    upgraded.execute(REFUSAL.format(statement=statement))
+    refused = upgraded.query(REFUSED)
+    upgraded.execute("DROP TABLE upgrade_refusal")
+    return None if refused == [["55000:true"]] else f"{what} gave {refused}, not 55000 naming warren.refresh"
+
+
 # Each graph's node order (0.4.0): graphs from before it are backfilled 'id'.
 NODE_ORDERS = "SELECT string_agg(name || ':' || node_order, ' ' ORDER BY name) FROM warren.graphs"
 
@@ -268,19 +291,29 @@ def after_update(upgraded):
     seeded = upgraded.query("SELECT created_by::text || ':' || length FROM warren.vectors WHERE name = 'old'")
     if seeded != [["upgrade_owner:4"]]:
         problems.append(f"backfilled vectors are {seeded}")
-    values = upgraded.query(
-        "SELECT string_agg(value::text, ',') FROM warren.vector_values('upgrade', 'old', NULL::bigint, 1)")
-    if values != [["1,1,1,1"]]:
-        problems.append(f"the old vector reads back as {values}")
-    # The version 'upgrade_typed' had before the update loads, with its
-    # merged CSR, and gives the results the release gave.
+    problem = old_format_problem(upgraded, "warren.vector_values('upgrade', 'old', NULL::bigint, 1)",
+                                 "reading the old vector")
+    if problem:
+        problems.append(problem)
+    # The version 'upgrade_typed' had before the update is refused, and
+    # the version a refresh builds on it gives the results the release gave.
     built = upgraded.query("SELECT current_version FROM warren.graphs WHERE name = 'upgrade_typed'")[0][0]
+    problem = old_format_problem(
+        upgraded, f"warren.bfs('upgrade_typed', ARRAY[1::bigint], 3, 'both', version := {built})",
+        "reading the pre-update multi-relation version")
+    if problem:
+        problems.append(problem)
+    upgraded.execute("SELECT warren.refresh('upgrade_typed')")
+    rebuilt = upgraded.query("SELECT current_version FROM warren.graphs WHERE name = 'upgrade_typed'")[0][0]
     spmv = upgraded.query("SELECT count(*) FROM upgrade_expected WHERE what = 'spmv'") == [["1"]]
-    results(upgraded, built, spmv)
+    if spmv:
+        upgraded.execute("SELECT warren.vector_from_query('upgrade_typed', 'x',"
+                         " 'SELECT id, id::float8 / 3 FROM upgrade_nodes')")
+    results(upgraded, rebuilt, spmv)
     expected = upgraded.query("SELECT what, result FROM upgrade_expected ORDER BY what")
     found = upgraded.query("SELECT what, result FROM upgrade_results ORDER BY what")
     if found != expected:
-        problems.append(f"the pre-update multi-relation version gives {found}, not {expected}")
+        problems.append(f"the multi-relation graph rebuilt after the update gives {found}, not {expected}")
     empty = upgraded.query("SELECT count(*) FROM upgrade_expected WHERE result IS NULL OR result = ''")
     if empty != [["0"]]:
         problems.append(f"the release recorded empty results: {expected}")

@@ -1,7 +1,8 @@
 //! CSR construction without a comparison sort of the edge list (DESIGN.md
 //! §5.4 step 4), streamed: relations are built a group at a time by a
-//! counting sort of the edge list by source, each row then sorted and
-//! deduplicated in place, transposed for the reverse CSR, and handed to a
+//! counting sort of the edge list by relation and source, with sparse
+//! offsets where they pay (§5.3), each row then sorted and deduplicated in
+//! place, transposed for the reverse CSR, and handed to a
 //! [`CsrSink`] that can write it out and free it before the next relation.
 //! The merged CSR comes last, from the edge list itself, which it frees
 //! column by column. A [`BuildPlan`] checks the edges and estimates the
@@ -16,10 +17,11 @@ mod sink;
 
 use std::ops::Range;
 
-use columns::{group_rows, merged_rows, Columns};
+use columns::{dense_rows, group_rows, Columns};
 pub use sink::{BuiltCsr, CsrDirection, CsrScope, CsrSink};
 
-use super::transpose::transpose_within;
+use super::cursors::RowCursors;
+use super::transpose::{transpose_with, transpose_within};
 use super::{AnyCsr, Csr, CsrLayout, Target, TargetWidth};
 use crate::graph::edge_list::{EdgeColumns, Endpoints};
 use crate::graph::{BuildBuffer, BuildCharge, BuildMemory, EdgeList, GraphError};
@@ -194,15 +196,26 @@ impl BuildPlan {
         AnyCsr: From<Csr<T>>,
     {
         let mut summary = BuildSummary::default();
+        if self.relation_edges.len() == 1 {
+            // The only relation is the all-relations CSR: dense, as the
+            // merged CSR is, and built as it is, without row cursors.
+            let rows = dense_rows::<T, E>(columns, self.id_space)?;
+            let (forward, charge, folded) = rows.into_relation_csr(self.id_space)?;
+            summary.edge_count = forward.edge_count();
+            summary.deduplicated_edges = folded;
+            self.emit(CsrScope::Relation(0), forward, charge, None, sink)?;
+            return Ok(summary);
+        }
+        let memory = columns.sources.memory().clone();
+        let mut cursors = match self.groups.is_empty() {
+            true => None,
+            false => Some(RowCursors::new(&memory, self.id_space)?),
+        };
         for (index, group) in self.groups.iter().enumerate() {
+            let Some(cursors) = &mut cursors else { break };
             let release = !self.store_merged && index + 1 == self.groups.len();
-            let rows = group_rows::<T, E>(
-                &mut columns,
-                group,
-                &self.relation_edges,
-                self.id_space,
-                release,
-            )?;
+            let rows =
+                group_rows::<T, E>(&mut columns, group, &self.relation_edges, cursors, release)?;
             // The charge for the rows' headers is held until every
             // relation of the group is built.
             let (rows, _rows_charge) = rows.into_parts();
@@ -210,32 +223,38 @@ impl BuildPlan {
                 let (forward, charge, folded) = rows.into_relation_csr(self.id_space)?;
                 summary.edge_count += forward.edge_count();
                 summary.deduplicated_edges += folded;
-                self.emit(CsrScope::Relation(relation), forward, charge, sink)?;
+                self.emit(CsrScope::Relation(relation), forward, charge, Some(cursors), sink)?;
             }
         }
+        drop(cursors);
         if self.store_merged {
             let (forward, charge) =
-                merged_rows::<T, E>(columns, self.id_space)?.into_merged_csr(self.id_space)?;
-            self.emit(CsrScope::Merged, forward, charge, sink)?;
+                dense_rows::<T, E>(columns, self.id_space)?.into_merged_csr(self.id_space)?;
+            self.emit(CsrScope::Merged, forward, charge, None, sink)?;
         }
         Ok(summary)
     }
 
-    /// Transposes `forward` if the build has reverse CSRs, then passes both
-    /// to `sink`, forward first.
+    /// Transposes `forward` if the build has reverse CSRs, a relation's
+    /// through `cursors` (so with sparse offsets where they pay) and the
+    /// merged CSR's with dense offsets, then passes both to `sink`, forward
+    /// first.
     fn emit<T: Target, S: CsrSink>(
         &self,
         scope: CsrScope,
         forward: Csr<T>,
         charge: BuildCharge,
+        cursors: Option<&mut RowCursors>,
         sink: &mut S,
     ) -> Result<(), S::Error>
     where
         AnyCsr: From<Csr<T>>,
     {
-        let reverse = match self.build_reverse {
-            true => Some(transpose_within(&forward, charge.memory())?),
-            false => None,
+        let memory = charge.memory();
+        let reverse = match (self.build_reverse, cursors) {
+            (false, _) => None,
+            (true, Some(cursors)) => Some(transpose_with(&forward, cursors, memory)?),
+            (true, None) => Some(transpose_within(&forward, memory)?),
         };
         let direction = CsrDirection::Forward;
         sink.csr(BuiltCsr { scope, direction, csr: forward.into(), charge })?;
@@ -322,6 +341,23 @@ mod tests {
         assert_eq!(split.groups.len(), 5);
         assert_eq!(split.bytes_needed(), finest_needed);
         drop(held);
+    }
+
+    /// A graph of one relation builds its dense CSR with its offsets as
+    /// the scatter cursors, so it holds no row cursors over the id space.
+    #[test]
+    fn a_graph_of_one_relation_holds_no_row_cursors() {
+        let memory = BuildMemory::unlimited();
+        let mut relations = RelationDictionary::new();
+        let relation = relations.intern("only").unwrap();
+        let nodes = 1_000_000u64;
+        let mut edges = EdgeList::within(nodes, false, &memory);
+        (0..nodes).for_each(|node| edges.push(relation, node, (node + 1) % nodes, 1.0).unwrap());
+        let layout = CsrLayout { build_reverse: false, store_merged: false };
+        let plan = BuildPlan::new(&edges, 1, nodes, layout, &memory, 0).unwrap();
+        // Dense offsets and a target per edge, beyond the edge list.
+        let csr = (nodes + 1) * 8 + nodes * 4;
+        assert!(plan.bytes_needed() <= csr, "{} > {csr}", plan.bytes_needed());
     }
 
     /// Counts the CSRs a build passes to it.
