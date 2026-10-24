@@ -8,10 +8,12 @@
 
 mod any;
 mod build;
+mod cursors;
 mod graph_csr;
 mod merge;
 mod rows;
 mod slices;
+mod sparse;
 mod target;
 mod transpose;
 
@@ -221,9 +223,9 @@ impl<T: Target> Csr<T> {
     }
 }
 
-#[cfg(test)]
 impl<T: Target> Csr<T> {
-    /// The same CSR with dense offsets.
+    /// The same CSR with dense offsets (a debug build's check that a
+    /// reverse CSR is its forward's transpose compares them so).
     pub(crate) fn densified(&self) -> Self {
         let mut offsets = vec![0u64; self.id_space as usize + 1];
         for source in 0..self.id_space {

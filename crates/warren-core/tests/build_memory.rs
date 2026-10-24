@@ -232,6 +232,9 @@ fn a_build_charges_at_least_its_peak_allocation_and_plans_for_it() -> Outcome<()
         Case { base: true, ..merged },
         // A relation per row, as a mistaken relation column gives.
         Case::new(10, 20_000, 20_000, true, false),
+        // Many relations of few rows each, whose offsets are sparse.
+        Case::new(20_000, 200_000, 500, true, true),
+        Case { undirected: true, ..Case::new(20_000, 200_000, 500, false, false) },
     ];
     for (number, case) in cases.iter().enumerate() {
         let measured = measure(case)?;
@@ -241,6 +244,11 @@ fn a_build_charges_at_least_its_peak_allocation_and_plans_for_it() -> Outcome<()
             "case {number}: {measured:?}"
         );
         assert!(measured.planned >= measured.charged, "case {number}: {measured:?}");
+        // Sparse offsets: no plan holds an offsets array per relation.
+        let dense_offsets = case.relations as u64 * (case.nodes + 1) * 8 * 2;
+        if case.relations == 500 {
+            assert!(measured.planned < dense_offsets / 4, "case {number}: {measured:?}");
+        }
     }
     Ok(())
 }
