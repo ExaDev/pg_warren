@@ -477,7 +477,7 @@ jobs:
           case "$status" in
             404) echo "the first push creates the package" ;;
             200) jq -e '.repository == null' "$package" >/dev/null || {
-                   echo "::error::the GHCR package is linked to $(jq -r '.repository.full_name' "$package"), whose workflows may then write to it: disconnect it (CONTRIBUTING.md, owner setup)"
+                   echo "::error::the GHCR package is linked to $(jq -r '.repository.full_name' "$package"), whose workflows may then write to it: delete the package, since its workflows may already have pushed tags this release would not overwrite (CONTRIBUTING.md, owner setup)"
                    exit 1
                  } ;;
             *) echo "::error::GitHub's API answered $status for the GHCR package"; exit 1 ;;

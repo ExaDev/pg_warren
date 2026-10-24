@@ -67,6 +67,11 @@ def members(deb, part):
     archive = tarfile.open(fileobj=io.BytesIO(done.stdout))
     found = {}
     for member in archive.getmembers():
+        if member.pax_headers:
+            # dpkg-deb writes none, and dpkg's tar reader could apply one
+            # differently from Python's: a member could check as one path
+            # and install as another.
+            raise AssetError(f"{deb.name}: {member.name} carries pax headers in its {part} archive")
         name = member.name.removeprefix("./").rstrip("/")
         name = "" if name == "." else name
         if name in found:
@@ -78,7 +83,7 @@ def members(deb, part):
 def fields(deb, control):
     """A control file's fields, each value with its continuation lines."""
     values, name = {}, None
-    for line in control.splitlines():
+    for line in control.removesuffix("\n").split("\n"):
         if line.startswith(" ") and name:
             values[name] += "\n" + line
             continue

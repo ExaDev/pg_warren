@@ -58,9 +58,9 @@ def entry(name, data=None, mode=None, owner=(0, 0, "root", "root"), link=None):
     return info, data
 
 
-def tar_gz(entries):
+def tar_gz(entries, format=tarfile.GNU_FORMAT):
     raw = io.BytesIO()
-    with tarfile.open(fileobj=raw, mode="w:gz", format=tarfile.GNU_FORMAT) as archive:
+    with tarfile.open(fileobj=raw, mode="w:gz", format=format) as archive:
         for info, data in entries:
             archive.addfile(info, io.BytesIO(data) if data is not None and info.isreg() else None)
     return raw.getvalue()
@@ -313,6 +313,27 @@ def test_a_control_member_that_is_not_a_regular_file_is_refused(tmp_path):
     ar(deb, {"debian-binary": b"2.0\n", "control.tar.gz": tar_gz(ctrl),
              "data.tar.gz": tar_gz([entry("usr/lib/postgresql/16/lib/pg_warren.so", b"x")])})
     with pytest.raises(AssetError, match="regular"):
+        check_deb(deb, "0.7.0")
+
+
+def test_a_member_with_pax_headers_is_refused(tmp_path):
+    """dpkg-deb writes no pax headers, and Python's tar reader and dpkg's
+    could read one differently: a package with one is not ours."""
+    deb = build(tmp_path)
+    so = "usr/lib/postgresql/16/lib/pg_warren.so"
+    library = entry(so, b"x")
+    library[0].pax_headers = {"comment": "x"}
+    data = [entry(""), *(entry(d) for d in ("usr", "usr/lib", "usr/lib/postgresql", "usr/lib/postgresql/16",
+                                            "usr/lib/postgresql/16/lib")),
+            library,
+            *(entry(d) for d in ("usr/share", "usr/share/postgresql", "usr/share/postgresql/16",
+                                 "usr/share/postgresql/16/extension")),
+            entry("usr/share/postgresql/16/extension/pg_warren.control", b"x")]
+    ctrl = [entry(""), entry("control", control_text("16", "0.7.0-1~deb12", "amd64").encode()),
+            entry("md5sums", b""), entry("postinst", expected_postinst("16"), 0o755)]
+    ar(deb, {"debian-binary": b"2.0\n", "control.tar.gz": tar_gz(ctrl),
+             "data.tar.gz": tar_gz(data, tarfile.PAX_FORMAT)})
+    with pytest.raises(AssetError, match="pax"):
         check_deb(deb, "0.7.0")
 
 

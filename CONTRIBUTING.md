@@ -543,7 +543,10 @@ Set once in the repository's settings; the workflows assume them.
    workflow here that asks for `packages: write` push the images. Keep it
    unlinked: the publish job refuses to push to a package linked to a
    repository (GitHub's API shows the link, not the inheritance setting,
-   so the link is what it checks). After the first release, in Packages →
+   so the link is what it checks). If it refuses, delete the package
+   (Package settings → *Delete this package*) rather than disconnect it:
+   whatever pushed to it while it was linked may have left tags a release
+   does not overwrite. After the first release, in Packages →
    pg_warren → Package settings: *Change visibility* → **Public**; do not
    *Connect repository*; under *Manage Actions access*, add no repository
    (or this one with **Read** at most). The token can write to every
