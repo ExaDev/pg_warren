@@ -374,3 +374,21 @@ Half scale, without the recursive CTE baseline, because the machine had
 about 8 GB of disk free, shared with other work; the full-scale text run
 needs about 16 GB (DESIGN.md §12). Both private runs skipped their second
 version for the disk floor, so `diff` and `distance` were not run.
+
+## Rows made as they are returned, at half scale (§5.7, §12)
+
+`a-scale2-text-m10-lazy.json` then `a-scale2-m10-lazy.json`: case a at
+half scale (5M nodes, 50M edges) with IRIs and with `bigint` ids, after
+`components`, `minimum_spanning_forest`, `vector_topk` and
+`most_similar` were changed to make each row's external ids as it is
+returned, to compare their peaks with `a-scale2-text-m10.json` and
+`a-scale2-m10.json`. PostgreSQL 16.15 from a private tree, a release
+build of 8d759e5, harness 8d759e5, the same 4-vCPU Xeon, one after the
+other on 2026-10-24, load average 1.0–2.9 (another agent's work during
+the bigint run):
+
+    bench/soak.py a --ids text --label=-m10-lazy --scale 2 --no-cte --no-eigen-steps \
+        --eigen-max-iter 200 --skip communities --skip second-version --disk-floor 3221225472 \
+        --pg-config /var/tmp/m10-pgtree/usr/lib/postgresql/16/bin/pg_config --parent /var/tmp/m10-soak \
+        --extension-revision 8d759e5 --extension-profile release --threads 4 --statement-timeout 20min
+    bench/soak.py a --ids bigint --label=-m10-lazy …   # otherwise as above
