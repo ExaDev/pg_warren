@@ -1,0 +1,134 @@
+name: Release (prepare)
+
+# Prepares release X.Y.Z on a branch release-X.Y.Z (release/prepare.py: the
+# commit to tag, then the freeze commit), opens the release PR with
+# CHANGELOG's section as its body, and dispatches CI on the branch.
+# CONTRIBUTING.md, "Releases and upgrades".
+#
+# A PR opened with GITHUB_TOKEN starts no pull_request workflow, but a
+# workflow_dispatch made with it does start one. So this workflow dispatches
+# ci.yml on release-X.Y.Z: a full CI run on the release branch's head,
+# whose checks show on the PR as a pull_request run's would, under the same
+# names. A dispatched run is not a pull_request event, so it includes Miri;
+# test/upgrade.py runs in every pgrx-test job. Pushes a person makes to the
+# branch later start ci.yml's pull_request run as usual, which runs Miri for
+# release-* branches too.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The release, X.Y.Z (the version in development)
+        required: true
+        type: string
+      next:
+        description: The version to develop next (default X.(Y+1).0)
+        required: false
+        type: string
+      title:
+        description: The release's name in CHANGELOG's heading (optional)
+        required: false
+        type: string
+
+concurrency:
+  group: release-prepare
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  PGRX_VERSION: 0.19.3
+
+jobs:
+  prepare:
+    name: Prepare release ${{ inputs.version }}
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    env:
+      VERSION: ${{ inputs.version }}
+      NEXT_VERSION: ${{ inputs.next }}
+      TITLE: ${{ inputs.title }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # released.commits and the drift check resolve every release's commit.
+          fetch-depth: 0
+      - name: The release branch, and the next version
+        id: release
+        run: |
+          set -euo pipefail
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must be X.Y.Z, not '$VERSION'"
+            exit 1
+          fi
+          IFS=. read -r major minor _ <<<"$VERSION"
+          next="${NEXT_VERSION:-$major.$((minor + 1)).0}"
+          branch="release-$VERSION"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            echo "::error::$branch already exists: close its PR and delete the branch to prepare $VERSION again"
+            exit 1
+          fi
+          echo "next=$next" >>"$GITHUB_OUTPUT"
+          echo "branch=$branch" >>"$GITHUB_OUTPUT"
+      - name: Install pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: ./.github/actions/setup-postgres
+        # A stalled PGDG mirror once held a job here for hours; fail and re-run instead.
+        timeout-minutes: 30
+        with:
+          pg-major: "16"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: pg16
+          cache-bin: "false"
+          save-if: "false"
+      - name: Cache cargo-pgrx ${{ env.PGRX_VERSION }}
+        id: cargo-pgrx-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-pgrx
+          key: cargo-pgrx-${{ env.PGRX_VERSION }}-${{ runner.os }}-${{ runner.arch }}-rust-${{ hashFiles('rust-toolchain.toml') }}
+      - name: Install cargo-pgrx
+        if: steps.cargo-pgrx-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-pgrx --version "$PGRX_VERSION" --locked
+      - name: cargo pgrx init
+        run: cargo pgrx init --pg16 "$PG_CONFIG"
+      - name: release/prepare.py ${{ inputs.version }}
+        env:
+          NEXT: ${{ steps.release.outputs.next }}
+          BRANCH: ${{ steps.release.outputs.branch }}
+          PG: pg16
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          args=("$VERSION" "$NEXT")
+          if [[ -n "$TITLE" ]]; then args+=(--title "$TITLE"); fi
+          python3 release/prepare.py "${args[@]}"
+          git push origin "$BRANCH"
+      - name: Open the release PR
+        env:
+          BRANCH: ${{ steps.release.outputs.branch }}
+        run: |
+          set -euo pipefail
+          python3 release/changelog.py notes "$VERSION" >"$RUNNER_TEMP/notes.md"
+          gh pr create --base main --head "$BRANCH" --title "release: $VERSION" --body-file "$RUNNER_TEMP/notes.md"
+      - name: Dispatch CI on the release branch
+        env:
+          BRANCH: ${{ steps.release.outputs.branch }}
+        run: |
+          set -euo pipefail
+          gh workflow run ci.yml --ref "$BRANCH"
+          {
+            echo "Prepared $VERSION on \`$BRANCH\` and opened its PR."
+            echo "CI (with Miri and test/upgrade.py) is dispatched on the branch: its checks show on the PR."
+            echo "Merge the PR with a merge commit; release-publish.yml then tags v$VERSION after approval."
+          } >>"$GITHUB_STEP_SUMMARY"
