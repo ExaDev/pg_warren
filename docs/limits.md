@@ -15,7 +15,7 @@ is set in the server's configuration and takes effect on reload.
 | `warren.max_compute_memory` | `4GB` | `64kB` up | memory one call holds: every vector it reads (once, cached or not), every vector and work buffer it allocates, and what its statement holds in the cache past `warren.max_cache_memory` | `configuration_limit_exceeded` (53400), before allocating or loading |
 | `warren.max_cache_memory` | `4GB` | `64kB` up | what this backend's cache holds *between* statements: cached versions, cached persisted vectors, and every role's transient vectors | versions and persisted vectors no running statement has read are evicted, least recently used first; a transient write that would go over is refused with 53400 |
 | `warren.shared_cache_memory` | `4GB` | `0` up; `0` turns it off | the cluster's shared versions and persisted vectors, of every database together; set in `postgresql.conf` (or `ALTER SYSTEM`) and reloaded, not per session ([the shared cache](#the-shared-cache)) | unpinned entries no backend maps are evicted, least recently used first; one that still does not fit is loaded into the reading backend's own cache, with a `NOTICE` |
-| `warren.max_build_memory` | `4GB` | `1MB` up | everything a `refresh` holds at once: the node ids, the id map, the edge list, the CSRs it is building and its sort and write buffers; and, separately, the CSR offsets of the whole version (8 bytes × (id_space + 1) per relation's CSR, and the merged CSR's if stored, per direction) | `configuration_limit_exceeded` (53400): before the edge query runs if the id map or the offsets do not fit, before the version is written if the build's estimate does not, else when the edge list grows past it |
+| `warren.max_build_memory` | `4GB` | `1MB` up | everything a `refresh` holds at once: the node ids, the id map, the edge list, the CSRs it is building and its sort and write buffers; and, separately, the offsets every version holds whatever its edges (the merged CSR's 8 bytes × (id_space + 1) if stored, and 8 bytes per relation's CSR, per direction) | `configuration_limit_exceeded` (53400): before the edge query runs if the id map or the offsets do not fit, before the version is written if the build's estimate does not, else when the edge list grows past it |
 | `warren.max_walk_paths` | `10000000` | 1 up | the largest `max_results` for a `walk` that returns a row per walk (`mode := 'paths'`, or `'ends'` without `distinct_ends`) | `program_limit_exceeded` (54000) |
 
 On the `kg` graph of [change-detection.md](change-detection.md):
@@ -173,8 +173,12 @@ differs.
   soak run whose results are not committed, the backend was killed for
   memory at 12.8 GB).
 - Storage of a version, per direction: offsets 8 bytes × (id_space + 1) for
-  each relation, plus the merged CSR's when there is more than one relation
-  and the graph stores it (`store_merged`, the default; see below);
+  the merged CSR when there is more than one relation and the graph stores
+  it (`store_merged`, the default; see below), and for each relation whose
+  edges start from many of the nodes; one whose edges start from at most
+  about a sixth of them (an eighth above 2³² nodes) stores 12 bytes (16)
+  per node they start from instead (in the reverse CSR, per node they
+  reach);
   targets 4 bytes per edge (8 above 2³² nodes); weights 8 bytes per edge.
   The reverse CSR doubles it (`build_reverse := true`, the default). A
   persisted `f64` vector is 8 bytes × id_space × width (80 MB per column at
