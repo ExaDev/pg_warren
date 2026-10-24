@@ -22,6 +22,7 @@ SELECT assert.equal(total, 200006::float8, 'a and b read x')
 FROM unnest(ARRAY['a', 'b']) AS session,
      LATERAL dblink(session, $$SELECT warren.vector_reduce('g', 'x', 'sum')$$) AS t(total float8);
 SELECT assert.equal(shared_vector_segments(:x), :one, 'x is loaded once');
+SELECT coalesce(max(bytes), 0) AS x_bytes FROM warren.shared_cache() WHERE kind = 'vector' AND vector_id = :x \gset
 SELECT assert.equal(count(*), :one, 'the view lists x, mapped by a and b')
 FROM warren.shared_cache()
 WHERE kind = 'vector' AND vector_id = :x AND vector = 'x' AND graph = 'g' AND version = :v1
@@ -48,31 +49,32 @@ SELECT assert.equal(shared_vector_segments(:flags), 0::bigint, 'a bool vector is
 -- released its mapping in own_evictions), and is freed once they release
 -- it at their next read, which shares the new one.
 SELECT warren.vector_const('g', 'x', 3) AS x2 \gset
-SELECT assert.equal(shared_vector_segments(:x), :one, 'the replaced x drains while mapped');
+SELECT assert.equal(unnamed_shared_bytes(), :unnamed + :x_bytes, 'the replaced x drains while mapped');
 SELECT assert.equal(total, 300009::float8, 'a, b and c read the new x')
 FROM unnest(ARRAY['a', 'b', 'c']) AS session,
      LATERAL dblink(session, $$SELECT warren.vector_reduce('g', 'x', 'sum')$$) AS t(total float8);
-SELECT assert.equal(shared_vector_segments(:x), 0::bigint, 'the replaced x is freed');
+SELECT assert.equal(unnamed_shared_bytes(), :unnamed, 'the replaced x is freed');
 SELECT assert.equal(shared_vector_segments(:x2), :one, 'the new x is shared');
 
 -- Dropping x evicts it; it is freed once a, b and c release it.
 SELECT warren.drop_vector('g', 'x');
 SELECT t.* FROM unnest(ARRAY['a', 'b', 'c']) AS session,
      LATERAL dblink(session, $$SELECT warren.degree('g', 1::bigint)$$) AS t(degree bigint);
-SELECT assert.equal(shared_vector_segments(:x2), 0::bigint, 'a dropped vector is freed');
+SELECT assert.equal(unnamed_shared_bytes(), :unnamed, 'a dropped vector is freed');
 
 -- z, bound to v1, is shared; v1 is dropped (and z with it) after a
 -- promotion: c's next cache miss prunes z, and a releases it at its next
--- read.
+-- read. v1, pruned too, drains while b, which has not read since, maps it.
 SELECT warren.vector_const('g', 'z', 1) AS z \gset
 SELECT * FROM dblink('a', $$SELECT warren.vector_reduce('g', 'z', 'sum')$$) AS t(total float8);
 SELECT assert.equal(shared_vector_segments(:z), :one, 'z is shared');
+SELECT coalesce(shared_segment_size(:v1), 0) AS v1_bytes \gset
 INSERT INTO nodes VALUES (100004);
 SELECT warren.refresh('g') AS v2 \gset
 SELECT warren.drop_version('g', :v1);
 SELECT * FROM dblink('c', $$SELECT warren.degree('g', 1::bigint)$$) AS t(degree bigint);
 SELECT * FROM dblink('a', $$SELECT warren.degree('g', 1::bigint)$$) AS t(degree bigint);
-SELECT assert.equal(shared_vector_segments(:z), 0::bigint, 'a vector whose row is gone is evicted');
+SELECT assert.equal(unnamed_shared_bytes(), :unnamed + :v1_bytes, 'a vector whose row is gone is evicted');
 
 -- warren.evict: a role that does not own g evicts no shared vector; the
 -- owner evicts g's shared version and vector that no statement pins.

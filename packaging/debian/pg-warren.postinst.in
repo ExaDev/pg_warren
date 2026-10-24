@@ -1,0 +1,20 @@
+#!/bin/sh
+# postinst of postgresql-PGVERSION-pg-warren: says what to do next. It does
+# not edit postgresql.conf.
+set -e
+
+if [ "$1" = configure ]; then
+	cat <<'NEXT'
+pg_warren is installed for PostgreSQL PGVERSION. To use it:
+  1. add pg_warren to shared_preload_libraries in postgresql.conf, e.g.
+       shared_preload_libraries = 'pg_warren'
+     (it shares loaded graphs between backends);
+  2. restart PostgreSQL: sudo systemctl restart postgresql@PGVERSION-main
+     (or pg_ctlcluster PGVERSION main restart);
+  3. in each database: CREATE EXTENSION pg_warren;
+NEXT
+fi
+
+#DEBHELPER#
+
+exit 0

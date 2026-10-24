@@ -3,8 +3,8 @@
 -- maps that copy; none of them holds it in its own cache. Where the shared
 -- cache is off or unavailable (test/run.py --shared-cache off, or on
 -- without the preload on PG 15 and 16), each backend loads its own copy
--- and no segment is created. The segments are counted in /dev/shm, and
--- the registry is read through warren.shared_cache().
+-- and no segment is created. The segments are counted, and the registry
+-- read, through warren.shared_cache().
 \ir include/shared_cache.sql
 CREATE TABLE nodes AS SELECT generate_series(1, 200003)::bigint AS id;
 SELECT warren.create_graph('g', 'SELECT id FROM nodes', 'SELECT id, id % 200003 + 1 FROM nodes');

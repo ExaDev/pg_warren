@@ -27,7 +27,7 @@ jobs:
     name: Format (rustfmt)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - run: cargo fmt --all --check
@@ -36,7 +36,7 @@ jobs:
     name: warren-core has no Postgres dependency (§15.4)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - name: cargo tree -p warren-core must not mention pgrx / pg-sys
@@ -53,10 +53,10 @@ jobs:
     name: warren-core unit + property tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: core
       # --all-targets also builds the criterion benches and runs each once in
@@ -79,10 +79,10 @@ jobs:
       # proptest reads the working directory and OS randomness.
       MIRIFLAGS: -Zmiri-disable-isolation
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install nightly with Miri
         run: rustup toolchain install "$MIRI_NIGHTLY" --profile minimal --component miri,rust-src
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: miri
       - run: cargo "+$MIRI_NIGHTLY" miri setup
@@ -96,12 +96,12 @@ jobs:
       matrix:
         target: [decode_csr, decode_id_map, decode_text_id_map, decode_tombstones, decode_relation_dictionary, decode_membership]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: rustup toolchain install "$MIRI_NIGHTLY" --profile minimal
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cargo-fuzz
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: fuzz
           workspaces: fuzz
@@ -112,7 +112,7 @@ jobs:
     name: Clippy + rustdoc (PG 16)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: ./.github/actions/setup-postgres
@@ -120,7 +120,7 @@ jobs:
         timeout-minutes: 30
         with:
           pg-major: "16"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: lint
       - name: clippy (workspace, all targets)
@@ -138,7 +138,7 @@ jobs:
       matrix:
         pg: ["15", "16", "17", "18"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # test/upgrade.py builds each release from its commit in
           # sql/released.commits, which needs the full history.
@@ -150,14 +150,14 @@ jobs:
         timeout-minutes: 30
         with:
           pg-major: ${{ matrix.pg }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: pg${{ matrix.pg }}
           # cargo-pgrx is cached on its own below; its key survives Cargo.lock changes.
           cache-bin: "false"
       - name: Cache cargo-pgrx ${{ env.PGRX_VERSION }}
         id: cargo-pgrx-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cargo/bin/cargo-pgrx
           key: cargo-pgrx-${{ env.PGRX_VERSION }}-${{ runner.os }}-${{ runner.arch }}-rust-${{ hashFiles('rust-toolchain.toml') }}
@@ -173,7 +173,7 @@ jobs:
         working-directory: crates/pg_warren
         run: cargo pgrx test pg${{ matrix.pg }}
       - name: Cache the release builds (source, target directory per release and major, release cargo-pgrx)
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/pg_warren-releases
           # sql/released.commits fixes each release's source, and so the pgrx
@@ -196,7 +196,7 @@ jobs:
         # through psql and pg_restore, each statement in its own transaction;
         # a trusted install's installer dumps without the catalog's data.
         run: python3 test/dump.py --no-install --pg-config "$PG_CONFIG"
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.13"
           cache: pip
@@ -218,6 +218,126 @@ jobs:
         if: matrix.pg == '16'
         run: PG=pg16 sql/schema-drift.sh
 
+  arm64:
+    # Most hosted Postgres runs on arm64 (DESIGN.md §13, M11 Distribution).
+    # The build and the in-database tests on two majors, 16 (the
+    # development baseline, private versions without the preload) and 18
+    # (shared by default, so the shared cache's atomics run on arm64's
+    # weaker memory ordering), and the SQL harness at the default and
+    # preloaded. Not on arm64: Miri and the fuzzers (warren-core is
+    # arch-independent safe Rust), test/upgrade.py and test/dump.py (catalog
+    # paths, covered on x86_64 for every major), clippy and rustdoc.
+    name: arm64 pgrx tests + SQL harness (PG ${{ matrix.pg }})
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: ["16", "18"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: ./.github/actions/setup-postgres
+        # A stalled PGDG mirror once held a job here for hours; fail and re-run instead.
+        timeout-minutes: 30
+        with:
+          pg-major: ${{ matrix.pg }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: arm64-pg${{ matrix.pg }}
+          cache-bin: "false"
+      - name: Cache cargo-pgrx ${{ env.PGRX_VERSION }}
+        id: cargo-pgrx-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cargo/bin/cargo-pgrx
+          key: cargo-pgrx-${{ env.PGRX_VERSION }}-${{ runner.os }}-${{ runner.arch }}-rust-${{ hashFiles('rust-toolchain.toml') }}
+      - name: Install cargo-pgrx
+        if: steps.cargo-pgrx-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-pgrx --version "$PGRX_VERSION" --locked
+      - name: Let the runner user install into the PG ${{ matrix.pg }} tree
+        run: |
+          sudo chmod a+rwx "$("$PG_CONFIG" --pkglibdir)" "$("$PG_CONFIG" --sharedir)/extension"
+      - name: cargo pgrx init
+        run: cargo pgrx init --pg${{ matrix.pg }} "$PG_CONFIG"
+      - name: cargo pgrx test pg${{ matrix.pg }}
+        working-directory: crates/pg_warren
+        run: cargo pgrx test pg${{ matrix.pg }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: bench/requirements.txt
+      - run: pip install -r bench/requirements.txt
+      - name: SQL harness (test/run.py)
+        run: python test/run.py --pg-config "$PG_CONFIG"
+      - name: SQL harness with the shared cache preloaded (test/run.py --shared-cache preload)
+        run: python test/run.py --no-install --shared-cache preload --pg-config "$PG_CONFIG"
+
+  macos:
+    # Apple silicon with Homebrew's PostgreSQL. macOS has no /dev/shm: DSM
+    # segments are POSIX shared memory with no file system to measure, so
+    # the store is taken as unbounded, as for sysv (DESIGN.md §5.6, Size
+    # checks). It runs everything and reports; until macOS is supported it
+    # does not fail the workflow (continue-on-error), so read its result.
+    name: macOS arm64 pgrx tests + SQL harness (Homebrew PG 18)
+    runs-on: macos-15
+    continue-on-error: true
+    env:
+      # RUSTFLAGS replaces, not extends, crates/pg_warren/.cargo/config.toml's
+      # macOS rustflags, so repeat its link flag: the Postgres symbols
+      # resolve when the server loads the library.
+      RUSTFLAGS: -D warnings -Clink-arg=-Wl,-undefined,dynamic_lookup
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Install postgresql@18 from Homebrew
+        run: |
+          brew install postgresql@18
+          echo "PG_CONFIG=$(brew --prefix postgresql@18)/bin/pg_config" >>"$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: macos-pg18
+          cache-bin: "false"
+      - name: Cache cargo-pgrx ${{ env.PGRX_VERSION }}
+        id: cargo-pgrx-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cargo/bin/cargo-pgrx
+          key: cargo-pgrx-${{ env.PGRX_VERSION }}-${{ runner.os }}-${{ runner.arch }}-rust-${{ hashFiles('rust-toolchain.toml') }}
+      - name: Install cargo-pgrx
+        if: steps.cargo-pgrx-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-pgrx --version "$PGRX_VERSION" --locked
+      - name: cargo pgrx init
+        run: cargo pgrx init --pg18 "$PG_CONFIG"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: bench/requirements.txt
+      # Before the tests, so the harness steps still run if they fail.
+      - run: pip install -r bench/requirements.txt
+      - name: cargo pgrx test pg18
+        working-directory: crates/pg_warren
+        run: cargo pgrx test pg18
+      - name: SQL harness (test/run.py)
+        if: ${{ !cancelled() }}
+        run: python test/run.py --pg-config "$PG_CONFIG"
+      - name: SQL harness with the shared cache preloaded (test/run.py --shared-cache preload)
+        if: ${{ !cancelled() }}
+        run: python test/run.py --no-install --shared-cache preload --pg-config "$PG_CONFIG"
+      - name: The tap's formula passes brew style and brew audit
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          brew tap-new --no-git exadev/tap
+          git archive --format=tar.gz --prefix=pg_warren-0.0.0/ -o "$RUNNER_TEMP/pg_warren-0.0.0.tar.gz" HEAD
+          python3 release/homebrew.py "$RUNNER_TEMP/pg_warren-0.0.0.tar.gz" \
+            >"$(brew --repo exadev/tap)/Formula/pg_warren.rb"
+          brew style exadev/tap/pg_warren
+          brew audit --strict --formula exadev/tap/pg_warren
+
   harness:
     # The out-of-crate harness (DESIGN.md §12): generator and harness pytest
     # tests, the test/ SQL suite against an installed pg_warren, and one smoke
@@ -225,7 +345,7 @@ jobs:
     name: Generators + SQL harness (PG 16)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # test/tests/test_releases.py resolves the commits in
           # sql/released.commits, which needs the full history.
@@ -237,7 +357,7 @@ jobs:
         timeout-minutes: 30
         with:
           pg-major: "16"
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.13"
           cache: pip
@@ -245,13 +365,13 @@ jobs:
       - run: pip install -r bench/requirements.txt
       - name: pytest (generators, harness, oracle)
         run: pytest
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: harness
           cache-bin: "false"
       - name: Cache cargo-pgrx ${{ env.PGRX_VERSION }}
         id: cargo-pgrx-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cargo/bin/cargo-pgrx
           key: cargo-pgrx-${{ env.PGRX_VERSION }}-${{ runner.os }}-${{ runner.arch }}-rust-${{ hashFiles('rust-toolchain.toml') }}
@@ -285,10 +405,10 @@ jobs:
     name: Docker image builds (PG 16)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
       - name: docker build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: docker/Dockerfile
@@ -320,3 +440,78 @@ jobs:
             -c 'CREATE ROLE app LOGIN' -c 'CREATE DATABASE app OWNER app'
           docker exec pgw psql -U app -d app -v ON_ERROR_STOP=1 \
             -c 'CREATE EXTENSION pg_warren' -c 'SELECT warren.version()'
+
+  packages:
+    # The .deb path the release takes (release-publish.yml), for one package:
+    # built in Debian 12's container against PGDG, installed with apt into a
+    # clean container with PGDG's PostgreSQL, preloaded, restarted and
+    # smoke-tested (superuser and trusted), then the Docker image built from
+    # it and the same test run in it. The publish job's check of a package
+    # (release/assets.py) must pass on it. CONTRIBUTING.md, "Packages".
+    name: Debian package and image (PG 16, bookworm, amd64)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Build postgresql-16-pg-warren (release/packages.py deb)
+        run: python3 release/packages.py deb bookworm . dist --majors 16
+      - name: The publish job's check passes on it (release/assets.py check-deb)
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          mkdir -p "$RUNNER_TEMP/assets"
+          for deb in dist/*.deb; do
+            name="$(basename "$deb")"
+            cp -- "$deb" "$RUNNER_TEMP/assets/${name//\~/.}"
+            python3 release/assets.py check-deb "$RUNNER_TEMP/assets/${name//\~/.}" "$version"
+          done
+      - name: Install it with apt, preload, restart, smoke test
+        run: python3 release/packages.py check dist/postgresql-16-pg-warren_*.deb
+      - name: Tarball from it
+        run: python3 release/packages.py tarball dist/postgresql-16-pg-warren_*.deb dist
+      - name: Docker image from it, and its smoke test
+        run: python3 release/packages.py image dist/postgresql-16-pg-warren_*.deb pg_warren:ci-pg16
+
+  packages-arm64:
+    # The same on arm64 and Ubuntu, off the pull-request path (as Miri):
+    # on pushes to main, dispatches (each release branch) and release PRs,
+    # so a release's arm64 and Ubuntu builds are proven before it is tagged.
+    name: Debian package and image (PG 18, noble, arm64)
+    if: github.event_name != 'pull_request' || startsWith(github.head_ref, 'release-')
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Build postgresql-18-pg-warren (release/packages.py deb)
+        run: python3 release/packages.py deb noble . dist --majors 18
+      - name: The publish job's check passes on it (release/assets.py check-deb)
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          mkdir -p "$RUNNER_TEMP/assets"
+          for deb in dist/*.deb; do
+            name="$(basename "$deb")"
+            cp -- "$deb" "$RUNNER_TEMP/assets/${name//\~/.}"
+            python3 release/assets.py check-deb "$RUNNER_TEMP/assets/${name//\~/.}" "$version"
+          done
+      - name: Install it with apt, preload, restart, smoke test
+        run: python3 release/packages.py check dist/postgresql-18-pg-warren_*.deb
+
+  actionlint:
+    name: Workflows (actionlint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Both pinned, so a new release cannot change the verdict unannounced
+      # (the runner's own shellcheck flagged what 0.11.0 does not). Go's
+      # checksum database verifies actionlint; shellcheck, which actionlint
+      # runs on each run: script, is checked against its release's sha256.
+      # CONTRIBUTING.md runs the same versions locally.
+      - name: Install actionlint 1.7.12 and shellcheck 0.11.0
+        run: |
+          set -euo pipefail
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          tarball="$RUNNER_TEMP/shellcheck.tar.xz"
+          curl -fsSLo "$tarball" https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  $tarball" | sha256sum --check
+          tar -xJf "$tarball" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellcheck-v0.11.0" >>"$GITHUB_PATH"
+      - run: shellcheck --version && ~/go/bin/actionlint -color

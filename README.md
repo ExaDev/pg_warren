@@ -37,6 +37,81 @@ backends) is **planned** as the power-user path; it is not there yet.
 
 pg_warren supports PostgreSQL 15, 16, 17 and 18 (16 is the development
 baseline). `CREATE EXTENSION pg_warren` does not need a superuser (below).
+Packages are published from 0.7.0 on; for an earlier release, build from
+source.
+
+**Debian 12 and 13, Ubuntu 22.04 and 24.04 (amd64, arm64)**: a signed apt
+repository of `postgresql-NN-pg-warren` packages, built against
+[PGDG](https://wiki.postgresql.org/wiki/Apt)'s PostgreSQL, whose
+`postgresql-NN` they depend on (add PGDG first unless your distribution
+ships that major). Add the key and the source once:
+
+```sh
+sudo install -d /etc/apt/keyrings
+curl -fsSL https://exadev.github.io/pg_warren/apt/pg_warren.asc \
+  | sudo tee /etc/apt/keyrings/pg_warren.asc >/dev/null
+echo "deb [signed-by=/etc/apt/keyrings/pg_warren.asc] https://exadev.github.io/pg_warren/apt $(. /etc/os-release && echo "$VERSION_CODENAME") main" \
+  | sudo tee /etc/apt/sources.list.d/pg_warren.list
+sudo apt update
+sudo apt install postgresql-17-pg-warren   # or -15, -16, -18
+```
+
+Check the key before trusting it: `gpg --show-keys /etc/apt/keyrings/pg_warren.asc`
+must show the fingerprint
+`(set by the owner before the first release)` <!-- apt key -->,
+which every GitHub Release's notes repeat.
+
+The package does not edit `postgresql.conf`. Add the preload yourself
+(below: on PG 15 and 16 it is what lets backends share loaded graphs) and
+restart: `shared_preload_libraries = 'pg_warren'` in
+`/etc/postgresql/17/main/postgresql.conf`, then
+`sudo systemctl restart postgresql@17-main`.
+
+**Docker**, the quickest way to try it: PGDG's official `postgres` image
+(Debian 13) with the package installed and pg_warren preloaded, for amd64
+and arm64:
+
+```sh
+docker run --rm --shm-size=1g -e POSTGRES_PASSWORD=postgres -p 5432:5432 ghcr.io/exadev/pg_warren:pg17
+```
+
+Tags are `pgNN` (the latest release) and `X.Y.Z-pgNN`. `--shm-size` sizes
+the container's `/dev/shm`, where the shared cache keeps loaded graphs
+(below); Docker's default is 64 MB. `1g` shares graphs of up to about
+750 MB; for the default cap of 4GB, give it `6g`. `docker/Dockerfile`
+builds an image from source instead
+(`docker build -f docker/Dockerfile --build-arg PG_MAJOR=17 -t pg_warren:pg17 .`).
+
+**macOS (Homebrew)**, for Homebrew's `postgresql@17` and `postgresql@18`; a
+bottle on Apple silicon, built from source (with Rust) on Intel:
+
+```sh
+brew install exadev/tap/pg_warren
+```
+
+Then add `shared_preload_libraries = 'pg_warren'` to
+`$(brew --prefix)/var/postgresql@18/postgresql.conf` and
+`brew services restart postgresql@18` (`brew info pg_warren` repeats this).
+macOS is not yet a supported platform: CI runs the tests there without
+gating on them, and the shared cache, which measures `/dev/shm` (absent on
+macOS), is expected to keep a copy per backend (DESIGN.md §13, M11).
+Postgres.app is not supported for now.
+
+**Other Linux (glibc 2.35 or later)**: each GitHub Release has
+`pg_warren-X.Y.Z-pgNN-linux-{x86_64,aarch64}.tar.gz`, built on Ubuntu 22.04.
+Copy its files where that PostgreSQL's `pg_config` says (its `INSTALL`
+says the same), then preload and restart as above:
+
+```sh
+cp pkglibdir/* "$(pg_config --pkglibdir)"
+cp sharedir/extension/* "$(pg_config --sharedir)/extension"
+```
+
+RPM packages (RHEL, Fedora) and PGXN are planned, not built yet.
+
+**Managed PostgreSQL** (Amazon RDS and Aurora, Cloud SQL, Azure, Supabase,
+Neon and the like) installs only the extensions the provider ships, so
+pg_warren cannot be used there until a provider adopts it.
 
 **From source**, with Rust (the toolchain pinned in `rust-toolchain.toml`),
 the server headers (`postgresql-server-dev-NN`), `clang`/`libclang-dev`, and
@@ -49,19 +124,6 @@ cargo pgrx init --pg16 "$(command -v pg_config)"
 cd crates/pg_warren
 cargo pgrx install --release --pg-config "$(command -v pg_config)"
 ```
-
-**Docker**: `docker/Dockerfile` builds the extension for one major and
-installs it into the official `postgres` image for that major. No image is
-published yet; build it locally:
-
-```sh
-docker build -f docker/Dockerfile --build-arg PG_MAJOR=17 -t pg_warren:pg17 .
-docker run --rm --shm-size=1g -e POSTGRES_PASSWORD=postgres -p 5432:5432 pg_warren:pg17
-```
-
-`--shm-size` sizes the container's `/dev/shm`, where the shared cache keeps
-loaded graphs (below); Docker's default is 64 MB. `1g` shares graphs of up
-to about 750 MB; for the default cap of 4GB, give it `6g`.
 
 Then, in each database:
 

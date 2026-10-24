@@ -1,0 +1,30 @@
+Source: pg-warren
+Section: database
+Priority: optional
+Maintainer: Will Faithfull <wfaithfull@users.noreply.github.com>
+Build-Depends:
+ clang,
+ debhelper-compat (= 13),
+ libclang-dev,
+ pkgconf,
+ postgresql-server-dev-all (>= 217~),
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/ExaDev/pg_warren
+Vcs-Browser: https://github.com/ExaDev/pg_warren
+Vcs-Git: https://github.com/ExaDev/pg_warren.git
+
+Package: postgresql-PGVERSION-pg-warren
+Architecture: any
+Depends:
+ postgresql-PGVERSION,
+ ${misc:Depends},
+ ${shlibs:Depends},
+Description: index-free-adjacency traversal and graph compute for PostgreSQL PGVERSION
+ pg_warren builds a compressed adjacency (CSR) of a graph held in ordinary
+ tables, and runs traversals (BFS, walks, shortest paths) and graph compute
+ (PageRank, components, community detection, spectral methods) over it
+ from SQL.
+ .
+ Add pg_warren to shared_preload_libraries and restart PostgreSQL, then run
+ CREATE EXTENSION pg_warren in each database.
