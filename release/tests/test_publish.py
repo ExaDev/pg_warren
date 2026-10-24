@@ -118,3 +118,25 @@ def test_a_recorded_commit_without_the_released_script_is_not_tagged(repo):
     done = publish(repo, "tag", "1.0.0")
     assert done.returncode == 1
     assert "does not hold the released sql/pg_warren--1.0.0.sql" in done.stderr
+
+
+def test_a_version_recorded_twice_fails_verification(repo):
+    with (repo / "sql" / "released.commits").open("a") as commits:
+        commits.write(f"{git(repo, 'rev-parse', 'HEAD')}  1.0.0\n")
+    done = publish(repo, "verify")
+    assert done.returncode == 1
+    assert "1.0.0 is recorded more than once in sql/released.commits" in done.stderr
+
+
+def test_a_commit_recorded_for_two_versions_fails_verification(repo):
+    with (repo / "sql" / "released.commits").open("a") as commits:
+        commits.write(f"{released(repo)}  1.1.0\n")
+    done = publish(repo, "verify")
+    assert done.returncode == 1
+    assert f"commit {released(repo)} is recorded for more than one release in sql/released.commits" in done.stderr
+
+
+def test_the_recorded_commit_is_printed(repo):
+    done = publish(repo, "commit", "1.0.0")
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == f"{released(repo)}\n"

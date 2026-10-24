@@ -5,7 +5,9 @@ checks the frozen install scripts and makes the release's tag, for
 after the release PR has merged.
 
     release/publish.py latest          # the last version in sql/released.commits
-    release/publish.py verify          # every frozen script matches sql/released.sha256
+    release/publish.py verify          # every frozen script matches sql/released.sha256,
+                                       # and no version or commit is recorded twice
+    release/publish.py commit X.Y.Z    # X.Y.Z's recorded commit, once shown to be the release
     release/publish.py tag X.Y.Z       # annotated tag vX.Y.Z on X.Y.Z's recorded commit
 
 `tag` makes the tag only on the commit sql/released.commits records for
@@ -52,6 +54,13 @@ def recorded():
 
 
 def verify():
+    seen = {}
+    for version, sha in recorded():
+        if version in seen.values():
+            raise Unpublishable(f"{version} is recorded more than once in sql/released.commits")
+        if sha in seen:
+            raise Unpublishable(f"commit {sha} is recorded for more than one release in sql/released.commits")
+        seen[sha] = version
     for script, digest in frozen().items():
         if hashlib.sha256((SQL / script).read_bytes()).hexdigest() != digest:
             raise Unpublishable(f"sql/{script} does not match sql/released.sha256: released scripts are frozen")
@@ -92,6 +101,8 @@ def main(argv):
             print(recorded()[-1][0])
         elif argv == ["verify"]:
             verify()
+        elif len(argv) == 2 and argv[0] == "commit" and re.fullmatch(r"\d+\.\d+\.\d+", argv[1]):
+            print(release_commit(argv[1]))
         elif len(argv) == 2 and argv[0] == "tag" and re.fullmatch(r"\d+\.\d+\.\d+", argv[1]):
             tag(argv[1])
         else:
