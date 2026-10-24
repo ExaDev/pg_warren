@@ -211,15 +211,14 @@ pub fn eigen<I: Interrupts>(
 ) -> Result<Eigen, SpectralError> {
     let mut operator = LinearOperator::new(resources, graph, matrix)?;
     check_count(&operator, options)?;
-    let mut deflation = deflate(resources, &mut operator, matrix, options)?;
-    let working_set = admit(resources, &operator, deflation.as_ref(), matrix, options)?;
-    let deflation = deflation.as_mut();
+    let mut prepared = deflate(resources, &mut operator, matrix, options)?;
+    let working_set = admit(resources, &operator, prepared.deflation.as_ref(), matrix, options)?;
     match options.precision {
         Precision::F32 => {
-            solve::<f32, I>(resources, &mut operator, deflation, options, &working_set)
+            solve::<f32, I>(resources, &mut operator, &mut prepared, options, &working_set)
         }
         Precision::F64 => {
-            solve::<f64, I>(resources, &mut operator, deflation, options, &working_set)
+            solve::<f64, I>(resources, &mut operator, &mut prepared, options, &working_set)
         }
     }
 }
@@ -236,8 +235,8 @@ pub fn admit_eigen<I: Interrupts>(
 ) -> Result<(), SpectralError> {
     let mut operator = LinearOperator::new(resources, graph, matrix)?;
     check_count(&operator, options)?;
-    let deflation = deflate(resources, &mut operator, matrix, options)?;
-    admit(resources, &operator, deflation.as_ref(), matrix, options).map(drop)
+    let prepared = deflate(resources, &mut operator, matrix, options)?;
+    admit(resources, &operator, prepared.deflation.as_ref(), matrix, options).map(drop)
 }
 
 /// Refuses an eigenpair count of 0 or past the dimension.
@@ -249,16 +248,33 @@ fn check_count(operator: &LinearOperator<'_>, options: &EigenOptions) -> Result<
     Ok(())
 }
 
-/// The components' eigenpairs, if their eigenvalue is at the wanted end.
+/// What the components give a solve before its first step.
+#[derive(Debug)]
+struct Prepared {
+    /// Their eigenpairs, if any is at the wanted end.
+    deflation: Option<Deflation>,
+    /// Their number, if counted without a deflation.
+    components: Option<u64>,
+}
+
+/// The components' eigenpairs, if their eigenvalue is at the wanted end
+/// and some component gives it (the normalised Laplacian's 2 needs a
+/// bipartite one). Without one, the solve runs and is admitted as if
+/// nothing were deflated, keeping only the count of components.
 fn deflate<I: Interrupts>(
     resources: &mut Resources<'_, I>,
     operator: &mut LinearOperator<'_>,
     matrix: &GraphMatrix<'_>,
     options: &EigenOptions,
-) -> Result<Option<Deflation>, SpectralError> {
-    Deflation::known(matrix.operator, options.which)
-        .map(|known| Deflation::new(resources, operator, known))
-        .transpose()
+) -> Result<Prepared, SpectralError> {
+    let Some(known) = Deflation::known(matrix.operator, options.which) else {
+        return Ok(Prepared { deflation: None, components: None });
+    };
+    let deflation = Deflation::new(resources, operator, known)?;
+    Ok(match deflation.count() {
+        0 => Prepared { deflation: None, components: Some(deflation.components()) },
+        _ => Prepared { deflation: Some(deflation), components: None },
+    })
 }
 
 /// Checks the working set against the compute memory and returns it.
@@ -291,7 +307,7 @@ fn admit<I>(
 fn solve<E: Stored, I: Interrupts>(
     resources: &mut Resources<'_, I>,
     operator: &mut LinearOperator<'_>,
-    mut deflation: Option<&mut Deflation>,
+    prepared: &mut Prepared,
     options: &EigenOptions,
     working_set: &WorkingSet,
 ) -> Result<Eigen, SpectralError>
@@ -301,11 +317,12 @@ where
     let found = match working_set.wanted {
         0 => Found { pairs: Vec::new(), iterations: 0, converged: true },
         _ => {
-            Lanczos::<E>::new(resources, operator, deflation.as_deref_mut(), options, working_set)?
+            let deflation = prepared.deflation.as_mut();
+            Lanczos::<E>::new(resources, operator, deflation, options, working_set)?
                 .run(resources)?
         }
     };
-    let (known, components) = match &deflation {
+    let (known, components) = match &prepared.deflation {
         Some(deflation) => {
             let mut known = Vec::new();
             for pair in deflation.pairs(options.k).collect::<Vec<_>>() {
@@ -314,23 +331,32 @@ where
             }
             (known, deflation.components())
         }
-        None => (Vec::new(), operator.components(resources)?.count()),
+        None => match prepared.components {
+            Some(components) => (Vec::new(), components),
+            None => (Vec::new(), operator.components(resources)?.count()),
+        },
     };
-    let (pairs, exact) =
-        merge(known, found.pairs, options.k, options.which, tie(options.precision));
+    let nonnegative = prepared.deflation.as_ref().is_some_and(Deflation::nonnegative);
+    let tie = tie(options.precision);
+    let (pairs, exact) = merge(known, found.pairs, options.k, options.which, tie, nonnegative);
     Ok(Eigen { pairs, iterations: found.iterations, converged: found.converged, components, exact })
 }
 
 /// The first `k` of the components' pairs and Lanczos's, in `which` order,
-/// and how many of them are the components'. A Lanczos value within
-/// `tie · max|θ|` of a component's exact one is ordered as equal to it, so
-/// the exact pairs come first among values equal to rounding.
+/// and how many of them are the components'. When the matrix has no
+/// negative entry, nothing lies beyond the components' eigenvalues at the
+/// wanted end (below the Laplacians' 0, past the random walk's ±1 or the
+/// normalised Laplacian's 2), so a Lanczos value just beyond one, within
+/// `tie · max|θ|`, is a copy of it rounded across and is ordered as equal
+/// to it, after the exact pairs. Nothing else moves: with a negative entry
+/// there are eigenvalues beyond, and the true values are sorted.
 fn merge(
     known: Vec<Eigenpair>,
     found: Vec<Eigenpair>,
     k: usize,
     which: Which,
     tie: f64,
+    nonnegative: bool,
 ) -> (Vec<Eigenpair>, usize) {
     let known_count = known.len();
     let mut exact: Vec<f64> = known.iter().map(|pair| pair.value).collect();
@@ -338,9 +364,16 @@ fn merge(
     let mut pairs: Vec<Option<Eigenpair>> = known.into_iter().chain(found).map(Some).collect();
     let values: Vec<f64> = pairs.iter().flatten().map(|pair| pair.value).collect();
     let width = tie * values.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+    let rounded_across = |value: f64, exact: f64| {
+        let beyond = match which {
+            Which::Smallest => value < exact,
+            Which::Largest => value.abs() > exact.abs() && value.signum() == exact.signum(),
+        };
+        nonnegative && beyond && (value - exact).abs() <= width
+    };
     let keys: Vec<f64> = values
         .iter()
-        .map(|&value| *exact.iter().find(|&&e| (value - e).abs() <= width).unwrap_or(&value))
+        .map(|&value| *exact.iter().find(|&&e| rounded_across(value, e)).unwrap_or(&value))
         .collect();
     let order: Vec<usize> = ritz::order(&keys, which, tie).into_iter().take(k).collect();
     let exact = order.iter().filter(|&&i| i < known_count).count();

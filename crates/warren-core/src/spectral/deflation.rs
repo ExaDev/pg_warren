@@ -116,6 +116,12 @@ impl Deflation {
         })
     }
 
+    /// Whether the matrix has no negative entry, so that nothing lies
+    /// beyond the known eigenvalues at the wanted end.
+    pub(super) fn nonnegative(&self) -> bool {
+        self.nonnegative
+    }
+
     /// The number of components.
     pub(super) fn components(&self) -> u64 {
         self.components.count()

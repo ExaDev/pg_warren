@@ -941,20 +941,25 @@ fn a_component_whose_lowest_node_is_inactive_is_still_counted() {
 
 #[test]
 fn the_exact_pairs_come_first_among_values_equal_to_rounding() {
-    // Lanczos's zeros may round below 0; the components' exact zeros still
-    // come first, and a value distinct beyond rounding does not move.
+    // Without a negative entry nothing lies below 0, so Lanczos's zeros
+    // rounded below it are copies of it: the components' exact zeros still
+    // come first, and a value distinct beyond rounding does not move. With
+    // a negative entry the true values are sorted.
     let memory = ComputeMemory::new(1 << 20);
     let pair = |value: f64| Eigenpair {
         value,
         residual: 0.0,
         vector: Vector::<f64>::filled(&memory, 1, 1, value).unwrap().into(),
     };
-    let known = vec![pair(0.0), pair(0.0)];
-    let found = vec![pair(-2.9e-17), pair(-2.0e-17), pair(-1e-3)];
-    let (merged, exact) = merge(known, found, 4, Which::Smallest, F64_TIE);
+    let values = |merged: &[Eigenpair]| merged.iter().map(|p| p.value).collect::<Vec<f64>>();
+    let known = || vec![pair(0.0), pair(0.0)];
+    let found = || vec![pair(-2.9e-17), pair(-2.0e-17), pair(-1e-3)];
+    let (merged, exact) = merge(known(), found(), 4, Which::Smallest, F64_TIE, true);
     assert_eq!(exact, 2);
-    let values: Vec<f64> = merged.iter().map(|p| p.value).collect();
-    assert_eq!(values, [-1e-3, 0.0, 0.0, -2.9e-17]);
+    assert_eq!(values(&merged), [-1e-3, 0.0, 0.0, -2.9e-17]);
+    let (merged, exact) = merge(known(), found(), 4, Which::Smallest, F64_TIE, false);
+    assert_eq!(exact, 1);
+    assert_eq!(values(&merged), [-1e-3, -2.9e-17, -2.0e-17, 0.0]);
 }
 
 proptest! {
@@ -1012,4 +1017,58 @@ fn an_f32_residual_at_rounding_level_is_a_breakdown_not_a_direction() {
         let eigen = solve(&graph, Operator::NormalizedLaplacian, &options);
         check(n, &edges, Operator::NormalizedLaplacian, &options, &eigen).unwrap();
     }
+}
+
+#[test]
+fn a_genuine_eigenvalue_beside_the_exact_ones_is_not_cut() {
+    // 0 – 1 – 2 with weights 1 and −δ has a Laplacian eigenvalue near
+    // −1.5δ; 3 – 4 and 5 – 6 weigh 1000, so the tie width (rounding of the
+    // largest eigenvalue, 2000) spans it. It was ordered as a tie with the
+    // components' exact zeros, after them, and cut at k: [0, 0, 0].
+    let undirected = |list: &[(u64, u64, f64)]| -> Edges {
+        list.iter().flat_map(|&(s, t, w)| [(0, s, t, w), (0, t, s, w)]).collect()
+    };
+    for (precision, delta) in [(Precision::F64, 1e-10), (Precision::F32, 1e-4)] {
+        let edges = undirected(&[(0, 1, 1.0), (1, 2, -delta), (3, 4, 1000.0), (5, 6, 1000.0)]);
+        let graph = reference::graph(7, 1, &edges, true, true);
+        let options =
+            EigenOptions { which: Which::Smallest, precision, tol: 1e-12, ..EigenOptions::new(3) };
+        let eigen = solve(&graph, Operator::Laplacian, &options);
+        let dense: Dense =
+            dense_reference::operator(7, &edges, None, true, true, Operator::Laplacian);
+        let reference: Vec<f64> = dense.eigenpairs().iter().map(|p| p.0).take(3).collect();
+        let values: Vec<f64> = eigen.pairs.iter().map(|p| p.value).collect();
+        assert!(reference[0] < -delta, "{reference:?}");
+        assert!((values[0] - reference[0]).abs() < 1e-2 * delta, "{precision:?}: {values:?}");
+        assert_eq!(values[1..], [0.0, 0.0], "{precision:?}");
+        assert_eq!(eigen.exact, 2);
+    }
+}
+
+#[test]
+fn the_normalised_laplacian_s_largest_without_a_bipartite_component_is_not_deflated() {
+    // An odd cycle has no bipartite component: nothing to take exactly, so
+    // the solve holds and is admitted as before, without a deflation.
+    let graph = reference::graph(201, 1, &cycles(1, 201), false, true);
+    let matrix = GraphMatrix::new(Operator::NormalizedLaplacian);
+    let options = EigenOptions::new(4);
+    let set = WorkingSet {
+        id_space: 201,
+        dimension: 201,
+        operator: Operator::NormalizedLaplacian,
+        k: 4,
+        precision: Precision::F32,
+        deflated: None,
+        wanted: 4,
+    };
+    let needed = set.bytes();
+    for (limit, admitted) in [(needed - 1, false), (needed, true)] {
+        let memory = ComputeMemory::new(limit);
+        let mut resources =
+            Resources { workers: workers(1), memory: &memory, interrupts: &mut Uninterrupted };
+        let found = admit_eigen(&mut resources, &graph, &matrix, &options);
+        assert_eq!(found.is_ok(), admitted, "{limit}: {found:?}");
+    }
+    let eigen = solve(&graph, Operator::NormalizedLaplacian, &options);
+    assert_eq!((eigen.exact, eigen.components), (0, 1));
 }
