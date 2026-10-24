@@ -25,6 +25,8 @@ pub struct Adjacency<'g> {
     weighted_relations: Vec<&'g RelationCsr>,
     rows: Vec<CsrRows<'g>>,
     weighted_rows: Vec<&'g AnyCsr>,
+    summed_relation: Option<&'g RelationCsr>,
+    summed_rows: Vec<&'g AnyCsr>,
     labelled: Vec<(RelationIndex, &'g RelationCsr)>,
     labelled_rows: Vec<LabelledRows<'g>>,
 }
@@ -52,6 +54,12 @@ impl<'g> Adjacency<'g> {
         direction: Direction,
         relations: RelationSelection<'_>,
     ) -> Result<Self, TraversalError> {
+        // One CSR holds the selection's summed weights: the stored merged
+        // CSR, or the only relation selected.
+        let summed_relation = match graph.selected(relations) {
+            Ok(selected) if selected.len() == 1 => selected.first().copied(),
+            _ => None,
+        };
         let (relations, weighted_relations, labelled) = match relations {
             RelationSelection::All => {
                 let each = graph.relations().iter().collect();
@@ -81,39 +89,57 @@ impl<'g> Adjacency<'g> {
             }
         };
         let id_space = graph.all_relations().forward().id_space();
-        Self::read(direction, id_space, relations, weighted_relations, labelled)
+        let read = Read { direction, id_space, summed_relation };
+        read.adjacency(relations, weighted_relations, labelled)
     }
+}
 
-    fn read(
-        direction: Direction,
-        id_space: u64,
+/// What an [`Adjacency`] is read from besides its relations.
+struct Read<'g> {
+    direction: Direction,
+    id_space: u64,
+    summed_relation: Option<&'g RelationCsr>,
+}
+
+impl<'g> Read<'g> {
+    fn adjacency(
+        self,
         relations: Selected<'g>,
         weighted_relations: Vec<&'g RelationCsr>,
         labelled: Vec<(RelationIndex, &'g RelationCsr)>,
-    ) -> Result<Self, TraversalError> {
+    ) -> Result<Adjacency<'g>, TraversalError> {
+        let Self { direction, id_space, summed_relation } = self;
         let rows = relations.rows(direction)?;
         let weighted_rows = scanned(&weighted_relations, direction)?;
+        let summed_rows = scanned(summed_relation.as_slice(), direction)?;
         let labelled_rows = labelled
             .iter()
             .map(|&(relation, csr)| LabelledRows::read(relation, csr, direction))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self {
+        Ok(Adjacency {
             direction,
             id_space,
             relations,
             weighted_relations,
             rows,
             weighted_rows,
+            summed_relation,
+            summed_rows,
             labelled,
             labelled_rows,
         })
     }
+}
 
+impl<'g> Adjacency<'g> {
     /// The same relations read in the opposite direction.
     pub fn reversed(&self) -> Result<Self, TraversalError> {
-        Self::read(
-            self.direction.reversed(),
-            self.id_space,
+        let read = Read {
+            direction: self.direction.reversed(),
+            id_space: self.id_space,
+            summed_relation: self.summed_relation,
+        };
+        read.adjacency(
             self.relations.clone(),
             self.weighted_relations.clone(),
             self.labelled.clone(),
@@ -193,6 +219,23 @@ impl<'g> Adjacency<'g> {
         })
     }
 
+    /// The CSRs, one per direction read, whose rows hold each pair once
+    /// with the selected relations' weights summed in relation order (the
+    /// stored merged CSR, or the only relation selected); empty if the
+    /// relations' rows must be summed as they are read
+    /// ([`Self::relation_rows`]).
+    pub(crate) fn summed_rows(&self) -> &[&'g AnyCsr] {
+        &self.summed_rows
+    }
+
+    /// Each selected relation's CSRs, in relation order, each with whether
+    /// it is read in the second direction of [`Direction::Both`].
+    pub(crate) fn relation_rows(&self) -> impl Iterator<Item = (bool, &'g AnyCsr)> + '_ {
+        self.labelled_rows.iter().flat_map(|rows| {
+            std::iter::once((false, rows.first)).chain(rows.second.map(|csr| (true, csr)))
+        })
+    }
+
     /// The nodes one edge away from `node` with each edge's weight (1 when
     /// the graph is unweighted), one entry per relation the edge is in.
     pub(crate) fn weighted_neighbours(
@@ -205,81 +248,6 @@ impl<'g> Adjacency<'g> {
                 (target, weights.and_then(|w| w.get(i)).map_or(1.0, |&w| w))
             })
         })
-    }
-}
-
-impl<'g> Adjacency<'g> {
-    /// The distinct nodes one edge away from `node`, ascending, each with
-    /// its pair's weight read once (DESIGN.md §5.3): the sum of its
-    /// relations' weights in relation order (1 when the graph is
-    /// unweighted); for [`Direction::Both`], the lighter of the two
-    /// directions' sums (NaN if either is).
-    pub(crate) fn summed_neighbours(&self, node: DenseId) -> SummedNeighbours<'g> {
-        let row = |csr: &'g AnyCsr| WeightedRow::new(csr, node);
-        SummedNeighbours {
-            first: self.labelled_rows.iter().map(|rows| row(rows.first)).collect(),
-            second: self.labelled_rows.iter().filter_map(|rows| rows.second.map(row)).collect(),
-        }
-    }
-}
-
-/// A node's neighbours with their summed weights; see
-/// [`Adjacency::summed_neighbours`].
-pub(crate) struct SummedNeighbours<'g> {
-    first: Vec<WeightedRow<'g>>,
-    second: Vec<WeightedRow<'g>>,
-}
-
-impl Iterator for SummedNeighbours<'_> {
-    type Item = (DenseId, f64);
-
-    fn next(&mut self) -> Option<(DenseId, f64)> {
-        let smallest =
-            self.first.iter_mut().chain(&mut self.second).filter_map(WeightedRow::peek).min()?;
-        let first = sum_at(&mut self.first, smallest);
-        let second = sum_at(&mut self.second, smallest);
-        let weight = match (first, second) {
-            (Some(a), Some(b)) if a.is_nan() || b.is_nan() => f64::NAN,
-            (Some(a), Some(b)) => a.min(b),
-            (one, other) => one.or(other)?,
-        };
-        Some((smallest, weight))
-    }
-}
-
-/// The sum of the weights of the entries for `target` that start `rows`,
-/// consumed in relation order; `None` if none does. An unweighted entry
-/// weighs 1 however many relations hold it.
-fn sum_at(rows: &mut [WeightedRow<'_>], target: DenseId) -> Option<f64> {
-    let mut entries = rows.iter_mut().filter_map(|row| row.next_if(target));
-    let first = entries.next()?;
-    let sum = entries.fold(first, |sum, weight| sum.zip(weight).map(|(sum, weight)| sum + weight));
-    Some(sum.unwrap_or(1.0))
-}
-
-/// One CSR row's entries with their weights (`None` when unweighted).
-struct WeightedRow<'g> {
-    targets: Peekable<std::iter::Enumerate<crate::graph::Neighbours<'g>>>,
-    weights: Option<&'g [f64]>,
-}
-
-impl<'g> WeightedRow<'g> {
-    fn new(csr: &'g AnyCsr, node: DenseId) -> Self {
-        Self {
-            targets: csr.neighbours(node).enumerate().peekable(),
-            weights: csr.neighbour_weights(node),
-        }
-    }
-
-    /// The next entry's target.
-    fn peek(&mut self) -> Option<DenseId> {
-        self.targets.peek().map(|&(_, target)| target)
-    }
-
-    /// The next entry's weight, consumed, if its target is `target`.
-    fn next_if(&mut self, target: DenseId) -> Option<Option<f64>> {
-        let (i, _) = self.targets.next_if(|&(_, next)| next == target)?;
-        Some(self.weights.and_then(|weights| weights.get(i)).copied())
     }
 }
 
