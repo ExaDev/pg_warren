@@ -2,8 +2,10 @@
 -- propagation, synchronous and deterministic. Labels start as vector `seed`
 -- (default: each node's dense id); each iteration every node takes the most
 -- frequent label among its own and its neighbours' (direction ignored, each
--- neighbour once, over `rels`; a self-loop counts the node's own label once
--- more; weights are not read), the smallest on a tie, until no label
+-- neighbour once, or with `per_relation` once in each relation linking it
+-- (DESIGN.md §5.3), over `rels`; a self-loop counts the node's own label
+-- once more, in each of its relations with `per_relation`; weights are not
+-- read), the smallest on a tie, until no label
 -- changes, or after max_iter iterations with a WARNING (a synchronous
 -- update can oscillate). NetworkX's label propagation is asynchronous
 -- (random order and ties) or semi-synchronous (by colouring), so neither
@@ -12,7 +14,8 @@
 -- executor. Writes vector `out` (f64) and returns the iterations run.
 CREATE FUNCTION warren.label_propagation_majority(graph text, "out" text, seed text DEFAULT NULL,
                                                   max_iter int DEFAULT 100, rels text[] DEFAULT NULL,
-                                                  version bigint DEFAULT NULL)
+                                                  version bigint DEFAULT NULL,
+                                                  per_relation boolean DEFAULT false)
 RETURNS int LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   info jsonb := warren.info(graph);
@@ -23,14 +26,15 @@ DECLARE
   votes text := format(
     'SELECT node_id, value
      FROM warren.gather(%1$L, %2$L, NULL::%3$s, NULL::float8, ''mode'', ''both'', %4$L::text[],
-                        version := %5$s, include_self := true)',
-    graph, '_warren_label_propagation_majority_x', info ->> 'id_type', rels, v);
+                        version := %5$s, include_self := true, per_relation := %6$L)',
+    graph, '_warren_label_propagation_majority_x', info ->> 'id_type', rels, v, per_relation);
   nodes bigint;
   delta float8;
   i int := 0;
 BEGIN
-  IF "out" IS NULL OR max_iter IS NULL THEN
-    RAISE EXCEPTION '% must not be NULL', CASE WHEN "out" IS NULL THEN 'out' ELSE 'max_iter' END
+  IF "out" IS NULL OR max_iter IS NULL OR per_relation IS NULL THEN
+    RAISE EXCEPTION '% must not be NULL',
+      CASE WHEN "out" IS NULL THEN 'out' WHEN max_iter IS NULL THEN 'max_iter' ELSE 'per_relation' END
       USING ERRCODE = 'null_value_not_allowed';
   END IF;
   IF starts_with("out", '_warren_') OR starts_with(seed, '_warren_') THEN

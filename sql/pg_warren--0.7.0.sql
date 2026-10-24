@@ -839,8 +839,10 @@ END $$;
 -- propagation, synchronous and deterministic. Labels start as vector `seed`
 -- (default: each node's dense id); each iteration every node takes the most
 -- frequent label among its own and its neighbours' (direction ignored, each
--- neighbour once, over `rels`; a self-loop counts the node's own label once
--- more; weights are not read), the smallest on a tie, until no label
+-- neighbour once, or with `per_relation` once in each relation linking it
+-- (DESIGN.md §5.3), over `rels`; a self-loop counts the node's own label
+-- once more, in each of its relations with `per_relation`; weights are not
+-- read), the smallest on a tie, until no label
 -- changes, or after max_iter iterations with a WARNING (a synchronous
 -- update can oscillate). NetworkX's label propagation is asynchronous
 -- (random order and ties) or semi-synchronous (by colouring), so neither
@@ -849,7 +851,8 @@ END $$;
 -- executor. Writes vector `out` (f64) and returns the iterations run.
 CREATE FUNCTION warren.label_propagation_majority(graph text, "out" text, seed text DEFAULT NULL,
                                                   max_iter int DEFAULT 100, rels text[] DEFAULT NULL,
-                                                  version bigint DEFAULT NULL)
+                                                  version bigint DEFAULT NULL,
+                                                  per_relation boolean DEFAULT false)
 RETURNS int LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   info jsonb := warren.info(graph);
@@ -860,14 +863,15 @@ DECLARE
   votes text := format(
     'SELECT node_id, value
      FROM warren.gather(%1$L, %2$L, NULL::%3$s, NULL::float8, ''mode'', ''both'', %4$L::text[],
-                        version := %5$s, include_self := true)',
-    graph, '_warren_label_propagation_majority_x', info ->> 'id_type', rels, v);
+                        version := %5$s, include_self := true, per_relation := %6$L)',
+    graph, '_warren_label_propagation_majority_x', info ->> 'id_type', rels, v, per_relation);
   nodes bigint;
   delta float8;
   i int := 0;
 BEGIN
-  IF "out" IS NULL OR max_iter IS NULL THEN
-    RAISE EXCEPTION '% must not be NULL', CASE WHEN "out" IS NULL THEN 'out' ELSE 'max_iter' END
+  IF "out" IS NULL OR max_iter IS NULL OR per_relation IS NULL THEN
+    RAISE EXCEPTION '% must not be NULL',
+      CASE WHEN "out" IS NULL THEN 'out' WHEN max_iter IS NULL THEN 'max_iter' ELSE 'per_relation' END
       USING ERRCODE = 'null_value_not_allowed';
   END IF;
   IF starts_with("out", '_warren_') OR starts_with(seed, '_warren_') THEN
@@ -1223,27 +1227,17 @@ STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'reachable_set_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/compute_sql/product.rs:178
+-- crates/pg_warren/src/compute_sql/product.rs:179
 -- pg_warren::compute_sql::product::spmv
-CREATE  FUNCTION warren."spmv"(
-	"graph" TEXT, /* Option < & str > */
-	"x" TEXT, /* Option < & str > */
-	"y" TEXT, /* Option < & str > */
-	"semiring" TEXT DEFAULT 'plus_times', /* Option < & str > */
-	"transpose" bool DEFAULT false, /* Option < bool > */
-	"rels" TEXT[] DEFAULT NULL, /* :: std :: option :: Option < Vec < Option < String > > > */
-	"weighted" bool DEFAULT NULL, /* Option < bool > */
-	"mask" TEXT DEFAULT NULL, /* Option < & str > */
-	"mask_complement" bool DEFAULT false, /* Option < bool > */
-	"replace" bool DEFAULT false, /* Option < bool > */
-	"accumulate" TEXT DEFAULT NULL, /* Option < & str > */
-	"persist" bool DEFAULT true, /* Option < bool > */
-	"version" bigint DEFAULT NULL, /* Option < i64 > */
-	"per_relation" bool DEFAULT false /* Option < bool > */
-) RETURNS void
-VOLATILE PARALLEL UNSAFE 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'spmv_wrapper';
+
+CREATE FUNCTION warren.spmv(graph text, x text, y text, semiring text DEFAULT 'plus_times',
+                            transpose boolean DEFAULT false, rels text[] DEFAULT NULL,
+                            weighted boolean DEFAULT NULL, mask text DEFAULT NULL,
+                            mask_complement boolean DEFAULT false, replace boolean DEFAULT false,
+                            accumulate text DEFAULT NULL, persist boolean DEFAULT true,
+                            version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
+RETURNS void
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'spmv_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -1261,21 +1255,15 @@ AS 'MODULE_PATHNAME', 'drop_vector_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/compute_sql/constructors.rs:95
+-- crates/pg_warren/src/compute_sql/constructors.rs:96
 -- pg_warren::compute_sql::constructors::vector_degree
-CREATE  FUNCTION warren."vector_degree"(
-	"graph" TEXT, /* Option < & str > */
-	"name" TEXT, /* Option < & str > */
-	"direction" TEXT DEFAULT 'out', /* Option < & str > */
-	"rels" TEXT[] DEFAULT NULL, /* :: std :: option :: Option < Vec < Option < String > > > */
-	"dtype" TEXT DEFAULT 'f64', /* Option < & str > */
-	"persist" bool DEFAULT true, /* Option < bool > */
-	"version" bigint DEFAULT NULL, /* Option < i64 > */
-	"per_relation" bool DEFAULT false /* Option < bool > */
-) RETURNS bigint /* Option < i64 > */
-VOLATILE PARALLEL UNSAFE 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'vector_degree_wrapper';
+
+CREATE FUNCTION warren.vector_degree(graph text, name text, direction text DEFAULT 'out',
+                                     rels text[] DEFAULT NULL, dtype text DEFAULT 'f64',
+                                     persist boolean DEFAULT true, version bigint DEFAULT NULL,
+                                     per_relation boolean DEFAULT false)
+RETURNS bigint
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'vector_degree_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -1535,7 +1523,7 @@ AS 'MODULE_PATHNAME', 'topological_order_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/traversal_sql/neighbourhood.rs:60
+-- crates/pg_warren/src/traversal_sql/neighbourhood.rs:61
 -- pg_warren::traversal_sql::neighbourhood::degree
 
 CREATE FUNCTION warren.degree(graph text, node anyelement, direction text DEFAULT 'out',
@@ -1725,14 +1713,15 @@ STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'id_map_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/compute_sql/gather/mod.rs:354
+-- crates/pg_warren/src/compute_sql/gather/mod.rs:364
 -- pg_warren::compute_sql::gather::gather
 
 CREATE FUNCTION warren.gather(graph text, messages text, id_type anyelement,
                               value_type anycompatible, combine text DEFAULT 'collect',
                               direction text DEFAULT 'in', rels text[] DEFAULT NULL,
                               mask text DEFAULT NULL, mask_complement boolean DEFAULT false,
-                              version bigint DEFAULT NULL, include_self boolean DEFAULT false)
+                              version bigint DEFAULT NULL, include_self boolean DEFAULT false,
+                              per_relation boolean DEFAULT false)
 RETURNS TABLE (node_id anyelement, value anycompatible)
 VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'gather_wrapper';
 /* </end connected objects> */
@@ -1775,21 +1764,15 @@ AS 'MODULE_PATHNAME', 'triangles_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/community_sql/contract.rs:44
+-- crates/pg_warren/src/community_sql/contract.rs:45
 -- pg_warren::community_sql::contract::contract
-CREATE  FUNCTION warren."contract"(
-	"graph" TEXT, /* Option < & str > */
-	"label_vector" TEXT, /* Option < & str > */
-	"out_graph" TEXT, /* Option < & str > */
-	"weighted" bool DEFAULT true, /* Option < bool > */
-	"drop_self_loops" bool DEFAULT false, /* Option < bool > */
-	"promote" bool DEFAULT true, /* Option < bool > */
-	"version" bigint DEFAULT NULL, /* Option < i64 > */
-	"per_relation" bool DEFAULT false /* Option < bool > */
-) RETURNS bigint /* Option < i64 > */
-VOLATILE PARALLEL UNSAFE 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'contract_wrapper';
+
+CREATE FUNCTION warren.contract(graph text, label_vector text, out_graph text,
+                                weighted boolean DEFAULT true, drop_self_loops boolean DEFAULT false,
+                                promote boolean DEFAULT true, version bigint DEFAULT NULL,
+                                per_relation boolean DEFAULT false)
+RETURNS bigint
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'contract_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -1829,25 +1812,17 @@ AS 'MODULE_PATHNAME', 'vector_stats_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/community_sql/local_moving.rs:31
+-- crates/pg_warren/src/community_sql/local_moving.rs:32
 -- pg_warren::community_sql::local_moving::local_moving
-CREATE  FUNCTION warren."local_moving"(
-	"graph" TEXT, /* Option < & str > */
-	"out" TEXT, /* Option < & str > */
-	"initial" TEXT DEFAULT NULL, /* Option < & str > */
-	"keys" TEXT DEFAULT NULL, /* Option < & str > */
-	"resolution" double precision DEFAULT 1.0, /* Option < f64 > */
-	"seed" bigint DEFAULT 0, /* Option < i64 > */
-	"max_sweeps" INT DEFAULT 100, /* Option < i32 > */
-	"tolerance" double precision DEFAULT 1e-7, /* Option < f64 > */
-	"weighted" bool DEFAULT NULL, /* Option < bool > */
-	"persist" bool DEFAULT true, /* Option < bool > */
-	"version" bigint DEFAULT NULL, /* Option < i64 > */
-	"per_relation" bool DEFAULT false /* Option < bool > */
-) RETURNS bigint /* Option < i64 > */
-VOLATILE PARALLEL UNSAFE 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'local_moving_wrapper';
+
+CREATE FUNCTION warren.local_moving(graph text, "out" text, initial text DEFAULT NULL,
+                                    keys text DEFAULT NULL, resolution double precision DEFAULT 1.0,
+                                    seed bigint DEFAULT 0, max_sweeps integer DEFAULT 100,
+                                    tolerance double precision DEFAULT 1e-7,
+                                    weighted boolean DEFAULT NULL, persist boolean DEFAULT true,
+                                    version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
+RETURNS bigint
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'local_moving_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -1889,40 +1864,27 @@ AS 'MODULE_PATHNAME', 'version_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/community_sql/local_moving.rs:102
+-- crates/pg_warren/src/community_sql/local_moving.rs:116
 -- pg_warren::community_sql::local_moving::leiden_refine
-CREATE  FUNCTION warren."leiden_refine"(
-	"graph" TEXT, /* Option < & str > */
-	"communities" TEXT, /* Option < & str > */
-	"out" TEXT, /* Option < & str > */
-	"keys" TEXT DEFAULT NULL, /* Option < & str > */
-	"resolution" double precision DEFAULT 1.0, /* Option < f64 > */
-	"seed" bigint DEFAULT 0, /* Option < i64 > */
-	"randomness" double precision DEFAULT 0.01, /* Option < f64 > */
-	"weighted" bool DEFAULT NULL, /* Option < bool > */
-	"persist" bool DEFAULT true, /* Option < bool > */
-	"version" bigint DEFAULT NULL, /* Option < i64 > */
-	"per_relation" bool DEFAULT false /* Option < bool > */
-) RETURNS bigint /* Option < i64 > */
-VOLATILE PARALLEL UNSAFE 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'leiden_refine_wrapper';
+
+CREATE FUNCTION warren.leiden_refine(graph text, communities text, "out" text,
+                                     keys text DEFAULT NULL, resolution double precision DEFAULT 1.0,
+                                     seed bigint DEFAULT 0, randomness double precision DEFAULT 0.01,
+                                     weighted boolean DEFAULT NULL, persist boolean DEFAULT true,
+                                     version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
+RETURNS bigint
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'leiden_refine_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/community_sql/modularity.rs:28
+-- crates/pg_warren/src/community_sql/modularity.rs:29
 -- pg_warren::community_sql::modularity::modularity
-CREATE  FUNCTION warren."modularity"(
-	"graph" TEXT, /* Option < & str > */
-	"labels" TEXT, /* Option < & str > */
-	"resolution" double precision DEFAULT 1.0, /* Option < f64 > */
-	"weighted" bool DEFAULT NULL, /* Option < bool > */
-	"version" bigint DEFAULT NULL, /* Option < i64 > */
-	"per_relation" bool DEFAULT false /* Option < bool > */
-) RETURNS double precision /* Option < f64 > */
-STABLE PARALLEL RESTRICTED 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'modularity_wrapper';
+
+CREATE FUNCTION warren.modularity(graph text, labels text, resolution double precision DEFAULT 1.0,
+                                  weighted boolean DEFAULT NULL, version bigint DEFAULT NULL,
+                                  per_relation boolean DEFAULT false)
+RETURNS double precision
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'modularity_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -2041,27 +2003,17 @@ AS 'MODULE_PATHNAME', 'compact_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/compute_sql/product.rs:218
+-- crates/pg_warren/src/compute_sql/product.rs:232
 -- pg_warren::compute_sql::product::spmm
-CREATE  FUNCTION warren."spmm"(
-	"graph" TEXT, /* Option < & str > */
-	"x" TEXT, /* Option < & str > */
-	"y" TEXT, /* Option < & str > */
-	"semiring" TEXT DEFAULT 'plus_times', /* Option < & str > */
-	"transpose" bool DEFAULT false, /* Option < bool > */
-	"rels" TEXT[] DEFAULT NULL, /* :: std :: option :: Option < Vec < Option < String > > > */
-	"weighted" bool DEFAULT NULL, /* Option < bool > */
-	"mask" TEXT DEFAULT NULL, /* Option < & str > */
-	"mask_complement" bool DEFAULT false, /* Option < bool > */
-	"replace" bool DEFAULT false, /* Option < bool > */
-	"accumulate" TEXT DEFAULT NULL, /* Option < & str > */
-	"persist" bool DEFAULT true, /* Option < bool > */
-	"version" bigint DEFAULT NULL, /* Option < i64 > */
-	"per_relation" bool DEFAULT false /* Option < bool > */
-) RETURNS void
-VOLATILE PARALLEL UNSAFE 
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'spmm_wrapper';
+
+CREATE FUNCTION warren.spmm(graph text, x text, y text, semiring text DEFAULT 'plus_times',
+                            transpose boolean DEFAULT false, rels text[] DEFAULT NULL,
+                            weighted boolean DEFAULT NULL, mask text DEFAULT NULL,
+                            mask_complement boolean DEFAULT false, replace boolean DEFAULT false,
+                            accumulate text DEFAULT NULL, persist boolean DEFAULT true,
+                            version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
+RETURNS void
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'spmm_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */

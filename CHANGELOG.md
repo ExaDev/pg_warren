@@ -17,15 +17,18 @@
 - **`per_relation boolean DEFAULT false`** on `modularity`, `contract`,
   `local_moving`, `leiden_refine`, `louvain`, `leiden`, `spmv`, `spmm`,
   `pagerank`, `katz_centrality`, `eigenvector_centrality`, `hits`,
-  `sssp_vector`, `degree`, `vector_degree`, `degree_vector` and
-  `aggregate_neighbours`: `true` reads a
+  `sssp_vector`, `degree`, `vector_degree`, `degree_vector`,
+  `aggregate_neighbours`, `gather` and `label_propagation_majority`:
+  `true` reads a
   pair linked in several relations as an edge in each (one per relation,
   as parallel edges), for when that multiplicity is the signal.
 
 ### Upgrading
 
 - `ALTER EXTENSION pg_warren UPDATE` drops and recreates the functions
-  that gain `per_relation`, keeping their privileges.
+  that gain `per_relation`, keeping their privileges. Until the update,
+  0.6.0's definitions still work with the new library, counting a pair
+  once.
 
 ## 0.6.0 — identity, lifecycle and visibility (2026-10-24)
 

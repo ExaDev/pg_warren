@@ -16,6 +16,7 @@ use warren_core::traversal::{Adjacency, TraversalError};
 
 use super::{entry, TraversalSqlError};
 use crate::cache::{cached, resolve, CachedIds, LoadedVersion, Resolved};
+use crate::extension::added_flag;
 use crate::external_ids::{element, element_widened, external};
 use crate::selection::{adjacency, direction};
 use crate::source::with_id_type;
@@ -73,8 +74,9 @@ fn degree(
     direction: Option<&str>,
     rels: Option<Vec<Option<String>>>,
     version: Option<i64>,
-    per_relation: Option<bool>,
+    fcinfo: pg_sys::FunctionCallInfo,
 ) -> Option<i64> {
+    let per_relation = added_flag(fcinfo, 5);
     entry(|| {
         let per_relation = per_relation.ok_or(TraversalSqlError::NullArgument("per_relation"))?;
         let query =

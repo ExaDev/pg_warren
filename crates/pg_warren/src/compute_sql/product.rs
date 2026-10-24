@@ -16,6 +16,7 @@ use warren_core::graph::RelationSelection;
 use super::vectors::Vectors;
 use super::{entry, ComputeSqlError};
 use crate::cache::{resolve, CachedIds};
+use crate::extension::added_flag;
 use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
 use crate::selection::relations;
@@ -175,7 +176,19 @@ fn product(
 /// A pair linked in several of `rels` is one entry, its weights summed, or
 /// with `per_relation` an entry in each (DESIGN.md §5.3).
 #[allow(clippy::too_many_arguments)] // The SQL signature's arguments.
-#[pg_extern(schema = "warren", volatile, parallel_unsafe)]
+#[pg_extern(
+    schema = "warren",
+    sql = r#"
+CREATE FUNCTION warren.spmv(graph text, x text, y text, semiring text DEFAULT 'plus_times',
+                            transpose boolean DEFAULT false, rels text[] DEFAULT NULL,
+                            weighted boolean DEFAULT NULL, mask text DEFAULT NULL,
+                            mask_complement boolean DEFAULT false, replace boolean DEFAULT false,
+                            accumulate text DEFAULT NULL, persist boolean DEFAULT true,
+                            version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
+RETURNS void
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'spmv_wrapper';
+"#
+)]
 fn spmv(
     graph: Option<&str>,
     x: Option<&str>,
@@ -190,8 +203,9 @@ fn spmv(
     accumulate: default!(Option<&str>, "NULL"),
     persist: default!(Option<bool>, "true"),
     version: default!(Option<i64>, "NULL"),
-    per_relation: default!(Option<bool>, "false"),
+    fcinfo: pg_sys::FunctionCallInfo,
 ) {
+    let per_relation = added_flag(fcinfo, 13);
     product(
         Shape::Vector,
         graph,
@@ -215,7 +229,19 @@ fn spmv(
 /// for matrices of one width, written to matrix `y` (transient if not
 /// `persist`); a mask selects rows. `per_relation` as for `spmv`.
 #[allow(clippy::too_many_arguments)] // The SQL signature's arguments.
-#[pg_extern(schema = "warren", volatile, parallel_unsafe)]
+#[pg_extern(
+    schema = "warren",
+    sql = r#"
+CREATE FUNCTION warren.spmm(graph text, x text, y text, semiring text DEFAULT 'plus_times',
+                            transpose boolean DEFAULT false, rels text[] DEFAULT NULL,
+                            weighted boolean DEFAULT NULL, mask text DEFAULT NULL,
+                            mask_complement boolean DEFAULT false, replace boolean DEFAULT false,
+                            accumulate text DEFAULT NULL, persist boolean DEFAULT true,
+                            version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
+RETURNS void
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'spmm_wrapper';
+"#
+)]
 fn spmm(
     graph: Option<&str>,
     x: Option<&str>,
@@ -230,8 +256,9 @@ fn spmm(
     accumulate: default!(Option<&str>, "NULL"),
     persist: default!(Option<bool>, "true"),
     version: default!(Option<i64>, "NULL"),
-    per_relation: default!(Option<bool>, "false"),
+    fcinfo: pg_sys::FunctionCallInfo,
 ) {
+    let per_relation = added_flag(fcinfo, 13);
     product(
         Shape::Matrix,
         graph,

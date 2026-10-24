@@ -246,7 +246,7 @@ and combined at each receiver, in-engine.
 warren.gather(graph, messages, NULL::<id type>, NULL::<result type>,
               combine := 'collect', direction := 'in', rels := NULL,
               mask := NULL, mask_complement := false, version := NULL,
-              include_self := false)
+              include_self := false, per_relation := false)
   RETURNS TABLE (node_id, value)
 ```
 
@@ -269,6 +269,14 @@ warren.gather(graph, messages, NULL::<id type>, NULL::<result type>,
   its distinct neighbours in `direction` (`in`: nodes with an edge to it;
   `out`; `both`) over `rels`. Weights are not read. Receivers with no
   message, or outside `mask`, return no row.
+- With `per_relation := true`, a sender is a sender once in each relation
+  linking it to the receiver (with `both`, once per relation even if it
+  is linked both ways), so its messages arrive once per relation: `count`
+  counts them and `sum` adds them that many times, `collect` lists them
+  that many times (all of a sender's messages, then all of them again),
+  `mode` counts each copy as a vote, and `min`, `max`, `first`, `bool_or`
+  and `bool_and` are unchanged. Use it when the number of shared relations
+  is the signal ([semantics](semantics.md#a-pair-in-several-relations)).
 - With `include_self := true`, each receiver also receives its own
   messages, ahead of its senders' (and again as a sender if it has a
   self-loop); a node with no senders then still gets a row.
@@ -321,7 +329,7 @@ intermediates transient, and persists only `out`.
 | `katz_centrality(graph, out, alpha := 0.1, beta := 1.0, seed := NULL, normalized := true, tol := 1e-6, max_iter := 1000, rels, weighted, per_relation := false)` | Katz centrality as NetworkX computes it; `seed` (a vector) makes β per node: `beta × seed` | iterations |
 | `hits(graph, hubs, authorities, tol := 1e-8, max_iter := 100, normalized := true, rels, weighted, per_relation := false)` | HITS hub and authority scores as NetworkX computes them, into two vectors | iterations |
 | `clustering(graph, out, rels)` | local clustering coefficient of the undirected unweighted graph, as `nx.clustering` | void |
-| `label_propagation_majority(graph, out, seed := NULL, max_iter := 100, rels)` | majority-vote label propagation: synchronous, smallest label on a tie | iterations |
+| `label_propagation_majority(graph, out, seed := NULL, max_iter := 100, rels, per_relation := false)` | majority-vote label propagation: synchronous, smallest label on a tie; with `per_relation`, a neighbour votes once in each relation linking it | iterations |
 | `core_number(graph, out, rels := NULL, persist := true)` | each node's k-core number in the undirected simple graph | the degeneracy |
 | `strong_components_vector(graph, out, rels := NULL, persist := true)` | each node's strongly connected component, as the smallest dense id in it | the component count |
 | `topological_order(graph, out, rels := NULL, persist := true)` | each node's position, from 0, in the topological order (smallest dense id first among ready nodes) | vector id |

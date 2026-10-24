@@ -10,6 +10,7 @@ use super::CommunitySqlError;
 use crate::access::entry;
 use crate::cache::resolve;
 use crate::compute_sql::Vectors;
+use crate::extension::added_flag;
 use crate::source::with_id_type;
 
 /// `warren.modularity`: the modularity, at resolution `resolution`, of the
@@ -25,15 +26,25 @@ use crate::source::with_id_type;
 /// self-loop's weight halved (equal without self-loops); on a directed
 /// graph, NetworkX's of `nx.MultiGraph(G)`, not of `G`, which NetworkX
 /// scores with Leicht and Newman's directed formula.
-#[pg_extern(schema = "warren", stable, parallel_restricted)]
+#[pg_extern(
+    schema = "warren",
+    sql = r#"
+CREATE FUNCTION warren.modularity(graph text, labels text, resolution double precision DEFAULT 1.0,
+                                  weighted boolean DEFAULT NULL, version bigint DEFAULT NULL,
+                                  per_relation boolean DEFAULT false)
+RETURNS double precision
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'modularity_wrapper';
+"#
+)]
 fn modularity(
     graph: Option<&str>,
     labels: Option<&str>,
     resolution: default!(Option<f64>, "1.0"),
     weighted: default!(Option<bool>, "NULL"),
     version: default!(Option<i64>, "NULL"),
-    per_relation: default!(Option<bool>, "false"),
+    fcinfo: pg_sys::FunctionCallInfo,
 ) -> Option<f64> {
+    let per_relation = added_flag(fcinfo, 5);
     entry(|_| -> Result<Option<f64>, CommunitySqlError> {
         let graph = graph.ok_or(CommunitySqlError::NullArgument("graph"))?;
         let labels = labels.ok_or(CommunitySqlError::NullArgument("labels"))?;

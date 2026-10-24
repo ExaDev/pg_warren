@@ -11,7 +11,7 @@ mod tests {
     use crate::cache::resolve;
     use crate::compute_sql::gather::read;
     use crate::compute_sql::{entry, Vectors};
-    use crate::fixture::{allocated, failure, refresh, ring, rows, small};
+    use crate::fixture::{allocated, failure, refresh, relation_expansions, ring, rows, small};
     use crate::source::with_pinned_snapshot;
 
     /// `warren.gather` over the small graph, as `node:value` text.
@@ -93,6 +93,51 @@ mod tests {
         let null =
             failure("warren.gather('t', 'x', NULL::bigint, NULL::bigint, include_self := NULL)")?;
         assert_eq!(null.as_deref(), Some("22004: include_self must not be NULL"));
+        Ok(())
+    }
+
+    /// With `per_relation`, a sender sends once in each relation linking
+    /// it to the receiver (both directions of one relation once), with or
+    /// without a stored merged CSR and a reverse CSR; by default once.
+    #[pg_test]
+    fn per_relation_a_sender_sends_once_in_each_of_its_relations() -> Result<(), Error> {
+        relation_expansions("gp")?;
+        Spi::run(
+            "SELECT warren.create_graph('gp_f', 'SELECT id FROM gp_nodes',
+                                        'SELECT src, dst, rel FROM gp_edges', has_relations := true,
+                                        build_reverse := false);
+             SELECT warren.refresh('gp_f')",
+        )?;
+        for graph in ["gp_s", "gp_u", "gp_f"] {
+            for direction in ["in", "out", "both"] {
+                for per_relation in [false, true] {
+                    let relation = if per_relation { "rel" } else { "''" };
+                    let expected = rows(&format!(
+                        "SELECT receiver || ':' || count(*) || ':' || array_agg(sender ORDER BY sender)::text
+                         FROM (SELECT dst AS receiver, {relation} AS r, src AS sender FROM gp_edges
+                               WHERE '{direction}' IN ('in', 'both')
+                               UNION SELECT src, {relation}, dst FROM gp_edges
+                               WHERE '{direction}' IN ('out', 'both')) l
+                         GROUP BY receiver ORDER BY receiver"
+                    ))?;
+                    let found = rows(&format!(
+                        "SELECT c.node_id || ':' || n.value || ':' || c.value::text
+                         FROM warren.gather('{graph}', 'SELECT id, id FROM gp_nodes', NULL::bigint,
+                                            NULL::bigint[], direction := '{direction}',
+                                            per_relation := {per_relation}) c
+                         JOIN warren.gather('{graph}', 'SELECT id, id FROM gp_nodes', NULL::bigint,
+                                            NULL::bigint, 'count', '{direction}',
+                                            per_relation := {per_relation}) n USING (node_id)
+                         ORDER BY c.node_id"
+                    ))?;
+                    assert_eq!(found, expected, "{graph} {direction} {per_relation}");
+                }
+            }
+        }
+        let null = failure(
+            "warren.gather('gp_s', 'x', NULL::bigint, NULL::bigint, per_relation := NULL)",
+        )?;
+        assert_eq!(null.as_deref(), Some("22004: per_relation must not be NULL"));
         Ok(())
     }
 

@@ -388,6 +388,48 @@ mod tests {
         Ok(())
     }
 
+    /// One iteration of `label_propagation_majority` takes the most
+    /// frequent of a node's own label and its neighbours' (each once, or
+    /// with `per_relation` once in each relation linking it), the smallest
+    /// on a tie.
+    #[pg_test]
+    fn label_propagation_majority_counts_a_neighbour_once_or_in_each_of_its_relations(
+    ) -> Result<(), Error> {
+        relation_expansions("lp")?;
+        for graph in ["lp_s", "lp_u"] {
+            Spi::run(&format!(
+                "SELECT warren.vector_from_query('{graph}', 'seed', 'SELECT id, id FROM lp_nodes')"
+            ))?;
+            let mut labels = Vec::new();
+            for per_relation in [false, true] {
+                let relation = if per_relation { "rel" } else { "''" };
+                let wrong = Spi::get_one::<i64>(&format!(
+                    "SELECT warren.label_propagation_majority('{graph}', 'lpm', 'seed', max_iter := 1,
+                                                              per_relation := {per_relation});
+                     WITH votes AS (SELECT id AS node, id AS label FROM lp_nodes
+                                    UNION ALL
+                                    SELECT node, other FROM (SELECT src AS node, {relation} AS r, dst AS other
+                                                             FROM lp_edges
+                                                             UNION SELECT dst, {relation}, src FROM lp_edges) l),
+                          counted AS (SELECT node, label, count(*) AS n FROM votes GROUP BY node, label),
+                          expected AS (SELECT DISTINCT ON (node) node, label FROM counted
+                                       ORDER BY node, n DESC, label)
+                     SELECT count(*) FILTER (WHERE v.value IS DISTINCT FROM e.label)
+                     FROM expected e
+                     LEFT JOIN warren.vector_values('{graph}', 'lpm', NULL::bigint) v ON v.node_id = e.node"
+                ));
+                assert_eq!(wrong?, Some(0), "{graph} {per_relation}");
+                labels.push(rows(&format!(
+                    "SELECT value::text FROM warren.vector_values('{graph}', 'lpm', NULL::bigint) ORDER BY node_id"
+                ))?);
+            }
+            assert_ne!(labels[0], labels[1], "the readings differ");
+        }
+        let null = failure("warren.label_propagation_majority('lp_s', 'x', per_relation := NULL)")?;
+        assert_eq!(null.as_deref(), Some("22004: per_relation must not be NULL"));
+        Ok(())
+    }
+
     /// With `per_relation`, a pair in several relations is an edge in each,
     /// so `sssp_vector`'s `min_plus` takes the cheapest, as `dijkstra`
     /// does; by default it is one edge, its weights summed.

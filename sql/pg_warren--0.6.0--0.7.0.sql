@@ -32,7 +32,9 @@ DECLARE
         'warren.degree(text, anyelement, text, text[], bigint)',
         'warren.vector_degree(text, text, text, text[], text, boolean, bigint)',
         'warren.degree_vector(text, text, text, text[], bigint)',
-        'warren.aggregate_neighbours(text, text, text, text, integer, text[], text, bigint)'];
+        'warren.aggregate_neighbours(text, text, text, text, integer, text[], text, bigint)',
+        'warren.gather(text, text, anyelement, anycompatible, text, text, text[], text, boolean, bigint, boolean)',
+        'warren.label_propagation_majority(text, text, text, integer, text[], bigint)'];
     news text[] := ARRAY[
         'warren.contract(text, text, text, boolean, boolean, boolean, bigint, boolean)',
         'warren.modularity(text, text, double precision, boolean, bigint, boolean)',
@@ -50,7 +52,9 @@ DECLARE
         'warren.degree(text, anyelement, text, text[], bigint, boolean)',
         'warren.vector_degree(text, text, text, text[], text, boolean, bigint, boolean)',
         'warren.degree_vector(text, text, text, text[], bigint, boolean)',
-        'warren.aggregate_neighbours(text, text, text, text, integer, text[], text, bigint, boolean)'];
+        'warren.aggregate_neighbours(text, text, text, text, integer, text[], text, bigint, boolean)',
+        'warren.gather(text, text, anyelement, anycompatible, text, text, text[], text, boolean, bigint, boolean, boolean)',
+        'warren.label_propagation_majority(text, text, text, integer, text[], bigint, boolean)'];
     acls text[] := ARRAY[]::text[];
     kept record;
 BEGIN
@@ -60,66 +64,35 @@ BEGIN
         EXECUTE pg_catalog.format('DROP FUNCTION %s', olds[i]);
     END LOOP;
 
-CREATE FUNCTION warren."contract"(
-	"graph" TEXT,
-	"label_vector" TEXT,
-	"out_graph" TEXT,
-	"weighted" bool DEFAULT true,
-	"drop_self_loops" bool DEFAULT false,
-	"promote" bool DEFAULT true,
-	"version" bigint DEFAULT NULL,
-	"per_relation" bool DEFAULT false
-) RETURNS bigint
-VOLATILE PARALLEL UNSAFE
-LANGUAGE c
-AS 'MODULE_PATHNAME', 'contract_wrapper';
+CREATE FUNCTION warren.contract(graph text, label_vector text, out_graph text,
+                                weighted boolean DEFAULT true, drop_self_loops boolean DEFAULT false,
+                                promote boolean DEFAULT true, version bigint DEFAULT NULL,
+                                per_relation boolean DEFAULT false)
+RETURNS bigint
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'contract_wrapper';
 
-CREATE FUNCTION warren."modularity"(
-	"graph" TEXT,
-	"labels" TEXT,
-	"resolution" double precision DEFAULT 1.0,
-	"weighted" bool DEFAULT NULL,
-	"version" bigint DEFAULT NULL,
-	"per_relation" bool DEFAULT false
-) RETURNS double precision
-STABLE PARALLEL RESTRICTED
-LANGUAGE c
-AS 'MODULE_PATHNAME', 'modularity_wrapper';
+CREATE FUNCTION warren.modularity(graph text, labels text, resolution double precision DEFAULT 1.0,
+                                  weighted boolean DEFAULT NULL, version bigint DEFAULT NULL,
+                                  per_relation boolean DEFAULT false)
+RETURNS double precision
+STABLE PARALLEL RESTRICTED LANGUAGE c AS 'MODULE_PATHNAME', 'modularity_wrapper';
 
-CREATE FUNCTION warren."local_moving"(
-	"graph" TEXT,
-	"out" TEXT,
-	"initial" TEXT DEFAULT NULL,
-	"keys" TEXT DEFAULT NULL,
-	"resolution" double precision DEFAULT 1.0,
-	"seed" bigint DEFAULT 0,
-	"max_sweeps" INT DEFAULT 100,
-	"tolerance" double precision DEFAULT 1e-7,
-	"weighted" bool DEFAULT NULL,
-	"persist" bool DEFAULT true,
-	"version" bigint DEFAULT NULL,
-	"per_relation" bool DEFAULT false
-) RETURNS bigint
-VOLATILE PARALLEL UNSAFE
-LANGUAGE c
-AS 'MODULE_PATHNAME', 'local_moving_wrapper';
+CREATE FUNCTION warren.local_moving(graph text, "out" text, initial text DEFAULT NULL,
+                                    keys text DEFAULT NULL, resolution double precision DEFAULT 1.0,
+                                    seed bigint DEFAULT 0, max_sweeps integer DEFAULT 100,
+                                    tolerance double precision DEFAULT 1e-7,
+                                    weighted boolean DEFAULT NULL, persist boolean DEFAULT true,
+                                    version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
+RETURNS bigint
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'local_moving_wrapper';
 
-CREATE FUNCTION warren."leiden_refine"(
-	"graph" TEXT,
-	"communities" TEXT,
-	"out" TEXT,
-	"keys" TEXT DEFAULT NULL,
-	"resolution" double precision DEFAULT 1.0,
-	"seed" bigint DEFAULT 0,
-	"randomness" double precision DEFAULT 0.01,
-	"weighted" bool DEFAULT NULL,
-	"persist" bool DEFAULT true,
-	"version" bigint DEFAULT NULL,
-	"per_relation" bool DEFAULT false
-) RETURNS bigint
-VOLATILE PARALLEL UNSAFE
-LANGUAGE c
-AS 'MODULE_PATHNAME', 'leiden_refine_wrapper';
+CREATE FUNCTION warren.leiden_refine(graph text, communities text, "out" text,
+                                     keys text DEFAULT NULL, resolution double precision DEFAULT 1.0,
+                                     seed bigint DEFAULT 0, randomness double precision DEFAULT 0.01,
+                                     weighted boolean DEFAULT NULL, persist boolean DEFAULT true,
+                                     version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
+RETURNS bigint
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'leiden_refine_wrapper';
 
 CREATE FUNCTION warren.louvain(graph text, "out" text, resolution float8 DEFAULT 1.0,
                                seed bigint DEFAULT 0, max_levels int DEFAULT 100,
@@ -375,45 +348,23 @@ BEGIN
   RETURN q;
 END $$;
 
-CREATE FUNCTION warren."spmv"(
-	"graph" TEXT,
-	"x" TEXT,
-	"y" TEXT,
-	"semiring" TEXT DEFAULT 'plus_times',
-	"transpose" bool DEFAULT false,
-	"rels" TEXT[] DEFAULT NULL,
-	"weighted" bool DEFAULT NULL,
-	"mask" TEXT DEFAULT NULL,
-	"mask_complement" bool DEFAULT false,
-	"replace" bool DEFAULT false,
-	"accumulate" TEXT DEFAULT NULL,
-	"persist" bool DEFAULT true,
-	"version" bigint DEFAULT NULL,
-	"per_relation" bool DEFAULT false
-) RETURNS void
-VOLATILE PARALLEL UNSAFE
-LANGUAGE c
-AS 'MODULE_PATHNAME', 'spmv_wrapper';
+CREATE FUNCTION warren.spmv(graph text, x text, y text, semiring text DEFAULT 'plus_times',
+                            transpose boolean DEFAULT false, rels text[] DEFAULT NULL,
+                            weighted boolean DEFAULT NULL, mask text DEFAULT NULL,
+                            mask_complement boolean DEFAULT false, replace boolean DEFAULT false,
+                            accumulate text DEFAULT NULL, persist boolean DEFAULT true,
+                            version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
+RETURNS void
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'spmv_wrapper';
 
-CREATE FUNCTION warren."spmm"(
-	"graph" TEXT,
-	"x" TEXT,
-	"y" TEXT,
-	"semiring" TEXT DEFAULT 'plus_times',
-	"transpose" bool DEFAULT false,
-	"rels" TEXT[] DEFAULT NULL,
-	"weighted" bool DEFAULT NULL,
-	"mask" TEXT DEFAULT NULL,
-	"mask_complement" bool DEFAULT false,
-	"replace" bool DEFAULT false,
-	"accumulate" TEXT DEFAULT NULL,
-	"persist" bool DEFAULT true,
-	"version" bigint DEFAULT NULL,
-	"per_relation" bool DEFAULT false
-) RETURNS void
-VOLATILE PARALLEL UNSAFE
-LANGUAGE c
-AS 'MODULE_PATHNAME', 'spmm_wrapper';
+CREATE FUNCTION warren.spmm(graph text, x text, y text, semiring text DEFAULT 'plus_times',
+                            transpose boolean DEFAULT false, rels text[] DEFAULT NULL,
+                            weighted boolean DEFAULT NULL, mask text DEFAULT NULL,
+                            mask_complement boolean DEFAULT false, replace boolean DEFAULT false,
+                            accumulate text DEFAULT NULL, persist boolean DEFAULT true,
+                            version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
+RETURNS void
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'spmm_wrapper';
 
 CREATE FUNCTION warren.pagerank(graph text, "out" text, damping float8 DEFAULT 0.85,
                                 tol float8 DEFAULT 1e-6, max_iter int DEFAULT 100,
@@ -787,19 +738,12 @@ CREATE FUNCTION warren.degree(graph text, node anyelement, direction text DEFAUL
 RETURNS bigint
 STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'degree_wrapper';
 
-CREATE FUNCTION warren."vector_degree"(
-	"graph" TEXT,
-	"name" TEXT,
-	"direction" TEXT DEFAULT 'out',
-	"rels" TEXT[] DEFAULT NULL,
-	"dtype" TEXT DEFAULT 'f64',
-	"persist" bool DEFAULT true,
-	"version" bigint DEFAULT NULL,
-	"per_relation" bool DEFAULT false
-) RETURNS bigint
-VOLATILE PARALLEL UNSAFE
-LANGUAGE c
-AS 'MODULE_PATHNAME', 'vector_degree_wrapper';
+CREATE FUNCTION warren.vector_degree(graph text, name text, direction text DEFAULT 'out',
+                                     rels text[] DEFAULT NULL, dtype text DEFAULT 'f64',
+                                     persist boolean DEFAULT true, version bigint DEFAULT NULL,
+                                     per_relation boolean DEFAULT false)
+RETURNS bigint
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'vector_degree_wrapper';
 
 CREATE FUNCTION warren.degree_vector(graph text, "out" text, direction text DEFAULT 'out',
                                      rels text[] DEFAULT NULL, version bigint DEFAULT NULL,
@@ -862,6 +806,82 @@ BEGIN
     RAISE;
   END;
   PERFORM warren.drop_vector(graph, '_warren_aggregate_neighbours_' || part, v, true) FROM unnest(parts) part;
+END $$;
+
+CREATE FUNCTION warren.gather(graph text, messages text, id_type anyelement,
+                              value_type anycompatible, combine text DEFAULT 'collect',
+                              direction text DEFAULT 'in', rels text[] DEFAULT NULL,
+                              mask text DEFAULT NULL, mask_complement boolean DEFAULT false,
+                              version bigint DEFAULT NULL, include_self boolean DEFAULT false,
+                              per_relation boolean DEFAULT false)
+RETURNS TABLE (node_id anyelement, value anycompatible)
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'gather_wrapper';
+
+CREATE FUNCTION warren.label_propagation_majority(graph text, "out" text, seed text DEFAULT NULL,
+                                                  max_iter int DEFAULT 100, rels text[] DEFAULT NULL,
+                                                  version bigint DEFAULT NULL,
+                                                  per_relation boolean DEFAULT false)
+RETURNS int LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+  info jsonb := warren.info(graph);
+  v bigint := coalesce(version, (info ->> 'current_version')::bigint);
+  parts text[] := ARRAY['x', 'next'];
+  -- Each node's own label and its neighbours', counted in-engine; the most
+  -- votes win, then the smallest label.
+  votes text := format(
+    'SELECT node_id, value
+     FROM warren.gather(%1$L, %2$L, NULL::%3$s, NULL::float8, ''mode'', ''both'', %4$L::text[],
+                        version := %5$s, include_self := true, per_relation := %6$L)',
+    graph, '_warren_label_propagation_majority_x', info ->> 'id_type', rels, v, per_relation);
+  nodes bigint;
+  delta float8;
+  i int := 0;
+BEGIN
+  IF "out" IS NULL OR max_iter IS NULL OR per_relation IS NULL THEN
+    RAISE EXCEPTION '% must not be NULL',
+      CASE WHEN "out" IS NULL THEN 'out' WHEN max_iter IS NULL THEN 'max_iter' ELSE 'per_relation' END
+      USING ERRCODE = 'null_value_not_allowed';
+  END IF;
+  IF starts_with("out", '_warren_') OR starts_with(seed, '_warren_') THEN
+    RAISE EXCEPTION 'vector names beginning with _warren_ are reserved for the library''s intermediates'
+      USING ERRCODE = 'reserved_name';
+  END IF;
+  IF max_iter < 1 THEN
+    RAISE EXCEPTION 'max_iter must be at least 1, not %', max_iter USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+  BEGIN
+    IF seed IS NULL THEN
+      PERFORM warren.vector_dense_id(graph, '_warren_label_propagation_majority_x', 'f64', false, v);
+    ELSE
+      -- vector_reduce names a missing seed vector (42704); vector_map would
+      -- call it a missing column.
+      PERFORM warren.vector_reduce(graph, seed, 'nnz', v);
+      PERFORM warren.vector_map(graph, '_warren_label_propagation_majority_x', format('%I::float8', seed), false, v);
+    END IF;
+    -- No live nodes, no labels: no iterations (NetworkX finds no communities).
+    nodes := (warren.vector_stats(graph, '_warren_label_propagation_majority_x', v) ->> 'count')::bigint;
+    WHILE i < max_iter AND nodes > 0 LOOP
+      i := i + 1;
+      PERFORM warren.report_progress('label_propagation_majority', graph, 'iterating', i - 1, max_iter);
+      PERFORM warren.vector_from_query(graph, '_warren_label_propagation_majority_next', votes, 'f64',
+                                       persist := false, version := v);
+      delta := warren.vector_norm_diff(graph, '_warren_label_propagation_majority_next',
+                                       '_warren_label_propagation_majority_x', 'l1', v, v);
+      PERFORM warren.vector_map(graph, '_warren_label_propagation_majority_x',
+                                '_warren_label_propagation_majority_next', false, v);
+      EXIT WHEN delta = 0;
+    END LOOP;
+    IF delta <> 0 THEN
+      RAISE WARNING 'label_propagation_majority did not converge in % iterations', i;
+    END IF;
+    PERFORM warren.vector_map(graph, "out", '_warren_label_propagation_majority_x', true, v);
+  EXCEPTION WHEN OTHERS OR query_canceled THEN
+    PERFORM warren.drop_vector(graph, '_warren_label_propagation_majority_' || part, v, true)
+      FROM unnest(parts) part;
+    RAISE;
+  END;
+  PERFORM warren.drop_vector(graph, '_warren_label_propagation_majority_' || part, v, true) FROM unnest(parts) part;
+  RETURN i;
 END $$;
 
     FOR i IN 1 .. pg_catalog.array_length(news, 1) LOOP

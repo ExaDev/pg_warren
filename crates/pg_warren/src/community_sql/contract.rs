@@ -18,6 +18,7 @@ use crate::catalog::{
     NewGraph,
 };
 use crate::compute_sql::Vectors;
+use crate::extension::added_flag;
 use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
 use crate::segment::{SpiSegmentStore, CHUNK_SIZE};
@@ -41,7 +42,17 @@ use warren_core::graph::NodeOrder;
 /// `graph`, and a member of `out_graph`'s owner role if it exists. The
 /// version is made current if `promote`, and is otherwise left staged.
 #[allow(clippy::too_many_arguments)] // the SQL signature of DESIGN.md §6.6
-#[pg_extern(schema = "warren", volatile, parallel_unsafe)]
+#[pg_extern(
+    schema = "warren",
+    sql = r#"
+CREATE FUNCTION warren.contract(graph text, label_vector text, out_graph text,
+                                weighted boolean DEFAULT true, drop_self_loops boolean DEFAULT false,
+                                promote boolean DEFAULT true, version bigint DEFAULT NULL,
+                                per_relation boolean DEFAULT false)
+RETURNS bigint
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'contract_wrapper';
+"#
+)]
 fn contract(
     graph: Option<&str>,
     label_vector: Option<&str>,
@@ -50,8 +61,9 @@ fn contract(
     drop_self_loops: default!(Option<bool>, "false"),
     promote: default!(Option<bool>, "true"),
     version: default!(Option<i64>, "NULL"),
-    per_relation: default!(Option<bool>, "false"),
+    fcinfo: pg_sys::FunctionCallInfo,
 ) -> Option<i64> {
+    let per_relation = added_flag(fcinfo, 7);
     entry(|caller| {
         let graph = graph.ok_or(CommunitySqlError::NullArgument("graph"))?;
         let label_vector = label_vector.ok_or(CommunitySqlError::NullArgument("label_vector"))?;
