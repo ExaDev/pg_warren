@@ -306,6 +306,10 @@ Every SQL example in the README and `docs/` runs in CI, in
   in `warren.backends()` and `warren.progress()` need
   `shared_preload_libraries` ([docs/limits.md](docs/limits.md)).
 
+- **0.7.0** (in development, M11): proof at scale and in deployment:
+  benchmarks on real graphs, robustness behind connection poolers, on
+  replicas and through crashes, and packages (DESIGN.md §13).
+
 See [CHANGELOG.md](CHANGELOG.md). This is pre-1.0 software: the SQL surface
 may still change between minor versions, with an upgrade script each time.
 

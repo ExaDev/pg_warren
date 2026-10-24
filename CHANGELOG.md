@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.7.0 — in development
+
 ## 0.6.0 — identity, lifecycle and visibility (2026-10-24)
 
 Milestone M10 of DESIGN.md §13. Nodes can be keyed on strings: `text` is
