@@ -407,8 +407,8 @@ first step, not after it: with n the id space, m = min(active nodes,
 max(2k + 1, 20)) basis vectors and e = 4 bytes (`f32`) or 8 (`f64`), a
 solve holds at its peak n·33 bytes of operator (n·49 for the normalised
 operators), ⌈n / 4096⌉·4096·m·e of basis, (4m² + m)·8 of projected
-matrices, k·n·e of eigenvectors and n·8 for counting components (where the
-components' eigenpairs are taken exactly, n·16 + 8 per component for them
+matrices, k·n·e of eigenvectors and n·11 for counting components (where the
+components' eigenpairs are taken exactly, n·17 + 17 per component for them
 instead, held through the solve, and n·9 of a product's scratch beside one
 eigenvector fewer); at 10M nodes, k = 20, `f32` and the normalised
 Laplacian that is 3.0 GB, 3.1 GB with `which := 'smallest'`. For a graph that is only just over, `store_merged :=
@@ -772,13 +772,14 @@ messages where totals may exceed 9.2 × 10¹⁸.
 
 **Repeated eigenvalues.** Lanczos from one start vector finds one direction
 per eigenspace, so a repeated eigenvalue may appear fewer times than its
-multiplicity. The one every connected component gives (0 of both
-Laplacians, 1 of the random walk) is exempt where it is at the wanted end
-(`smallest` for the Laplacians, `largest` for the random walk): `eigen`
-returns each copy exactly, as its component's eigenvector. Other repeated
-eigenvalues, such as those of identical components or of a symmetric
-structure, may still be missed; `eigen` warns when the active nodes form
-several components and the call is not one of those. Non-symmetric spectra
+multiplicity. The ones every connected component gives (0 of both
+Laplacians, 1 of the random walk) and every bipartite one (−1 of the random
+walk, 2 of the normalised Laplacian) are exempt where they are at the
+wanted end (`smallest` for the Laplacians' 0, `largest` for the others):
+`eigen` returns each copy exactly, as its component's eigenvector. Other
+repeated eigenvalues, such as those of identical components or of a
+symmetric structure, may still be missed; `eigen` warns when the active
+nodes form several components and some pair came from Lanczos. Non-symmetric spectra
 are not computed: `symmetrize := false` is accepted only when the matrix
 is already symmetric.
 
