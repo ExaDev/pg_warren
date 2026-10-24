@@ -14,6 +14,9 @@
 - **`dijkstra` now costs a weighted pair linked in several relations the
   sum of their weights**, as `sssp_vector` and the centralities do. It
   took the cheapest relation's weight; `per_relation := true` still does.
+- **Undirected weighted centralities refuse a pair whose weight is NaN in
+  one direction** (22023), as they refuse a NaN anywhere else. They used
+  the other direction's weight.
 
 ### Added
 
@@ -34,6 +37,11 @@
   that gain `per_relation`, keeping their privileges. Until the update,
   0.6.0's definitions still work with the new library, counting a pair
   once.
+- The update drops those functions without `CASCADE`, so it fails if a
+  view, or a function with a `BEGIN ATOMIC` body, calls one of them
+  ("cannot drop function ... because other objects depend on it"). Drop
+  the dependent objects, run `ALTER EXTENSION pg_warren UPDATE`, then
+  create them again.
 
 ## 0.6.0 — identity, lifecycle and visibility (2026-10-24)
 
