@@ -165,8 +165,8 @@ mod tests {
     use crate::segment::{write_version, MemorySegmentStore};
     use crate::source::InPlaceId;
     use warren_core::graph::{
-        AnyCsr, CsrLayout, EdgeIntake, FixedKeys, GraphCsr, IdMap, RelationCsr, RelationDictionary,
-        TextIds, TextKeys,
+        AnyCsr, Csr, CsrLayout, EdgeIntake, FixedKeys, GraphCsr, IdMap, RelationCsr,
+        RelationDictionary, TextIds, TextKeys,
     };
 
     /// A version built in memory: ids 10, 20, 30, 40 (or as given) with
@@ -257,6 +257,51 @@ mod tests {
             assert!(merged > 0);
             assert_eq!(loaded.bytes() + merged, with_merged.bytes());
         }
+    }
+
+    #[test]
+    fn a_version_with_sparse_offsets_loads_as_written() {
+        // Ids 10..40, the second tombstoned: each relation stores rows 0
+        // and 3 sparsely (its reverse, rows 0 or 3, and 2); the merged CSR
+        // stays dense.
+        let version = built(&["a", "b"], true, true);
+        let sparse = |csr: &AnyCsr| match csr {
+            AnyCsr::U32(csr) => {
+                let rows: Vec<u32> = (0..4).filter(|&row| csr.degree(row.into()) > 0).collect();
+                let mut offsets = vec![0];
+                let mut targets = Vec::new();
+                let mut weights = Vec::new();
+                for &row in &rows {
+                    targets.extend_from_slice(csr.neighbours(row.into()));
+                    weights.extend_from_slice(csr.neighbour_weights(row.into()).unwrap());
+                    offsets.push(targets.len() as u64);
+                }
+                AnyCsr::U32(
+                    Csr::from_sparse_parts(4, rows, offsets, targets, Some(weights)).unwrap(),
+                )
+            }
+            AnyCsr::U64(_) => panic!("u64 targets"),
+        };
+        let relations: Vec<RelationCsr> = version
+            .graph
+            .relations()
+            .iter()
+            .map(|r| RelationCsr::new(sparse(r.forward()), r.reverse().map(sparse)).unwrap())
+            .collect();
+        let merged = version.graph.merged().cloned();
+        let graph = GraphCsr::from_parts(4, relations, merged, 0).unwrap();
+        let version = Built { graph, ..version };
+        let mut store = stored(&version);
+        assert!(store.chunks.contains_key(&(7, "rows:0".to_owned(), 0)));
+        assert!(store.chunks.contains_key(&(7, "rev_rows:1".to_owned(), 0)));
+        assert!(!store.chunks.keys().any(|(_, name, _)| name.ends_with("rows:merged")));
+        loads_as_written(&version);
+        // Without its rows, a sparse CSR's offsets are refused, not misread.
+        store.chunks.retain(|(_, name, _), _| name != "rows:0");
+        assert!(matches!(
+            load::<FixedKeys<i64>>(&mut store, 7, true),
+            Err(LoadError::Graph(GraphError::OffsetsLength { expected: 5, found: 3 }))
+        ));
     }
 
     #[test]

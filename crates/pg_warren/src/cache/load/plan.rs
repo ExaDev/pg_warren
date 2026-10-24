@@ -141,7 +141,7 @@ impl<S: SegmentStore> Planner<'_, S> {
     }
 
     /// Places the CSRs of `scope`: forward, which must exist, and reverse,
-    /// if stored.
+    /// if stored; each with its `rows` if its offsets are sparse.
     fn relation(&mut self, scope: CsrScope, target: usize) -> Result<(), LoadError> {
         for direction in [Direction::Forward, Direction::Reverse] {
             let array = |part| Array::Csr(direction, part, scope);
@@ -153,6 +153,8 @@ impl<S: SegmentStore> Planner<'_, S> {
             } else if self.place(offsets, &segment, SegmentKind::Offsets, word)?.is_none() {
                 continue;
             }
+            let rows = (array(CsrPart::Rows), name(CsrPart::Rows));
+            self.place(rows.0, &rows.1, SegmentKind::Rows, target)?;
             let targets = (array(CsrPart::Targets), name(CsrPart::Targets));
             self.require(targets.0, &targets.1, SegmentKind::Targets, target)?;
             let weights = (array(CsrPart::Weights), name(CsrPart::Weights));

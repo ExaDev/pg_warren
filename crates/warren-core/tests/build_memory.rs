@@ -132,7 +132,7 @@ impl CsrSink for Encoder {
     type Error = GraphError;
 
     fn csr(&mut self, built: BuiltCsr) -> Result<(), GraphError> {
-        for part in [CsrPart::Offsets, CsrPart::Targets, CsrPart::Weights] {
+        for part in [CsrPart::Rows, CsrPart::Offsets, CsrPart::Targets, CsrPart::Weights] {
             let written = built.csr.encode_part(part, CHUNK_SIZE, &self.memory, &mut |_| Ok(()))?;
             self.bytes += written.unwrap_or(0);
         }

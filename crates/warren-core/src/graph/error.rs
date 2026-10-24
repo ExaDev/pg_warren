@@ -109,7 +109,10 @@ pub enum GraphError {
     #[error("not a pg_warren segment")]
     SegmentMagic,
     /// A segment's format is not one this build reads.
-    #[error("unsupported segment format {found}")]
+    #[error(
+        "unsupported segment format {found}: a version built by an earlier pg_warren must be \
+         built again with warren.refresh"
+    )]
     SegmentFormat {
         /// The format in the header.
         found: u8,

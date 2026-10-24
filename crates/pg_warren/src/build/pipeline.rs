@@ -517,7 +517,11 @@ mod tests {
             let weights = self
                 .has_segment(version, &weights_name)
                 .then(|| self.segment(version, &weights_name));
-            AnyCsr::decode(id_space, &offsets, &targets, weights.as_deref()).unwrap()
+            let rows_name = format!("{prefix}rows:{scope}");
+            let rows =
+                self.has_segment(version, &rows_name).then(|| self.segment(version, &rows_name));
+            AnyCsr::decode(id_space, rows.as_deref(), &offsets, &targets, weights.as_deref())
+                .unwrap()
         }
 
         fn stored_bytes(&self, version: VersionId) -> u64 {
