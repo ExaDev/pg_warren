@@ -7,3 +7,4 @@
 cc bafbf23ce5fdb505d023a00322b7a516dea9dc162a0a4b2d42df3e2a17c9009d # shrinks to n = 8, density = 0, seed = 0, k = 1, operator = Adjacency, smallest = false, f64_vectors = false
 cc 6574d226020eaf74f9026f8c18f6266de830897636f9c18a06baa3606e7edee5 # shrinks to n = 20, density = 0, seed = 17101197991593766322, k = 1, operator = Adjacency, smallest = false, f64_vectors = false
 cc 25975ea965ad6d286609e222f714b566bdce638c91112a3e809cffa9707178a2 # shrinks to n = 110, density = 0, seed = 661609988267822669, k = 2, operator = RandomWalk, smallest = false, f64_vectors = true
+cc d956a64ed47eba5cea0ab0447c778e2316664575dffc10fe42139c276cab236e # shrinks to lengths = [4, 6, 8], extra = 1, normalized = true, f64_vectors = false, seed = 245476224701

@@ -366,7 +366,7 @@ mod tests {
         // On q (2,000 rows, so 4,096 in the basis's blocks) k = 10 in f32
         // holds a basis of 21 vectors (344,064 bytes), the operator's
         // 66,000, H and its decomposition (14,280), the eigenvectors
-        // (80,000) and the components pass's 16,000: 520,344 bytes. The
+        // (80,000) and the components pass's 22,000: 526,344 bytes. The
         // basis and the operator fit in 450kB, the eigenvectors do not;
         // the solve used to run its 100,000 steps before finding that out.
         long_path()?;
@@ -375,7 +375,7 @@ mod tests {
         assert_eq!(
             refused.as_deref(),
             Some(
-                "53400: compute memory limit exceeded: the eigenproblem needs 520344 bytes, \
+                "53400: compute memory limit exceeded: the eigenproblem needs 526344 bytes, \
                  0 of 460800 in use beside it"
             )
         );
@@ -429,9 +429,15 @@ mod tests {
     #[pg_test]
     fn every_component_s_zero_eigenvalue_comes_back_exactly() -> Result<(), Error> {
         triangles()?;
+        let zeros = "SELECT count(*)
+                     FROM warren.eigen('c', 30, 'normalized_laplacian', 'smallest', dtype := 'f64')";
+        assert_eq!(warnings(zeros)?, Vec::<String>::new());
         let call = "SELECT string_agg(eigenvalue::text, ' ' ORDER BY i), max(residual)
                     FROM warren.eigen('c', 31, 'normalized_laplacian', 'smallest', dtype := 'f64')";
-        assert_eq!(warnings(call)?, Vec::<String>::new());
+        // 1.5 repeats too, and comes from Lanczos.
+        let warned = warnings(call)?;
+        assert_eq!(warned.len(), 1, "{warned:?}");
+        assert!(warned[0].starts_with("the matrix has 30 connected components"), "{warned:?}");
         let (values, residual) = Spi::get_two::<String, f64>(call)?;
         let values = values.unwrap_or_default();
         let values: Vec<&str> = values.split(' ').collect();
@@ -442,6 +448,47 @@ mod tests {
         let adjacency = warnings("SELECT count(*) FROM warren.eigen('c', 3)")?;
         assert_eq!(adjacency.len(), 1, "{adjacency:?}");
         assert!(adjacency[0].starts_with("the matrix has 30 connected components"));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn every_bipartite_component_s_minus_one_comes_back_exactly() -> Result<(), Error> {
+        // Four paths of 5, 8, 11 and 14 nodes: the random walk has 1 and −1
+        // four times each, and Lanczos returned one −1 and 0.9709.
+        Spi::run(
+            "CREATE TABLE bp_nodes (id bigint); CREATE TABLE bp_edges (src bigint, dst bigint);
+             INSERT INTO bp_nodes SELECT generate_series(1, 38);
+             INSERT INTO bp_edges SELECT id, id + 1 FROM bp_nodes
+                 WHERE id NOT IN (5, 13, 24, 38);
+             SELECT warren.create_graph('bp', 'SELECT id FROM bp_nodes',
+                                        'SELECT src, dst FROM bp_edges', directed := false);
+             SELECT warren.refresh('bp')",
+        )?;
+        let call = "SELECT string_agg(eigenvalue::text, ' ' ORDER BY i)
+                    FROM warren.eigen('bp', 7, 'random_walk', dtype := 'f64')";
+        assert_eq!(warnings(call)?, Vec::<String>::new());
+        assert_eq!(Spi::get_one::<String>(call)?.as_deref(), Some("1 1 1 1 -1 -1 -1"));
+        Ok(())
+    }
+
+    #[pg_test]
+    fn an_unsymmetrised_edge_into_a_node_without_edges_of_its_own_is_no_error() -> Result<(), Error>
+    {
+        // 2 ↔ 3, and 2 → 1 of weight 0: 1 has no row of its own, so is in
+        // no component. It was its component's lowest node, which went
+        // uncounted, and the solve failed on an internal error.
+        Spi::run(
+            "CREATE TABLE z_nodes (id bigint);
+             CREATE TABLE z_edges (src bigint, dst bigint, w double precision);
+             INSERT INTO z_nodes VALUES (1), (2), (3);
+             INSERT INTO z_edges VALUES (2, 3, 1), (3, 2, 1), (2, 1, 0);
+             SELECT warren.create_graph('z', 'SELECT id FROM z_nodes',
+                                        'SELECT src, dst, w FROM z_edges', weighted := true);
+             SELECT warren.refresh('z')",
+        )?;
+        let call = "SELECT count(*) || ' ' || max(eigenvalue)
+                    FROM warren.eigen('z', 1, 'laplacian', 'smallest', symmetrize := false)";
+        assert_eq!(Spi::get_one::<String>(call)?.as_deref(), Some("1 0"));
         Ok(())
     }
 

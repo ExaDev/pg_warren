@@ -337,7 +337,7 @@ mod tests {
     fn a_fresh_solve_of_either_version_that_cannot_fit_is_refused_before_either_runs(
     ) -> Result<(), Error> {
         // The path 1 – … – 2,000 and then 1 – … – 10,000: k = 2 in f32 on the
-        // first holds 438,640 bytes, on the second 1,486,000, so in 1000kB
+        // first holds 444,640 bytes, on the second 1,516,000, so in 1000kB
         // only the first fits. It used to solve the first (here 100,000
         // steps) before the second was refused.
         Spi::run(
@@ -359,7 +359,7 @@ mod tests {
         );
         let started = std::time::Instant::now();
         let refused = failure(&call)?.unwrap_or_default();
-        let expected = "53400: compute memory limit exceeded: the eigenproblem needs 1486000 bytes";
+        let expected = "53400: compute memory limit exceeded: the eigenproblem needs 1516000 bytes";
         assert!(refused.starts_with(expected), "{refused}");
         assert!(started.elapsed().as_secs_f64() < 2.0, "{:?}", started.elapsed());
         Ok(())

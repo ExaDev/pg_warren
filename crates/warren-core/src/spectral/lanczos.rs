@@ -42,7 +42,7 @@ use super::basis::{Basis, Orthogonalized, Stored};
 use super::deflation::Deflation;
 use super::operator::LinearOperator;
 use super::ritz::{self, Ritz};
-use super::working_set::WorkingSet;
+use super::working_set::{Deflated, WorkingSet};
 use super::{dense, GraphMatrix, Resources, SpectralError};
 use crate::compute::{AnyVector, ComputeError, ComputeMemory, MemoryCharge, Vector};
 use crate::graph::GraphCsr;
@@ -58,8 +58,11 @@ const F64_TIE: f64 = 1e-12;
 const STEPS_PER_BASIS_VECTOR: usize = 1000;
 
 /// A new direction shorter than this, relative to the vector it came from,
-/// means the basis spans an invariant subspace.
-const BREAKDOWN: f64 = 1e-10;
+/// means the basis spans an invariant subspace: what is left is the
+/// rounding of the stored vectors, about 10⁻⁷ of them in `f32` and 10⁻¹⁶
+/// in `f64`, which normalised would be a basis vector of noise.
+const F32_BREAKDOWN: f64 = 1e-5;
+const F64_BREAKDOWN: f64 = 1e-10;
 
 /// Which end of the spectrum to compute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -190,11 +193,10 @@ pub struct Eigen {
     /// per component), and single-vector Lanczos may find fewer copies than
     /// there are.
     pub components: u64,
-    /// Whether the eigenvalue each component gives once (0 of the
-    /// Laplacians at the smallest end, 1 of the random walk at the largest)
-    /// was taken exactly, an eigenvector per component, so that none of its
-    /// copies is missed.
-    pub deflated: bool,
+    /// How many of `pairs` were taken exactly from the components, not
+    /// from Lanczos (DESIGN.md §6.5): the copies of an eigenvalue each
+    /// component gives once, none of which is missed.
+    pub exact: usize,
 }
 
 /// The `options.k` eigenpairs of `matrix` over `graph` at the `which` end.
@@ -254,8 +256,8 @@ fn deflate<I: Interrupts>(
     matrix: &GraphMatrix<'_>,
     options: &EigenOptions,
 ) -> Result<Option<Deflation>, SpectralError> {
-    Deflation::eigenvalue(matrix.operator, options.which)
-        .map(|value| Deflation::new(resources, operator, value))
+    Deflation::known(matrix.operator, options.which)
+        .map(|known| Deflation::new(resources, operator, known))
         .transpose()
 }
 
@@ -274,7 +276,10 @@ fn admit<I>(
         operator: matrix.operator,
         k: options.k,
         precision: options.precision,
-        deflated: deflation.map(Deflation::count),
+        deflated: deflation.map(|deflation| Deflated {
+            components: deflation.components(),
+            vectors: deflation.count(),
+        }),
         wanted: deflation.map_or(options.k, |deflation| deflation.wanted(options.k, dimension)),
     };
     working_set.admit(resources.memory)?;
@@ -303,35 +308,43 @@ where
     let (known, components) = match &deflation {
         Some(deflation) => {
             let mut known = Vec::new();
-            for c in 0..deflation.count().min(options.k as u64) {
-                deflation.vector(resources, c, operator.input_mut()?)?;
-                known.push(eigenpair::<E, I>(resources, operator, deflation.value())?);
+            for pair in deflation.pairs(options.k).collect::<Vec<_>>() {
+                deflation.vector(resources, pair, operator.input_mut()?)?;
+                known.push(eigenpair::<E, I>(resources, operator, pair.value)?);
             }
-            (known, deflation.count())
+            (known, deflation.components())
         }
         None => (Vec::new(), operator.components(resources)?.count()),
     };
-    Ok(Eigen {
-        pairs: merge(known, found.pairs, options.k, options.which, tie(options.precision)),
-        iterations: found.iterations,
-        converged: found.converged,
-        components,
-        deflated: deflation.is_some(),
-    })
+    let (pairs, exact) =
+        merge(known, found.pairs, options.k, options.which, tie(options.precision));
+    Ok(Eigen { pairs, iterations: found.iterations, converged: found.converged, components, exact })
 }
 
 /// The first `k` of the components' pairs and Lanczos's, in `which` order,
-/// the components' first among equal values.
+/// and how many of them are the components'. A Lanczos value within
+/// `tie · max|θ|` of a component's exact one is ordered as equal to it, so
+/// the exact pairs come first among values equal to rounding.
 fn merge(
     known: Vec<Eigenpair>,
     found: Vec<Eigenpair>,
     k: usize,
     which: Which,
     tie: f64,
-) -> Vec<Eigenpair> {
+) -> (Vec<Eigenpair>, usize) {
+    let known_count = known.len();
+    let mut exact: Vec<f64> = known.iter().map(|pair| pair.value).collect();
+    exact.dedup();
     let mut pairs: Vec<Option<Eigenpair>> = known.into_iter().chain(found).map(Some).collect();
     let values: Vec<f64> = pairs.iter().flatten().map(|pair| pair.value).collect();
-    ritz::order(&values, which, tie).into_iter().take(k).filter_map(|i| pairs[i].take()).collect()
+    let width = tie * values.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+    let keys: Vec<f64> = values
+        .iter()
+        .map(|&value| *exact.iter().find(|&&e| (value - e).abs() <= width).unwrap_or(&value))
+        .collect();
+    let order: Vec<usize> = ritz::order(&keys, which, tie).into_iter().take(k).collect();
+    let exact = order.iter().filter(|&&i| i < known_count).count();
+    (order.into_iter().filter_map(|i| pairs[i].take()).collect(), exact)
 }
 
 /// How close two magnitudes may be, relative to the largest, for
@@ -341,6 +354,15 @@ fn tie(precision: Precision) -> f64 {
     match precision {
         Precision::F32 => F32_TIE,
         Precision::F64 => F64_TIE,
+    }
+}
+
+/// How short a new direction may be, relative to the vector it came from,
+/// before it counts as rounding.
+fn breakdown(precision: Precision) -> f64 {
+    match precision {
+        Precision::F32 => F32_BREAKDOWN,
+        Precision::F64 => F64_BREAKDOWN,
     }
 }
 
@@ -518,7 +540,7 @@ where
         if !beta.is_finite() {
             return Err(SpectralError::NotFinite);
         }
-        Ok((beta > BREAKDOWN * before).then_some(beta))
+        Ok((beta > breakdown(self.options.precision) * before).then_some(beta))
     }
 
     /// Appends the last residual, normalised, or after a breakdown a fresh
@@ -552,7 +574,7 @@ where
             Some(deflation) => deflation.project(resources, v)?,
             None => norm,
         };
-        if norm <= BREAKDOWN * before {
+        if norm <= breakdown(self.options.precision) * before {
             return Ok(false);
         }
         self.basis.push(resources, v, norm)?;

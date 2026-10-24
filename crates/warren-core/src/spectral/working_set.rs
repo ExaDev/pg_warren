@@ -6,8 +6,9 @@
 //! and degrees, the deflation's components and unit vectors when the
 //! components' eigenpairs are taken exactly, the basis, `H` and its
 //! Rayleigh–Ritz decomposition, and the eigenvectors, all held at once.
-//! Without a deflation, the parents of the connected-components pass come
-//! last, beside all `k` eigenvectors, and outweigh any transient buffer of
+//! Without a deflation, the connected-components pass (its parents,
+//! colours and flags, at most 11 bytes a row) comes last, beside all `k`
+//! eigenvectors, and outweighs any transient buffer of
 //! a product (the push-form scratch of a transposed product without
 //! reverse CSRs, `9` bytes a row), which comes beside one eigenvector
 //! fewer. With one, that scratch, for the last eigenvector's residual, is
@@ -33,6 +34,11 @@ const WORK_VECTORS: u64 = 3;
 /// and whether it is present.
 const PUSH_SCRATCH: u64 = (size_of::<f64>() + size_of::<bool>()) as u64;
 
+/// The components pass, per row: the union-find parents, the colours and
+/// the odd-cycle flags, and whether each component is bipartite (counted
+/// per row, as every node may be one).
+const COMPONENTS_PASS: u64 = (size_of::<DenseId>() + 3 * size_of::<bool>()) as u64;
+
 /// The `size × size` matrices a Rayleigh–Ritz decomposition holds: the
 /// copy of `H` it decomposes, the eigenvectors, and them reordered.
 pub(super) const RITZ_MATRICES: u64 = 3;
@@ -50,12 +56,22 @@ pub(super) struct WorkingSet {
     pub(super) k: usize,
     /// The element type of the basis and the eigenvectors.
     pub(super) precision: Precision,
-    /// The connected components whose eigenpairs are taken exactly, if
-    /// they are (DESIGN.md §6.5).
-    pub(super) deflated: Option<u64>,
+    /// The components whose eigenpairs are taken exactly, if they are
+    /// (DESIGN.md §6.5).
+    pub(super) deflated: Option<Deflated>,
     /// The pairs Lanczos computes: `k`, or with a deflation those it does
     /// not give.
     pub(super) wanted: usize,
+}
+
+/// The components of a deflated eigenproblem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Deflated {
+    /// The connected components.
+    pub(super) components: u64,
+    /// The eigenvectors they give exactly, which Lanczos runs orthogonal
+    /// to.
+    pub(super) vectors: u64,
 }
 
 impl WorkingSet {
@@ -66,7 +82,8 @@ impl WorkingSet {
         if self.wanted == 0 {
             return 0;
         }
-        let dimension = self.dimension.saturating_sub(self.deflated.unwrap_or(0));
+        let deflated = self.deflated.map_or(0, |deflated| deflated.vectors);
+        let dimension = self.dimension.saturating_sub(deflated);
         let dimension = usize::try_from(dimension).unwrap_or(usize::MAX);
         dimension.min(self.k.saturating_mul(2).saturating_add(1).max(MIN_BASIS))
     }
@@ -83,13 +100,15 @@ impl WorkingSet {
         self.id_space.saturating_mul(row)
     }
 
-    /// The bytes the deflation charges when it is prepared: each node's
-    /// component and unit vector entry, and a coefficient per component.
+    /// The bytes the deflation holds once it is prepared: each node's
+    /// component, colour and unit vector entry, and each component's two
+    /// coefficients and whether it is bipartite. (The components pass's
+    /// odd-cycle flags, a byte a row, are released before the solve.)
     pub(super) fn deflation_bytes(&self) -> u64 {
-        let Some(components) = self.deflated else { return 0 };
-        let row = (size_of::<DenseId>() + size_of::<f64>()) as u64;
-        let coefficients = components.saturating_mul(size_of::<f64>() as u64);
-        self.id_space.saturating_mul(row).saturating_add(coefficients)
+        let Some(Deflated { components, .. }) = self.deflated else { return 0 };
+        let row = (size_of::<DenseId>() + size_of::<bool>() + size_of::<f64>()) as u64;
+        let component = (2 * size_of::<f64>() + size_of::<bool>()) as u64;
+        self.id_space.saturating_mul(row).saturating_add(components.saturating_mul(component))
     }
 
     /// The bytes held before the solve starts: the operator's and the
@@ -111,13 +130,13 @@ impl WorkingSet {
             .saturating_mul(size_of::<f64>() as u64);
         let eigenvectors =
             |count: usize| self.id_space.saturating_mul(count as u64).saturating_mul(element);
-        let end = match self.deflated {
-            None => eigenvectors(self.k)
-                .saturating_add(self.id_space.saturating_mul(size_of::<DenseId>() as u64)),
-            Some(_) => {
-                eigenvectors(self.k - 1).saturating_add(self.id_space.saturating_mul(PUSH_SCRATCH))
-            }
-        };
+        let end =
+            match self.deflated {
+                None => eigenvectors(self.k)
+                    .saturating_add(self.id_space.saturating_mul(COMPONENTS_PASS)),
+                Some(_) => eigenvectors(self.k - 1)
+                    .saturating_add(self.id_space.saturating_mul(PUSH_SCRATCH)),
+            };
         [basis, matrices, end].into_iter().fold(0, u64::saturating_add)
     }
 
@@ -183,9 +202,9 @@ mod tests {
         // 1000 rows in blocks of 7 make 1001; 20 basis vectors.
         let f32s = working_set(Operator::Adjacency, 3, Precision::F32);
         let (basis, matrices) = (1001 * 20 * 4, (4 * 20 * 20 + 20) * 8);
-        assert_eq!(f32s.solve_bytes(), basis + matrices + 3 * 1000 * 4 + 1000 * 8);
+        assert_eq!(f32s.solve_bytes(), basis + matrices + 3 * 1000 * 4 + 1000 * 11);
         let f64s = WorkingSet { precision: Precision::F64, ..f32s };
-        assert_eq!(f64s.solve_bytes(), 2 * basis + matrices + 3 * 1000 * 8 + 1000 * 8);
+        assert_eq!(f64s.solve_bytes(), 2 * basis + matrices + 3 * 1000 * 8 + 1000 * 11);
         assert_eq!(f64s.bytes(), f64s.operator_bytes() + f64s.solve_bytes());
     }
 
@@ -194,12 +213,12 @@ mod tests {
         // 900 active nodes in 30 components, k = 40 of which Lanczos
         // computes 10: the basis still has 2k + 1 vectors.
         let set = WorkingSet {
-            deflated: Some(30),
+            deflated: Some(Deflated { components: 30, vectors: 30 }),
             wanted: 10,
             ..working_set(Operator::NormalizedLaplacian, 40, Precision::F32)
         };
         assert_eq!(set.basis_size(), 81);
-        assert_eq!(set.deflation_bytes(), 1000 * (8 + 8) + 30 * 8);
+        assert_eq!(set.deflation_bytes(), 1000 * (8 + 1 + 8) + 30 * (16 + 1));
         assert_eq!(set.prepared_bytes(), set.operator_bytes() + set.deflation_bytes());
         let (basis, matrices) = (1001 * 81 * 4, (4 * 81 * 81 + 81) * 8);
         // One eigenvector fewer and a transposed product's push scratch.
@@ -211,6 +230,12 @@ mod tests {
         let none = WorkingSet { k: 20, wanted: 0, ..set };
         assert_eq!(none.basis_size(), 0);
         assert_eq!(none.solve_bytes(), 19 * 1000 * 4 + 1000 * 9);
+        // The random walk's bipartite components give a second vector each,
+        // which Lanczos also runs orthogonal to.
+        let walk = Deflated { components: 30, vectors: 60 };
+        let walk = WorkingSet { deflated: Some(walk), k: 500, wanted: 440, ..set };
+        assert_eq!(walk.basis_size(), 840);
+        assert_eq!(walk.deflation_bytes(), set.deflation_bytes());
     }
 
     #[test]
