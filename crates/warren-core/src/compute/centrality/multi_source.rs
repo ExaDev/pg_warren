@@ -289,6 +289,7 @@ mod tests {
             tombstones: &tombstones,
             directed: false,
             weighted: None,
+            per_relation: false,
         };
         let memory = ComputeMemory::new(1 << 24);
         let matrix = Adjacency::matrix(&paths, &memory).unwrap();
@@ -309,6 +310,7 @@ mod tests {
             tombstones: &tombstones,
             directed: true,
             weighted: None,
+            per_relation: false,
         };
         let memory = ComputeMemory::new(1 << 20);
         let cancellation = Cancellation::new();
@@ -351,6 +353,7 @@ mod tests {
                 tombstones: &tombstones,
                 directed,
                 weighted: None,
+                per_relation: false,
             };
             let memory = ComputeMemory::new(1 << 24);
             let matrix = Adjacency::matrix(&paths, &memory).unwrap();

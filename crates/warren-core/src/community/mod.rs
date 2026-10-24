@@ -24,4 +24,4 @@ pub use local_moving::{local_moving, LocalMoving, Moved};
 pub use modularity::modularity;
 pub use projection::{lift, project, Aggregate};
 pub use refinement::{refine, Refined, Refinement};
-pub use undirected::Undirected;
+pub use undirected::{Undirected, Weighting};

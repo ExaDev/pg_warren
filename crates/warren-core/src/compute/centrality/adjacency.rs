@@ -15,7 +15,7 @@ use super::super::product::{Matrix, RowScratch};
 use super::super::symmetric::{distinct, selected_rows, Symmetric};
 use super::super::{ComputeError, ComputeMemory, MemoryCharge};
 use super::ShortestPaths;
-use crate::graph::DenseId;
+use crate::graph::{CsrRows, DenseId, GraphCsr, RelationSelection};
 use crate::interrupts::{Cancellation, Cancelled, Work};
 
 /// The rows a search reads.
@@ -29,12 +29,20 @@ pub(super) enum Adjacency<'g> {
 }
 
 impl<'g> Adjacency<'g> {
-    /// The matrix the adjacency reads (whose weightedness it takes).
+    /// The matrix the adjacency reads (whose weightedness it takes): per
+    /// relation only when weighted, since unweighted it changes nothing.
     pub(super) fn matrix(
         paths: &ShortestPaths<'_, 'g>,
         memory: &ComputeMemory,
     ) -> Result<Matrix<'g>, ComputeError> {
-        Matrix::new(paths.graph, paths.relations, false, paths.weighted, memory)
+        let read = |per_relation| {
+            Matrix::new(paths.graph, paths.relations, false, paths.weighted, per_relation, memory)
+        };
+        let matrix = read(false)?;
+        match paths.per_relation && matrix.is_weighted() {
+            true => read(true),
+            false => Ok(matrix),
+        }
     }
 
     /// At most the bytes [`Self::new`] charges, beyond the row scratch a
@@ -43,7 +51,10 @@ impl<'g> Adjacency<'g> {
         if paths.directed {
             return 0;
         }
-        let forward = selected_rows(paths.graph, paths.relations).unwrap_or_default();
+        let forward = match matrix.is_per_relation() {
+            true => each_relation_rows(paths.graph, paths.relations),
+            false => selected_rows(paths.graph, paths.relations).unwrap_or_default(),
+        };
         let id_space = paths.tombstones.id_space();
         let symmetric = Symmetric::bytes(&forward, id_space);
         match matrix.is_weighted() {
@@ -96,6 +107,26 @@ impl<'g> Adjacency<'g> {
         mut edge: impl FnMut(DenseId, f64) -> Result<(), ComputeError>,
     ) -> Result<(), ComputeError> {
         match self {
+            Self::Directed(matrix) if matrix.is_per_relation() => {
+                // A pair's entries are adjacent, in relation order: keep
+                // the lightest (NaN if any is), as `WeightedSymmetric` does.
+                let mut pending: Option<(DenseId, f64)> = None;
+                matrix.for_each_entry(node, scratch, |target, weight| {
+                    work.spend(1)?;
+                    match pending {
+                        Some((held, lightest)) if held == target => {
+                            pending = Some((held, lighter(lightest, weight)));
+                        }
+                        Some((held, lightest)) => {
+                            edge(held, lightest)?;
+                            pending = Some((target, weight));
+                        }
+                        None => pending = Some((target, weight)),
+                    }
+                    Ok(())
+                })?;
+                pending.map_or(Ok(()), |(target, weight)| edge(target, weight))
+            }
             Self::Directed(matrix) => matrix.for_each_entry(node, scratch, |target, weight| {
                 work.spend(1)?;
                 edge(target, weight)
@@ -115,6 +146,27 @@ impl<'g> Adjacency<'g> {
                 Ok(())
             }
         }
+    }
+}
+
+/// The lighter of two weights, or NaN if either is, so a NaN weight in any
+/// relation is refused as it is when the relations' weights are summed.
+fn lighter(a: f64, b: f64) -> f64 {
+    match a.is_nan() || b.is_nan() {
+        true => f64::NAN,
+        false => a.min(b),
+    }
+}
+
+/// The forward rows of each selected relation, every relation's own rather
+/// than the merged CSR, as a per-relation matrix reads them.
+fn each_relation_rows<'g>(
+    graph: &'g GraphCsr,
+    relations: RelationSelection<'_>,
+) -> Vec<CsrRows<'g>> {
+    match relations {
+        RelationSelection::All => graph.relations().iter().map(|r| r.forward().into()).collect(),
+        RelationSelection::Only(_) => selected_rows(graph, relations).unwrap_or_default(),
     }
 }
 
@@ -182,7 +234,8 @@ impl WeightedSymmetric {
     }
 
     /// Sorts every row by neighbour then weight and keeps the lightest
-    /// entry of each neighbour (moving it to the front of a run, so the
+    /// entry of each neighbour, or a NaN one if any, so a NaN weight is
+    /// refused whichever direction or relation holds it (moving it to the front of a run, so the
     /// row keeps its length: later duplicates are marked by
     /// [`DenseId::MAX`] and compacted out once all rows are sorted).
     fn sort(&mut self, cancellation: &Cancellation) -> Result<(), Cancelled> {
@@ -205,7 +258,10 @@ impl WeightedSymmetric {
             for node in nodes {
                 let row = (offsets[node] - base) as usize..(offsets[node + 1] - base) as usize;
                 let row = &mut chunk[row];
-                row.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+                row.sort_unstable_by(|a, b| {
+                    let nan_first = b.1.is_nan().cmp(&a.1.is_nan());
+                    a.0.cmp(&b.0).then(nan_first).then(a.1.total_cmp(&b.1))
+                });
                 for i in (1..row.len()).rev() {
                     if row[i].0 == row[i - 1].0 {
                         row[i].0 = DenseId::MAX;

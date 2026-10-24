@@ -4,9 +4,11 @@
 //! `B = A + Aᵀ` (an edge and its reverse add up, so a self-loop counts
 //! twice); an undirected graph is stored both ways with a self-loop once,
 //! and `B = A`: a self-loop counts once, as in pg_warren's degrees and
-//! `contract` (§6.6), where NetworkX counts it twice. Every relation's
-//! edges add up, as in the merged CSR. A node's degree `k` is its row sum
-//! and `2m` the sum of all of `B`.
+//! `contract` (§6.6), where NetworkX counts it twice. `A` is the matrix
+//! `spmv` reads over every relation (§6.3): an edge in several relations
+//! is one entry, its weights summed in relation order, or 1 when
+//! unweighted (the number of its relations if counted per relation). A
+//! node's degree `k` is its row sum and `2m` the sum of all of `B`.
 //!
 //! Both forms are closed under contraction (§6.6): the `B` of a quotient
 //! is `PᵀBP`, so a partition's modularity on a graph is that of the
@@ -17,8 +19,8 @@ use std::mem::size_of;
 use rayon::prelude::*;
 
 use super::CommunityError;
-use crate::compute::{ComputeError, ComputeMemory, MemoryCharge};
-use crate::graph::{DenseId, GraphCsr};
+use crate::compute::{ComputeError, ComputeMemory, Matrix, MemoryCharge};
+use crate::graph::{DenseId, GraphCsr, RelationSelection};
 use crate::interrupts::{Cancellation, Cancelled};
 
 /// The rows one task folds; small under test, so tests cross tasks.
@@ -26,6 +28,17 @@ const NODES_PER_TASK: usize = if cfg!(test) { 3 } else { 4096 };
 
 /// How often the sequential passes check the cancellation flag, in nodes.
 const NODES_PER_CHECK: u64 = 1 << 16;
+
+/// How [`Undirected`] weighs the edges joining two nodes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Weighting {
+    /// Each edge weighs its weight (else 1).
+    pub weighted: bool,
+    /// Unweighted, a pair of nodes joined in several relations weighs the
+    /// number of those relations rather than 1. Weights are summed across
+    /// relations either way, so it changes nothing when `weighted`.
+    pub per_relation: bool,
+}
 
 /// `B` as rows of `(neighbour, weight)`, each row ascending and distinct,
 /// with each node's degree and their total.
@@ -49,21 +62,24 @@ impl Undirected {
             .saturating_add(nodes.saturating_add(1).saturating_mul(per_node))
     }
 
-    /// `B` of `graph`'s relations, each edge weighing its weight if
-    /// `weighted` (else 1), charged to `memory`. Refuses a negative or NaN
-    /// weight: modularity needs weights of at least 0.
+    /// `B` of `graph`'s relations, weighed as `weighting` says, charged to
+    /// `memory`. Refuses a negative or NaN weight of `A`: modularity needs
+    /// weights of at least 0.
     pub fn new(
         memory: &ComputeMemory,
         cancellation: &Cancellation,
         graph: &GraphCsr,
-        weighted: bool,
+        weighting: Weighting,
         directed: bool,
     ) -> Result<Self, CommunityError> {
         let nodes = graph.all_relations().forward().id_space();
         let len =
             usize::try_from(nodes).map_err(|_| ComputeError::OutOfMemory { bytes: u64::MAX })?;
         let (mut offsets, offsets_charge) = memory.filled(len + 1, 0u64)?;
-        each_entry(graph, weighted, directed, cancellation, &mut |row, _, _| {
+        let Weighting { weighted, per_relation } = weighting;
+        let all = RelationSelection::All;
+        let a = Matrix::new(graph, all, false, Some(weighted), per_relation, memory)?;
+        each_entry(graph, &a, directed, cancellation, &mut |row, _, _| {
             offsets[row as usize] += 1;
         })?;
         let mut end = 0;
@@ -74,7 +90,7 @@ impl Undirected {
         offsets[len] = end;
         let (mut entries, entries_charge) = memory.filled(end as usize, (0, 0.0))?;
         let mut negative = None;
-        each_entry(graph, weighted, directed, cancellation, &mut |row, target, weight| {
+        each_entry(graph, &a, directed, cancellation, &mut |row, target, weight| {
             if (weight.is_nan() || weight < 0.0) && negative.is_none() {
                 negative = Some((row, target, weight));
             }
@@ -129,35 +145,34 @@ impl Undirected {
 }
 
 /// Passes each entry of `B` to `entry` as (row, target, weight), in a
-/// fixed order: relation by relation, row by row; a directed edge `u → v`
-/// to rows `u` and `v` (a self-loop once, with twice its weight), an
-/// undirected graph's stored entries as they are.
+/// fixed order: row by row of `A`, the matrix `spmv` reads over every
+/// relation (an edge in several relations one entry, its weights summed in
+/// relation order, or 1 when unweighted); a directed edge `u → v` to rows
+/// `u` and `v` (a self-loop once, with twice its weight), an undirected
+/// graph's entries as they are.
 fn each_entry(
     graph: &GraphCsr,
-    weighted: bool,
+    a: &Matrix<'_>,
     directed: bool,
     cancellation: &Cancellation,
     entry: &mut dyn FnMut(DenseId, DenseId, f64),
-) -> Result<(), Cancelled> {
-    for relation in graph.relations() {
-        let csr = relation.forward();
-        for source in 0..csr.id_space() {
-            if source % NODES_PER_CHECK == 0 && cancellation.is_cancelled() {
-                return Err(Cancelled);
-            }
-            let weights = csr.neighbour_weights(source).filter(|_| weighted);
-            for (at, target) in csr.neighbours(source).enumerate() {
-                let weight = weights.map_or(1.0, |weights| weights[at]);
-                match (source == target, directed) {
-                    (true, true) => entry(source, target, 2.0 * weight),
-                    (false, true) => {
-                        entry(source, target, weight);
-                        entry(target, source, weight);
-                    }
-                    (_, false) => entry(source, target, weight),
-                }
-            }
+) -> Result<(), ComputeError> {
+    let mut scratch = a.scratch()?;
+    for source in 0..graph.all_relations().forward().id_space() {
+        if source % NODES_PER_CHECK == 0 && cancellation.is_cancelled() {
+            return Err(Cancelled.into());
         }
+        a.for_each_entry(source, &mut scratch, |target, weight| {
+            match (source == target, directed) {
+                (true, true) => entry(source, target, 2.0 * weight),
+                (false, true) => {
+                    entry(source, target, weight);
+                    entry(target, source, weight);
+                }
+                (_, false) => entry(source, target, weight),
+            }
+            Ok(())
+        })?;
     }
     Ok(())
 }
@@ -239,29 +254,29 @@ mod tests {
 
     use super::*;
     use crate::compute::reference::{self, Edges};
+    use crate::graph::CsrLayout;
 
-    fn undirected(graph: &GraphCsr, weighted: bool, directed: bool) -> Undirected {
+    const WEIGHTED: Weighting = Weighting { weighted: true, per_relation: false };
+    const UNWEIGHTED: Weighting = Weighting { weighted: false, per_relation: false };
+
+    fn undirected(graph: &GraphCsr, weighting: Weighting, directed: bool) -> Undirected {
         let memory = ComputeMemory::new(u64::MAX);
-        Undirected::new(&memory, &Cancellation::new(), graph, weighted, directed).unwrap()
+        Undirected::new(&memory, &Cancellation::new(), graph, weighting, directed).unwrap()
     }
 
-    /// `B` the dense way, from the stored entries.
-    fn naive(graph: &GraphCsr, weighted: bool, directed: bool) -> Vec<Vec<f64>> {
-        let n = graph.all_relations().forward().id_space() as usize;
+    /// `B` the dense way, from the edge list: `A` deduplicated by pair
+    /// (an edge in several relations once, its weights summed, or 1 when
+    /// not `weighted`), then `A + Aᵀ` if `directed`.
+    fn naive(n: u64, edges: &Edges, weighted: bool, directed: bool) -> Vec<Vec<f64>> {
+        let a = reference::adjacency(n, edges, None, weighted);
+        let n = n as usize;
         let mut b = vec![vec![0.0; n]; n];
-        for relation in graph.relations() {
-            let csr = relation.forward();
-            for u in 0..n as u64 {
-                let weights = csr.neighbour_weights(u);
-                for (at, v) in csr.neighbours(u).enumerate() {
-                    let w = match (weighted, weights) {
-                        (true, Some(weights)) => weights[at],
-                        _ => 1.0,
-                    };
-                    b[u as usize][v as usize] += w;
-                    if directed {
-                        b[v as usize][u as usize] += w;
-                    }
+        for (u, row) in a.iter().enumerate() {
+            for (v, &entry) in row.iter().enumerate() {
+                let Some(w) = entry else { continue };
+                b[u][v] += w;
+                if directed {
+                    b[v][u] += w;
                 }
             }
         }
@@ -272,13 +287,13 @@ mod tests {
     fn a_directed_edge_and_its_reverse_add_up_and_a_self_loop_counts_twice() {
         let edges: Edges = vec![(0, 0, 1, 2.0), (0, 1, 0, 3.0), (0, 1, 2, 1.0), (0, 2, 2, 4.0)];
         let graph = reference::graph(3, 1, &edges, true, false);
-        let b = undirected(&graph, true, true);
+        let b = undirected(&graph, WEIGHTED, true);
         assert_eq!(b.row(0), [(1, 5.0)]);
         assert_eq!(b.row(1), [(0, 5.0), (2, 1.0)]);
         assert_eq!(b.row(2), [(1, 1.0), (2, 8.0)]);
         assert_eq!((b.degree(0), b.degree(1), b.degree(2)), (5.0, 6.0, 9.0));
         assert_eq!(b.total(), 20.0);
-        let unweighted = undirected(&graph, false, true);
+        let unweighted = undirected(&graph, UNWEIGHTED, true);
         assert_eq!(unweighted.row(2), [(1, 1.0), (2, 2.0)]);
     }
 
@@ -286,10 +301,46 @@ mod tests {
     fn an_undirected_graph_is_already_symmetric_and_a_self_loop_counts_once() {
         let edges: Edges = vec![(0, 0, 1, 2.0), (0, 1, 0, 2.0), (0, 1, 1, 3.0)];
         let graph = reference::graph(2, 1, &edges, true, false);
-        let b = undirected(&graph, true, false);
+        let b = undirected(&graph, WEIGHTED, false);
         assert_eq!(b.row(0), [(1, 2.0)]);
         assert_eq!(b.row(1), [(0, 2.0), (1, 3.0)]);
         assert_eq!(b.total(), 7.0);
+    }
+
+    #[test]
+    fn an_unweighted_pair_in_several_relations_counts_once() {
+        // 0 → 1 in relations 0 and 1, 1 → 0 in relation 1, 2 → 2 in both.
+        let edges: Edges =
+            vec![(0, 0, 1, 1.0), (1, 0, 1, 1.0), (1, 1, 0, 1.0), (0, 2, 2, 1.0), (1, 2, 2, 1.0)];
+        for store_merged in [false, true] {
+            let layout = CsrLayout { build_reverse: false, store_merged };
+            let graph = reference::graph_as(3, 2, &edges, false, layout);
+            let b = undirected(&graph, UNWEIGHTED, true);
+            assert_eq!(b.row(0), [(1, 2.0)]);
+            assert_eq!(b.row(1), [(0, 2.0)]);
+            assert_eq!(b.row(2), [(2, 2.0)]);
+            assert_eq!(b.total(), 6.0);
+        }
+    }
+
+    #[test]
+    fn per_relation_an_unweighted_pair_counts_once_in_each_of_its_relations() {
+        // As above; weights, summed across relations, are unchanged by it.
+        let edges: Edges =
+            vec![(0, 0, 1, 1.0), (1, 0, 1, 2.0), (1, 1, 0, 4.0), (0, 2, 2, 8.0), (1, 2, 2, 16.0)];
+        let per_relation = Weighting { weighted: false, per_relation: true };
+        for store_merged in [false, true] {
+            let layout = CsrLayout { build_reverse: false, store_merged };
+            let graph = reference::graph_as(3, 2, &edges, true, layout);
+            let b = undirected(&graph, per_relation, true);
+            assert_eq!(b.row(0), [(1, 3.0)]);
+            assert_eq!(b.row(1), [(0, 3.0)]);
+            assert_eq!(b.row(2), [(2, 4.0)]);
+            let weighted = Weighting { per_relation: true, ..WEIGHTED };
+            let summed = undirected(&graph, weighted, true);
+            assert_eq!(summed.row(0), [(1, 7.0)]);
+            assert_eq!(summed.row(2), [(2, 48.0)]);
+        }
     }
 
     #[test]
@@ -297,7 +348,7 @@ mod tests {
         for bad in [-1.0, f64::NAN] {
             let graph = reference::graph(2, 1, &vec![(0, 0, 1, bad)], true, false);
             let memory = ComputeMemory::new(u64::MAX);
-            let refused = Undirected::new(&memory, &Cancellation::new(), &graph, true, true);
+            let refused = Undirected::new(&memory, &Cancellation::new(), &graph, WEIGHTED, true);
             assert!(matches!(refused, Err(CommunityError::NegativeWeight { from: 0, to: 1, .. })));
         }
     }
@@ -307,12 +358,12 @@ mod tests {
         let edges: Edges = (0..40u64).map(|i| (0, i % 7, (i * 3) % 7, 1.0)).collect();
         let graph = reference::graph(7, 1, &edges, true, false);
         let memory = ComputeMemory::new(u64::MAX);
-        let b = Undirected::new(&memory, &Cancellation::new(), &graph, true, true).unwrap();
+        let b = Undirected::new(&memory, &Cancellation::new(), &graph, WEIGHTED, true).unwrap();
         assert!(memory.in_use() <= Undirected::bytes(&graph, true));
         drop(b);
         let small = ComputeMemory::new(64);
         assert!(matches!(
-            Undirected::new(&small, &Cancellation::new(), &graph, true, true),
+            Undirected::new(&small, &Cancellation::new(), &graph, WEIGHTED, true),
             Err(CommunityError::Compute(ComputeError::MemoryLimit { .. }))
         ));
     }
@@ -323,7 +374,9 @@ mod tests {
         let graph = reference::graph(50, 1, &edges, true, false);
         for directed in [false, true] {
             let exact = ComputeMemory::new(Undirected::bytes(&graph, directed));
-            assert!(Undirected::new(&exact, &Cancellation::new(), &graph, true, directed).is_ok());
+            assert!(
+                Undirected::new(&exact, &Cancellation::new(), &graph, WEIGHTED, directed).is_ok()
+            );
         }
     }
 
@@ -336,12 +389,14 @@ mod tests {
             )),
             weighted in any::<bool>(),
             directed in any::<bool>(),
+            store_merged in any::<bool>(),
         ) {
             let edges: Edges =
                 edges.into_iter().map(|(r, s, t, w)| (r, s, t, f64::from(w))).collect();
-            let graph = reference::graph(n, 2, &edges, true, false);
-            let b = undirected(&graph, weighted, directed);
-            let expected = naive(&graph, weighted, directed);
+            let layout = CsrLayout { build_reverse: false, store_merged };
+            let graph = reference::graph_as(n, 2, &edges, true, layout);
+            let b = undirected(&graph, Weighting { weighted, per_relation: false }, directed);
+            let expected = naive(n, &edges, weighted, directed);
             for u in 0..n {
                 let row: Vec<(u64, f64)> = expected[u as usize]
                     .iter()

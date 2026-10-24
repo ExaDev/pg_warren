@@ -5,9 +5,11 @@
 -- then mean a negative cycle reachable from the source, an error (22023).
 -- Weights as spmv reads them (1 if unweighted); unreachable nodes are
 -- Infinity. Writes vector `out` (f64) and returns the iterations run.
+-- A pair linked in several relations is one edge, or with `per_relation`
+-- an edge in each (DESIGN.md §5.3).
 CREATE FUNCTION warren.sssp_vector(graph text, "out" text, source anyelement,
                                    rels text[] DEFAULT NULL, weighted boolean DEFAULT NULL,
-                                   max_iter int DEFAULT NULL, version bigint DEFAULT NULL)
+                                   max_iter int DEFAULT NULL, version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
 RETURNS int LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   v bigint := coalesce(version, (warren.info(graph) ->> 'current_version')::bigint);
@@ -33,7 +35,7 @@ BEGIN
       PERFORM warren.report_progress('sssp_vector', graph, 'iterating', i - 1, limit_);
       PERFORM warren.vector_map(graph, '_warren_sssp_vector_next', '_warren_sssp_vector_x', false, v);
       PERFORM warren.spmv(graph, '_warren_sssp_vector_x', '_warren_sssp_vector_next', 'min_plus',
-                          transpose := true, rels := rels, weighted := weighted, accumulate := 'min',
+                          transpose := true, rels := rels, weighted := weighted, per_relation := per_relation, accumulate := 'min',
                           persist := false, version := v);
       PERFORM warren.vector_map(graph, '_warren_sssp_vector_fell',
         'CASE WHEN _warren_sssp_vector_next < _warren_sssp_vector_x THEN 1 ELSE 0 END', false, v);

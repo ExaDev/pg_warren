@@ -13,6 +13,7 @@ use crate::access::entry;
 use crate::activity::Running;
 use crate::cache::resolve;
 use crate::compute_sql::Vectors;
+use crate::extension::added_flag;
 use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
 use crate::source::with_id_type;
@@ -25,10 +26,22 @@ use crate::source::with_id_type;
 /// sweep, to the neighbouring community that most raises modularity at
 /// `resolution`, until a sweep moves none, raises modularity by no more
 /// than `tolerance`, or `max_sweeps` have run. The graph is undirected for
-/// this (`warren.modularity`'s view); `seed` orders the sweep. Returns the
-/// number of communities.
+/// this (`warren.modularity`'s view, `weighted` and `per_relation` as
+/// there); `seed` orders the sweep. Returns the number of communities.
 #[allow(clippy::too_many_arguments)] // the SQL signature of DESIGN.md §6.7
-#[pg_extern(schema = "warren", volatile, parallel_unsafe)]
+#[pg_extern(
+    schema = "warren",
+    sql = r#"
+CREATE FUNCTION warren.local_moving(graph text, "out" text, initial text DEFAULT NULL,
+                                    keys text DEFAULT NULL, resolution double precision DEFAULT 1.0,
+                                    seed bigint DEFAULT 0, max_sweeps integer DEFAULT 100,
+                                    tolerance double precision DEFAULT 1e-7,
+                                    weighted boolean DEFAULT NULL, persist boolean DEFAULT true,
+                                    version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
+RETURNS bigint
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'local_moving_wrapper';
+"#
+)]
 fn local_moving(
     graph: Option<&str>,
     out: Option<&str>,
@@ -41,7 +54,9 @@ fn local_moving(
     weighted: default!(Option<bool>, "NULL"),
     persist: default!(Option<bool>, "true"),
     version: default!(Option<i64>, "NULL"),
+    fcinfo: pg_sys::FunctionCallInfo,
 ) -> Option<i64> {
+    let per_relation = added_flag(fcinfo, 11);
     entry(|_| -> Result<Option<i64>, CommunitySqlError> {
         let graph = graph.ok_or(CommunitySqlError::NullArgument("graph"))?;
         let out = out.ok_or(CommunitySqlError::NullArgument("out"))?;
@@ -71,7 +86,7 @@ fn local_moving(
             vectors.check_writable(out, persist)?;
             let initial = initial.map(|name| integers(&mut vectors, name, "initial")).transpose()?;
             let keys = keys.map(|name| integers(&mut vectors, name, "keys")).transpose()?;
-            let view = undirected(&vectors, weighted)?;
+            let view = undirected(&vectors, weighted, per_relation)?;
             let moved = moving(
                 &*workers()?,
                 &vectors.memory,
@@ -95,9 +110,21 @@ fn local_moving(
 /// inside its community and connected, labelled by the smallest of its
 /// members' `keys` (NULL: dense ids). `randomness` is θ of Traag et al.
 /// (0: always the best merge); `seed` orders the nodes and seeds the
-/// draws. Returns the number of refined communities.
+/// draws; `weighted` and `per_relation` are `warren.modularity`'s. Returns
+/// the number of refined communities.
 #[allow(clippy::too_many_arguments)] // the SQL signature of DESIGN.md §6.7
-#[pg_extern(schema = "warren", volatile, parallel_unsafe)]
+#[pg_extern(
+    schema = "warren",
+    sql = r#"
+CREATE FUNCTION warren.leiden_refine(graph text, communities text, "out" text,
+                                     keys text DEFAULT NULL, resolution double precision DEFAULT 1.0,
+                                     seed bigint DEFAULT 0, randomness double precision DEFAULT 0.01,
+                                     weighted boolean DEFAULT NULL, persist boolean DEFAULT true,
+                                     version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
+RETURNS bigint
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'leiden_refine_wrapper';
+"#
+)]
 fn leiden_refine(
     graph: Option<&str>,
     communities: Option<&str>,
@@ -109,7 +136,9 @@ fn leiden_refine(
     weighted: default!(Option<bool>, "NULL"),
     persist: default!(Option<bool>, "true"),
     version: default!(Option<i64>, "NULL"),
+    fcinfo: pg_sys::FunctionCallInfo,
 ) -> Option<i64> {
+    let per_relation = added_flag(fcinfo, 10);
     entry(|_| -> Result<Option<i64>, CommunitySqlError> {
         let graph = graph.ok_or(CommunitySqlError::NullArgument("graph"))?;
         let communities = communities.ok_or(CommunitySqlError::NullArgument("communities"))?;
@@ -133,7 +162,7 @@ fn leiden_refine(
             vectors.check_writable(out, persist)?;
             let (partition, _charge) = integers(&mut vectors, communities, "communities")?;
             let keys = keys.map(|name| integers(&mut vectors, name, "keys")).transpose()?;
-            let view = undirected(&vectors, weighted)?;
+            let view = undirected(&vectors, weighted, per_relation)?;
             let refined = refine(
                 &*workers()?,
                 &vectors.memory,

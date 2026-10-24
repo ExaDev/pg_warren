@@ -78,8 +78,10 @@ fn generate(shape: &Shape, tombstones: bool) -> Result<(), Error> {
              FROM (SELECT 1 + floor(random() * {n})::int AS x,
                           1 + floor(random() * {n})::int AS y
                    FROM generate_series(1, {m})) r;
-         -- Parallel edges, self-loops, NULL fields.
+         -- Parallel edges, pairs in two relations, self-loops, NULL fields.
          INSERT INTO {g}_edges SELECT * FROM {g}_edges ORDER BY src, dst LIMIT {m} / 20;
+         INSERT INTO {g}_edges SELECT src, dst, CASE rel WHEN 'a' THEN 'b' ELSE 'a' END, w / 3
+             FROM {g}_edges ORDER BY w DESC LIMIT {m} / 20;
          INSERT INTO {g}_edges SELECT src, src, rel, w FROM {g}_edges ORDER BY dst LIMIT 10;
          INSERT INTO {g}_edges SELECT src, NULL, rel, w FROM {g}_edges LIMIT 3;
          INSERT INTO {g}_edges SELECT src, dst, NULL, w FROM {g}_edges ORDER BY w LIMIT 3;

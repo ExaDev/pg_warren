@@ -13,10 +13,12 @@
 -- and `authorities` (f64) and returns the iterations run. A constant
 -- vector is 0 at tombstoned rows, where vector_map evaluates too, so a
 -- division by one is guarded.
+-- A pair linked in several relations is one edge, or with `per_relation`
+-- an edge in each (DESIGN.md §5.3).
 CREATE FUNCTION warren.hits(graph text, hubs text, authorities text, tol float8 DEFAULT 1e-8,
                             max_iter int DEFAULT 100, normalized boolean DEFAULT true,
                             rels text[] DEFAULT NULL, weighted boolean DEFAULT NULL,
-                            version bigint DEFAULT NULL)
+                            version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
 RETURNS int LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   v bigint := coalesce(version, (warren.info(graph) ->> 'current_version')::bigint);
@@ -57,8 +59,8 @@ BEGIN
       i := i + 1;
       PERFORM warren.report_progress('hits', graph, 'iterating', i - 1, max_iter);
       PERFORM warren.spmv(graph, '_warren_hits_x', '_warren_hits_a', transpose := true, rels := rels,
-                          weighted := weighted, persist := false, version := v);
-      PERFORM warren.spmv(graph, '_warren_hits_a', '_warren_hits_next', rels := rels, weighted := weighted,
+                          weighted := weighted, per_relation := per_relation, persist := false, version := v);
+      PERFORM warren.spmv(graph, '_warren_hits_a', '_warren_hits_next', rels := rels, weighted := weighted, per_relation := per_relation,
                           persist := false, version := v);
       scale := warren.vector_reduce(graph, '_warren_hits_next', 'max', v);
       IF NOT abs(scale) < 'Infinity' THEN

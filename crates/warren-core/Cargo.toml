@@ -29,6 +29,10 @@ name = "csr_build"
 harness = false
 
 [[bench]]
+name = "dijkstra"
+harness = false
+
+[[bench]]
 name = "gather"
 harness = false
 

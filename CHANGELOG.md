@@ -2,6 +2,47 @@
 
 ## 0.7.0 — in development
 
+### Behaviour changes
+
+- **An unweighted pair of nodes linked in several relations now counts
+  once in `modularity`, `contract`, `local_moving`, `leiden_refine`,
+  `louvain` and `leiden`**, as it already did in `spmv`, `degree` and
+  `pagerank`. They counted it once per relation, so on graphs with such
+  pairs their results differ from 0.6.0's. A counting `contract` counts
+  the pair in the first of its relations. Weighted pairs are unchanged:
+  their weights are summed across relations.
+- **`dijkstra` now costs a weighted pair linked in several relations the
+  sum of their weights**, as `sssp_vector` and the centralities do. It
+  took the cheapest relation's weight; `per_relation := true` still does.
+- **Undirected weighted centralities refuse a pair whose weight is NaN in
+  one direction** (22023), as they refuse a NaN anywhere else. They used
+  the other direction's weight.
+
+### Added
+
+- **`per_relation boolean DEFAULT false`** on `modularity`, `contract`,
+  `local_moving`, `leiden_refine`, `louvain`, `leiden`, `spmv`, `spmm`,
+  `pagerank`, `katz_centrality`, `eigenvector_centrality`, `hits`,
+  `sssp_vector`, `dijkstra`, `betweenness_centrality`,
+  `closeness_centrality`, `harmonic_centrality`, `dag_longest_path`,
+  `minimum_spanning_forest`, `degree`, `vector_degree`, `degree_vector`,
+  `aggregate_neighbours`, `gather`, `label_propagation_majority`, `eigen`
+  and `distance`: `true` reads a pair linked in several relations as an
+  edge in each (one per relation, as parallel edges), for when that
+  multiplicity is the signal.
+
+### Upgrading
+
+- `ALTER EXTENSION pg_warren UPDATE` drops and recreates the functions
+  that gain `per_relation`, keeping their privileges. Until the update,
+  0.6.0's definitions still work with the new library, counting a pair
+  once.
+- The update drops those functions without `CASCADE`, so it fails if a
+  view, or a function with a `BEGIN ATOMIC` body, calls one of them
+  ("cannot drop function ... because other objects depend on it"). Drop
+  the dependent objects, run `ALTER EXTENSION pg_warren UPDATE`, then
+  create them again.
+
 ## 0.6.0 — identity, lifecycle and visibility (2026-10-24)
 
 Milestone M10 of DESIGN.md §13. Nodes can be keyed on strings: `text` is

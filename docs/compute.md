@@ -35,7 +35,7 @@ d > 1 is an N × d **matrix**, for example embeddings.
 |---|---|
 | `vector_from_query(graph, name, query, dtype := 'f64', fill := 0)` | `vector_values(graph, name, NULL::<id type>)` → `(node_id, value)` |
 | `vector_const(graph, name, value, dtype := 'f64')` | `matrix_rows(graph, name, NULL::<id type>)` → `(node_id, row float8[])` |
-| `vector_degree(graph, name, direction := 'out', rels := NULL)` | `vector_topk(graph, name, k, NULL::<id type>, descending := true)` |
+| `vector_degree(graph, name, direction := 'out', rels := NULL, per_relation := false)` | `vector_topk(graph, name, k, NULL::<id type>, descending := true)` |
 | `vector_dense_id(graph, name)` (each node's own dense id, `i64`) | `vector_stats(graph, name)` → `{count, min, max, mean, sd, l2, nnz}` |
 | results of `spmv`, `spmm`, `vector_map`, the library, `eigen` | `vector_reduce(graph, x, op)`: `sum`, `max`, `min`, `l1`, `l2`, `nnz` |
 
@@ -100,12 +100,17 @@ Rules:
 ```
 warren.spmv(graph, x, y, semiring := 'plus_times', transpose := false, rels := NULL,
             weighted := NULL, mask := NULL, mask_complement := false, replace := false,
-            accumulate := NULL, persist := true, version := NULL)
+            accumulate := NULL, persist := true, version := NULL, per_relation := false)
 ```
 
 `spmv` computes `y = A ⊗ x`, where `A[i][j]` is the weight of edge `i → j`,
 summed over the selected `rels`; when the graph is unweighted it is 1, even
-for a pair linked in several relations. With `transpose :=
+for a pair linked in several relations. With `per_relation := true` such a
+pair is an entry in each of its relations instead, as parallel edges: `⊕`
+folds them, so `plus_times` and `plus_first` sum their weights (2 for an
+unweighted pair in two relations), `min_plus` takes the cheapest and
+`plus_pair` counts each ([semantics.md](semantics.md#a-pair-in-several-relations)).
+With `transpose :=
 false`, `y_i` combines node i's **out**-neighbours' values; with `transpose :=
 true`, its **in**-neighbours' (as PageRank does). `spmm` is the same over a
 width-d matrix, row by row.
@@ -241,7 +246,7 @@ and combined at each receiver, in-engine.
 warren.gather(graph, messages, NULL::<id type>, NULL::<result type>,
               combine := 'collect', direction := 'in', rels := NULL,
               mask := NULL, mask_complement := false, version := NULL,
-              include_self := false)
+              include_self := false, per_relation := false)
   RETURNS TABLE (node_id, value)
 ```
 
@@ -264,6 +269,14 @@ warren.gather(graph, messages, NULL::<id type>, NULL::<result type>,
   its distinct neighbours in `direction` (`in`: nodes with an edge to it;
   `out`; `both`) over `rels`. Weights are not read. Receivers with no
   message, or outside `mask`, return no row.
+- With `per_relation := true`, a sender is a sender once in each relation
+  linking it to the receiver (with `both`, once per relation even if it
+  is linked both ways), so its messages arrive once per relation: `count`
+  counts them and `sum` adds them that many times, `collect` lists them
+  that many times (all of a sender's messages, then all of them again),
+  `mode` counts each copy as a vote, and `min`, `max`, `first`, `bool_or`
+  and `bool_and` are unchanged. Use it when the number of shared relations
+  is the signal ([semantics](semantics.md#a-pair-in-several-relations)).
 - With `include_self := true`, each receiver also receives its own
   messages, ahead of its senders' (and again as a sender if it has a
   self-loop); a node with no senders then still gets a row.
@@ -305,23 +318,23 @@ intermediates transient, and persists only `out`.
 
 | Function | Computes | Returns |
 |---|---|---|
-| `pagerank(graph, out, damping := 0.85, tol := 1e-6, max_iter := 100, seed := NULL, rels, weighted)` | PageRank as NetworkX computes it; `seed` (a vector) personalises it; `out` sums to 1 | iterations |
+| `pagerank(graph, out, damping := 0.85, tol := 1e-6, max_iter := 100, seed := NULL, rels, weighted, per_relation := false)` | PageRank as NetworkX computes it; `seed` (a vector) personalises it; `out` sums to 1 | iterations |
 | `components_vector(graph, out, rels)` | each node's component, as the minimum dense id in it (min-label propagation, both directions) | iterations |
 | `label_propagation(graph, out, seed := NULL, max_iter := 100, mask := NULL, rels)` | min-label propagation from `seed` labels, restricted to `mask` | iterations |
-| `sssp_vector(graph, out, source, rels, weighted, max_iter)` | distance from `source` (Bellman-Ford); unreachable is `Infinity`; a negative cycle reachable from `source` is an error (22023) | iterations |
-| `degree_vector(graph, out, direction := 'out', rels)` | distinct-neighbour degree | vector id |
-| `aggregate_neighbours(graph, x, out, agg := 'mean', hops := 1, rels, direction := 'out')` | `mean`, `sum` or `max` of neighbours' rows of matrix `x` (a "one-layer GNN") | void |
+| `sssp_vector(graph, out, source, rels, weighted, max_iter, per_relation := false)` | distance from `source` (Bellman-Ford); unreachable is `Infinity`; a negative cycle reachable from `source` is an error (22023) | iterations |
+| `degree_vector(graph, out, direction := 'out', rels, per_relation := false)` | distinct-neighbour degree; with `per_relation`, a neighbour once in each relation linking it | vector id |
+| `aggregate_neighbours(graph, x, out, agg := 'mean', hops := 1, rels, direction := 'out', per_relation := false)` | `mean`, `sum` or `max` of neighbours' rows of matrix `x` (a "one-layer GNN"); with `per_relation`, a neighbour's row once in each relation linking it | void |
 | `triangles(graph, out, rels := NULL, persist := true)` | per-node triangle count in the undirected simple graph | vector id |
-| `eigenvector_centrality(graph, out, tol := 1e-6, max_iter := 100, rels, weighted)` | eigenvector centrality as NetworkX computes it (in-edges, unit L2 norm) | iterations |
-| `katz_centrality(graph, out, alpha := 0.1, beta := 1.0, seed := NULL, normalized := true, tol := 1e-6, max_iter := 1000, rels, weighted)` | Katz centrality as NetworkX computes it; `seed` (a vector) makes β per node: `beta × seed` | iterations |
-| `hits(graph, hubs, authorities, tol := 1e-8, max_iter := 100, normalized := true, rels, weighted)` | HITS hub and authority scores as NetworkX computes them, into two vectors | iterations |
+| `eigenvector_centrality(graph, out, tol := 1e-6, max_iter := 100, rels, weighted, per_relation := false)` | eigenvector centrality as NetworkX computes it (in-edges, unit L2 norm) | iterations |
+| `katz_centrality(graph, out, alpha := 0.1, beta := 1.0, seed := NULL, normalized := true, tol := 1e-6, max_iter := 1000, rels, weighted, per_relation := false)` | Katz centrality as NetworkX computes it; `seed` (a vector) makes β per node: `beta × seed` | iterations |
+| `hits(graph, hubs, authorities, tol := 1e-8, max_iter := 100, normalized := true, rels, weighted, per_relation := false)` | HITS hub and authority scores as NetworkX computes them, into two vectors | iterations |
 | `clustering(graph, out, rels)` | local clustering coefficient of the undirected unweighted graph, as `nx.clustering` | void |
-| `label_propagation_majority(graph, out, seed := NULL, max_iter := 100, rels)` | majority-vote label propagation: synchronous, smallest label on a tie | iterations |
+| `label_propagation_majority(graph, out, seed := NULL, max_iter := 100, rels, per_relation := false)` | majority-vote label propagation: synchronous, smallest label on a tie; with `per_relation`, a neighbour votes once in each relation linking it | iterations |
 | `core_number(graph, out, rels := NULL, persist := true)` | each node's k-core number in the undirected simple graph | the degeneracy |
 | `strong_components_vector(graph, out, rels := NULL, persist := true)` | each node's strongly connected component, as the smallest dense id in it | the component count |
 | `topological_order(graph, out, rels := NULL, persist := true)` | each node's position, from 0, in the topological order (smallest dense id first among ready nodes) | vector id |
-| `dag_longest_path(graph, out, rels := NULL, weighted := NULL, persist := true)` | the length of the longest path ending at each node | the longest length |
-| `minimum_spanning_forest(graph, id_type, rels := NULL, weighted := NULL)` | rows `(source, target, weight)`: a minimum spanning tree of each component | rows |
+| `dag_longest_path(graph, out, rels := NULL, weighted := NULL, persist := true, per_relation := false)` | the length of the longest path ending at each node | the longest length |
+| `minimum_spanning_forest(graph, id_type, rels := NULL, weighted := NULL, per_relation := false)` | rows `(source, target, weight)`: a minimum spanning tree of each component | rows |
 
 All take `version := …`. `label_propagation` is deterministic min-label
 propagation; `label_propagation_majority` is the majority vote. `triangles`
@@ -331,7 +344,7 @@ and the structural kernels are native kernels rather than PL/pgSQL
 The centralities follow NetworkX exactly: the same start, iteration,
 normalisation and stopping rule, so with the same `tol` and `max_iter` they
 stop at the same iteration and agree to rounding (tested on random graphs).
-`weighted` follows `spmv`: NULL reads the weights if the graph has them
+`weighted` and `per_relation` follow `spmv`: NULL reads the weights if the graph has them
 (NetworkX's `weight=None` default for eigenvector and Katz centrality is
 `weighted := false` here). Where NetworkX raises
 `PowerIterationFailedConvergence`, these write the last iterate and raise a
@@ -425,7 +438,10 @@ for `topological_order` and `dag_longest_path`, and 40 for
 three when they read several relations' CSRs, a row scratch of 16 bytes per
 entry of the longest row (DESIGN.md §6.7).
 Edges are read under `rels` as the products read them: an edge in several
-selected relations is one edge, its weights summed.
+selected relations is one edge, its weights summed. With `per_relation :=
+true` (both functions) it is an edge in each relation, so, weighted, a
+longest path takes the heaviest and the forest the lightest
+([semantics.md](semantics.md#a-pair-in-several-relations)).
 
 - `core_number` and `minimum_spanning_forest` ignore direction and
   self-loops. `core_number` returns the graph's degeneracy (its largest core
@@ -473,11 +489,15 @@ write an `f64` vector `out` and return how many sources they used. Each is
 NetworkX's function of the same name over the shortest paths under `rels`:
 along edges (`directed := true`, the default) or in the undirected simple
 graph (`directed := false`; a pair joined both ways weighs the lighter of
-its two), weighted if `weighted` (NULL: if the graph has weights; paths are
+its two, and is refused if either is NaN), weighted if `weighted` (NULL: if the graph has weights; paths are
 then the lightest, by Dijkstra: every edge a search follows must weigh more
 than 0 and every distance must stay finite, else 22023; a self-loop's
 weight is never read), else by edge count. An edge in several selected
-relations is one edge, its weights summed. Closeness and harmonic
+relations is one edge, its weights summed; weighted, `per_relation := true`
+makes it an edge in each relation, so paths take the lightest
+([semantics.md](semantics.md#a-pair-in-several-relations)). Unweighted,
+`per_relation` changes nothing: parallel edges change no path's length and
+no count of shortest paths. Closeness and harmonic
 centrality use the distances *to* each node, as NetworkX does on a directed
 graph.
 
@@ -594,7 +614,8 @@ SELECT * FROM warren.similarity('roads', 'VALUES (2, 4), (1, 5)', NULL::int, 'ad
 ```
 warren.eigen(graph, k, matrix := 'adjacency', which := 'largest', rels := NULL,
              weighted := NULL, symmetrize := true, tol := 1e-6, max_iter := NULL,
-             vectors_prefix := NULL, version := NULL, dtype := 'f32', persist := true)
+             vectors_prefix := NULL, version := NULL, dtype := 'f32', persist := true,
+             per_relation := false)
   RETURNS TABLE (i int, eigenvalue float8, residual float8)
 ```
 
@@ -647,7 +668,7 @@ SELECT * FROM warren.eigen('roads', 2, 'laplacian', 'smallest', vectors_prefix :
 warren.distance(graph, v1, v2, method, vectors_prefix := NULL, k := NULL, x := NULL, y := NULL,
                 compared_rows := 'shared', matrix := NULL, which := 'largest', rels := NULL,
                 weighted := NULL, symmetrize := true, tol := 1e-6, max_iter := NULL, dtype := 'f32',
-                graph2 := NULL)
+                graph2 := NULL, per_relation := false)
   RETURNS jsonb   -- {"method", "from", "to", ["graph2"], …the method's scalars}
 ```
 
@@ -657,7 +678,7 @@ are aligned by dense id; across graphs, by external id.
 | Method | Needs | Returns |
 |---|---|---|
 | `edit` | nothing | per relation and `overall`: `added`, `removed`, `union`, `distance` (Jaccard, `(added + removed) / union`); weights ignored |
-| `degree` | nothing | `wasserstein` (W₁, in degrees), `ks`, over live nodes' out-degrees |
+| `degree` | nothing | `wasserstein` (W₁, in degrees), `ks`, over live nodes' out-degrees (with `per_relation`, a neighbour once in each relation linking it) |
 | `spectral` | `k`; optionally `vectors_prefix` | `l2`, `relative`, `max` of the eigenvalue difference, and `before`, `after`. With a prefix it uses the stored `<prefix>_1..k` (their Rayleigh quotients under `matrix`, which you must then name, since a stored vector does not record its operator); without, it solves `k` eigenpairs of `matrix` (default `adjacency`) on each side and adds `converged` (true when both solves converged) |
 | `subspace` | `vectors_prefix`, `k` (run `eigen` on both versions first) | `projection` (‖P₁ − P₂‖_F), `max_angle`, `angles`: principal angles between the two eigenvector spans; the most sensitive to restructuring, the least to volume |
 | `embedding` | `x` (matrix of `v1`), `y` (of `v2`, default `x`) | `mean_l2`, `max_l2`, `mean_cosine`, `max_cosine` (1 − cos), `rows` compared |

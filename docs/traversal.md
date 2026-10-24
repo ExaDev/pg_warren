@@ -30,7 +30,7 @@ an undirected graph sees each edge in both directions.
 | Function | Returns |
 |---|---|
 | `neighbours(graph, node, direction := 'out', rels := NULL)` | each distinct neighbour once, in dense-id order |
-| `degree(graph, node, direction := 'out', rels := NULL)` | the number of distinct neighbours (`bigint`) |
+| `degree(graph, node, direction := 'out', rels := NULL, per_relation := false)` | the number of distinct neighbours (`bigint`); with `per_relation`, a neighbour once in each relation linking it |
 | `has_edge(graph, src, dst, rel := NULL)` | whether `src → dst` exists, in relation `rel` if given |
 | `reachable(graph, start, target, max_depth := NULL, rels := NULL, direction := 'out')` | whether `target` can be reached (an unknown node reaches nothing, not even itself) |
 
@@ -92,7 +92,7 @@ applies ([limits.md](limits.md#known-limitations)); bound them with
 | Function | Returns |
 |---|---|
 | `shortest_path(graph, start, target, max_depth := NULL, rels := NULL, direction := 'out')` | the fewest-hop path as an id array, start to target; NULL if none |
-| `dijkstra(graph, start, target, rels := NULL, direction := 'out')` | one row `(path, cost)`: the cheapest path by summed weight (1 per edge when unweighted); no row if none |
+| `dijkstra(graph, start, target, rels := NULL, direction := 'out', per_relation := false)` | one row `(path, cost)`: the cheapest path by summed weight (1 per edge when unweighted); no row if none |
 
 ```sql
 SELECT warren.shortest_path('roads', 1, 5);                           -- {1,4,5}: 2 hops
@@ -103,8 +103,12 @@ SELECT warren.shortest_path('social', 7::bigint, 1::bigint, direction := 'in'); 
 
 - `shortest_path` is a bidirectional BFS; ties go to the smallest dense id,
   so the result is deterministic.
-- `dijkstra` uses each relation's own weights (an edge in two selected
-  relations costs the cheaper one). A negative or NaN weight is an error
+- An edge in two selected relations costs `dijkstra` their weights' sum,
+  as `spmv` reads it; with `per_relation := true` it costs the cheaper
+  relation's weight
+  ([semantics.md](semantics.md#a-pair-in-several-relations)). Through
+  0.6.0 it always cost the cheaper one. Read both ways (`direction :=
+  'both'`), a pair costs its lighter direction. A negative or NaN weight is an error
   when the search reaches it; an infinite cost is never followed.
 
 ## Components

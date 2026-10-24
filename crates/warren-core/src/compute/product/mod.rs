@@ -16,6 +16,7 @@ mod matrix;
 
 use kernel::{PushScratch, Write};
 use matrix::Form;
+pub use matrix::Reading;
 pub(crate) use matrix::{Matrix, RowScratch};
 
 use super::{
@@ -38,6 +39,10 @@ pub struct Product<'a> {
     /// Use edge weights (`None`: if the graph has them); without them every
     /// weight is 1.
     pub weighted: Option<bool>,
+    /// Read an edge in several selected relations as one entry per
+    /// relation (the multigraph of the relations' edges) rather than one
+    /// entry, its weights summed (DESIGN.md §6.3).
+    pub per_relation: bool,
     /// Only rows the mask selects are written.
     pub mask: Option<Mask<'a>>,
     /// Set rows the mask does not select to the `⊕` identity instead of
@@ -58,6 +63,7 @@ impl Product<'_> {
             transpose: false,
             relations: RelationSelection::All,
             weighted: None,
+            per_relation: false,
             mask: None,
             replace: false,
             accumulate: None,
@@ -128,8 +134,14 @@ fn multiply<I: Interrupts>(
     if let Some(mask) = product.mask {
         mask.check(id_space)?;
     }
-    let matrix =
-        Matrix::new(graph, product.relations, product.transpose, product.weighted, memory)?;
+    let matrix = Matrix::new(
+        graph,
+        product.relations,
+        product.transpose,
+        product.weighted,
+        product.per_relation,
+        memory,
+    )?;
     let mut run = Run { workers, memory, interrupts, matrix: &matrix, product };
     match y {
         AnyVector::F32(y) => run.typed(x, y),

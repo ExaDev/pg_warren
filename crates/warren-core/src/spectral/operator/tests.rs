@@ -181,6 +181,20 @@ fn symmetrising_a_graph_whose_reverse_csrs_equal_its_forward_ones_multiplies_onc
 }
 
 #[test]
+fn per_relation_symmetrises_a_symmetric_merged_csr_whose_relations_are_not() {
+    // 0 → 1 in relations 0 and 1, 1 → 0 in relation 0: the merged CSR is
+    // symmetric, but per relation A = [[0, 2], [1, 0]] is not, so
+    // (A + Aᵀ)/2 · e0 = [0, 1.5] with the merged CSR stored or not.
+    let edges: Edges = vec![(0, 0, 1, 1.0), (1, 0, 1, 1.0), (0, 1, 0, 1.0)];
+    for store_merged in [false, true] {
+        let layout = crate::graph::CsrLayout { build_reverse: true, store_merged };
+        let graph = reference::graph_as(2, 2, &edges, false, layout);
+        let matrix = GraphMatrix { per_relation: true, ..GraphMatrix::new(Operator::Adjacency) };
+        assert_eq!(apply(&graph, &matrix, &[1.0, 0.0]).unwrap(), [0.0, 1.5], "{store_merged}");
+    }
+}
+
+#[test]
 fn normalised_operators_need_positive_degrees() {
     let edges = vec![(0, 0, 1, 1.0), (0, 1, 2, -3.0)];
     let graph = reference::graph(3, 1, &edges, true, true);
@@ -228,6 +242,32 @@ proptest! {
         for operator in Operator::ALL {
             let got = apply(&graph, &GraphMatrix::new(operator), &x).unwrap();
             let want = dense(n, &edges, None, true, true, operator, &x);
+            prop_assert!(close(&got, &want), "{:?}: {:?} != {:?}", operator, got, want);
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+
+    /// Per relation, the operators are those of the multigraph: `A` sums
+    /// each relation's adjacency, so an unweighted pair in k relations
+    /// weighs k; with or without a stored merged CSR.
+    #[test]
+    fn per_relation_operators_match_the_multigraph_s_dense_matrices(
+        (n, edges, x, reverse) in scenarios(),
+        weighted in any::<bool>(),
+        store_merged in any::<bool>(),
+    ) {
+        let layout = crate::graph::CsrLayout { build_reverse: reverse, store_merged };
+        let graph = reference::graph_as(n, 2, &edges, true, layout);
+        let active = dense_reference::per_relation_operator(n, &edges, None, weighted, true, Operator::Adjacency).active;
+        let x: Vec<f64> = x.iter().zip(&active).map(|(&x, &a)| if a { x } else { 0.0 }).collect();
+        for operator in Operator::ALL {
+            let matrix = GraphMatrix { weighted: Some(weighted), per_relation: true, ..GraphMatrix::new(operator) };
+            let got = apply(&graph, &matrix, &x).unwrap();
+            let dense = dense_reference::per_relation_operator(n, &edges, None, weighted, true, operator);
+            let want: Vec<f64> = (&dense.matrix * nalgebra::DVector::from_column_slice(&x)).iter().copied().collect();
             prop_assert!(close(&got, &want), "{:?}: {:?} != {:?}", operator, got, want);
         }
     }

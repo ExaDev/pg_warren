@@ -1,9 +1,10 @@
 -- warren.contract of a directed graph with two relations against
 -- NetworkX's quotient graph (DESIGN.md §6.6, §12), counting edges
 -- (weighted := false): each edge u → v counts once towards the edge from
--- u's community to v's, per relation, and the all-relations quotient sums
--- the relations' (an edge in both counts twice). 17 communities by a hash
--- of the id.
+-- u's community to v's, and an edge in both relations counts once, in the
+-- first (a), so the all-relations quotient is NetworkX's of the graph of
+-- distinct edges, as relation a's is (b's edges are all in a). 17
+-- communities by a hash of the id.
 -- fixture: random --nodes 250 --edges 1200 --directed --seed 3
 -- oracle: quotient --count --directed --labels-sql 'SELECT id, (id * 104729) % 17 FROM nodes' --edges-sql 'SELECT src, dst FROM edges UNION ALL SELECT src, dst FROM edges WHERE (src + dst) % 3 = 0'
 CREATE TABLE g_edges AS
@@ -34,12 +35,22 @@ SELECT assert.equal((SELECT count(*) FROM quotient_edges WHERE rels = 'a'), (SEL
 SELECT assert.equal((SELECT count(*) FROM quotient_edges f JOIN oracle_quotient o USING (source, target)
                      WHERE f.rels = 'a' AND f.weight = o.weight), (SELECT count(*) FROM oracle_quotient),
                     'each counts the edges it joins, as NetworkX''s');
--- Over both relations, an edge in both counts twice.
-CREATE TABLE expected AS
-SELECT (src * 104729) % 17 AS source, (dst * 104729) % 17 AS target, count(*)::float8 AS weight
-FROM g_edges GROUP BY 1, 2;
-SELECT assert.equal((SELECT count(*) FROM quotient_edges WHERE rels = 'all'), (SELECT count(*) FROM expected),
-                    'the all-relations quotient has an edge per pair of communities joined');
-SELECT assert.equal((SELECT count(*) FROM quotient_edges f JOIN expected e USING (source, target)
-                     WHERE f.rels = 'all' AND f.weight = e.weight), (SELECT count(*) FROM expected),
-                    'each sums the relations'' counts');
+-- Over both relations, an edge in both counts once.
+SELECT assert.equal((SELECT count(*) FROM quotient_edges WHERE rels = 'all'), (SELECT count(*) FROM oracle_quotient),
+                    'the all-relations quotient has NetworkX''s edges');
+SELECT assert.equal((SELECT count(*) FROM quotient_edges f JOIN oracle_quotient o USING (source, target)
+                     WHERE f.rels = 'all' AND f.weight = o.weight), (SELECT count(*) FROM oracle_quotient),
+                    'each counts the distinct edges it joins');
+-- A counting quotient keeps a pair in several relations in the first of
+-- them only: every edge of b is also in a, so the quotient's relation b
+-- has no edge, and a read filtered to b sees none. Per relation, or
+-- weighted, each relation keeps its own.
+SELECT warren.vector_const('q', 'one', 1);
+SELECT warren.spmv('q', 'one', 'b_out', rels := ARRAY['b']);
+SELECT assert.equal((SELECT count(*) FROM warren.vector_values('q', 'b_out', NULL::bigint) WHERE value <> 0),
+                    0::bigint, 'relation b of a counting quotient is empty');
+SELECT warren.contract('g', 'label', 'qp', weighted := false, per_relation := true);
+SELECT warren.vector_const('qp', 'one', 1);
+SELECT warren.spmv('qp', 'one', 'b_out', rels := ARRAY['b']);
+SELECT assert.that((SELECT count(*) FROM warren.vector_values('qp', 'b_out', NULL::bigint) WHERE value <> 0) > 0,
+                   'per relation, relation b keeps its edges');

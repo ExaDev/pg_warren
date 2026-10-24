@@ -1,5 +1,6 @@
 //! A naive `gather` for the property tests: join the distinct
-//! `(sender, receiver)` pairs of the selected edges with the messages, and
+//! `(sender, receiver)` pairs of the selected edges (or, per relation, the
+//! distinct `(relation, sender, receiver)` triples) with the messages, and
 //! group by receiver in collect order.
 
 use std::cmp::Ordering;
@@ -96,6 +97,8 @@ pub(super) struct Naive<'a, T> {
     pub(super) selects: Vec<bool>,
     /// Whether a receiver's own messages come first.
     pub(super) include_self: bool,
+    /// Whether a sender sends once in each relation linking it.
+    pub(super) per_relation: bool,
     pub(super) sent: &'a [(DenseId, T)],
 }
 
@@ -108,22 +111,26 @@ pub(super) fn gather<M: Own>(
     if let Some(&(sender, _)) = naive.sent.iter().find(|(sender, _)| *sender >= naive.id_space) {
         return Err(ComputeError::SenderOutsideIdSpace { sender, id_space: naive.id_space });
     }
-    let mut pairs = BTreeSet::new();
+    // (receiver, sender, relation), the relation 0 unless per relation.
+    let mut links = BTreeSet::new();
     for &(relation, source, target, _) in naive.edges {
         if naive.selected.is_some_and(|selected| !selected.contains(&relation)) {
             continue;
         }
+        let relation = if naive.per_relation { relation } else { 0 };
         if naive.direction != Direction::Out {
-            pairs.insert((target, source));
+            links.insert((target, source, relation));
         }
         if naive.direction != Direction::In {
-            pairs.insert((source, target));
+            links.insert((source, target, relation));
         }
     }
     let mut rows = Vec::new();
     for receiver in (0..naive.id_space).filter(|&r| naive.selects[r as usize]) {
         let own = naive.include_self.then_some(receiver);
-        let senders = pairs.range((receiver, 0)..=(receiver, DenseId::MAX)).map(|&(_, s)| s);
+        let senders = links
+            .range((receiver, 0, 0)..=(receiver, DenseId::MAX, usize::MAX))
+            .map(|&(_, s, _)| s);
         let received: Vec<M::Owned> = own
             .into_iter()
             .chain(senders)

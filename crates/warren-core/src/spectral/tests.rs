@@ -180,7 +180,9 @@ fn spectral_results_do_not_depend_on_whether_the_merged_csr_is_stored() {
     }
     let tombstones = Tombstones::new(nodes).unwrap();
     assert_eq!(
-        degree_distance(&mut resources, (&stored, &tombstones), (&unmerged, &tombstones)).unwrap(),
-        degree_distance(&mut resources, (&stored, &tombstones), (&stored, &tombstones)).unwrap()
+        degree_distance(&mut resources, (&stored, &tombstones), (&unmerged, &tombstones), false)
+            .unwrap(),
+        degree_distance(&mut resources, (&stored, &tombstones), (&stored, &tombstones), false)
+            .unwrap()
     );
 }

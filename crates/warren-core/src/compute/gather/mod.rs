@@ -8,11 +8,14 @@
 //! orientation of `spmv` with `transpose = true`; with `out` they are its
 //! out-neighbours `{s : r → s}` (`transpose = false`); with `both` they are
 //! the union of the two. An edge in several selected relations, or in both
-//! directions, still makes its sender a sender once. Edge weights are not
-//! read.
+//! directions, still makes its sender a sender once; with `per_relation`,
+//! a sender once in each relation linking it (both directions of one
+//! relation still once), so its messages arrive once per relation. Edge
+//! weights are not read.
 //!
 //! A receiver's messages are combined in *collect order*: ascending sender
-//! dense id, and a sender's own messages in the order they were pushed.
+//! dense id, and a sender's own messages in the order they were pushed
+//! (per relation, all of them again for each further relation).
 //! With `include_self`, a receiver's own messages come first, as one more
 //! sender ahead of the others: a node with no senders still receives them,
 //! and one with a self-loop receives them twice.
@@ -58,6 +61,9 @@ pub struct Gather<'a> {
     /// Whether each receiver also receives its own messages, ahead of its
     /// senders' (and again as a sender, if it has a self-loop).
     pub include_self: bool,
+    /// Whether a sender sends once in each selected relation linking it
+    /// to the receiver, rather than once (DESIGN.md §5.3).
+    pub per_relation: bool,
 }
 
 impl Gather<'_> {
@@ -69,6 +75,7 @@ impl Gather<'_> {
             relations: RelationSelection::All,
             mask: None,
             include_self: false,
+            per_relation: false,
         }
     }
 }
@@ -103,7 +110,7 @@ pub fn gather<M: Combine, I: Interrupts>(
         mask.check(id_space)?;
     }
     let selects = |receiver| mask.is_none_or(|mask: Mask<'_>| mask.selects(receiver));
-    let sources = Sources::new(graph, gather.direction, gather.relations)?;
+    let sources = Sources::new(graph, gather.direction, gather.relations, gather.per_relation)?;
     // Charges on the pool reclaim no held memory (`memory`), so room for
     // what is sized before the fan-out is reclaimed here, on the caller's
     // thread.

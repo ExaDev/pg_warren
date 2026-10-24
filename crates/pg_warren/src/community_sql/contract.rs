@@ -18,6 +18,7 @@ use crate::catalog::{
     NewGraph,
 };
 use crate::compute_sql::Vectors;
+use crate::extension::added_flag;
 use crate::interrupts::workers;
 use crate::interrupts::PostgresInterrupts;
 use crate::segment::{SpiSegmentStore, CHUNK_SIZE};
@@ -34,11 +35,24 @@ use warren_core::graph::NodeOrder;
 /// §6.7: the library's levels). Each live node belongs to the community of its
 /// label, which must be an integer; the quotient's node ids (`bigint`)
 /// are the labels. Edges between communities are summed by weight (or
-/// counted if not `weighted`); edges inside a community make its
-/// self-loop, unless `drop_self_loops`. The caller must be a reader of
+/// counted if not `weighted` or the graph has no weights: an edge in
+/// several relations once, in the first of them, or with `per_relation`
+/// once in each); edges inside a community make its self-loop, unless
+/// `drop_self_loops`. The caller must be a reader of
 /// `graph`, and a member of `out_graph`'s owner role if it exists. The
 /// version is made current if `promote`, and is otherwise left staged.
-#[pg_extern(schema = "warren", volatile, parallel_unsafe)]
+#[allow(clippy::too_many_arguments)] // the SQL signature of DESIGN.md §6.6
+#[pg_extern(
+    schema = "warren",
+    sql = r#"
+CREATE FUNCTION warren.contract(graph text, label_vector text, out_graph text,
+                                weighted boolean DEFAULT true, drop_self_loops boolean DEFAULT false,
+                                promote boolean DEFAULT true, version bigint DEFAULT NULL,
+                                per_relation boolean DEFAULT false)
+RETURNS bigint
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'contract_wrapper';
+"#
+)]
 fn contract(
     graph: Option<&str>,
     label_vector: Option<&str>,
@@ -47,7 +61,9 @@ fn contract(
     drop_self_loops: default!(Option<bool>, "false"),
     promote: default!(Option<bool>, "true"),
     version: default!(Option<i64>, "NULL"),
+    fcinfo: pg_sys::FunctionCallInfo,
 ) -> Option<i64> {
+    let per_relation = added_flag(fcinfo, 7);
     entry(|caller| {
         let graph = graph.ok_or(CommunitySqlError::NullArgument("graph"))?;
         let label_vector = label_vector.ok_or(CommunitySqlError::NullArgument("label_vector"))?;
@@ -55,6 +71,7 @@ fn contract(
             require_unreserved(name)?;
         }
         let weighted = weighted.ok_or(CommunitySqlError::NullArgument("weighted"))?;
+        let per_relation = per_relation.ok_or(CommunitySqlError::NullArgument("per_relation"))?;
         let drop_self_loops =
             drop_self_loops.ok_or(CommunitySqlError::NullArgument("drop_self_loops"))?;
         let promote = promote.ok_or(CommunitySqlError::NullArgument("promote"))?;
@@ -87,6 +104,7 @@ fn contract(
                 },
                 contraction: Contraction {
                     weighted,
+                    per_relation,
                     drop_self_loops,
                     undirected: !vectors.graph.directed,
                 },

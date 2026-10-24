@@ -9,10 +9,9 @@ finding and not a convention:
 - modularity is of the undirected view B (A + Aᵀ for a directed graph, A
   for an undirected one), in which a self-loop counts once in its node's
   degree; NetworkX counts a self-loop's weight twice, so the view gives it
-  half of B's diagonal (§6.7, docs/communities.md). pg_warren's view sums
-  the merged relations, so an unweighted pair in k relations weighs k
-  there, where `spmv`'s A is 1 (docs/compute.md); `per_relation=False`
-  gives the view with A at 1.
+  half of B's diagonal (§6.7, docs/communities.md). A is `spmv`'s: an
+  unweighted pair in k relations weighs 1 (docs/compute.md), or k with
+  `per_relation=True`.
 Ids stay the strings the tables hold."""
 
 import csv
@@ -109,7 +108,7 @@ class Reference:
     def self_loop_nodes(self):
         return {node for node, _ in nx.selfloop_edges(self.graph)}
 
-    def undirected_view(self, per_relation=True):
+    def undirected_view(self, per_relation=False):
         view = nx.Graph()
         view.add_nodes_from(self.graph)
         for source, target, data in self.graph.edges(data=True):
