@@ -313,6 +313,9 @@ What each function does with such a pair (0.6.0: how it read one; *n/a*: the cou
 | `modularity`, `local_moving`, `leiden_refine`, `louvain`, `leiden` | k (B summed the relations) | yes; the default is now once |
 | `contract` (counting) | k (each relation counted its edges, the quotient summed them) | yes; the default counts the pair once, in its first relation |
 | `contract` (weighted), `project`, `lift` | weights summed | n/a: a sum is linear; membership only |
+| `spmv`, `spmm` | once (`A`) | yes: an entry per relation, folded by `⊕` |
+| `pagerank`, `katz_centrality`, `eigenvector_centrality`, `hits` | once (through `spmv`) | yes: weighted, the same as once (their `plus_times` sums); unweighted, the pair weighs k |
+| `sssp_vector` | once, its weights summed | yes: the cheapest relation, as `dijkstra` |
 
 Alignment: every segment starts on a 64-byte boundary when loaded.
 
@@ -803,8 +806,10 @@ warren.spmv(graph text, x text, y text,
             weighted bool DEFAULT NULL,           -- NULL = use weights if present
             mask text DEFAULT NULL, mask_complement bool DEFAULT false,
             replace bool DEFAULT false,           -- with a mask: false keeps y outside the mask; true sets it to the ⊕ identity
-            accumulate text DEFAULT NULL)        -- NULL = overwrite y; else a binary op: y = y ⊙ result
+            accumulate text DEFAULT NULL,        -- NULL = overwrite y; else a binary op: y = y ⊙ result
                                                  --   plus | min | max | times | first | second
+            ...,                                 -- persist, version (below)
+            per_relation bool DEFAULT false)     -- a pair in several relations: one entry, or one per relation (§5.3)
   RETURNS void;
 
 -- Y = A ⊗ X for a width-d matrix X (neighbour aggregation of embeddings is one call)
@@ -830,7 +835,7 @@ warren.vector_norm_diff(graph text, a text, b text, norm text DEFAULT 'l2') RETU
 Semirings are implemented generically in `warren-core` over `(⊕, ⊗, identity)` for f64, i64, and bool element types, and for f32 too, so `aggregate_neighbours` works on f32 embeddings (A.5). With `A[i][j]` the weight of the edge `i → j`, `transpose = false` computes `y = A ⊗ x` (`y_i` combines the out-neighbours' values), pulled row by row over the forward CSR; `transpose = true` computes `y = Aᵀ ⊗ x` (`y_i` gathers from the in-neighbours, as PageRank does), pulled over the reverse CSR. Without a reverse CSR, `transpose = true` scatters (pushes) over the forward CSR instead: one thread, plus an `id_space × width` scratch charged to the memory budget. The pull form parallelises by rows with no write conflicts, which is why `build_reverse` defaults to true. Both forms fold each row's entries in ascending dense-ID order, so they agree bit for bit.
 
 Decisions made in M4 (`warren-core::compute`):
-- A relation selection makes `A[i][j]` the sum of the edge's weights over the selected relations, in relation order (1 when unweighted), which is what the merged CSR holds for all relations; without a stored merged CSR, all relations are summed so as they are read (§5.3), with the same bits. `weighted := true` on an unweighted graph uses weight 1.
+- A relation selection makes `A[i][j]` the sum of the edge's weights over the selected relations, in relation order (1 when unweighted), which is what the merged CSR holds for all relations; without a stored merged CSR, all relations are summed so as they are read (§5.3), with the same bits. `weighted := true` on an unweighted graph uses weight 1. *0.7.0:* with `per_relation := true` an edge in several selected relations is instead an entry in each, with its relation's weight, in relation order after its column (§5.3: the multigraph); the products then read every relation's CSRs, never the stored merged CSR, through the same row scratch, and `⊕` folds the entries as it folds any row's. Tested: per relation, a product is `⊕` over the relations of each relation's product (a property over every semiring, both layouts, both orientations); by default, the product of the deduplicated graph.
 - Edge weights are cast to the element type as SQL casts `double precision`: `i64` rounds half to even and fails out of range, `f32` fails on overflow or underflow, `bool` is `weight ≠ 0`. A weight is cast only if `⊗` reads it (`second` and `pair` do not).
 - `min` and `max` use SQL order (`NaN` above every number, `-0 = 0`, ties keep the first operand), like `LEAST`/`GREATEST`. `any` takes the row's first entry, so results are deterministic. Float kernels otherwise use IEEE arithmetic (infinities are values, not errors); `i64` overflow is an error (`bigint out of range`). The exception keeps dense "no entry" values stable across supersteps: in the semiring kernels, the `i64` identity of `min` (`i64::MAX`) and of `max` (`i64::MIN`) stands for ±∞ and absorbs `plus` (`MAX + w = MAX` under `min`, `MIN + w = MIN` under `max`), so repeated integer `min_plus`/`max_plus` (hop counts, SSSP) leave unreached nodes at the identity rather than failing. They also absorb `times` by a weight above zero (`MAX · w = MAX` under `min`, `MIN · w = MIN` under `max`, for `w > 0`), so `min_times`/`max_times` supersteps keep unreached nodes too; times by a weight of zero or less treats the identity as an ordinary `bigint` (`MAX · 0 = 0`, `MAX · −1 = −MAX`; `MIN · −1` and `|w| ≥ 2` overflow), since ±∞ · w has no `bigint` value there. Every other overflow still errors. Floats need no exception, since `∞ + w = ∞`.
 - Accumulation follows GraphBLAS: a row of `A` with no entry leaves `y_i` unchanged under `accumulate`, and without it writes the `⊕` identity. `accumulate` accepts any GraphBLAS binary operator name (`first | second | pair | plus | times | min | max | lor | land | any`; `first` keeps `y`, `second` takes the result). The mask is a width-1 vector of any element type, also for `spmm`, where it selects whole rows.

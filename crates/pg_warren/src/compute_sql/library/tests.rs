@@ -73,7 +73,9 @@ mod tests {
     use pgrx::spi::Error;
 
     use super::{compiled, none_left, values};
-    use crate::fixture::{failure, refresh, ring, rows, small, warnings};
+    use crate::fixture::{
+        failure, refresh, relation_expansions, ring, rows, same_as_expanded, small, warnings,
+    };
 
     #[pg_test]
     fn pagerank_is_uniform_on_a_ring_and_personalised_by_a_seed() -> Result<(), Error> {
@@ -262,6 +264,50 @@ mod tests {
             "SELECT warren.label_propagation('t', 'lp', seed := 'seed', max_iter := 1)",
         )?;
         assert_eq!(values("t", "lp", 0)?.as_deref(), Some("1:6 2:7 3:6 4:6 5:5 6:4"));
+        Ok(())
+    }
+
+    /// With `per_relation`, the centralities over `spmv` read a pair
+    /// linked in k relations as an edge weighing k, its expansion's; by
+    /// default as one edge (DESIGN.md §5.3).
+    #[pg_test]
+    fn centralities_read_a_pair_per_relation_as_its_expansion() -> Result<(), Error> {
+        relation_expansions("c")?;
+        for statement in [
+            "SELECT warren.pagerank('{g}', 'out', tol := 1e-12{per})",
+            "SELECT warren.katz_centrality('{g}', 'out', alpha := 0.02, weighted := NULL{per})",
+            "SELECT warren.eigenvector_centrality('{g}', 'out', tol := 1e-9, max_iter := 1000,
+                                                  weighted := NULL{per})",
+            "SELECT warren.hits('{g}', 'out', 'authorities', tol := 1e-12{per})",
+        ] {
+            same_as_expanded("c", statement, "out")?;
+        }
+        Ok(())
+    }
+
+    /// With `per_relation`, a pair in several relations is an edge in each,
+    /// so `sssp_vector`'s `min_plus` takes the cheapest, as `dijkstra`
+    /// does; by default it is one edge, its weights summed.
+    #[pg_test]
+    fn sssp_vector_per_relation_takes_the_cheapest_relation() -> Result<(), Error> {
+        Spi::run(
+            "CREATE TABLE two_nodes (id bigint); INSERT INTO two_nodes VALUES (1), (2), (3);
+             CREATE TABLE two_edges (src bigint, dst bigint, rel text, w float8);
+             INSERT INTO two_edges VALUES (1, 2, 'road', 5), (1, 2, 'rail', 2), (2, 3, 'road', 1);
+             SELECT warren.create_graph('two', 'SELECT id FROM two_nodes',
+                                        'SELECT src, dst, rel, w FROM two_edges',
+                                        weighted := true, has_relations := true);
+             SELECT warren.refresh('two');
+             SELECT warren.sssp_vector('two', 'once', 1::bigint);
+             SELECT warren.sssp_vector('two', 'each', 1::bigint, per_relation := true)",
+        )?;
+        assert_eq!(values("two", "once", 0)?.as_deref(), Some("1:0 2:7 3:8"));
+        assert_eq!(values("two", "each", 0)?.as_deref(), Some("1:0 2:2 3:3"));
+        let dijkstra = rows(
+            "SELECT n || ':' || cost FROM generate_series(1, 3) n,
+                    warren.dijkstra('two', 1::bigint, n::bigint) ORDER BY n",
+        )?;
+        assert_eq!(dijkstra.as_deref(), Some("1:0 2:2 3:3"));
         Ok(())
     }
 

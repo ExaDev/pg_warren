@@ -21,14 +21,28 @@ DECLARE
         'warren.local_moving(text, text, text, text, double precision, bigint, integer, double precision, boolean, boolean, bigint)',
         'warren.leiden_refine(text, text, text, text, double precision, bigint, double precision, boolean, boolean, bigint)',
         'warren.louvain(text, text, double precision, bigint, integer, double precision, boolean, text, bigint)',
-        'warren.leiden(text, text, double precision, bigint, integer, double precision, double precision, integer, boolean, text, bigint)'];
+        'warren.leiden(text, text, double precision, bigint, integer, double precision, double precision, integer, boolean, text, bigint)',
+        'warren.spmv(text, text, text, text, boolean, text[], boolean, text, boolean, boolean, text, boolean, bigint)',
+        'warren.spmm(text, text, text, text, boolean, text[], boolean, text, boolean, boolean, text, boolean, bigint)',
+        'warren.pagerank(text, text, double precision, double precision, integer, text, text[], boolean, bigint)',
+        'warren.katz_centrality(text, text, double precision, double precision, text, boolean, double precision, integer, text[], boolean, bigint)',
+        'warren.eigenvector_centrality(text, text, double precision, integer, text[], boolean, bigint)',
+        'warren.hits(text, text, text, double precision, integer, boolean, text[], boolean, bigint)',
+        'warren.sssp_vector(text, text, anyelement, text[], boolean, integer, bigint)'];
     news text[] := ARRAY[
         'warren.contract(text, text, text, boolean, boolean, boolean, bigint, boolean)',
         'warren.modularity(text, text, double precision, boolean, bigint, boolean)',
         'warren.local_moving(text, text, text, text, double precision, bigint, integer, double precision, boolean, boolean, bigint, boolean)',
         'warren.leiden_refine(text, text, text, text, double precision, bigint, double precision, boolean, boolean, bigint, boolean)',
         'warren.louvain(text, text, double precision, bigint, integer, double precision, boolean, text, bigint, boolean)',
-        'warren.leiden(text, text, double precision, bigint, integer, double precision, double precision, integer, boolean, text, bigint, boolean)'];
+        'warren.leiden(text, text, double precision, bigint, integer, double precision, double precision, integer, boolean, text, bigint, boolean)',
+        'warren.spmv(text, text, text, text, boolean, text[], boolean, text, boolean, boolean, text, boolean, bigint, boolean)',
+        'warren.spmm(text, text, text, text, boolean, text[], boolean, text, boolean, boolean, text, boolean, bigint, boolean)',
+        'warren.pagerank(text, text, double precision, double precision, integer, text, text[], boolean, bigint, boolean)',
+        'warren.katz_centrality(text, text, double precision, double precision, text, boolean, double precision, integer, text[], boolean, bigint, boolean)',
+        'warren.eigenvector_centrality(text, text, double precision, integer, text[], boolean, bigint, boolean)',
+        'warren.hits(text, text, text, double precision, integer, boolean, text[], boolean, bigint, boolean)',
+        'warren.sssp_vector(text, text, anyelement, text[], boolean, integer, bigint, boolean)'];
     acls text[] := ARRAY[]::text[];
     kept record;
 BEGIN
@@ -351,6 +365,412 @@ BEGIN
     PERFORM warren.drop_graph(g);
   END IF;
   RETURN q;
+END $$;
+
+CREATE FUNCTION warren."spmv"(
+	"graph" TEXT,
+	"x" TEXT,
+	"y" TEXT,
+	"semiring" TEXT DEFAULT 'plus_times',
+	"transpose" bool DEFAULT false,
+	"rels" TEXT[] DEFAULT NULL,
+	"weighted" bool DEFAULT NULL,
+	"mask" TEXT DEFAULT NULL,
+	"mask_complement" bool DEFAULT false,
+	"replace" bool DEFAULT false,
+	"accumulate" TEXT DEFAULT NULL,
+	"persist" bool DEFAULT true,
+	"version" bigint DEFAULT NULL,
+	"per_relation" bool DEFAULT false
+) RETURNS void
+VOLATILE PARALLEL UNSAFE
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'spmv_wrapper';
+
+CREATE FUNCTION warren."spmm"(
+	"graph" TEXT,
+	"x" TEXT,
+	"y" TEXT,
+	"semiring" TEXT DEFAULT 'plus_times',
+	"transpose" bool DEFAULT false,
+	"rels" TEXT[] DEFAULT NULL,
+	"weighted" bool DEFAULT NULL,
+	"mask" TEXT DEFAULT NULL,
+	"mask_complement" bool DEFAULT false,
+	"replace" bool DEFAULT false,
+	"accumulate" TEXT DEFAULT NULL,
+	"persist" bool DEFAULT true,
+	"version" bigint DEFAULT NULL,
+	"per_relation" bool DEFAULT false
+) RETURNS void
+VOLATILE PARALLEL UNSAFE
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'spmm_wrapper';
+
+CREATE FUNCTION warren.pagerank(graph text, "out" text, damping float8 DEFAULT 0.85,
+                                tol float8 DEFAULT 1e-6, max_iter int DEFAULT 100,
+                                seed text DEFAULT NULL, rels text[] DEFAULT NULL,
+                                weighted boolean DEFAULT NULL, version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
+RETURNS int LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+  v bigint := coalesce(version, (warren.info(graph) ->> 'current_version')::bigint);
+  parts text[] := ARRAY['one', 'out', 'x', 'p', 'total', 'damping', 'teleport', 'msg', 'dangling_x',
+                        'dangling', 'y', 'next'];
+  nodes float8;
+  dangling float8;
+  delta float8;
+  i int := 0;
+BEGIN
+  IF starts_with("out", '_warren_') OR starts_with(seed, '_warren_') THEN
+    RAISE EXCEPTION 'vector names beginning with _warren_ are reserved for the library''s intermediates'
+      USING ERRCODE = 'reserved_name';
+  END IF;
+  BEGIN
+    -- Every live node's out-weight: the row sums of A.
+    PERFORM warren.vector_const(graph, '_warren_pagerank_one', 1, persist := false, version := v);
+    PERFORM warren.spmv(graph, '_warren_pagerank_one', '_warren_pagerank_out', 'plus_first',
+                        rels := rels, weighted := weighted, per_relation := per_relation, persist := false, version := v);
+    nodes := warren.vector_reduce(graph, '_warren_pagerank_one', 'sum', v);
+    PERFORM warren.vector_const(graph, '_warren_pagerank_x', 1.0 / nodes, persist := false, version := v);
+    IF seed IS NULL THEN
+      PERFORM warren.vector_map(graph, '_warren_pagerank_p', '_warren_pagerank_x', false, v);
+    ELSE
+      -- Times the reciprocal: a constant vector is 0 at tombstoned rows,
+      -- where vector_map evaluates too, so dividing by one would fail.
+      PERFORM warren.vector_const(graph, '_warren_pagerank_total', 1.0 / warren.vector_reduce(graph, seed, 'sum', v),
+                                  persist := false, version := v);
+      PERFORM warren.vector_map(graph, '_warren_pagerank_p', format('%I * _warren_pagerank_total', seed), false, v);
+    END IF;
+    PERFORM warren.vector_const(graph, '_warren_pagerank_damping', damping, persist := false, version := v);
+    PERFORM warren.vector_const(graph, '_warren_pagerank_teleport', 1 - damping, persist := false, version := v);
+    WHILE i < max_iter LOOP
+      i := i + 1;
+      PERFORM warren.report_progress('pagerank', graph, 'iterating', i - 1, max_iter);
+      PERFORM warren.vector_map(graph, '_warren_pagerank_msg',
+        'CASE WHEN _warren_pagerank_out > 0 THEN _warren_pagerank_x / _warren_pagerank_out ELSE 0 END', false, v);
+      PERFORM warren.vector_map(graph, '_warren_pagerank_dangling_x',
+        'CASE WHEN _warren_pagerank_out > 0 THEN 0 ELSE _warren_pagerank_x END', false, v);
+      dangling := warren.vector_reduce(graph, '_warren_pagerank_dangling_x', 'sum', v);
+      PERFORM warren.vector_const(graph, '_warren_pagerank_dangling', dangling, persist := false, version := v);
+      PERFORM warren.spmv(graph, '_warren_pagerank_msg', '_warren_pagerank_y', transpose := true,
+                          rels := rels, weighted := weighted, per_relation := per_relation, persist := false, version := v);
+      PERFORM warren.vector_map(graph, '_warren_pagerank_next',
+        '_warren_pagerank_damping * (_warren_pagerank_y + _warren_pagerank_dangling * _warren_pagerank_p)
+         + _warren_pagerank_teleport * _warren_pagerank_p', false, v);
+      delta := warren.vector_norm_diff(graph, '_warren_pagerank_next', '_warren_pagerank_x', 'l1', v, v);
+      PERFORM warren.vector_map(graph, '_warren_pagerank_x', '_warren_pagerank_next', false, v);
+      EXIT WHEN delta < nodes * tol;
+    END LOOP;
+    PERFORM warren.vector_map(graph, "out", '_warren_pagerank_x', true, v);
+  EXCEPTION WHEN OTHERS OR query_canceled THEN
+    PERFORM warren.drop_vector(graph, '_warren_pagerank_' || part, v, true) FROM unnest(parts) part;
+    RAISE;
+  END;
+  PERFORM warren.drop_vector(graph, '_warren_pagerank_' || part, v, true) FROM unnest(parts) part;
+  RETURN i;
+END $$;
+
+CREATE FUNCTION warren.katz_centrality(graph text, "out" text, alpha float8 DEFAULT 0.1,
+                                       beta float8 DEFAULT 1.0, seed text DEFAULT NULL,
+                                       normalized boolean DEFAULT true, tol float8 DEFAULT 1e-6,
+                                       max_iter int DEFAULT 1000, rels text[] DEFAULT NULL,
+                                       weighted boolean DEFAULT NULL, version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
+RETURNS int LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+  v bigint := coalesce(version, (warren.info(graph) ->> 'current_version')::bigint);
+  parts text[] := ARRAY['one', 'b', 'alpha', 'x', 'y', 'next', 'scale'];
+  nodes float8;
+  norm float8;
+  delta float8;
+  i int := 0;
+BEGIN
+  IF "out" IS NULL OR alpha IS NULL OR beta IS NULL OR normalized IS NULL OR tol IS NULL OR max_iter IS NULL THEN
+    RAISE EXCEPTION '% must not be NULL',
+      CASE WHEN "out" IS NULL THEN 'out' WHEN alpha IS NULL THEN 'alpha' WHEN beta IS NULL THEN 'beta'
+           WHEN normalized IS NULL THEN 'normalized' WHEN tol IS NULL THEN 'tol' ELSE 'max_iter' END
+      USING ERRCODE = 'null_value_not_allowed';
+  END IF;
+  IF starts_with("out", '_warren_') OR starts_with(seed, '_warren_') THEN
+    RAISE EXCEPTION 'vector names beginning with _warren_ are reserved for the library''s intermediates'
+      USING ERRCODE = 'reserved_name';
+  END IF;
+  IF tol < 0 THEN
+    RAISE EXCEPTION 'tol must be at least 0, not %', tol USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+  IF max_iter < 1 THEN
+    RAISE EXCEPTION 'max_iter must be at least 1, not %', max_iter USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+  BEGIN
+    PERFORM warren.vector_const(graph, '_warren_katz_centrality_one', 1, persist := false, version := v);
+    nodes := warren.vector_reduce(graph, '_warren_katz_centrality_one', 'sum', v);
+    IF nodes = 0 THEN
+      RAISE EXCEPTION 'graph "%" has no live nodes', graph USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+    IF seed IS NULL THEN
+      PERFORM warren.vector_const(graph, '_warren_katz_centrality_b', beta, persist := false, version := v);
+    ELSE
+      -- vector_reduce names a missing seed vector (42704); vector_map would
+      -- call it a missing column.
+      PERFORM warren.vector_reduce(graph, seed, 'nnz', v);
+      PERFORM warren.vector_map(graph, '_warren_katz_centrality_b', format('%I::float8', seed), false, v);
+      PERFORM warren.vector_const(graph, '_warren_katz_centrality_scale', beta, persist := false, version := v);
+      PERFORM warren.vector_map(graph, '_warren_katz_centrality_b',
+                                '_warren_katz_centrality_scale * _warren_katz_centrality_b', false, v);
+    END IF;
+    PERFORM warren.vector_const(graph, '_warren_katz_centrality_alpha', alpha, persist := false, version := v);
+    PERFORM warren.vector_const(graph, '_warren_katz_centrality_x', 0, persist := false, version := v);
+    WHILE i < max_iter LOOP
+      i := i + 1;
+      PERFORM warren.report_progress('katz_centrality', graph, 'iterating', i - 1, max_iter);
+      PERFORM warren.spmv(graph, '_warren_katz_centrality_x', '_warren_katz_centrality_y',
+                          transpose := true, rels := rels, weighted := weighted, per_relation := per_relation, persist := false, version := v);
+      PERFORM warren.vector_map(graph, '_warren_katz_centrality_next',
+        '_warren_katz_centrality_alpha * _warren_katz_centrality_y + _warren_katz_centrality_b', false, v);
+      delta := warren.vector_norm_diff(graph, '_warren_katz_centrality_next', '_warren_katz_centrality_x',
+                                       'l1', v, v);
+      IF NOT delta < 'Infinity' THEN
+        RAISE EXCEPTION 'katz_centrality diverged: its values are not finite after % iterations', i
+          USING ERRCODE = 'numeric_value_out_of_range',
+                HINT = 'alpha must be below 1 / the largest eigenvalue of the adjacency matrix.';
+      END IF;
+      PERFORM warren.vector_map(graph, '_warren_katz_centrality_x', '_warren_katz_centrality_next', false, v);
+      EXIT WHEN delta < nodes * tol;
+    END LOOP;
+    IF NOT delta < nodes * tol THEN
+      RAISE WARNING 'katz_centrality did not converge in % iterations', i;
+    END IF;
+    IF normalized THEN
+      norm := warren.vector_reduce(graph, '_warren_katz_centrality_x', 'l2', v);
+      IF NOT norm < 'Infinity' THEN
+        RAISE EXCEPTION 'katz_centrality diverged: its L2 norm overflows after % iterations', i
+          USING ERRCODE = 'numeric_value_out_of_range',
+                HINT = 'alpha must be below 1 / the largest eigenvalue of the adjacency matrix.';
+      END IF;
+      PERFORM warren.vector_const(graph, '_warren_katz_centrality_scale', CASE WHEN norm = 0 THEN 1 ELSE norm END,
+                                  persist := false, version := v);
+      PERFORM warren.vector_map(graph, "out",
+        'CASE WHEN _warren_katz_centrality_scale <> 0
+              THEN _warren_katz_centrality_x / _warren_katz_centrality_scale ELSE 0 END', true, v);
+    ELSE
+      PERFORM warren.vector_map(graph, "out", '_warren_katz_centrality_x', true, v);
+    END IF;
+  EXCEPTION WHEN OTHERS OR query_canceled THEN
+    PERFORM warren.drop_vector(graph, '_warren_katz_centrality_' || part, v, true) FROM unnest(parts) part;
+    RAISE;
+  END;
+  PERFORM warren.drop_vector(graph, '_warren_katz_centrality_' || part, v, true) FROM unnest(parts) part;
+  RETURN i;
+END $$;
+
+CREATE FUNCTION warren.eigenvector_centrality(graph text, "out" text, tol float8 DEFAULT 1e-6,
+                                              max_iter int DEFAULT 100, rels text[] DEFAULT NULL,
+                                              weighted boolean DEFAULT NULL, version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
+RETURNS int LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+  v bigint := coalesce(version, (warren.info(graph) ->> 'current_version')::bigint);
+  parts text[] := ARRAY['one', 'x', 'y', 'next', 'scale'];
+  nodes float8;
+  norm float8;
+  delta float8;
+  i int := 0;
+BEGIN
+  IF "out" IS NULL OR tol IS NULL OR max_iter IS NULL THEN
+    RAISE EXCEPTION '% must not be NULL', CASE WHEN "out" IS NULL THEN 'out' WHEN tol IS NULL THEN 'tol' ELSE 'max_iter' END
+      USING ERRCODE = 'null_value_not_allowed';
+  END IF;
+  IF starts_with("out", '_warren_') THEN
+    RAISE EXCEPTION 'vector names beginning with _warren_ are reserved for the library''s intermediates'
+      USING ERRCODE = 'reserved_name';
+  END IF;
+  IF tol < 0 THEN
+    RAISE EXCEPTION 'tol must be at least 0, not %', tol USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+  IF max_iter < 1 THEN
+    RAISE EXCEPTION 'max_iter must be at least 1, not %', max_iter USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+  BEGIN
+    PERFORM warren.vector_const(graph, '_warren_eigenvector_centrality_one', 1, persist := false, version := v);
+    nodes := warren.vector_reduce(graph, '_warren_eigenvector_centrality_one', 'sum', v);
+    IF nodes = 0 THEN
+      RAISE EXCEPTION 'graph "%" has no live nodes', graph USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+    PERFORM warren.vector_const(graph, '_warren_eigenvector_centrality_x', 1.0 / nodes, persist := false,
+                                version := v);
+    WHILE i < max_iter LOOP
+      i := i + 1;
+      PERFORM warren.report_progress('eigenvector_centrality', graph, 'iterating', i - 1, max_iter);
+      PERFORM warren.spmv(graph, '_warren_eigenvector_centrality_x', '_warren_eigenvector_centrality_y',
+                          transpose := true, rels := rels, weighted := weighted, per_relation := per_relation, persist := false, version := v);
+      PERFORM warren.vector_map(graph, '_warren_eigenvector_centrality_next',
+        '_warren_eigenvector_centrality_x + _warren_eigenvector_centrality_y', false, v);
+      norm := warren.vector_reduce(graph, '_warren_eigenvector_centrality_next', 'l2', v);
+      IF NOT norm < 'Infinity' THEN
+        RAISE EXCEPTION 'eigenvector_centrality diverged: its values are not finite after % iterations', i
+          USING ERRCODE = 'numeric_value_out_of_range',
+                HINT = 'The edge weights are too large: their squares overflow double precision.';
+      END IF;
+      PERFORM warren.vector_const(graph, '_warren_eigenvector_centrality_scale',
+                                  CASE WHEN norm = 0 THEN 1 ELSE norm END, persist := false, version := v);
+      PERFORM warren.vector_map(graph, '_warren_eigenvector_centrality_next',
+        'CASE WHEN _warren_eigenvector_centrality_scale <> 0
+              THEN _warren_eigenvector_centrality_next / _warren_eigenvector_centrality_scale ELSE 0 END', false, v);
+      delta := warren.vector_norm_diff(graph, '_warren_eigenvector_centrality_next',
+                                       '_warren_eigenvector_centrality_x', 'l1', v, v);
+      PERFORM warren.vector_map(graph, '_warren_eigenvector_centrality_x', '_warren_eigenvector_centrality_next',
+                                false, v);
+      EXIT WHEN delta < nodes * tol;
+    END LOOP;
+    IF NOT delta < nodes * tol THEN
+      RAISE WARNING 'eigenvector_centrality did not converge in % iterations', i;
+    END IF;
+    PERFORM warren.vector_map(graph, "out", '_warren_eigenvector_centrality_x', true, v);
+  EXCEPTION WHEN OTHERS OR query_canceled THEN
+    PERFORM warren.drop_vector(graph, '_warren_eigenvector_centrality_' || part, v, true) FROM unnest(parts) part;
+    RAISE;
+  END;
+  PERFORM warren.drop_vector(graph, '_warren_eigenvector_centrality_' || part, v, true) FROM unnest(parts) part;
+  RETURN i;
+END $$;
+
+CREATE FUNCTION warren.hits(graph text, hubs text, authorities text, tol float8 DEFAULT 1e-8,
+                            max_iter int DEFAULT 100, normalized boolean DEFAULT true,
+                            rels text[] DEFAULT NULL, weighted boolean DEFAULT NULL,
+                            version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
+RETURNS int LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+  v bigint := coalesce(version, (warren.info(graph) ->> 'current_version')::bigint);
+  parts text[] := ARRAY['one', 'x', 'a', 'next', 'scale'];
+  nodes float8;
+  scale float8;
+  hub_scale float8;
+  delta float8;
+  i int := 0;
+BEGIN
+  IF hubs IS NULL OR authorities IS NULL OR normalized IS NULL OR tol IS NULL OR max_iter IS NULL THEN
+    RAISE EXCEPTION '% must not be NULL',
+      CASE WHEN hubs IS NULL THEN 'hubs' WHEN authorities IS NULL THEN 'authorities'
+           WHEN normalized IS NULL THEN 'normalized' WHEN tol IS NULL THEN 'tol' ELSE 'max_iter' END
+      USING ERRCODE = 'null_value_not_allowed';
+  END IF;
+  IF starts_with(hubs, '_warren_') OR starts_with(authorities, '_warren_') THEN
+    RAISE EXCEPTION 'vector names beginning with _warren_ are reserved for the library''s intermediates'
+      USING ERRCODE = 'reserved_name';
+  END IF;
+  IF hubs = authorities THEN
+    RAISE EXCEPTION 'hubs and authorities must be different vectors' USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+  IF tol < 0 THEN
+    RAISE EXCEPTION 'tol must be at least 0, not %', tol USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+  IF max_iter < 1 THEN
+    RAISE EXCEPTION 'max_iter must be at least 1, not %', max_iter USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+  BEGIN
+    PERFORM warren.vector_const(graph, '_warren_hits_one', 1, persist := false, version := v);
+    nodes := warren.vector_reduce(graph, '_warren_hits_one', 'sum', v);
+    IF nodes = 0 THEN
+      RAISE EXCEPTION 'graph "%" has no live nodes', graph USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+    PERFORM warren.vector_const(graph, '_warren_hits_x', 1.0 / nodes, persist := false, version := v);
+    WHILE i < max_iter LOOP
+      i := i + 1;
+      PERFORM warren.report_progress('hits', graph, 'iterating', i - 1, max_iter);
+      PERFORM warren.spmv(graph, '_warren_hits_x', '_warren_hits_a', transpose := true, rels := rels,
+                          weighted := weighted, per_relation := per_relation, persist := false, version := v);
+      PERFORM warren.spmv(graph, '_warren_hits_a', '_warren_hits_next', rels := rels, weighted := weighted, per_relation := per_relation,
+                          persist := false, version := v);
+      scale := warren.vector_reduce(graph, '_warren_hits_next', 'max', v);
+      IF NOT abs(scale) < 'Infinity' THEN
+        RAISE EXCEPTION 'hits diverged: its values are not finite after % iterations', i
+          USING ERRCODE = 'numeric_value_out_of_range',
+                HINT = 'The edge weights are too large: their products overflow double precision.';
+      END IF;
+      PERFORM warren.vector_const(graph, '_warren_hits_scale', CASE WHEN scale = 0 THEN 1 ELSE scale END,
+                                  persist := false, version := v);
+      PERFORM warren.vector_map(graph, '_warren_hits_next',
+        'CASE WHEN _warren_hits_scale <> 0 THEN _warren_hits_next / _warren_hits_scale ELSE 0 END', false, v);
+      delta := warren.vector_norm_diff(graph, '_warren_hits_next', '_warren_hits_x', 'l1', v, v);
+      PERFORM warren.vector_map(graph, '_warren_hits_x', '_warren_hits_next', false, v);
+      EXIT WHEN delta < tol;
+    END LOOP;
+    IF NOT delta < tol THEN
+      RAISE WARNING 'hits did not converge in % iterations', i;
+    END IF;
+    IF normalized THEN
+      hub_scale := warren.vector_reduce(graph, '_warren_hits_x', 'sum', v);
+      scale := warren.vector_reduce(graph, '_warren_hits_a', 'sum', v);
+    ELSE
+      hub_scale := 1;
+      scale := warren.vector_reduce(graph, '_warren_hits_a', 'max', v);
+    END IF;
+    IF NOT abs(hub_scale) < 'Infinity' OR NOT abs(scale) < 'Infinity' THEN
+      RAISE EXCEPTION 'hits diverged: its values are not finite after % iterations', i
+        USING ERRCODE = 'numeric_value_out_of_range',
+              HINT = 'The edge weights are too large: their products overflow double precision.';
+    END IF;
+    PERFORM warren.vector_const(graph, '_warren_hits_scale', CASE WHEN hub_scale = 0 THEN 1 ELSE hub_scale END,
+                                persist := false, version := v);
+    PERFORM warren.vector_map(graph, hubs,
+      'CASE WHEN _warren_hits_scale <> 0 THEN _warren_hits_x / _warren_hits_scale ELSE 0 END', true, v);
+    PERFORM warren.vector_const(graph, '_warren_hits_scale', CASE WHEN scale = 0 THEN 1 ELSE scale END,
+                                persist := false, version := v);
+    PERFORM warren.vector_map(graph, authorities,
+      'CASE WHEN _warren_hits_scale <> 0 THEN _warren_hits_a / _warren_hits_scale ELSE 0 END', true, v);
+  EXCEPTION WHEN OTHERS OR query_canceled THEN
+    PERFORM warren.drop_vector(graph, '_warren_hits_' || part, v, true) FROM unnest(parts) part;
+    RAISE;
+  END;
+  PERFORM warren.drop_vector(graph, '_warren_hits_' || part, v, true) FROM unnest(parts) part;
+  RETURN i;
+END $$;
+
+CREATE FUNCTION warren.sssp_vector(graph text, "out" text, source anyelement,
+                                   rels text[] DEFAULT NULL, weighted boolean DEFAULT NULL,
+                                   max_iter int DEFAULT NULL, version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
+RETURNS int LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+  v bigint := coalesce(version, (warren.info(graph) ->> 'current_version')::bigint);
+  parts text[] := ARRAY['x', 'next', 'fell'];
+  limit_ int;
+  falling float8;
+  i int := 0;
+BEGIN
+  IF starts_with("out", '_warren_') THEN
+    RAISE EXCEPTION 'vector names beginning with _warren_ are reserved for the library''s intermediates'
+      USING ERRCODE = 'reserved_name';
+  END IF;
+  BEGIN
+    PERFORM warren.vector_from_query(graph, '_warren_sssp_vector_x',
+                                     format('SELECT %L::%s, 0', source, pg_typeof(source)),
+                                     fill := 'Infinity', persist := false, version := v);
+    IF warren.vector_reduce(graph, '_warren_sssp_vector_x', 'min', v) <> 0 THEN
+      RAISE EXCEPTION 'node % is not a node of graph "%"', source, graph USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+    limit_ := coalesce(max_iter, (warren.vector_stats(graph, '_warren_sssp_vector_x', v) ->> 'count')::int);
+    WHILE i < limit_ LOOP
+      i := i + 1;
+      PERFORM warren.report_progress('sssp_vector', graph, 'iterating', i - 1, limit_);
+      PERFORM warren.vector_map(graph, '_warren_sssp_vector_next', '_warren_sssp_vector_x', false, v);
+      PERFORM warren.spmv(graph, '_warren_sssp_vector_x', '_warren_sssp_vector_next', 'min_plus',
+                          transpose := true, rels := rels, weighted := weighted, per_relation := per_relation, accumulate := 'min',
+                          persist := false, version := v);
+      PERFORM warren.vector_map(graph, '_warren_sssp_vector_fell',
+        'CASE WHEN _warren_sssp_vector_next < _warren_sssp_vector_x THEN 1 ELSE 0 END', false, v);
+      falling := warren.vector_reduce(graph, '_warren_sssp_vector_fell', 'sum', v);
+      PERFORM warren.vector_map(graph, '_warren_sssp_vector_x', '_warren_sssp_vector_next', false, v);
+      EXIT WHEN falling = 0;
+    END LOOP;
+    IF max_iter IS NULL AND falling > 0 THEN
+      RAISE EXCEPTION 'a negative cycle is reachable from node % of graph "%"', source, graph
+        USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+    PERFORM warren.vector_map(graph, "out", '_warren_sssp_vector_x', true, v);
+  EXCEPTION WHEN OTHERS OR query_canceled THEN
+    PERFORM warren.drop_vector(graph, '_warren_sssp_vector_' || part, v, true) FROM unnest(parts) part;
+    RAISE;
+  END;
+  PERFORM warren.drop_vector(graph, '_warren_sssp_vector_' || part, v, true) FROM unnest(parts) part;
+  RETURN i;
 END $$;
 
     FOR i IN 1 .. pg_catalog.array_length(news, 1) LOOP

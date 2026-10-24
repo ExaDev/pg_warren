@@ -79,6 +79,9 @@ whole table.
 |---|---|
 | `modularity`, `louvain`, `leiden`, `local_moving`, `leiden_refine` | yes |
 | `contract` | yes: counting (`weighted := false`, or an unweighted graph), the default counts the pair once, in the first of its relations; per relation in each. Weights are summed either way |
+| `spmv`, `spmm` | yes: an entry in each relation, which `⊕` folds |
+| `pagerank`, `katz_centrality`, `eigenvector_centrality`, `hits` | yes: unweighted, the pair weighs k |
+| `sssp_vector` | yes: the cheapest of its relations, as `dijkstra` (by default their weights' sum) |
 
 ## Versions
 

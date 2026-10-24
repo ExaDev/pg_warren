@@ -100,12 +100,17 @@ Rules:
 ```
 warren.spmv(graph, x, y, semiring := 'plus_times', transpose := false, rels := NULL,
             weighted := NULL, mask := NULL, mask_complement := false, replace := false,
-            accumulate := NULL, persist := true, version := NULL)
+            accumulate := NULL, persist := true, version := NULL, per_relation := false)
 ```
 
 `spmv` computes `y = A ⊗ x`, where `A[i][j]` is the weight of edge `i → j`,
 summed over the selected `rels`; when the graph is unweighted it is 1, even
-for a pair linked in several relations. With `transpose :=
+for a pair linked in several relations. With `per_relation := true` such a
+pair is an entry in each of its relations instead, as parallel edges: `⊕`
+folds them, so `plus_times` and `plus_first` sum their weights (2 for an
+unweighted pair in two relations), `min_plus` takes the cheapest and
+`plus_pair` counts each ([semantics.md](semantics.md#a-pair-in-several-relations)).
+With `transpose :=
 false`, `y_i` combines node i's **out**-neighbours' values; with `transpose :=
 true`, its **in**-neighbours' (as PageRank does). `spmm` is the same over a
 width-d matrix, row by row.
@@ -305,16 +310,16 @@ intermediates transient, and persists only `out`.
 
 | Function | Computes | Returns |
 |---|---|---|
-| `pagerank(graph, out, damping := 0.85, tol := 1e-6, max_iter := 100, seed := NULL, rels, weighted)` | PageRank as NetworkX computes it; `seed` (a vector) personalises it; `out` sums to 1 | iterations |
+| `pagerank(graph, out, damping := 0.85, tol := 1e-6, max_iter := 100, seed := NULL, rels, weighted, per_relation := false)` | PageRank as NetworkX computes it; `seed` (a vector) personalises it; `out` sums to 1 | iterations |
 | `components_vector(graph, out, rels)` | each node's component, as the minimum dense id in it (min-label propagation, both directions) | iterations |
 | `label_propagation(graph, out, seed := NULL, max_iter := 100, mask := NULL, rels)` | min-label propagation from `seed` labels, restricted to `mask` | iterations |
-| `sssp_vector(graph, out, source, rels, weighted, max_iter)` | distance from `source` (Bellman-Ford); unreachable is `Infinity`; a negative cycle reachable from `source` is an error (22023) | iterations |
+| `sssp_vector(graph, out, source, rels, weighted, max_iter, per_relation := false)` | distance from `source` (Bellman-Ford); unreachable is `Infinity`; a negative cycle reachable from `source` is an error (22023) | iterations |
 | `degree_vector(graph, out, direction := 'out', rels)` | distinct-neighbour degree | vector id |
 | `aggregate_neighbours(graph, x, out, agg := 'mean', hops := 1, rels, direction := 'out')` | `mean`, `sum` or `max` of neighbours' rows of matrix `x` (a "one-layer GNN") | void |
 | `triangles(graph, out, rels := NULL, persist := true)` | per-node triangle count in the undirected simple graph | vector id |
-| `eigenvector_centrality(graph, out, tol := 1e-6, max_iter := 100, rels, weighted)` | eigenvector centrality as NetworkX computes it (in-edges, unit L2 norm) | iterations |
-| `katz_centrality(graph, out, alpha := 0.1, beta := 1.0, seed := NULL, normalized := true, tol := 1e-6, max_iter := 1000, rels, weighted)` | Katz centrality as NetworkX computes it; `seed` (a vector) makes β per node: `beta × seed` | iterations |
-| `hits(graph, hubs, authorities, tol := 1e-8, max_iter := 100, normalized := true, rels, weighted)` | HITS hub and authority scores as NetworkX computes them, into two vectors | iterations |
+| `eigenvector_centrality(graph, out, tol := 1e-6, max_iter := 100, rels, weighted, per_relation := false)` | eigenvector centrality as NetworkX computes it (in-edges, unit L2 norm) | iterations |
+| `katz_centrality(graph, out, alpha := 0.1, beta := 1.0, seed := NULL, normalized := true, tol := 1e-6, max_iter := 1000, rels, weighted, per_relation := false)` | Katz centrality as NetworkX computes it; `seed` (a vector) makes β per node: `beta × seed` | iterations |
+| `hits(graph, hubs, authorities, tol := 1e-8, max_iter := 100, normalized := true, rels, weighted, per_relation := false)` | HITS hub and authority scores as NetworkX computes them, into two vectors | iterations |
 | `clustering(graph, out, rels)` | local clustering coefficient of the undirected unweighted graph, as `nx.clustering` | void |
 | `label_propagation_majority(graph, out, seed := NULL, max_iter := 100, rels)` | majority-vote label propagation: synchronous, smallest label on a tie | iterations |
 | `core_number(graph, out, rels := NULL, persist := true)` | each node's k-core number in the undirected simple graph | the degeneracy |
@@ -331,7 +336,7 @@ and the structural kernels are native kernels rather than PL/pgSQL
 The centralities follow NetworkX exactly: the same start, iteration,
 normalisation and stopping rule, so with the same `tol` and `max_iter` they
 stop at the same iteration and agree to rounding (tested on random graphs).
-`weighted` follows `spmv`: NULL reads the weights if the graph has them
+`weighted` and `per_relation` follow `spmv`: NULL reads the weights if the graph has them
 (NetworkX's `weight=None` default for eigenvector and Katz centrality is
 `weighted := false` here). Where NetworkX raises
 `PowerIterationFailedConvergence`, these write the last iterate and raise a
