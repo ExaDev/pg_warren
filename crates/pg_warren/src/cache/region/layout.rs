@@ -437,7 +437,7 @@ mod tests {
     fn an_array_with_two_entries_is_refused() {
         let mut twice = arrays();
         twice.push(twice[1]);
-        assert_eq!(RegionLayout::plan(7, &twice), Err(RegionError::Entry { index: 6 }));
+        assert_eq!(RegionLayout::plan(7, &twice), Err(RegionError::Entry { index: 7 }));
         let layout = RegionLayout::plan(7, &arrays()).unwrap();
         let mut region = vec![0u8; layout.len()];
         layout.write_header(&mut region);
