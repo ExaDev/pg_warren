@@ -1,0 +1,8 @@
+-- pg_warren @START@ -> @END@ (DESIGN.md §13; CONTRIBUTING.md "Releases and
+-- upgrades"). Hand-maintained: every schema change made after @START@ is
+-- mirrored here in the same commit, and test/upgrade.py checks that
+-- ALTER EXTENSION pg_warren UPDATE from @START@ yields the catalog of a fresh
+-- @END@ install. In a trusted install it runs as the bootstrap superuser
+-- (DESIGN.md §7): create only in schema warren, schema-qualify, and use only
+-- exact-match pg_catalog operators and functions in what runs here.
+\echo Use "ALTER EXTENSION pg_warren UPDATE TO '@END@'" to load this file. \quit

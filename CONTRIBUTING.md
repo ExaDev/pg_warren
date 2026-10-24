@@ -127,7 +127,8 @@ pip install -r bench/requirements.txt      # numpy, networkx, scipy, pytest (pin
 ```
 
 ```sh
-# Generator, harness and oracle unit tests (no Postgres needed)
+# Generator, harness, oracle and release-tooling (release/) unit tests
+# (no Postgres needed; release/tests clones this repository's history)
 pytest
 
 # SQL tests in test/sql/: installs pg_warren (cargo pgrx install, debug) and
@@ -227,16 +228,81 @@ format. To benchmark a new function, add a workload with `requires` to
   loaded at once, but the catalog (new columns, functions, storage) only
   changes with the update, so calls in between can fail. Release notes
   (CHANGELOG.md) say so for every release with a schema change.
-- To release: finalise CHANGELOG.md (and README's Status) in a commit
-  that is otherwise the version in development; that commit gets the tag
-  `vX.Y.Z`. Then, in one commit: add the version's line to
-  `sql/released.sha256` (`cd sql && sha256sum pg_warren--X.Y.Z.sql >>
-  released.sha256`), record the tagged commit in `sql/released.commits`
-  (`echo "$(git rev-parse vX.Y.Z^{commit})  X.Y.Z" >> sql/released.commits`),
-  bump the workspace version, regenerate its install
-  script (`sql/schema-drift.sh --update`) and add the header-only upgrade
-  script `sql/pg_warren--X.Y.Z--<next>.sql`. In the other order the tagged
-  commit fails `schema-drift.sh` (its version would already be released).
+- A release is two commits, made by `release/prepare.py X.Y.Z NEXT`
+  (see its docstring): **the commit to tag** `vX.Y.Z`, `release: X.Y.Z`,
+  which dates CHANGELOG's section in development (`--title` names it) and
+  points README's install at `vX.Y.Z` after `sql/schema-drift.sh` passes;
+  then **the freeze commit**, `release: freeze X.Y.Z, develop NEXT`, which
+  adds the install script's sha256 to `sql/released.sha256`, records the
+  commit to tag in `sql/released.commits`, bumps the workspace version
+  (`Cargo.toml`, `Cargo.lock`), generates NEXT's install script
+  (`sql/schema-drift.sh --update`), adds the header-only
+  `sql/pg_warren--X.Y.Z--NEXT.sql` and opens CHANGELOG's NEXT section. In
+  the other order the tagged commit would fail `schema-drift.sh` (its
+  version would already be released). `test/upgrade.py` reads the releases
+  from those two files, so it needs no edit. The script refuses a dirty
+  tree, a released or tagged version and one that is not in development;
+  run again, it changes nothing, and after a failed freeze it resumes.
+- **To release** (DESIGN.md §13, M11 "Distribution"):
+  1. Merge what a person writes first, in an ordinary PR: CHANGELOG's
+     section as release notes, README's Status (the release as released,
+     NEXT as in development) and DESIGN §13's done list. The release
+     commits change none of it.
+  2. Run the **Release (prepare)** workflow from main (Actions → Release
+     (prepare) → Run workflow) with the version, and optionally the next
+     version (default `X.(Y+1).0`) and the release's name. Its first job
+     runs `release/prepare.py` on `release-X.Y.Z` with a read-only token
+     and hands the two commits on as a git bundle; its second job, which
+     runs no repository code, checks the bundle is exactly those two
+     commits on the dispatched main commit, touching only the files a
+     release touches and only as `release/prepare.py` does (CHANGELOG's
+     headings, README's install line, the workspace packages' version
+     lines, the frozen script's sha256, the commit to tag, the upgrade
+     script's header byte for byte), pushes the branch and dispatches CI
+     on it, Miri and
+     `test/upgrade.py` included (a dispatch made with `GITHUB_TOKEN` starts
+     a run, and its checks show on the PR).
+  3. Open the release PR yourself from the compare link in the run's
+     summary: title `release: X.Y.Z`, body CHANGELOG's section (also in
+     the summary). The workflow does not open it: a token that may open
+     PRs could also approve them. Review the PR and its CI. The review
+     must cover `sql/pg_warren--NEXT.sql`, which pgrx generates and no
+     check can compare line by line (it should hold the same entities as
+     `sql/pg_warren--X.Y.Z.sql`, in pgrx's order; CI's drift check
+     regenerates it), and `Cargo.toml` and `Cargo.lock`. To change it,
+     close it, delete the branch, fix main and run the workflow again: a
+     commit pushed on top would not be in the tagged commit.
+  4. **Merge it with a merge commit**, never a squash or a rebase: the
+     recorded commit to tag must be in main's history.
+  5. The merge changes `sql/released.commits`, which starts **Release
+     (publish)**. Its first job verifies every frozen install script and
+     that no version or commit is recorded twice, and shows
+     `vX.Y.Z → <commit>` and the notes in its summary; the publish job,
+     named after both, waits for a reviewer of the `release` environment.
+     Check that the run was started by the release PR's merge commit and
+     that the commit shown is the PR's `release: X.Y.Z` commit, and
+     approve. Both jobs read the commit that started the run (`github.sha`),
+     so what is shown is what is tagged. It
+     then pushes the annotated tag `vX.Y.Z` with the environment's deploy
+     key and creates the GitHub Release with CHANGELOG's section as its
+     notes. A re-run succeeds if the tag is already on the recorded commit
+     and fails if it is on another; run it by hand (with a version, or
+     none for the latest) to publish again.
+- **Manual fallback**, without the workflows: on a branch from main,
+  `release/prepare.py X.Y.Z NEXT --title "..."` (it needs cargo-pgrx
+  initialised for `$PG`, default pg16), push it and open the PR, run
+  `test/upgrade.py` and Miri (`cargo +$MIRI_NIGHTLY miri test -p
+  warren-core`) on it, and merge with a merge commit. Release (publish)
+  still runs on that merge; if it cannot, an admin, on an up-to-date
+  main: `release/publish.py verify && release/publish.py tag X.Y.Z &&
+  git push origin vX.Y.Z`, then `release/changelog.py notes X.Y.Z` as the
+  Release's notes (`gh release create vX.Y.Z --verify-tag --notes-file`).
+  Only the deploy key and admins can push a `v*` tag (below).
+- **Residual risk**: the tag ruleset protects tags, not GitHub Releases.
+  Anyone with write access can still edit or delete a Release's notes and
+  assets, or create a draft Release, on an existing tag; the tag itself,
+  and so the released source, cannot be moved. Check a Release against
+  CHANGELOG.md and its tag if in doubt.
 - pg_warren is a **trusted** extension, so a non-superuser's `CREATE` or
   `ALTER EXTENSION` runs every install and upgrade script as the bootstrap
   superuser. Scripts create objects only in schema `warren`, schema-qualify
@@ -249,6 +315,58 @@ test/upgrade.py --pg-config "$(command -v pg_config)"   # builds each release fr
 test/upgrade.py --no-install --trusted   # the same, installed and updated by a non-superuser
 test/dump.py --pg-config "$(command -v pg_config)"   # pg_dump and restore of graphs (plain, custom, trusted)
 ```
+
+### Release settings (owner setup)
+
+Set once in the repository's settings; the workflows assume them.
+
+1. **Deploy key for tags.** Generate a key pair used for nothing else:
+   `ssh-keygen -t ed25519 -N "" -C "pg_warren release tags" -f
+   release_deploy_key`. In Settings → Deploy keys → Add deploy key, add
+   `release_deploy_key.pub` with the title `release tags` and tick
+   **Allow write access**. It must be the repository's **only deploy key
+   with write access**: the ruleset's *Deploy keys* bypass (step 3) covers
+   every write deploy key, so remove write access from any other, or
+   remove it.
+2. **Environment `release`** (Settings → Environments → New environment):
+   *Required reviewers*: the people who may publish a release (with
+   *Prevent self-review* if more than one); *Deployment branches and
+   tags*: *Selected branches and tags*, with the branch rule `main`;
+   *Environment secrets*: add `RELEASE_DEPLOY_KEY` with the whole private
+   key file `release_deploy_key`. Then delete both key files locally. The
+   secret reaches a job only after a reviewer approves it, and only on
+   `main`. Approve only a publish run whose triggering commit is the
+   release PR's merge commit (the run's page shows the commit, and the
+   verify job's summary `vX.Y.Z → <commit>`); reject any other.
+3. **Tag ruleset for `v*`** (Settings → Rules → Rulesets → New ruleset →
+   New tag ruleset): enforcement *Active*; target tags matching the
+   pattern `v*`; rules *Restrict creations*, *Restrict updates* and
+   *Restrict deletions*; bypass list: **Deploy keys** ("Always allow") and
+   *Repository admin* (for the manual fallback). Do not add the GitHub
+   Actions app: any branch workflow with `contents: write` pushes as it.
+   If your plan's ruleset bypass list does not offer *Deploy keys*, use a
+   GitHub App of your own instead: create it with *Contents: read and
+   write* on this repository only, add it as the bypass, keep its app id
+   and private key as secrets of the `release` environment, and have the
+   publish job push the tag with its installation token
+   (`actions/create-github-app-token`, pinned by commit) instead of the
+   deploy key.
+4. **Actions → General → Workflow permissions**: keep *Read repository
+   contents and packages permissions* (each job asks for what it needs),
+   and leave **Allow GitHub Actions to create and approve pull requests**
+   *unticked*: the release PR is opened by a person.
+5. **Protect `main`** (a branch ruleset or classic protection): require
+   a pull request (and status checks if wanted); block force-pushes and
+   deletions. This also keeps the deploy key, which can write, from
+   pushing to `main`: a direct push is refused. If anyone other than the
+   owner has write access or can merge, also require one approval and
+   **approval of the most recent reviewable push**. (While every PR is
+   opened and merged under the owner's account, a required approval
+   would block every merge, since GitHub does not let an author approve
+   their own PR.) A dispatched CI run's checks satisfy required status
+   checks on a release PR: they have the same names as a
+   `pull_request` run's. Keep *Allow merge commits* enabled (Settings →
+   General → Pull requests): release PRs are merged with one.
 
 ## Docker
 

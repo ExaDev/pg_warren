@@ -1,0 +1,129 @@
+name: Release (publish)
+
+# Publishes a release once its release PR has merged: a push to main that
+# changes sql/released.commits, which only a release's freeze commit does
+# (and so also the manual fallback, CONTRIBUTING.md "Releases and
+# upgrades"). The verify job shows "vX.Y.Z → <commit>" and the release's
+# notes before the `release` environment's gate; after its reviewers
+# approve, the publish job pushes the annotated tag vX.Y.Z over SSH with the
+# environment's deploy key (the only bypass of the v* tag ruleset besides
+# admins) and creates the GitHub Release with CHANGELOG's section as its
+# notes. A re-run succeeds once the tag is on the recorded commit, and fails
+# if a tag of that name is on any other. workflow_dispatch publishes a given
+# release (or the latest) again.
+#
+# Both jobs check out the same commit, github.sha: the push (or dispatch)
+# that started the run. What the approver sees, "vX.Y.Z → <commit>" and the
+# notes, is read from that commit, and the publish job tags from it; a
+# later push to main starts a run of its own.
+
+on:
+  push:
+    branches: [main]
+    paths: [sql/released.commits]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The release to publish, X.Y.Z (default the last in sql/released.commits)
+        required: false
+        type: string
+
+concurrency:
+  group: release-publish
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  verify:
+    name: Verify the frozen release
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      commit: ${{ steps.release.outputs.commit }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Every frozen install script matches sql/released.sha256, each release recorded once
+        run: python3 release/publish.py verify
+      - name: The release to publish, its commit and its notes
+        id: release
+        env:
+          REQUESTED: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          version="${REQUESTED:-$(python3 release/publish.py latest)}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must be X.Y.Z, not '$version'"
+            exit 1
+          fi
+          commit="$(python3 release/publish.py commit "$version")"
+          {
+            echo "## v$version → $commit"
+            echo
+            echo "Approving the \`release\` environment tags $commit as v$version and publishes these notes:"
+            echo
+            python3 release/changelog.py notes "$version"
+          } >>"$GITHUB_STEP_SUMMARY"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "commit=$commit" >>"$GITHUB_OUTPUT"
+
+  publish:
+    name: Tag v${{ needs.verify.outputs.version }} → ${{ needs.verify.outputs.commit }}
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+      COMMIT: ${{ needs.verify.outputs.commit }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # Every branch and tag: the recorded commit's history, and any
+          # tag v$VERSION already pushed.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Every frozen install script matches sql/released.sha256, each release recorded once
+        run: python3 release/publish.py verify
+      - name: Tag ${{ env.COMMIT }} v${{ env.VERSION }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python3 release/publish.py tag "$VERSION"
+      - name: Push v${{ env.VERSION }} with the release deploy key
+        env:
+          DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DEPLOY_KEY" ]]; then
+            echo "::error::the release environment has no RELEASE_DEPLOY_KEY secret (CONTRIBUTING.md, owner setup)"
+            exit 1
+          fi
+          key="$RUNNER_TEMP/release_deploy_key"
+          hosts="$RUNNER_TEMP/known_hosts"
+          trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s\n' "$DEPLOY_KEY" >"$key")
+          # GitHub's published SSH host key (docs: GitHub's SSH key fingerprints).
+          echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" >"$hosts"
+          GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$hosts" \
+            git push "git@github.com:$GITHUB_REPOSITORY.git" "refs/tags/v$VERSION:refs/tags/v$VERSION"
+      - name: GitHub Release v${{ env.VERSION }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "GitHub Release v$VERSION already exists"
+            exit 0
+          fi
+          python3 release/changelog.py notes "$VERSION" >"$RUNNER_TEMP/notes.md"
+          gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "pg_warren $VERSION" --notes-file "$RUNNER_TEMP/notes.md"

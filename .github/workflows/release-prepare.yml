@@ -1,0 +1,244 @@
+name: Release (prepare)
+
+# Prepares release X.Y.Z on a branch release-X.Y.Z (release/prepare.py: the
+# commit to tag, then the freeze commit) and dispatches CI on it.
+# CONTRIBUTING.md, "Releases and upgrades".
+#
+# Two jobs, so that no write token is near the build. `prepare` runs the
+# repository's code (cargo, build scripts, cargo-pgrx) with a read-only
+# token that is not persisted, and hands over the two commits as a git
+# bundle. `publish-branch` runs none of it: it checks the bundle is exactly
+# those two commits on the dispatched main commit, touching only the files
+# a release touches, then pushes the branch and dispatches ci.yml, with the
+# token only in those two steps.
+#
+# A person opens the release PR from the compare link in the run's summary
+# (GITHUB_TOKEN may not open PRs here). A workflow_dispatch made with
+# GITHUB_TOKEN does start a run, so ci.yml runs on the branch's head and its
+# checks show on the PR, under the names a pull_request run's have; it is
+# not a pull_request event, so it includes Miri, and every pgrx-test job
+# runs test/upgrade.py. Later pushes to the branch start ci.yml's
+# pull_request run, which runs Miri for release-* branches too.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The release, X.Y.Z (the version in development)
+        required: true
+        type: string
+      next:
+        description: The version to develop next (default X.(Y+1).0)
+        required: false
+        type: string
+      title:
+        description: The release's name in CHANGELOG's heading (optional)
+        required: false
+        type: string
+
+concurrency:
+  group: release-prepare
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  PGRX_VERSION: 0.19.3
+
+jobs:
+  prepare:
+    name: Prepare release ${{ inputs.version }} (read-only)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      next: ${{ steps.release.outputs.next }}
+    env:
+      VERSION: ${{ inputs.version }}
+      NEXT_VERSION: ${{ inputs.next }}
+      TITLE: ${{ inputs.title }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # released.commits and the drift check resolve every release's commit.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: The release branch, and the next version
+        id: release
+        run: |
+          set -euo pipefail
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must be X.Y.Z, not '$VERSION'"
+            exit 1
+          fi
+          IFS=. read -r major minor _ <<<"$VERSION"
+          next="${NEXT_VERSION:-$major.$((minor + 1)).0}"
+          if ! [[ "$next" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::next must be X.Y.Z, not '$next'"
+            exit 1
+          fi
+          if git ls-remote --exit-code --heads origin "release-$VERSION" >/dev/null; then
+            echo "::error::release-$VERSION already exists: delete the branch (and close any PR) to prepare $VERSION again"
+            exit 1
+          fi
+          echo "next=$next" >>"$GITHUB_OUTPUT"
+      - name: Install pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: ./.github/actions/setup-postgres
+        # A stalled PGDG mirror once held a job here for hours; fail and re-run instead.
+        timeout-minutes: 30
+        with:
+          pg-major: "16"
+      - name: Install cargo-pgrx
+        run: cargo install cargo-pgrx --version "$PGRX_VERSION" --locked
+      - name: cargo pgrx init
+        run: cargo pgrx init --pg16 "$PG_CONFIG"
+      - name: release/prepare.py ${{ inputs.version }}
+        env:
+          NEXT: ${{ steps.release.outputs.next }}
+          PG: pg16
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "release-$VERSION"
+          args=("$VERSION" "$NEXT")
+          if [[ -n "$TITLE" ]]; then args+=(--title "$TITLE"); fi
+          python3 release/prepare.py "${args[@]}"
+          git bundle create "$RUNNER_TEMP/release.bundle" "$GITHUB_SHA..release-$VERSION"
+          {
+            echo "## release-$VERSION: CHANGELOG's $VERSION section (the PR body)"
+            echo
+            python3 release/changelog.py notes "$VERSION"
+          } >>"$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-bundle
+          path: ${{ runner.temp }}/release.bundle
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-branch:
+    name: Push release-${{ inputs.version }} and dispatch CI
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    env:
+      VERSION: ${{ inputs.version }}
+      NEXT: ${{ needs.prepare.outputs.next }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-bundle
+          path: ${{ runner.temp }}/bundle
+      - name: The bundle is the release's two commits on ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          branch="release-$VERSION"
+          bundle="$RUNNER_TEMP/bundle/release.bundle"
+          git bundle verify "$bundle"
+          git fetch --no-tags "$bundle" "refs/heads/$branch:refs/heads/$branch"
+          fail() { echo "::error::$*"; exit 1; }
+          [[ "$(git rev-list --count "$GITHUB_SHA..$branch")" == 2 ]] || fail "$branch is not two commits on $GITHUB_SHA"
+          [[ -z "$(git rev-list --merges "$GITHUB_SHA..$branch")" ]] || fail "$branch has a merge commit"
+          tagged="$(git rev-parse "$branch~1")"
+          [[ "$(git rev-parse "$branch~2")" == "$GITHUB_SHA" ]] || fail "$branch does not start at $GITHUB_SHA"
+          [[ "$(git log -1 --format=%s "$tagged")" == "release: $VERSION" ]] || fail "unexpected subject of $tagged"
+          [[ "$(git log -1 --format=%s "$branch")" == "release: freeze $VERSION, develop $NEXT" ]] \
+            || fail "unexpected subject of the freeze commit"
+          # A file's changed lines, without the diff's headers: everything
+          # before a file's first hunk is a header, everything after is
+          # content, whatever it starts with (SQL comments start with "--").
+          changes() {
+            git diff -U0 --no-color --no-renames "$1" "$2" -- "$3" \
+              | awk '/^diff --git /{header=1; next} /^@@ /{header=0; next} !header'
+          }
+          expect() {
+            diff <(git diff --no-renames --name-status "$1" "$2" | sort) <(printf '%s\n' "${@:3}" | sort) \
+              || fail "$2 changes other files than a release does"
+          }
+          same() { diff <(printf '%s\n' "$1") <(printf '%s\n' "$2") >/dev/null || fail "$3"; }
+          # The commit to tag: CHANGELOG's heading dated, and README's install
+          # line at v$VERSION unless it already was (release/prepare.py).
+          if git diff --quiet "$GITHUB_SHA" "$tagged" -- README.md; then
+            expect "$GITHUB_SHA" "$tagged" "M	CHANGELOG.md"
+          else
+            expect "$GITHUB_SHA" "$tagged" "M	CHANGELOG.md" "M	README.md"
+            readme="$(changes "$GITHUB_SHA" "$tagged" README.md)"
+            [[ "$readme" =~ ^-git\ checkout\ v[0-9]+\.[0-9]+\.[0-9]+(\ \ \ \#\ the\ latest\ release[^$'\n']*)$'\n'\+git\ checkout\ v"$VERSION"(.*)$ ]] \
+              && [[ "${BASH_REMATCH[1]}" == "${BASH_REMATCH[2]}" ]] \
+              || fail "README.md: the commit to tag changes more than its install line"
+          fi
+          heading="$(changes "$GITHUB_SHA" "$tagged" CHANGELOG.md)"
+          [[ "$heading" =~ ^-\#\#\ "$VERSION"\ —\ in\ development$'\n'\+\#\#\ "$VERSION"(\ —\ [^$'\n']+)?\ \([0-9]{4}-[0-9]{2}-[0-9]{2}\)$ ]] \
+            || fail "CHANGELOG.md: the commit to tag changes more than $VERSION's heading"
+          # The freeze commit.
+          expect "$tagged" "$branch" "M	CHANGELOG.md" "M	Cargo.lock" "M	Cargo.toml" \
+            "A	sql/pg_warren--$NEXT.sql" "A	sql/pg_warren--$VERSION--$NEXT.sql" \
+            "M	sql/released.commits" "M	sql/released.sha256"
+          same "$(changes "$tagged" "$branch" CHANGELOG.md | sort)" "$(printf '+\n+## %s — in development' "$NEXT")" \
+            "CHANGELOG.md: the freeze commit changes more than opening $NEXT's section"
+          same "$(changes "$tagged" "$branch" Cargo.toml)" "$(printf -- '-version = "%s"\n+version = "%s"' "$VERSION" "$NEXT")" \
+            "Cargo.toml: the freeze commit changes more than the workspace version"
+          # Cargo.lock: only version lines, and only the workspace's own
+          # packages (those without a source), each from $VERSION to $NEXT.
+          lock="$(changes "$tagged" "$branch" Cargo.lock)"
+          if grep -qvxF -e "-version = \"$VERSION\"" -e "+version = \"$NEXT\"" <<<"$lock"; then
+            fail "Cargo.lock: the freeze commit changes more than version lines"
+          fi
+          packages() {
+            git show "$1:Cargo.lock" | awk '/^\[\[package\]\]$/{if (n) print n, v, s; n = v = s = ""}
+              /^name = /{n = $3} /^version = /{v = $3} /^source = /{s = $3} END{if (n) print n, v, s}'
+          }
+          moved="$(diff <(packages "$tagged") <(packages "$branch") | grep '^[<>]' || true)"
+          members="$(sed -n 's/^< \("[^"]*"\) "'"$VERSION"'" $/\1/p' <<<"$moved" | sort)"
+          [[ -n "$members" ]] || fail "Cargo.lock: no workspace package moves to $NEXT"
+          expected="$(awk -v from="$VERSION" -v to="$NEXT" \
+            '{print "< " $0 " \"" from "\" "; print "> " $0 " \"" to "\" "}' <<<"$members" | sort)"
+          same "$(sort <<<"$moved")" "$expected" \
+            "Cargo.lock: the freeze commit moves more than the workspace's packages from $VERSION to $NEXT"
+          same "$(wc -l <<<"$members") $(wc -l <<<"$members")" "$(grep -c '^-' <<<"$lock") $(grep -c '^+' <<<"$lock")" \
+            "Cargo.lock: not one version line per workspace package"
+          frozen="$(git show "$branch:sql/pg_warren--$VERSION.sql" | sha256sum | cut -d' ' -f1)"
+          same "$(changes "$tagged" "$branch" sql/released.sha256)" "+$frozen  pg_warren--$VERSION.sql" \
+            "sql/released.sha256 does not add exactly the sha256 of sql/pg_warren--$VERSION.sql"
+          same "$(changes "$tagged" "$branch" sql/released.commits)" "+$tagged  $VERSION" \
+            "sql/released.commits does not record $tagged for $VERSION"
+          # The upgrade script is the header main's release/prepare.py writes,
+          # read as data, byte for byte.
+          cmp <(git show "$branch:sql/pg_warren--$VERSION--$NEXT.sql") \
+            <(sed -e "s/@START@/$VERSION/g" -e "s/@END@/$NEXT/g" release/upgrade-header.sql.in) \
+            || fail "sql/pg_warren--$VERSION--$NEXT.sql is not the header-only upgrade script"
+          # sql/pg_warren--$NEXT.sql is generated by pgrx and cannot be checked
+          # here: the release PR's review covers it (CONTRIBUTING.md).
+      - name: Push release-${{ inputs.version }}
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          auth="$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+            push origin "refs/heads/release-$VERSION:refs/heads/release-$VERSION"
+      - name: Dispatch CI on release-${{ inputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "release-$VERSION"
+          compare="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/main...release-$VERSION?expand=1"
+          {
+            echo "Prepared $VERSION on \`release-$VERSION\`; CI (with Miri and test/upgrade.py) is dispatched on it."
+            echo
+            echo "Open the release PR: $compare"
+            echo "Title it \`release: $VERSION\`, use the prepare job's summary (CHANGELOG's section) as its body,"
+            echo "and merge it with a merge commit. Release (publish) then tags v$VERSION after approval."
+          } >>"$GITHUB_STEP_SUMMARY"
