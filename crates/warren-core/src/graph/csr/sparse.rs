@@ -8,9 +8,11 @@
 use super::TargetWidth;
 
 /// Sparse offsets are stored when they take at most this share of the
-/// bytes of dense ones: below it a row lookup's binary search costs more
-/// than the memory saved is worth (measured in DESIGN.md §5.3).
-const SPARSE_SHARE: (u64, u64) = (1, 2);
+/// bytes of dense ones, so where a relation's rows fill at most about a
+/// sixth of the id space (an eighth at `u64` targets): past that a row
+/// lookup's binary search costs more than the few bytes it saves are worth
+/// (measured in DESIGN.md §5.3).
+const SPARSE_SHARE: (u64, u64) = (1, 4);
 
 /// The bytes of sparse offsets for `stored_rows` rows: a row id of the
 /// target width and an offset per row, and the end offset.
@@ -58,16 +60,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn offsets_are_sparse_where_they_take_at_most_half_the_bytes_of_dense_ones() {
+    fn offsets_are_sparse_where_they_take_at_most_a_quarter_of_the_bytes_of_dense_ones() {
         // 1,000 nodes: dense offsets take 8,008 bytes; sparse ones 12 per
         // row at u32, 16 at u64, and 8.
         assert!(stores_sparse(0, 1000, TargetWidth::U32));
-        assert!(stores_sparse(333, 1000, TargetWidth::U32));
-        assert!(!stores_sparse(334, 1000, TargetWidth::U32));
-        assert!(stores_sparse(249, 1000, TargetWidth::U64));
-        assert!(!stores_sparse(250, 1000, TargetWidth::U64));
+        assert!(stores_sparse(166, 1000, TargetWidth::U32));
+        assert!(!stores_sparse(167, 1000, TargetWidth::U32));
+        assert!(stores_sparse(124, 1000, TargetWidth::U64));
+        assert!(!stores_sparse(125, 1000, TargetWidth::U64));
         assert_eq!(offsets_bytes(2, 1000, TargetWidth::U32), 2 * 12 + 8);
-        assert_eq!(offsets_bytes(334, 1000, TargetWidth::U32), 8008);
+        assert_eq!(offsets_bytes(167, 1000, TargetWidth::U32), 8008);
         // An empty id space's one offset is the same either way.
         assert_eq!(offsets_bytes(0, 0, TargetWidth::U32), 8);
     }
