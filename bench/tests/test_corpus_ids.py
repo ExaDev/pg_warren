@@ -44,3 +44,13 @@ def test_the_report_compares_the_id_bytes_with_and_without_front_coding():
     assert report["id_map"]["id_offsets"] == 8 * 3
     assert report["id_map"]["id_order"] == 4 * 2
     assert report["front_coded"]["ratio"] == pytest.approx(42 / report["front_coded"]["bytes"])
+
+
+def test_the_front_coded_map_replaces_bytes_and_offsets_and_keeps_two_permutations():
+    # Front coding replaces id_bytes and the u64 id_offsets with the coded
+    # blocks and a u64 offset a block; it keeps id_order (u32 a node) and
+    # adds the dense id → sorted rank permutation (u32 a node).
+    report = ids.report(["https://example.org/a", "https://example.org/b"], nodes=2)
+    coded = report["front_coded"]
+    assert coded["map_total"] == coded["bytes"] + 8 * 1 + 4 * 2 + 4 * 2
+    assert coded["map_ratio"] == pytest.approx(report["id_map"]["total"] / coded["map_total"])

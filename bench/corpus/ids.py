@@ -5,9 +5,10 @@ the id map's three arrays as a text version stores them (`id_bytes`,
 coding would store instead: the ids sorted bytewise in blocks of 16, each
 block's first id whole and every other as the length of the prefix it
 shares with its predecessor, its suffix's length and the suffix (varints),
-plus a u64 offset a block. Front coding also needs a permutation from
-dense id to sorted rank (`id_order`'s inverse, u32 a node), not counted
-in its bytes."""
+plus a u64 offset a block. A front-coded map replaces `id_bytes` and
+`id_offsets` with those, keeps `id_order` and adds a permutation from
+dense id to sorted rank (u32 a node): `map_total` against the id map's
+`total`."""
 
 import math
 from collections import Counter
@@ -61,7 +62,10 @@ def report(ids, nodes):
     found = distribution(ids)
     coded = front_coding(ids)
     id_map = {"id_bytes": found["bytes"], "id_offsets": 8 * (nodes + 1), "id_order": 4 * nodes}
-    return {"distribution": found, "id_map": {**id_map, "total": sum(id_map.values())},
+    total = sum(id_map.values())
+    map_total = coded["bytes"] + coded["offsets_bytes"] + id_map["id_order"] + 4 * nodes
+    return {"distribution": found, "id_map": {**id_map, "total": total},
             "front_coded": {**coded, "ratio": found["bytes"] / coded["bytes"],
                             "ratio_with_offsets": found["bytes"] / (coded["bytes"] + coded["offsets_bytes"]),
-                            "rank_permutation_bytes": 4 * nodes}}
+                            "rank_permutation_bytes": 4 * nodes, "map_total": map_total,
+                            "map_ratio": total / map_total}}
