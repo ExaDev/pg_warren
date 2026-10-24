@@ -64,6 +64,11 @@ fn with_offsets<T: warren_core::graph::Target>(
         weights.extend_from_slice(csr.neighbour_weights(source).unwrap_or_default());
         offsets.push(targets.len() as u64);
     }
+    // Without spare capacity, which `bytes` would count.
+    offsets.shrink_to_fit();
+    rows.shrink_to_fit();
+    targets.shrink_to_fit();
+    weights.shrink_to_fit();
     let weights = csr.is_weighted().then_some(weights);
     match sparse {
         true => Csr::from_sparse_parts(csr.id_space(), rows, offsets, targets, weights),
