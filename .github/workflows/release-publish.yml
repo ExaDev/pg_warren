@@ -19,7 +19,8 @@ name: Release (publish)
 # PGDG), the tarballs, the Docker images and the Homebrew bottle and
 # formula. After approval the publish job, which runs no build code,
 # treats what they built as data: it checks each .deb (release/assets.py:
-# only pg_warren's files and postinst, this release's version), renders the
+# only pg_warren's files, root's and 0644 in 0755 directories, our postinst,
+# control.in's fields, this release's version), renders the
 # formula again keeping only the bottle block, signs SHA256SUMS, attaches
 # them to the GitHub Release, and assembles and signs the apt repository
 # (aptly) from this release's checked packages and earlier releases' that
@@ -305,8 +306,9 @@ jobs:
           assets="$RUNNER_TEMP/assets"
           mkdir -p "$assets"
           # The .deb files as Release assets (GitHub would turn "1~deb12"
-          # into "1.deb12"), each checked: pg_warren's files only, our
-          # postinst, Version $VERSION-1~<distribution>, its own file name.
+          # into "1.deb12"), each checked: pg_warren's files only, with
+          # their modes and owner, our postinst, control.in's fields, Version
+          # $VERSION-1~<distribution>, its own file name.
           for deb in "$artifacts"/debs-*/*.deb; do
             name="$(basename "$deb")"
             cp -- "$deb" "$assets/${name//\~/.}"

@@ -387,9 +387,18 @@ runs no build code, take what they built, **as data**:
   (`release/assets.py check-deb`): its control archive holds only
   `control`, `md5sums` and a `postinst` byte-equal to
   `packaging/debian/pg-warren.postinst.in` as debhelper renders it; its
+  control file has only the fields `dh_gencontrol` writes for
+  `packaging/debian/control.in` (no `Pre-Depends`, `Conflicts`, `Breaks`,
+  `Replaces`, `Provides`, `Essential` or `Protected`), with control.in's
+  values, and `Depends` is `postgresql-NN` and `libc6`/`libgcc-s1` at a
+  minimum version (what `dh_shlibdeps` finds a pgrx library links); its
   files are only `usr/lib/postgresql/NN/lib/pg_warren.so`,
-  `usr/share/postgresql/NN/extension/pg_warren*` and its docs, all regular
-  files; its Version is `X.Y.Z-1~<distribution>` and its file name its own;
+  `usr/share/postgresql/NN/extension/pg_warren*` and its docs, regular
+  files of mode 0644 (as `dh_fixperms` leaves them, the library too), in
+  directories of mode 0755 on those files' paths only, each owned by
+  root:root by name and id (dpkg takes the owner by name where the host
+  knows it); its Version is `X.Y.Z-1~<distribution>` and its file name its
+  own;
 - it renders the formula again from the source tarball
   (`release/homebrew.py`), taking from the bottle job only a bottle block
   of this release's `root_url` and sha256 lines;

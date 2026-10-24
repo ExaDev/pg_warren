@@ -10,9 +10,13 @@ get signed into the apt repository.
 
 A package passes `check-deb` only if its control archive holds `control`,
 `md5sums` and a `postinst` byte-equal to packaging/debian's template as
-debhelper renders it, its files are pg_warren's library, extension files
-and docs, all regular files, and its name, Version and Architecture are
-those of a package of X.Y.Z for a supported major and distribution.
+debhelper renders it; its control file has only the fields
+packaging/debian's control.in gives a binary package, with control.in's
+values, a Depends of postgresql-NN and the C libraries a pgrx library
+links, and the name, Version and Architecture of a package of X.Y.Z for a
+supported major and distribution; and its files are pg_warren's library,
+extension files and docs, regular files of mode 0644, in directories of
+mode 0755 on their paths only, all owned by root.
 """
 
 import hashlib
@@ -26,8 +30,16 @@ from pathlib import Path
 from packages import DISTRIBUTIONS, MAJORS, ROOT
 
 POSTINST = ROOT / "packaging" / "debian" / "pg-warren.postinst.in"
+CONTROL_IN = ROOT / "packaging" / "debian" / "control.in"
 ARCHITECTURES = ("amd64", "arm64")
 CONTROL_MEMBERS = {"control", "md5sums", "postinst"}
+# The fields dh_gencontrol writes for control.in's binary package: those
+# control.in gives it or its source, and those debhelper computes.
+FROM_CONTROL_IN = ("Source", "Maintainer", "Section", "Priority", "Homepage", "Description")
+FIELDS = {"Package", "Version", "Architecture", "Installed-Size", "Depends", *FROM_CONTROL_IN}
+# ${shlibs:Depends} of a pgrx library: libc (with libm) and libgcc_s.
+LIBRARIES = ("libc6", "libgcc-s1")
+ROOT_OWNED = (0, 0, "root", "root")
 DEB_NAME = re.compile(r"postgresql-\d+-pg-warren_\d+\.\d+\.\d+-1\.[a-z0-9.]+_[a-z0-9]+\.deb")
 FINGERPRINT = re.compile(r"`([0-9A-F ]{40,60})` <!-- apt key -->")
 
@@ -53,21 +65,71 @@ def members(deb, part):
     if done.returncode != 0:
         raise AssetError(f"{deb.name} is not a package: {done.stderr.decode().strip()}")
     archive = tarfile.open(fileobj=io.BytesIO(done.stdout))
-    named = ((m.name.removeprefix("./").rstrip("/"), m) for m in archive.getmembers())
-    return {name: (member, archive) for name, member in named if name not in ("", ".")}
+    found = {}
+    for member in archive.getmembers():
+        name = member.name.removeprefix("./").rstrip("/").removeprefix(".")
+        if name in found:
+            raise AssetError(f"{deb.name}: {name or '.'} is in its {part} archive twice")
+        found[name] = (member, archive)
+    return found
 
 
-def fields(control):
-    return dict(line.split(": ", 1) for line in control.splitlines() if ": " in line and not line.startswith(" "))
+def fields(deb, control):
+    """A control file's fields, each value with its continuation lines."""
+    values, name = {}, None
+    for line in control.splitlines():
+        if line.startswith(" ") and name:
+            values[name] += "\n" + line
+            continue
+        name, _, value = line.partition(": ")
+        if name in values:
+            raise AssetError(f"{deb.name}: control gives {name} twice")
+        values[name] = value
+    return values
+
+
+def control_in(major):
+    """control.in's fields for the binary package of `major` as
+    dh_gencontrol writes them: the binary stanza's over the source's."""
+    source, binary = (fields(CONTROL_IN, stanza) for stanza in
+                      CONTROL_IN.read_text().replace("PGVERSION", major).split("\n\n"))
+    return {**source, **binary}
+
+
+def check_depends(deb, depends, major):
+    """Depends as debhelper renders control.in's: postgresql-NN, and the
+    C libraries ${shlibs:Depends} names, at a minimum version."""
+    entries = [entry.strip() for entry in depends.split(",")]
+    libraries = [e for e in entries if e != f"postgresql-{major}"]
+    library = rf"(?:{'|'.join(map(re.escape, LIBRARIES))}) \(>= [0-9][0-9A-Za-z.+~-]*\)"
+    if (len(libraries) != len(entries) - 1 or len({e.partition(" ")[0] for e in libraries}) != len(libraries)
+            or not all(re.fullmatch(library, e) for e in libraries)):
+        raise AssetError(f"{deb.name}: Depends {depends!r} is not postgresql-{major} and {', '.join(LIBRARIES)}")
+
+
+def check_fields(deb, values, major):
+    """Only the fields of control.in's binary package, with its values."""
+    if set(values) != FIELDS:
+        unexpected = sorted(set(values) ^ FIELDS)
+        raise AssetError(f"{deb.name}: control gives or lacks {', '.join(unexpected)}, unlike control.in")
+    expected = control_in(major)
+    for name in FROM_CONTROL_IN:
+        if values[name] != expected[name]:
+            raise AssetError(f"{deb.name}: {name} {values[name]!r} is not control.in's")
+    if not re.fullmatch(r"[0-9]+", values["Installed-Size"]):
+        raise AssetError(f"{deb.name}: Installed-Size {values['Installed-Size']!r} is not a size")
+    check_depends(deb, values["Depends"], major)
 
 
 def check_control(deb, version):
-    control = members(deb, "ctrl")
+    control = {name: found for name, found in members(deb, "ctrl").items() if name}
     names = set(control)
     if names != CONTROL_MEMBERS:
         raise AssetError(f"{deb.name}: control archive holds {sorted(names)}, not {sorted(CONTROL_MEMBERS)}")
+    if not all(member.isreg() for member, _ in control.values()):
+        raise AssetError(f"{deb.name}: its control archive holds other than regular files")
     read = {name: archive.extractfile(member).read() for name, (member, archive) in control.items()}
-    values = fields(read["control"].decode())
+    values = fields(deb, read["control"].decode())
     major = re.fullmatch(r"postgresql-(\d+)-pg-warren", values.get("Package", ""))
     if not major or major.group(1) not in MAJORS:
         raise AssetError(f"{deb.name}: Package {values.get('Package')!r} is not pg_warren's for PG 15-18")
@@ -80,6 +142,7 @@ def check_control(deb, version):
         raise AssetError(f"{deb.name}: the file name is not the package's")
     if read["postinst"] != expected_postinst(major.group(1)):
         raise AssetError(f"{deb.name}: postinst is not packaging/debian's")
+    check_fields(deb, values, major.group(1))
     return values, major.group(1)
 
 
@@ -92,16 +155,34 @@ def allowed(path, major):
             or re.fullmatch(rf"{re.escape(doc)}/[A-Za-z0-9][A-Za-z0-9._-]*", path))
 
 
+def parents(path):
+    """The directories `path` is in, the root ("") included."""
+    parts = path.split("/")
+    return {"/".join(parts[:i]) for i in range(len(parts))}
+
+
 def check_files(deb, major):
-    files = {}
-    for path, (member, _) in members(deb, "fsys").items():
-        if member.isdir():
-            continue
-        if not member.isreg() or member.mode & 0o7000:
-            raise AssetError(f"{deb.name}: {path} is not a regular file without special mode bits")
+    """Regular files of mode 0644 on pg_warren's paths, in directories of
+    mode 0755 on those paths, all owned by root (by name, as dpkg takes the
+    owner by name where the install host knows it, and by id)."""
+    found = members(deb, "fsys")
+    files = {path for path, (member, _) in found.items() if not member.isdir()}
+    for path in files:
+        member = found[path][0]
+        if not member.isreg():
+            raise AssetError(f"{deb.name}: {path} is not a regular file")
         if not allowed(path, major):
             raise AssetError(f"{deb.name}: path {path} is not one of pg_warren's")
-        files[path] = member
+    directories = {parent for path in files for parent in parents(path)}
+    for path, (member, _) in found.items():
+        if member.isdir() and path not in directories:
+            raise AssetError(f"{deb.name}: directory {path} holds none of pg_warren's files")
+        mode = 0o755 if member.isdir() else 0o644
+        if member.mode & 0o7777 != mode:
+            raise AssetError(f"{deb.name}: {path or '.'} has mode {member.mode & 0o7777:04o}, not {mode:04o}")
+        if (member.uid, member.gid, member.uname, member.gname) != ROOT_OWNED:
+            raise AssetError(f"{deb.name}: {path or '.'} is owned by {member.uname or member.uid}:"
+                             f"{member.gname or member.gid}, not root:root")
     for required in (f"usr/lib/postgresql/{major}/lib/pg_warren.so",
                      f"usr/share/postgresql/{major}/extension/pg_warren.control"):
         if required not in files:
