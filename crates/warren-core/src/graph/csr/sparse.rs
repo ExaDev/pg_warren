@@ -109,7 +109,7 @@ mod readers {
         Workers,
     };
     use crate::graph::{
-        CsrLayout, DenseId, Direction, EdgeList, GraphCsr, Membership, RelationDictionary,
+        AnyCsr, CsrLayout, DenseId, Direction, EdgeList, GraphCsr, Membership, RelationDictionary,
         RelationIndex, RelationSelection, Tombstones,
     };
     use crate::interrupts::{Cancellation, Uninterrupted};
@@ -249,11 +249,54 @@ mod readers {
         results
     }
 
+    /// How many of `graph`'s relations' CSRs, forward and reverse, store
+    /// sparse offsets, and how many dense ones.
+    fn layouts(graph: &GraphCsr) -> (usize, usize) {
+        let csrs = graph.relations().iter().flat_map(|r| [Some(r.forward()), r.reverse()]);
+        let sparse: Vec<bool> = csrs
+            .flatten()
+            .map(|csr| match csr {
+                AnyCsr::U32(csr) => csr.is_sparse(),
+                AnyCsr::U64(csr) => csr.is_sparse(),
+            })
+            .collect();
+        let count = sparse.iter().filter(|&&sparse| sparse).count();
+        (count, sparse.len() - count)
+    }
+
+    #[test]
+    fn readers_agree_over_a_mix_of_sparse_and_dense_relations() {
+        // r0 has a row at every node (dense both ways); r1 links 3 nodes
+        // to 3 others (sparse both ways); r2 fans out from node 1 to every
+        // node (sparse forward, dense in reverse).
+        let id_space = 40;
+        let mut dictionary = RelationDictionary::new();
+        let relations: Vec<RelationIndex> =
+            (0..3).map(|r| dictionary.intern(&r.to_string()).unwrap()).collect();
+        let mut edges = EdgeList::new(true);
+        for node in 0..id_space {
+            edges.push(relations[0], node, (node * 7 + 3) % id_space, 1.5).unwrap();
+            edges.push(relations[2], 1, node, 0.25 + node as f64).unwrap();
+        }
+        for (source, target) in [(2, 30), (2, 31), (17, 30), (39, 0)] {
+            edges.push(relations[1], source, target, 2.0).unwrap();
+        }
+        for store_merged in [false, true] {
+            let layout = CsrLayout { build_reverse: true, store_merged };
+            let graph = GraphCsr::build_as(edges.clone(), 3, id_space, layout).unwrap();
+            assert_eq!(layouts(&graph), (3, 3));
+            assert_eq!(read(&graph, &relations), read(&graph.densified(), &relations));
+        }
+    }
+
     proptest! {
         #[test]
         fn readers_return_with_sparse_offsets_what_they_return_with_dense_ones(
             (graph, relations) in graphs(),
         ) {
+            // Several relations over a small id space are mostly sparse;
+            // a case where none is would test dense against dense.
+            prop_assume!(relations.len() == 1 || layouts(&graph).0 > 0);
             let dense = graph.densified();
             let (sparse, dense) = (read(&graph, &relations), read(&dense, &relations));
             for (sparse, dense) in sparse.iter().zip(&dense) {
