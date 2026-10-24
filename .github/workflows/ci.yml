@@ -5,9 +5,14 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Nightly, for Miri (below); the other jobs run too, against that day's
+  # runner image and toolchains.
+  schedule:
+    - cron: "23 2 * * *"
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # By event, so a push to main does not cancel the nightly run.
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -68,9 +73,12 @@ jobs:
     name: warren-core under Miri (pinned nightly)
     # Off the pull-request path: warren-core has no unsafe code, so Miri can
     # only find undefined behaviour in dependencies, and it takes 20+ minutes.
-    # It runs on every push to main, on demand (release-prepare.yml
-    # dispatches CI on each release branch) and on release PRs.
-    if: github.event_name != 'pull_request' || startsWith(github.head_ref, 'release-')
+    # It runs nightly on main, on demand (release-prepare.yml dispatches CI
+    # on each release branch) and on release PRs, not on every push to main:
+    # at an hour a run, a merge would cancel it before it finished.
+    if: >-
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'pull_request' && startsWith(github.head_ref, 'release-'))
     runs-on: ubuntu-latest
     env:
       # Miri is slow: keep property tests small and off the filesystem.

@@ -42,7 +42,7 @@ cargo test -p warren-core --all-targets
 # Tier 2: in-database tests (#[pg_test]) against a real Postgres
 cd crates/pg_warren && cargo pgrx test pg16
 
-# Domain tests under Miri (nightly; CI runs it on pushes to main, not on PRs; DESIGN.md §11)
+# Domain tests under Miri (nightly; CI runs it nightly on main and on release PRs, not on other PRs or pushes; DESIGN.md §11)
 MIRIFLAGS=-Zmiri-disable-isolation PROPTEST_CASES=16 PROPTEST_DISABLE_FAILURE_PERSISTENCE=true cargo +nightly-2026-10-15 miri test -p warren-core
 
 # Segment decoder fuzzing (nightly + `cargo install cargo-fuzz`); fuzz/ is outside the workspace
