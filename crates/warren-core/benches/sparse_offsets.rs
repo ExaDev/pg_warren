@@ -9,6 +9,12 @@
 //! lookup per node, most of them empty rows), `bfs_out` reads only rows
 //! that exist, and `gather_sum` pulls one `f64` per stored row over the
 //! reverse CSR. One thread. Bytes are printed once per graph.
+//!
+//! `sparse_offsets/unmerged/<relations>/<work>/<offsets>`: 1M nodes in
+//! `relations` relations that each store rows from a `1 / (2·relations)`
+//! fill of the nodes, 8 weighted edges a row, without a stored merged CSR,
+//! so all-relations work (`bfs_out`, `bfs_both`, `components`, `spmv`)
+//! merges the relations' rows on the fly (DESIGN.md §5.3).
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use warren_core::compute::{
@@ -20,7 +26,7 @@ use warren_core::graph::{
     RelationDictionary, RelationIndex, RelationSelection,
 };
 use warren_core::interrupts::Uninterrupted;
-use warren_core::traversal::{bfs, Adjacency, Limits};
+use warren_core::traversal::{bfs, components, Adjacency, Limits};
 
 const SIZES: [u64; 2] = [14_500, 1_000_000];
 const FILLS: [f64; 6] = [0.001, 0.01, 0.1, 0.3, 0.6, 1.0];
@@ -149,5 +155,79 @@ fn bench_sparse_offsets(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_sparse_offsets);
+/// `relations` relations over `nodes`, each of rows from a different
+/// `1 / (2·relations)` of the nodes, 8 edges a row to any node, built
+/// without the merged CSR, with every relation's offsets dense or sparse.
+fn unmerged(nodes: u64, relations: u64, sparse: bool) -> Result<GraphCsr, GraphError> {
+    let mut dictionary = RelationDictionary::new();
+    let indexes: Vec<RelationIndex> =
+        (0..relations).map(|r| dictionary.intern(&r.to_string())).collect::<Result<_, _>>()?;
+    let mut state: u64 = 0x2545_f491_4f6c_dd1d;
+    let mut next = move || {
+        state =
+            state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        state >> 33
+    };
+    let rows = nodes / (2 * relations);
+    let mut edges = EdgeList::for_id_space(nodes, true);
+    for (r, &relation) in indexes.iter().enumerate() {
+        for row in 0..rows {
+            let source = (row * 2 * relations + r as u64) % nodes;
+            for _ in 0..DEGREE {
+                edges.push(relation, source, next() % nodes, (next() % 100) as f64 / 10.0)?;
+            }
+        }
+    }
+    let layout = CsrLayout { build_reverse: true, store_merged: false };
+    let built = GraphCsr::build_as(edges, relations as usize, nodes, layout)?;
+    let converted_relations = built
+        .relations()
+        .iter()
+        .map(|relation| {
+            let reverse =
+                relation.reverse().map(|reverse| converted(reverse, sparse)).transpose()?;
+            RelationCsr::new(converted(relation.forward(), sparse)?, reverse)
+        })
+        .collect::<Result<_, _>>()?;
+    GraphCsr::from_parts(nodes, converted_relations, None, 0)
+}
+
+fn bench_unmerged(c: &mut Criterion) {
+    let Ok(workers) = Workers::new(1) else { return };
+    let memory = ComputeMemory::new(u64::MAX);
+    let mut never = Uninterrupted;
+    let mut group = c.benchmark_group("sparse_offsets/unmerged");
+    group.sample_size(10);
+    let nodes = 1_000_000;
+    let vector = |value| Vector::filled(&memory, nodes, 1, value).map(AnyVector::from);
+    let (Ok(x), Ok(mut y)) = (vector(1.0f64), vector(0.0f64)) else { return };
+    let product = Product::new(Semiring::PlusTimes);
+    for relations in [10, 100] {
+        for (name, sparse) in [("dense", false), ("sparse", true)] {
+            let Ok(graph) = unmerged(nodes, relations, sparse) else { continue };
+            let id = |work: &str| format!("{relations}/{work}/{name}");
+            eprintln!(
+                "sparse_offsets/unmerged {relations} relations, {name}: {:.2} MB (forward + reverse)",
+                graph.bytes() as f64 / 1e6
+            );
+            for (work, direction) in [("bfs_out", Direction::Out), ("bfs_both", Direction::Both)] {
+                let Ok(adjacency) = Adjacency::new(&graph, direction, RelationSelection::All)
+                else {
+                    continue;
+                };
+                let start: [DenseId; 1] = [0];
+                group.bench_function(id(work), |b| {
+                    b.iter(|| bfs(&adjacency, &start, None, Limits::default(), &mut never))
+                });
+            }
+            group.bench_function(id("components"), |b| b.iter(|| components(&graph, &mut never)));
+            group.bench_function(id("spmv"), |b| {
+                b.iter(|| spmv(&workers, &memory, &mut never, &graph, &product, &x, &mut y))
+            });
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench_sparse_offsets, bench_unmerged);
 criterion_main!(benches);
