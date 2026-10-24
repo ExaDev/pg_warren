@@ -43,7 +43,7 @@ SELECT assert.equal(shared_segments(:v1), :one, 'v1 is shared again');
 SELECT warren.drop_version('g', :v1);
 SELECT * FROM dblink('c', $$SELECT warren.degree('h', 1::bigint)$$) AS t(degree bigint);
 SELECT * FROM dblink('b', $$SELECT warren.degree('g', 1::bigint)$$) AS t(degree bigint);
-SELECT assert.equal(shared_segments(:v1), 0::bigint, 'a dropped version is evicted');
+SELECT assert.equal(unnamed_shared_bytes(), :unnamed, 'a dropped version is evicted');
 
 -- warren.evict: a role that does not own g evicts no shared version.
 SELECT assert.equal(evicted, 0::bigint, 'c owns nothing of g''s to free')
