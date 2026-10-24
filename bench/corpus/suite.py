@@ -7,6 +7,7 @@ and timed on the §12 matrix. bench/corpus/README.md has the details.
     bench/corpus/suite.py check --tier tiny --pg-config ...   # correctness against NetworkX
     bench/corpus/suite.py time --tier medium --pg-config ... --extension-revision ... --extension-profile release
     bench/corpus/suite.py ids hetionet yago3-10        # text id lengths and front coding
+    bench/corpus/suite.py summary                      # the results as Markdown tables
 
 The cache (`--cache`, default $WARREN_CORPUS_CACHE or /var/tmp/warren-corpus)
 holds the pinned keepset CLI and each dataset's tables; raw downloads are
@@ -23,7 +24,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(HERE.parent), str(HERE.parent.parent / "test")]
 
-from corpus import checks, fetch, ids, keepset, manifest, oracle, performance, tables  # noqa: E402
+from corpus import checks, fetch, ids, keepset, manifest, oracle, performance, summary, tables  # noqa: E402
 from harness.cluster import Cluster  # noqa: E402
 from soak import SETTINGS, hardware, installed_library, provenance  # noqa: E402
 
@@ -127,7 +128,20 @@ def command_time(args, datasets):
     return 0
 
 
-COMMANDS = {"fetch": command_fetch, "check": command_check, "ids": command_ids, "time": command_time}
+def command_summary(args, datasets):
+    def results(directory):
+        found = [directory / f"{d.name}.json" for d in datasets]
+        return [json.loads(path.read_text()) for path in found if path.exists()]
+
+    print(summary.correctness(results(args.results / "correctness")), end="\n\n")
+    timed = results(args.results)
+    print(summary.timings(timed, summary.SECTION_12), end="\n\n")
+    print(summary.timings(timed, summary.LIBRARY))
+    return 0
+
+
+COMMANDS = {"fetch": command_fetch, "check": command_check, "ids": command_ids, "time": command_time,
+            "summary": command_summary}
 
 
 def main(argv):
