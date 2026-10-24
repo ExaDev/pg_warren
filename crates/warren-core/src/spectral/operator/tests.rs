@@ -181,6 +181,20 @@ fn symmetrising_a_graph_whose_reverse_csrs_equal_its_forward_ones_multiplies_onc
 }
 
 #[test]
+fn per_relation_symmetrises_a_symmetric_merged_csr_whose_relations_are_not() {
+    // 0 → 1 in relations 0 and 1, 1 → 0 in relation 0: the merged CSR is
+    // symmetric, but per relation A = [[0, 2], [1, 0]] is not, so
+    // (A + Aᵀ)/2 · e0 = [0, 1.5] with the merged CSR stored or not.
+    let edges: Edges = vec![(0, 0, 1, 1.0), (1, 0, 1, 1.0), (0, 1, 0, 1.0)];
+    for store_merged in [false, true] {
+        let layout = crate::graph::CsrLayout { build_reverse: true, store_merged };
+        let graph = reference::graph_as(2, 2, &edges, false, layout);
+        let matrix = GraphMatrix { per_relation: true, ..GraphMatrix::new(Operator::Adjacency) };
+        assert_eq!(apply(&graph, &matrix, &[1.0, 0.0]).unwrap(), [0.0, 1.5], "{store_merged}");
+    }
+}
+
+#[test]
 fn normalised_operators_need_positive_degrees() {
     let edges = vec![(0, 0, 1, 1.0), (0, 1, 2, -3.0)];
     let graph = reference::graph(3, 1, &edges, true, true);
