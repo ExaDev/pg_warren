@@ -23,6 +23,11 @@ builds in 79 s where 0.5.0's soak took 173 s (under Performance).
 
 ### Upgrading
 
+- **If `pg_warren` is in `shared_preload_libraries`, restart the server**
+  after installing the new build. The postmaster keeps the library it loaded
+  at start, and every backend inherits it, so until a restart the server runs
+  the old code against the updated catalog. Without the preload, new sessions
+  load the new library.
 - **Run `ALTER EXTENSION pg_warren UPDATE;` in every database that has the
   extension**, after installing the new build and before using the new
   version. The new library is loaded at once, but the catalog changes only
