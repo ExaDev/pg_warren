@@ -149,7 +149,12 @@ mod tests {
                 chunk_size: 16,
                 memory_budget: u64::MAX,
             },
-            contraction: Contraction { weighted: true, drop_self_loops: false, undirected: false },
+            contraction: Contraction {
+                weighted: true,
+                per_relation: false,
+                drop_self_loops: false,
+                undirected: false,
+            },
             lineage: Lineage { parent_version, label_vector: Some(77) },
         }
     }

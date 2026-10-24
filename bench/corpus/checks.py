@@ -167,17 +167,11 @@ def _modularity_finding(check, warren, oracle, status_if_different, note):
             "warren": warren, "oracle": oracle, "difference": warren - oracle, "note": note}
 
 
-def _community_findings(warren, reference, relations):
+def _community_findings(warren, reference):
     nx_labels, nx_q = reference.louvain()
     warren_on_nx = warren.modularity(nx_labels)
     findings = [_modularity_finding("modularity definition", warren_on_nx, nx_q, "mismatch",
                                     "warren.modularity and NetworkX scoring NetworkX's Louvain partition")]
-    if relations:
-        once = reference.modularity(nx_labels, reference.undirected_view(per_relation=False))
-        findings.append(_modularity_finding(
-            "modularity, a pair in several relations", warren_on_nx, once, "definition difference",
-            "NetworkX with A at 1 for an unweighted pair in several relations, as spmv defines A "
-            "(docs/compute.md); pg_warren's undirected view counts the pair once per relation"))
     for function in ("louvain", "leiden"):
         labels, q = warren.community(function)
         returned = reference.modularity({n: label for n, label in labels.items()})
@@ -210,5 +204,5 @@ def run(warren, reference, dataset, create_graph_sql):
     findings.append(compare("clustering", warren.library("clustering"), reference.clustering(),
                             tolerance=CLUSTERING_TOLERANCE, documented=(reference.self_loop_nodes(), SELF_LOOP)))
     findings.append(compare("core_number", warren.library("core_number"), reference.core_number()))
-    findings += _community_findings(warren, reference, dataset.relations)
+    findings += _community_findings(warren, reference)
     return version, findings

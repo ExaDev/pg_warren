@@ -2,6 +2,16 @@
 
 ## 0.7.0 — in development
 
+### Behaviour changes
+
+- **An unweighted pair of nodes linked in several relations now counts
+  once in `modularity`, `contract`, `local_moving`, `leiden_refine`,
+  `louvain` and `leiden`**, as it already did in `spmv`, `degree` and
+  `pagerank`. They counted it once per relation, so on graphs with such
+  pairs their results differ from 0.6.0's. A counting `contract` counts
+  the pair in the first of its relations. Weighted pairs are unchanged:
+  their weights are summed across relations.
+
 ## 0.6.0 — identity, lifecycle and visibility (2026-10-24)
 
 Milestone M10 of DESIGN.md §13. Nodes can be keyed on strings: `text` is

@@ -34,7 +34,7 @@ impl<'g> Adjacency<'g> {
         paths: &ShortestPaths<'_, 'g>,
         memory: &ComputeMemory,
     ) -> Result<Matrix<'g>, ComputeError> {
-        Matrix::new(paths.graph, paths.relations, false, paths.weighted, memory)
+        Matrix::new(paths.graph, paths.relations, false, paths.weighted, false, memory)
     }
 
     /// At most the bytes [`Self::new`] charges, beyond the row scratch a

@@ -87,6 +87,7 @@ fn contract(
                 },
                 contraction: Contraction {
                     weighted,
+                    per_relation: false,
                     drop_self_loops,
                     undirected: !vectors.graph.directed,
                 },

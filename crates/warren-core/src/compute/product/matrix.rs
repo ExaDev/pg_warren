@@ -1,6 +1,7 @@
 //! The adjacency matrix a product reads: the CSRs of the selected relations
-//! in the orientation the product needs, with entries summed over
-//! relations.
+//! in the orientation the product needs, an edge in several of them one
+//! entry: its weights summed in relation order, or 1 when unweighted (the
+//! number of its relations if counted per relation).
 
 use std::mem::size_of;
 
@@ -23,6 +24,8 @@ pub(super) enum Form {
 pub(crate) struct Matrix<'g> {
     csrs: Vec<AnyCsrSlices<'g>>,
     weighted: bool,
+    /// Unweighted, an edge weighs the number of its relations, not 1.
+    per_relation: bool,
     form: Form,
     /// The budget row scratches are charged to.
     memory: ComputeMemory,
@@ -63,27 +66,37 @@ impl RowScratch {
 impl<'g> Matrix<'g> {
     /// The CSRs of `relations` for `y = A ⊗ x`, or `y = Aᵀ ⊗ x` if
     /// `transpose`: the forward CSRs pulled, or for `Aᵀ` the reverse CSRs
-    /// pulled, else the forward CSRs pushed.
+    /// pulled, else the forward CSRs pushed. Unweighted, an edge in several
+    /// relations weighs 1, or the number of its relations if
+    /// `per_relation`, which then reads every relation's CSRs rather than
+    /// the stored merged CSR; weighted, its weights' sum either way.
     pub(crate) fn new(
         graph: &'g GraphCsr,
         relations: RelationSelection<'_>,
         transpose: bool,
         weighted: Option<bool>,
+        per_relation: bool,
         memory: &ComputeMemory,
     ) -> Result<Self, ComputeError> {
-        let selected = graph
+        let mut selected = graph
             .selected(relations)
             .map_err(|relation| ComputeError::UnknownRelation { relation: relation.index() })?;
+        let has_weights = selected.iter().any(|r| r.forward().is_weighted());
+        let weighted = weighted.unwrap_or(true) && has_weights;
+        let per_relation = per_relation && !weighted;
+        if per_relation && relations == RelationSelection::All {
+            selected = graph.relations().iter().collect();
+        }
         let reverse: Option<Vec<&AnyCsr>> = selected.iter().map(|r| r.reverse()).collect();
         let (csrs, form) = match (transpose, reverse) {
             (true, Some(reverse)) => (reverse, Form::Pull),
             (true, None) => (selected.iter().map(|r| r.forward()).collect(), Form::Push),
             (false, _) => (selected.iter().map(|r| r.forward()).collect(), Form::Pull),
         };
-        let has_weights = csrs.iter().any(|csr| csr.is_weighted());
         Ok(Self {
             csrs: csrs.into_iter().map(AnyCsr::slices).collect(),
-            weighted: weighted.unwrap_or(true) && has_weights,
+            weighted,
+            per_relation,
             form,
             memory: memory.clone(),
         })
@@ -106,7 +119,8 @@ impl<'g> Matrix<'g> {
 
     /// Calls `entry(column, weight)` for each entry of `row` in ascending
     /// column order: an edge in several selected relations is one entry
-    /// whose weight is their sum, and every weight is 1 when unweighted.
+    /// whose weight is their sum, and every weight is 1 when unweighted
+    /// (the number of the edge's relations if counted per relation).
     /// `scratch` is reused across rows.
     pub(crate) fn for_each_entry(
         &self,
@@ -128,9 +142,10 @@ impl<'g> Matrix<'g> {
                 }
                 scratch.sort_by_key(|&(column, _)| column);
                 for run in scratch.chunk_by(|a, b| a.0 == b.0) {
-                    let weight = match self.weighted {
-                        true => run.iter().map(|&(_, weight)| weight).sum(),
-                        false => 1.0,
+                    let weight = match (self.weighted, self.per_relation) {
+                        (true, _) => run.iter().map(|&(_, weight)| weight).sum(),
+                        (false, true) => run.len() as f64,
+                        (false, false) => 1.0,
                     };
                     entry(run[0].0, weight)?;
                 }

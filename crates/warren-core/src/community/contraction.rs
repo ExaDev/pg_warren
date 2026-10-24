@@ -15,6 +15,9 @@ use super::CommunityError;
 pub struct Contraction {
     /// Sum the edges' weights (true) or count the edges (false).
     pub weighted: bool,
+    /// Counting, an edge in several of the parent's relations counts once
+    /// in each; else once, in the first of them (DESIGN.md §6.6).
+    pub per_relation: bool,
     /// Leave out the edges inside a community.
     pub drop_self_loops: bool,
     /// The parent is undirected: each of its edges is stored both ways
@@ -23,11 +26,15 @@ pub struct Contraction {
 }
 
 /// The quotient's edges, relation by relation: `relations` pairs each of
-/// the parent's relations' forward CSR with the quotient relation its
-/// edges go to. Between two communities `c` and `d` there is an edge
-/// `c → d` if some member of `c` has an edge to some member of `d`,
-/// weighted by the sum of those edges' weights (or their count, if not
-/// `weighted`): `PᵀAP` of the stored matrix. An undirected parent is
+/// the parent's relations' forward CSR, in relation order, with the
+/// quotient relation its edges go to. Between two communities `c` and `d`
+/// there is an edge `c → d` if some member of `c` has an edge to some
+/// member of `d`, weighted by the sum of those edges' weights (or their
+/// count, if not `weighted` or the parent has no weights): `PᵀAP` of the
+/// stored matrix. Counting, an edge in several relations counts once, in
+/// the first of them, so the quotient's relations sum to `PᵀAP` of the
+/// all-relations `A` that `spmv` reads (1 for such an edge); or once in
+/// each if `per_relation`. An undirected parent is
 /// stored both ways (a self-loop once), so its quotient is undirected too:
 /// an edge between two communities adds its weight to both directions, an
 /// edge inside a community adds it twice to the community's self-loop, and
@@ -66,23 +73,26 @@ fn aggregate(
     let members = Members::group(membership, memory, &mut work)?;
     let mut row = QuotientRow::new(membership.quotient_id_space(), memory)?;
     let mut edges = EdgeList::within(membership.quotient_id_space(), true, memory);
-    for &(relation, csr) in relations {
+    for (position, &(relation, csr)) in relations.iter().enumerate() {
+        let earlier = &relations[..position];
         for community in 0..membership.quotient_id_space() {
             for &member in members.of(community) {
                 work.spend(csr.degree(member) + 1).map_err(ComputeError::from)?;
-                let weights = csr.neighbour_weights(member);
+                let weights = csr.neighbour_weights(member).filter(|_| contraction.weighted);
+                // Counted once, an edge counts in the first relation it is in.
+                let once = weights.is_none() && !contraction.per_relation;
                 for (at, target) in csr.neighbours(member).enumerate() {
                     let Some(other) = membership.community(target) else { continue };
+                    if once && earlier.iter().any(|(_, csr)| csr.has_edge(member, target)) {
+                        continue;
+                    }
                     // The upper triangle of an undirected quotient, mirrored
                     // below, so both directions hold one sum.
                     let counted = !contraction.undirected || other >= community;
                     if !counted || (contraction.drop_self_loops && other == community) {
                         continue;
                     }
-                    let weight = match (contraction.weighted, weights) {
-                        (true, Some(weights)) => weights[at],
-                        _ => 1.0,
-                    };
+                    let weight = weights.map_or(1.0, |weights| weights[at]);
                     row.add(other, weight)?;
                 }
             }
@@ -207,7 +217,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::community::{modularity, Undirected};
+    use crate::community::{modularity, Undirected, Weighting};
     use crate::compute::reference::{self, Edges};
     use crate::compute::{ComputeError, ComputeMemory};
     use crate::graph::{DenseId, GraphCsr, GraphError};
@@ -251,8 +261,14 @@ mod tests {
         Ok(found)
     }
 
-    const DIRECTED: Contraction =
-        Contraction { weighted: true, drop_self_loops: false, undirected: false };
+    const WEIGHTED: Weighting = Weighting { weighted: true, per_relation: false };
+
+    const DIRECTED: Contraction = Contraction {
+        weighted: true,
+        per_relation: false,
+        drop_self_loops: false,
+        undirected: false,
+    };
     const UNDIRECTED: Contraction = Contraction { undirected: true, ..DIRECTED };
 
     fn membership(communities: &[Option<DenseId>], quotient_id_space: u64) -> Membership {
@@ -326,8 +342,43 @@ mod tests {
         assert_eq!(quotient(&graph, &p, DIRECTED).unwrap(), expected);
     }
 
-    /// The quotient by dense matrices: `PᵀAP` of the stored matrix, an
-    /// undirected parent's stored both ways (a self-loop once).
+    #[test]
+    fn a_counted_edge_in_several_relations_counts_once_in_the_first() {
+        // 0 → 1 in relations 0 and 1, 1 → 0 in relation 1 only, 2 → 3 in
+        // relations 1 and 2; communities {0} → 0, {1} → 1, {2, 3} → 2.
+        let edges: Edges =
+            vec![(0, 0, 1, 1.0), (1, 0, 1, 2.0), (1, 1, 0, 4.0), (1, 2, 3, 8.0), (2, 2, 3, 16.0)];
+        let graph = parent(4, 3, &edges, false);
+        let p = membership(&[Some(0), Some(1), Some(2), Some(2)], 3);
+        let counted = Contraction { weighted: false, ..DIRECTED };
+        let once = Quotient::from([((0, 0, 1), 1.0), ((1, 1, 0), 1.0), ((1, 2, 2), 1.0)]);
+        assert_eq!(quotient(&graph, &p, counted).unwrap(), once);
+        let per_relation = Contraction { per_relation: true, ..counted };
+        let each = Quotient::from([
+            ((0, 0, 1), 1.0),
+            ((1, 0, 1), 1.0),
+            ((1, 1, 0), 1.0),
+            ((1, 2, 2), 1.0),
+            ((2, 2, 2), 1.0),
+        ]);
+        assert_eq!(quotient(&graph, &p, per_relation).unwrap(), each);
+        // Weights are summed in each relation whether or not per relation.
+        let summed = Quotient::from([
+            ((0, 0, 1), 1.0),
+            ((1, 0, 1), 2.0),
+            ((1, 1, 0), 4.0),
+            ((1, 2, 2), 8.0),
+            ((2, 2, 2), 16.0),
+        ]);
+        assert_eq!(quotient(&graph, &p, DIRECTED).unwrap(), summed);
+        let weighted = Contraction { per_relation: true, ..DIRECTED };
+        assert_eq!(quotient(&graph, &p, weighted).unwrap(), summed);
+    }
+
+    /// The quotient by dense matrices, from the edge list: `PᵀA_rP` of
+    /// each relation's `A_r` (an undirected parent's edges both ways, a
+    /// self-loop once), counting an edge in an earlier relation only there
+    /// unless weighted or per relation.
     fn naive(
         id_space: u64,
         edges: &Edges,
@@ -335,14 +386,23 @@ mod tests {
         p: &[Option<DenseId>],
         contraction: Contraction,
     ) -> Quotient {
-        let graph = parent(id_space, relations, edges, contraction.undirected);
+        let mut stored = edges.clone();
+        if contraction.undirected {
+            stored.extend(edges.iter().filter(|e| e.1 != e.2).map(|&(r, s, t, w)| (r, t, s, w)));
+        }
+        let a: Vec<_> = (0..relations)
+            .map(|r| reference::adjacency(id_space, &stored, Some(&[r]), true))
+            .collect();
+        let once = !contraction.weighted && !contraction.per_relation;
         let mut found = Quotient::new();
         for relation in 0..relations {
-            let a = reference::adjacency(id_space, &stored(&graph, relation), None, true);
-            for (u, row) in a.iter().enumerate() {
+            for (u, row) in a[relation].iter().enumerate() {
                 for (v, entry) in row.iter().enumerate() {
                     let (Some(w), Some(c), Some(d)) = (entry, p[u], p[v]) else { continue };
                     if contraction.drop_self_loops && c == d {
+                        continue;
+                    }
+                    if once && a[..relation].iter().any(|earlier| earlier[u][v].is_some()) {
                         continue;
                     }
                     let value = if contraction.weighted { *w } else { 1.0 };
@@ -351,20 +411,6 @@ mod tests {
             }
         }
         found
-    }
-
-    /// The stored entries of one relation's forward CSR, as edges of
-    /// relation 0.
-    fn stored(graph: &GraphCsr, relation: usize) -> Edges {
-        let csr = graph.relations()[relation].forward();
-        let mut edges = Edges::new();
-        for source in 0..csr.id_space() {
-            let weights = csr.neighbour_weights(source).unwrap();
-            for (target, &weight) in csr.neighbours(source).zip(weights) {
-                edges.push((0, source, target, weight));
-            }
-        }
-        edges
     }
 
     fn close(a: &Quotient, b: &Quotient) -> bool {
@@ -386,6 +432,7 @@ mod tests {
                 prop::collection::vec(prop::option::weighted(0.9, 0u64..6), n as usize),
             )),
             weighted in any::<bool>(),
+            per_relation in any::<bool>(),
             drop_self_loops in any::<bool>(),
             undirected in any::<bool>(),
         ) {
@@ -394,7 +441,7 @@ mod tests {
                 .into_iter()
                 .filter(|&(_, s, t, _)| communities[s as usize].is_some() && communities[t as usize].is_some())
                 .collect();
-            let contraction = Contraction { weighted, drop_self_loops, undirected };
+            let contraction = Contraction { weighted, per_relation, drop_self_loops, undirected };
             let graph = parent(id_space, 2, &edges, undirected);
             let p = membership(&communities, 6);
             let found = quotient(&graph, &p, contraction).unwrap();
@@ -436,26 +483,34 @@ mod tests {
         fn a_partitions_modularity_is_its_quotients_singletons(
             (id_space, edges, communities) in (1u64..20).prop_flat_map(|n| (
                 Just(n),
-                prop::collection::vec((0usize..2, 0..n, 0..n, 1..5u32), 0..60),
+                prop::collection::vec((0usize..3, 0..n, 0..n, 1..5u32), 0..60),
                 prop::collection::vec(0u64..4, n as usize),
             )),
+            weighted in any::<bool>(),
+            per_relation in any::<bool>(),
             undirected in any::<bool>(),
             resolution in prop::sample::select(vec![0.5, 1.0, 2.0]),
         ) {
+            // In both counting modes, weighted or not, the quotient's
+            // all-relations view is the parent's contracted.
             let edges: Edges =
                 edges.into_iter().map(|(r, s, t, w)| (r, s, t, f64::from(w))).collect();
-            let graph = parent(id_space, 2, &edges, undirected);
+            let graph = parent(id_space, 3, &edges, undirected);
             let p = membership(&communities.iter().map(|&c| Some(c)).collect::<Vec<_>>(), 4);
-            let found = quotient(&graph, &p, Contraction { undirected, ..DIRECTED }).unwrap();
+            let contraction = Contraction { weighted, per_relation, undirected, ..DIRECTED };
+            let found = quotient(&graph, &p, contraction).unwrap();
             let stored: Edges = found.iter().map(|(&(r, s, t), &w)| (r, s, t, w)).collect();
-            let level = reference::graph(4, 2, &stored, true, false);
+            let level = reference::graph(4, 3, &stored, true, false);
             let memory = ComputeMemory::new(u64::MAX);
-            let view = |graph: &GraphCsr| {
-                Undirected::new(&memory, &Cancellation::new(), graph, true, !undirected).unwrap()
+            let view = |graph: &GraphCsr, weighting| {
+                Undirected::new(&memory, &Cancellation::new(), graph, weighting, !undirected)
+                    .unwrap()
             };
             let labels: Vec<i64> = communities.iter().map(|&c| c as i64).collect();
-            let before = modularity(&memory, &view(&graph), &labels, resolution).unwrap();
-            let after = modularity(&memory, &view(&level), &[0, 1, 2, 3], resolution).unwrap();
+            let weighting = Weighting { weighted, per_relation };
+            let before = modularity(&memory, &view(&graph, weighting), &labels, resolution).unwrap();
+            let after =
+                modularity(&memory, &view(&level, WEIGHTED), &[0, 1, 2, 3], resolution).unwrap();
             prop_assert!((before - after).abs() <= 1e-12, "{before} != {after}");
         }
     }

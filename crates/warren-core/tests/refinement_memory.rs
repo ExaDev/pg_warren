@@ -11,7 +11,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::error::Error;
 use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 
-use warren_core::community::{refine, CommunityError, Refinement, Undirected};
+use warren_core::community::{refine, CommunityError, Refinement, Undirected, Weighting};
 use warren_core::compute::{ComputeError, ComputeMemory, Workers};
 use warren_core::graph::{EdgeList, GraphCsr, RelationDictionary, Tombstones};
 use warren_core::interrupts::{Cancellation, Uninterrupted};
@@ -75,7 +75,13 @@ fn path(nodes: u64) -> Outcome<Undirected> {
     }
     let graph = GraphCsr::build(edges, 1, nodes, false)?;
     let memory = ComputeMemory::new(u64::MAX);
-    Ok(Undirected::new(&memory, &Cancellation::new(), &graph, false, false)?)
+    Ok(Undirected::new(
+        &memory,
+        &Cancellation::new(),
+        &graph,
+        Weighting { weighted: false, per_relation: false },
+        false,
+    )?)
 }
 
 /// Whether the refinement of `graph`'s `communities` fits in `limit` bytes.

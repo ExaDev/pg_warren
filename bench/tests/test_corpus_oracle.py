@@ -89,13 +89,13 @@ def test_louvain_returns_a_partition_and_its_modularity(tmp_path):
     assert q == pytest.approx(reference.modularity(labels))
 
 
-def test_the_view_counts_a_pair_once_per_relation_unless_asked_not_to(tmp_path):
-    # pg_warren's undirected view sums the merged relations (an unweighted
-    # pair in two relations weighs 2), where spmv's A is 1 (docs/compute.md).
+def test_the_view_counts_a_pair_once_unless_asked_per_relation(tmp_path):
+    # An unweighted pair in two relations weighs 1, as in spmv's A
+    # (docs/compute.md), or 2 counted per relation.
     reference = oracle.Reference.read(tables(tmp_path, ["a", "b"], [["a", "b", "x"], ["a", "b", "y"], ["a", "b", "y"]]),
                                       dataset(ids="text", relations=True))
-    assert reference.undirected_view()["a"]["b"]["weight"] == 2
-    assert reference.undirected_view(per_relation=False)["a"]["b"]["weight"] == 1
+    assert reference.undirected_view()["a"]["b"]["weight"] == 1
+    assert reference.undirected_view(per_relation=True)["a"]["b"]["weight"] == 2
 
 
 def test_self_loop_nodes_are_known(tmp_path):

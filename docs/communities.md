@@ -42,7 +42,10 @@ stored adjacency, so an undirected edge inside a community counts twice
 in its self-loop (both its stored directions) and a self-loop once, as
 each counts in its nodes' degrees: a community's weighted degree is the
 sum of its members', and the total edge weight is kept. Relations are
-kept, each contracted on its own.
+kept, each contracted on its own, except that a count counts an edge in
+several relations once, in the first of them: the quotient's relations
+then add up to the counts of distinct edges, as `spmv` counts such an
+edge once.
 
 ```sql
 SELECT warren.vector_const('regions', 'one', 1);
@@ -155,7 +158,9 @@ as singletons, on its quotient. NetworkX counts it twice, so on an
 undirected graph pg_warren's is NetworkX's with each self-loop's weight
 halved, and the two agree without self-loops. On a directed graph it is
 the modularity of the undirected view, not NetworkX's directed (Leicht and
-Newman) one.
+Newman) one. The view's edges are those `spmv` multiplies by: a pair linked
+in several relations is one edge, its weights summed, or weighing 1 when
+unweighted ([compute.md](compute.md)).
 
 The steps are SQL functions too, for programs of your own:
 `local_moving(graph, out, initial, keys, resolution, seed, max_sweeps,

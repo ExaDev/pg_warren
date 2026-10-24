@@ -3,7 +3,7 @@
 //! weighted view, built on the compute pool within the call's budget, and
 //! label vectors as integers.
 
-use warren_core::community::{CommunityError, Labels, Undirected};
+use warren_core::community::{CommunityError, Labels, Undirected, Weighting};
 use warren_core::compute::MemoryCharge;
 use warren_core::graph::BuildMemory;
 
@@ -21,13 +21,14 @@ pub(super) fn undirected<E: CachedIds>(
     vectors: &Vectors<E>,
     weighted: Option<bool>,
 ) -> Result<Undirected, CommunitySqlError> {
-    let weighted = weighted.unwrap_or(vectors.graph.weighted);
+    let weighting =
+        Weighting { weighted: weighted.unwrap_or(vectors.graph.weighted), per_relation: false };
     let directed = vectors.graph.directed;
     let graph = &vectors.loaded.graph;
     vectors.memory.reclaim_for(Undirected::bytes(graph, directed));
     let memory = &vectors.memory;
     let built = workers()?.run(&mut PostgresInterrupts, |cancellation| {
-        Ok(Undirected::new(memory, cancellation, graph, weighted, directed))
+        Ok(Undirected::new(memory, cancellation, graph, weighting, directed))
     })?;
     built.map_err(|error| match error {
         CommunityError::NegativeWeight { from, to, weight } => {

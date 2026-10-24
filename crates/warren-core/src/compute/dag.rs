@@ -33,7 +33,7 @@ pub fn topological_order<I: Interrupts>(
     relations: RelationSelection<'_>,
     tombstones: &Tombstones,
 ) -> Result<Vector<i64>, ComputeError> {
-    let matrix = Matrix::new(graph, relations, false, Some(false), memory)?;
+    let matrix = Matrix::new(graph, relations, false, Some(false), false, memory)?;
     let id_space = graph.all_relations().forward().id_space();
     let mut positions = Vector::filled(memory, id_space, 1, 0i64)?;
     let mut order = Positions { positions: positions.values_mut()?, next: 0 };
@@ -70,7 +70,7 @@ pub fn dag_longest_path<I: Interrupts>(
     weighted: Option<bool>,
     tombstones: &Tombstones,
 ) -> Result<LongestPaths, ComputeError> {
-    let matrix = Matrix::new(graph, relations, false, weighted, memory)?;
+    let matrix = Matrix::new(graph, relations, false, weighted, false, memory)?;
     let id_space = graph.all_relations().forward().id_space();
     let mut lengths = Vector::filled(memory, id_space, 1, 0f64)?;
     let mut longest = Lengths { lengths: lengths.values_mut()? };
@@ -324,7 +324,8 @@ mod tests {
         let path: Edges = (0..n - 1).map(|i| (0, i, i + 1, 1.0)).collect();
         let graph = reference::graph(n, 1, &path, false, false);
         let memory = memory();
-        let matrix = Matrix::new(&graph, RelationSelection::All, false, None, &memory).unwrap();
+        let matrix =
+            Matrix::new(&graph, RelationSelection::All, false, None, false, &memory).unwrap();
         let (cancellation, tombstones) = (Cancellation::new(), none(n));
         cancellation.cancel();
         let kahn = Kahn::new(&memory, &cancellation, &matrix, &tombstones).unwrap();

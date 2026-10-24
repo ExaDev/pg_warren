@@ -52,7 +52,7 @@ pub fn minimum_spanning_forest<I: Interrupts>(
     relations: RelationSelection<'_>,
     weighted: Option<bool>,
 ) -> Result<SpanningForest, ComputeError> {
-    let matrix = Matrix::new(graph, relations, false, weighted, memory)?;
+    let matrix = Matrix::new(graph, relations, false, weighted, false, memory)?;
     let id_space = graph.all_relations().forward().id_space();
     // A parent and a candidate per node, and the forest's buffer, which
     // grows by doubling to at most twice its N − 1 edges.
@@ -266,7 +266,8 @@ mod tests {
         let path: Edges = (0..n - 1).map(|i| (0, i, i + 1, 1.0)).collect();
         let graph = reference::graph(n, 1, &path, false, false);
         let memory = ComputeMemory::new(1 << 28);
-        let matrix = Matrix::new(&graph, RelationSelection::All, false, None, &memory).unwrap();
+        let matrix =
+            Matrix::new(&graph, RelationSelection::All, false, None, false, &memory).unwrap();
         let cancellation = Cancellation::new();
         cancellation.cancel();
         let boruvka = Boruvka::new(&memory, &cancellation, &matrix, n).unwrap();
