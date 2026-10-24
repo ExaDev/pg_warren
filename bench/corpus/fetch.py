@@ -15,6 +15,10 @@ class PinMismatch(RuntimeError):
     pass
 
 
+class NotEnoughMemory(RuntimeError):
+    pass
+
+
 def pin_of(provenance):
     return {"sha256": provenance["sha256"], "bytes": provenance["byteLength"], "url": provenance["fetchedUrl"]}
 
@@ -23,18 +27,24 @@ def directory_of(root, dataset):
     return root / "datasets" / dataset.name
 
 
-def fetch(dataset, keepset_, root, record):
+def fetch(dataset, keepset_, root, record, available_mb=None):
     """The directory of `dataset`'s tables, fetched unless the cache already
-    holds them at its pin. `record(name, pin)` records a first fetch's pin."""
+    holds them at its pin. `record(name, pin)` records a first fetch's pin.
+    A fetch whose heap (`keepset.heap_mb`) is more than `available_mb` is
+    refused before it starts, rather than exhausting a shared machine."""
     directory = directory_of(root, dataset)
     described = directory / "dataset.json"
     if described.exists() and dataset.pin and pin_of(json.loads(described.read_text())["provenance"]) == dataset.pin:
         return directory
+    heap = keepset.heap_mb(dataset.edges)
+    if available_mb is not None and heap > available_mb:
+        raise NotEnoughMemory(f"{dataset.name}: keepset needs about {heap} MB of heap, {available_mb} MB are "
+                              "available (keepset holds the whole graph and copies its edges)")
     shutil.rmtree(directory, ignore_errors=True)
     raw = directory / "raw" / f"{dataset.name}.json"
     raw.parent.mkdir(parents=True)
     try:
-        provenance = keepset_.fetch(dataset.name, raw, keepset.heap_mb(dataset.edges))
+        provenance = keepset_.fetch(dataset.name, raw, heap)
         pin = pin_of(provenance)
         if dataset.pin is None:
             record(dataset.name, pin)

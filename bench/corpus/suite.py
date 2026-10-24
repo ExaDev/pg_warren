@@ -33,7 +33,15 @@ RESULTS = HERE.parent / "results" / "corpus"
 def _fetched(args, dataset):
     read = manifest.read(args.manifest)
     cli = keepset.Keepset(args.cache, read.keepset["version"])
-    return fetch.fetch(dataset, cli, args.cache, lambda name, pin: manifest.record_pin(args.manifest, name, pin))
+    return fetch.fetch(dataset, cli, args.cache, lambda name, pin: manifest.record_pin(args.manifest, name, pin),
+                       available_mb=None if args.ignore_memory else _available_mb())
+
+
+def _available_mb():
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        if line.startswith("MemAvailable:"):
+            return int(line.split()[1]) // 1024
+    return None
 
 
 def command_fetch(args, datasets):
@@ -139,6 +147,8 @@ def main(argv):
     options.add_argument("--extension-profile", default="unknown", choices=["release", "debug", "unknown"])
     options.add_argument("--runas", default="postgres", help="cluster user when run as root")
     options.add_argument("--parent", type=Path, default=Path("/var/tmp"), help="where the cluster directory goes")
+    options.add_argument("--ignore-memory", action="store_true",
+                         help="fetch even when keepset's heap estimate exceeds the available memory")
     options.add_argument("--threads", type=int, default=os.cpu_count(), help="warren.threads for timings")
     args = options.parse_args(argv)
     args.argv = argv

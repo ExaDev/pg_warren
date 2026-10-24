@@ -86,3 +86,10 @@ def test_the_cli_is_installed_from_the_committed_lock_and_run_without_archive_re
     assert (tmp_path / "keepset-0.57.0" / "package-lock.json").exists()
     assert fetched[0][1:] == ["fetch", "karate", "--out", str(out), "--no-archive"]
     assert fetched[1]["env"]["NODE_OPTIONS"] == "--max-old-space-size=4096"
+
+
+def test_a_fetch_that_needs_more_memory_than_is_available_is_refused_before_it_starts(tmp_path):
+    keepset_ = FakeKeepset()
+    with pytest.raises(fetch.NotEnoughMemory, match="livejournal: keepset needs about 73855 MB of heap, 15000 MB"):
+        fetch.fetch(dataset(name="livejournal", edges=34_681_189), keepset_, tmp_path, record=None, available_mb=15_000)
+    assert keepset_.fetched == []
