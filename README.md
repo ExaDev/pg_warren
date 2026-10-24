@@ -56,6 +56,11 @@ sudo apt update
 sudo apt install postgresql-17-pg-warren   # or -15, -16, -18
 ```
 
+Check the key before trusting it: `gpg --show-keys /etc/apt/keyrings/pg_warren.asc`
+must show the fingerprint
+`(set by the owner before the first release)` <!-- apt key -->,
+which every GitHub Release's notes repeat.
+
 The package does not edit `postgresql.conf`. Add the preload yourself
 (below: on PG 15 and 16 it is what lets backends share loaded graphs) and
 restart: `shared_preload_libraries = 'pg_warren'` in

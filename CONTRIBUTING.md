@@ -365,17 +365,48 @@ tooling (`release/`, `packaging/`) of the commit that started the run:
 package installed with apt into a clean container with PGDG's PostgreSQL,
 preloaded, restarted and smoke-tested; the tarballs on jammy, the images on
 trixie, each smoke-tested) and `homebrew` (`brew style`, `brew audit
---strict`, `brew install --build-bottle`, `brew test`, `brew bottle`).
+--strict`, `brew install --build-bottle`, `brew test`, `brew bottle`). The
+Docker Hub images they build in and on (`debian`, `ubuntu`, `postgres`)
+are pinned by digest in `release/packages.py`, and rustup-init by version
+and sha256 in `packaging/build-deb.sh`; bump them deliberately, in their
+own change.
+
 Only after the `release` environment's approval does the publish job, which
-runs no build code, attach them to the GitHub Release (never replacing an
-asset already attached, so a re-run is safe), assemble the apt repository
-with aptly from **every** release's `.deb` assets (so each distribution
-keeps all versions; noble's reprepro would keep one), sign it with
-`RELEASE_APT_SIGNING_KEY`,
-push the images to GHCR and commit the formula to the tap with
-`HOMEBREW_TAP_DEPLOY_KEY`; the `pages` job then deploys the repository to
-GitHub Pages. Republishing an older release attaches and rebuilds the same
-way, but moves neither the images' `pgNN` tags nor the tap.
+runs no build code, take what they built, **as data**:
+
+- it downloads the expected artifacts by name, and checks every `.deb`
+  (`release/assets.py check-deb`): its control archive holds only
+  `control`, `md5sums` and a `postinst` byte-equal to
+  `packaging/debian/pg-warren.postinst.in` as debhelper renders it; its
+  files are only `usr/lib/postgresql/NN/lib/pg_warren.so`,
+  `usr/share/postgresql/NN/extension/pg_warren*` and its docs, all regular
+  files; its Version is `X.Y.Z-1~<distribution>` and its file name its own;
+- it renders the formula again from the source tarball
+  (`release/homebrew.py`), taking from the bottle job only a bottle block
+  of this release's `root_url` and sha256 lines;
+- it writes `SHA256SUMS` of every asset and signs it, `SHA256SUMS.asc`, with
+  `RELEASE_APT_SIGNING_KEY`, after checking that key's fingerprint is the
+  one README.md states (`<!-- apt key -->`), and puts the fingerprint in the
+  Release's notes;
+- it attaches the assets to the GitHub Release (never replacing one already
+  attached, so a re-run is safe);
+- it assembles the apt repository with aptly (noble's reprepro keeps one
+  version per package) from this release's checked files and, for each
+  earlier release recorded in `sql/released.commits` that is not a draft,
+  only the `.deb` files its `SHA256SUMS.asc`-verified `SHA256SUMS` lists,
+  each checked as above, so a file anyone with write access attaches to a
+  Release never reaches the repository (releases before signed sums
+  contribute nothing: the first packaged release starts the repository);
+  and signs it;
+- it pushes the images to GHCR with the environment's `GHCR_TOKEN` (the job
+  has no `packages: write`) and commits the formula to the tap with
+  `HOMEBREW_TAP_DEPLOY_KEY`;
+- the `pages` job then deploys the repository to GitHub Pages.
+
+Republishing an older release attaches and rebuilds the same way, but moves
+neither the images' `pgNN` tags nor the tap. Later: reproducible builds, so
+that a second, independent build could confirm the published packages
+(DESIGN.md §13).
 
 CI keeps the path from rotting: `packages` builds `postgresql-16-pg-warren`
 for bookworm on every pull request with the same `release/packages.py`,
@@ -446,26 +477,47 @@ Set once in the repository's settings; the workflows assume them.
    export GNUPGHOME="$(mktemp -d)"
    gpg --batch --passphrase '' --quick-gen-key "pg_warren apt repository" ed25519 sign never
    gpg --armor --export-secret-keys "pg_warren apt repository" >apt-signing-key.asc
+   gpg --fingerprint "pg_warren apt repository"   # the 40 hex digits, for README.md
+   # Optional: a revocation certificate, kept offline (not in the repository or a secret)
+   gpg --output pg_warren-apt-revoke.asc --gen-revoke "pg_warren apt repository"
    ```
 
    In the `release` environment, add the secret `RELEASE_APT_SIGNING_KEY`
-   with the whole file `apt-signing-key.asc`; then delete it and
-   `$GNUPGHOME`. The publish job exports the public key to
-   `https://exadev.github.io/pg_warren/apt/pg_warren.asc` on every
-   release. Keep the same key: users trust it once, and a new key breaks
-   their `apt update` until they fetch it again.
+   with the whole file `apt-signing-key.asc`. In README.md's Install, replace
+   `(set by the owner before the first release)` on the line marked
+   `<!-- apt key -->` with the fingerprint (as `gpg --fingerprint` prints it, or
+   without spaces), and merge that before the first
+   release: the publish job refuses a key whose fingerprint README.md does
+   not state. Then delete `apt-signing-key.asc` and `$GNUPGHOME`. The job
+   exports the public key to
+   `https://exadev.github.io/pg_warren/apt/pg_warren.asc` on every release.
+   Keep the same key: users trust it once, and a new key (with README.md
+   changed in the same PR) breaks their `apt update` until they fetch it
+   again.
 6. **GitHub Pages**: Settings → Pages → *Build and deployment* → Source
-   **GitHub Actions**. This creates the `github-pages` environment, which
-   admits only `main`; the `pages` job deploys to it after the publish job,
-   so only after a release's approval. The whole site is the apt
-   repository (`/apt/`).
-7. **The Docker images' package**: after the first release, Settings of
-   the org's package `pg_warren` (Packages → pg_warren → Package settings)
-   → *Change visibility* → **Public**, and under *Manage Actions access*
-   check that this repository has write access (the publish job pushes with
-   `GITHUB_TOKEN`).
+   **GitHub Actions**. This creates the `github-pages` environment. In
+   Settings → Environments → `github-pages`: add yourself as a *Required
+   reviewer*, and check *Deployment branches and tags* admits only `main`.
+   The `pages` job deploys to it after the publish job, so after the
+   `release` approval, and then waits for this second one. The whole site
+   is the apt repository (`/apt/`).
+7. **The Docker images**: the publish job pushes with a credential only the
+   `release` environment holds, not `GITHUB_TOKEN`, so no other workflow
+   can push. GHCR takes neither GitHub App nor fine-grained tokens, so
+   create a **classic personal access token** with only the
+   `write:packages` scope (it implies `read:packages`), on an account that
+   may publish packages for the org (a dedicated machine account if you
+   have one), with an expiry you will renew. In the `release` environment,
+   add it as the secret `GHCR_TOKEN`, and that account's login as the
+   environment *variable* `GHCR_USERNAME`. After the first release, in the
+   org's package `pg_warren` (Packages → pg_warren → Package settings):
+   *Change visibility* → **Public**; under *Manage Actions access*, give
+   this repository **Read** or remove it; and untick **Inherit access from
+   source repository**. The token can write to every package that account
+   can: keep the account's package rights to this one.
 8. **The Homebrew tap**: create the public repository
-   `ExaDev/homebrew-tap` (with a README, so that `main` exists). Generate
+   `ExaDev/homebrew-tap` (with a README, so that `main` exists), and protect
+   its `main` against force-pushes and deletion (a branch ruleset). Generate
    a key pair used for nothing else:
    `ssh-keygen -t ed25519 -N "" -C "pg_warren homebrew tap" -f tap_deploy_key`.
    In **the tap's** Settings → Deploy keys, add `tap_deploy_key.pub` with
