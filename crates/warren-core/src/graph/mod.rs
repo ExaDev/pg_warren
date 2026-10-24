@@ -30,7 +30,7 @@ pub use csr::{
     AllRelations, AnyCsr, BuildPlan, BuildSummary, BuiltCsr, Csr, CsrDirection, CsrLayout, CsrRows,
     CsrScope, CsrSink, GraphCsr, Neighbours, RelationCsr, RowNeighbours, Target, TargetWidth,
 };
-pub(crate) use csr::{AnyCsrSlices, CsrSlices};
+pub(crate) use csr::{AnyCsrSlices, CsrSlices, RowSweep};
 pub use direction::Direction;
 pub use edge_batch::{EdgeBatch, Endpoints, FixedEndpoints, IndexedKeys, TextEndpoints};
 pub use edge_list::{EdgeIntake, EdgeList};

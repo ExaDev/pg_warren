@@ -6,7 +6,7 @@ use std::iter::{FusedIterator, Peekable};
 
 use crate::graph::{
     memory, AllRelations, AnyCsr, CsrRows, DenseId, Direction, GraphCsr, GraphError, RelationCsr,
-    RelationIndex, RelationSelection, RowNeighbours,
+    RelationIndex, RelationSelection, RowNeighbours, RowSweep,
 };
 
 /// The CSRs a traversal reads: the selected relations in one direction.
@@ -35,6 +35,26 @@ pub struct Adjacency<'g> {
 enum Selected<'g> {
     All(AllRelations<'g>),
     Only(Vec<&'g RelationCsr>),
+}
+
+/// An [`Adjacency`]'s rows read with nodes mostly ascending: a
+/// [`RowSweep`] per CSR set read.
+#[derive(Debug)]
+pub(crate) struct AdjacencySweep<'g>(Vec<RowSweep<'g>>);
+
+impl<'g> AdjacencySweep<'g> {
+    /// [`Adjacency::row_entries`].
+    pub(crate) fn row_entries(
+        &mut self,
+        node: DenseId,
+    ) -> impl Iterator<Item = DenseId> + use<'_, 'g> {
+        self.0.iter_mut().flat_map(move |rows| rows.neighbours(node))
+    }
+
+    /// [`Adjacency::row_entry_bound`].
+    pub(crate) fn row_entry_bound(&mut self, node: DenseId) -> u64 {
+        self.0.iter_mut().map(|rows| rows.degree_bound(node)).sum()
+    }
 }
 
 /// The CSRs one relation is read from: one, or two for [`Direction::Both`].
@@ -166,6 +186,17 @@ impl<'g> Adjacency<'g> {
     /// in O(1) per CSR read; exact unless relations are merged on the fly.
     pub(crate) fn row_entry_bound(&self, node: DenseId) -> u64 {
         self.rows.iter().map(|rows| rows.degree_bound(node)).sum()
+    }
+
+    /// The rows read, for reading nodes mostly in ascending order
+    /// ([`RowSweep`]), as a sorted frontier or a scan of the id space reads
+    /// them.
+    pub(crate) fn sweep(&self) -> Result<AdjacencySweep<'g>, TraversalError> {
+        let mut sweeps = memory::with_capacity(self.rows.len())?;
+        for rows in &self.rows {
+            sweeps.push(rows.sweep()?);
+        }
+        Ok(AdjacencySweep(sweeps))
     }
 
     /// The hops from `node`, relation by relation in the selection's index

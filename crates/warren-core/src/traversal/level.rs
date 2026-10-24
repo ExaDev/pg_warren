@@ -147,13 +147,17 @@ impl LevelSearch {
     }
 
     /// Expands the current frontier by one level: pulled if `edges` allow
-    /// it and [`Self::pulls`] says so, pushed otherwise.
+    /// it and [`Self::pulls`] says so, pushed otherwise. The frontier is
+    /// sorted first, so its rows are read in ascending dense id order: a
+    /// row is then found in O(1) even where relations with sparse offsets
+    /// are merged on the fly ([`Adjacency::sweep`]).
     pub(crate) fn expand(
         &mut self,
         edges: Edges<'_, '_>,
         progress: &mut Progress<'_>,
         admit: &mut impl FnMut(Visit) -> Result<Admission, TraversalError>,
     ) -> Result<ControlFlow<()>, TraversalError> {
+        self.frontier.sort_unstable();
         let reverse = match edges.reverse {
             Some(reverse) if self.pulls(edges, reverse, progress)? => Some(reverse),
             _ => None,
@@ -185,8 +189,10 @@ impl LevelSearch {
         if self.frontier.len() as u64 * BETA <= id_space {
             return Ok(false);
         }
+        let mut rows = edges.adjacency.sweep()?;
         let frontier_entries: u64 =
-            self.frontier.iter().map(|&node| edges.adjacency.row_entry_bound(node)).sum();
+            self.frontier.iter().map(|&node| rows.row_entry_bound(node)).sum();
+        let mut reverse = reverse.sweep()?;
         let limit = frontier_entries.saturating_mul(ALPHA);
         let visited = self.visited.densify()?;
         let mut unvisited_entries = 0;
@@ -203,7 +209,8 @@ impl LevelSearch {
     }
 
     /// Pushes the current frontier one level: scans each frontier node's
-    /// row for unvisited nodes, admitting them in the order reached.
+    /// row for unvisited nodes, frontier nodes in ascending dense id order,
+    /// admitting them in the order reached.
     fn push(
         &mut self,
         edges: Edges<'_, '_>,
@@ -212,8 +219,9 @@ impl LevelSearch {
     ) -> Result<ControlFlow<()>, TraversalError> {
         let depth = self.depth + 1;
         let frontier = std::mem::take(&mut self.frontier);
+        let mut rows = edges.adjacency.sweep()?;
         for &via in &frontier {
-            for node in edges.adjacency.row_entries(via) {
+            for node in rows.row_entries(via) {
                 progress.edge_traversed()?;
                 if self.visited.contains(node) || edges.filter.is_some_and(|f| !f.contains(node)) {
                     continue;
@@ -244,6 +252,7 @@ impl LevelSearch {
         let id_space = edges.id_space();
         let frontier = NodeSet::from_dense_ids(id_space, self.frontier.iter().copied())?;
         let visited = self.visited.densify()?;
+        let mut reverse = reverse.sweep()?;
         for word in 0..visited.word_count() {
             for node in unvisited(visited.word(word), word, id_space) {
                 progress.node_examined()?;
