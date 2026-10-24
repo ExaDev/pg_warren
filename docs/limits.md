@@ -407,8 +407,11 @@ first step, not after it: with n the id space, m = min(active nodes,
 max(2k + 1, 20)) basis vectors and e = 4 bytes (`f32`) or 8 (`f64`), a
 solve holds at its peak n·33 bytes of operator (n·49 for the normalised
 operators), ⌈n / 4096⌉·4096·m·e of basis, (4m² + m)·8 of projected
-matrices, k·n·e of eigenvectors and n·8 for counting components; at 10M
-nodes, k = 20, `f32` and the normalised Laplacian that is 3.0 GB. For a graph that is only just over, `store_merged :=
+matrices, k·n·e of eigenvectors and n·8 for counting components (where the
+components' eigenpairs are taken exactly, n·16 + 8 per component for them
+instead, held through the solve, and n·9 of a product's scratch beside one
+eigenvector fewer); at 10M nodes, k = 20, `f32` and the normalised
+Laplacian that is 3.0 GB, 3.1 GB with `which := 'smallest'`. For a graph that is only just over, `store_merged :=
 false` also helps. With the shared cache (above), a version
 it holds counts against `warren.shared_cache_memory`, not
 `warren.max_cache_memory`, so the five-relation graph without the merged
@@ -769,11 +772,26 @@ messages where totals may exceed 9.2 × 10¹⁸.
 
 **Repeated eigenvalues.** Lanczos from one start vector finds one direction
 per eigenspace, so a repeated eigenvalue may appear fewer times than its
-multiplicity. A graph with c connected components has Laplacian eigenvalue 0
-c times; `eigen` warns when the active nodes form several components. When
-that matters, run `eigen` on a graph defined over the largest component
-only. Non-symmetric spectra are not computed: `symmetrize := false` is
-accepted only when the matrix is already symmetric.
+multiplicity. The one every connected component gives (0 of both
+Laplacians, 1 of the random walk) is exempt where it is at the wanted end
+(`smallest` for the Laplacians, `largest` for the random walk): `eigen`
+returns each copy exactly, as its component's eigenvector. Other repeated
+eigenvalues, such as those of identical components or of a symmetric
+structure, may still be missed; `eigen` warns when the active nodes form
+several components and the call is not one of those. Non-symmetric spectra
+are not computed: `symmetrize := false` is accepted only when the matrix
+is already symmetric.
+
+**Clustered small eigenvalues are slow.** Lanczos needs about
+√(spread / gap) steps per digit, where gap is the distance between the
+wanted eigenvalues and their neighbours: on a long, thin graph such as a
+road network the smallest Laplacian eigenvalues are 10⁻⁷–10⁻⁴ apart in a
+spectrum two wide. `k = 20` smallest of usroads-48's normalised
+Laplacian (126K nodes) takes about 20,500 steps (69 s), and of
+roadNet-TX's largest component (1.35M nodes) more than the default
+`max_iter` (DESIGN.md §12). Progress shows in `warren.progress()`, and a
+solve that reaches `max_iter` returns its pairs with a `WARNING`. Ask for fewer pairs, loosen `tol`, or raise
+`max_iter` and `statement_timeout` together.
 
 **Stable functions in a `WHERE` clause are called per row.** Write
 `WHERE x < (SELECT warren.vector_reduce(…))`, not `WHERE x <
