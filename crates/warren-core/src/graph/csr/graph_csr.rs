@@ -170,16 +170,20 @@ impl GraphCsr {
     }
 
     /// Refuses with [`GraphError::OffsetsOverBudget`] a version whose
-    /// [`Self::offsets_bytes`] exceed `budget`, before its edges are read:
-    /// what the edges add is estimated once they are ([`BuildPlan`]),
-    /// before anything is built (DESIGN.md §14 item 17).
+    /// [`Self::offsets_bytes`], with the `8·id_space` bytes of row cursors
+    /// a build of several relations holds (DESIGN.md §5.4), exceed
+    /// `budget`, before its edges are read: what the edges add is
+    /// estimated once they are ([`BuildPlan`]), before anything is built
+    /// (DESIGN.md §14 item 17).
     pub fn check_offsets(
         relation_count: usize,
         id_space: u64,
         layout: CsrLayout,
         budget: u64,
     ) -> Result<(), GraphError> {
-        let required = Self::offsets_bytes(relation_count, id_space, layout);
+        let cursors = if relation_count > 1 { id_space.saturating_mul(8) } else { 0 };
+        let offsets = Self::offsets_bytes(relation_count, id_space, layout);
+        let required = offsets.saturating_add(cursors);
         match required <= budget {
             true => Ok(()),
             false => Err(GraphError::OffsetsOverBudget { required, budget }),
@@ -735,15 +739,29 @@ mod tests {
     #[test]
     fn a_version_over_its_offsets_budget_is_refused_but_not_for_its_relations() {
         let layout = CsrLayout { build_reverse: true, store_merged: true };
-        let required = GraphCsr::offsets_bytes(1000, 1 << 40, layout);
+        let required = GraphCsr::offsets_bytes(1000, 1 << 40, layout) + 8 * (1 << 40);
         assert_eq!(
             GraphCsr::check_offsets(1000, 1 << 40, layout, 1 << 30),
             Err(GraphError::OffsetsOverBudget { required, budget: 1 << 30 })
         );
         // 1,000 relations over 10M nodes: 160 MB of offsets for the merged
         // CSR, and 16 kB for the relations (it was 160 GB).
-        assert_eq!(GraphCsr::check_offsets(1000, 10_000_000, layout, 200 << 20), Ok(()));
-        assert_eq!(GraphCsr::check_offsets(1000, 10_000_000, unmerged(true), 1 << 20), Ok(()));
+        assert_eq!(GraphCsr::check_offsets(1000, 10_000_000, layout, 300 << 20), Ok(()));
+        assert_eq!(GraphCsr::check_offsets(1000, 10_000_000, unmerged(true), 100 << 20), Ok(()));
+    }
+
+    #[test]
+    fn several_relations_are_refused_for_their_row_cursors_before_their_edges_are_read() {
+        // Without the merged CSR, 1,000 relations over 10M nodes hold 16 kB
+        // of offsets, but their build holds 80 MB of row cursors.
+        let required = GraphCsr::offsets_bytes(1000, 10_000_000, unmerged(true)) + 80_000_000;
+        assert_eq!(
+            GraphCsr::check_offsets(1000, 10_000_000, unmerged(true), 1 << 20),
+            Err(GraphError::OffsetsOverBudget { required, budget: 1 << 20 })
+        );
+        // One relation is built without them.
+        let one = GraphCsr::offsets_bytes(1, 10_000_000, unmerged(true));
+        assert_eq!(GraphCsr::check_offsets(1, 10_000_000, unmerged(true), one), Ok(()));
     }
 
     #[test]
