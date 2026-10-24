@@ -1,8 +1,8 @@
 //! Where Postgres creates dynamic shared memory segments, and the room
 //! left there (DESIGN.md §5.6, Size checks): `/dev/shm` for `posix`
-//! segments (reserved with `posix_fallocate`, so a short store is an ERROR
-//! at creation, not a later SIGBUS), `pg_dynshmem` for `mmap` ones,
-//! unbounded for `sysv`. On PG 17 and 18 the shared cache's registry and
+//! segments on Linux (reserved with `posix_fallocate`, so a short store is
+//! an ERROR at creation, not a later SIGBUS), `pg_dynshmem` for `mmap`
+//! ones, unbounded for `sysv` and for `posix` elsewhere. On PG 17 and 18 the shared cache's registry and
 //! the activity table (§5.7) are named DSM segments, which
 //! `GetNamedDSMSegment` creates or raises an ERROR, so each is created
 //! only where this says it has room. Depends on no other feature.
@@ -27,14 +27,27 @@ pub(crate) const fn named_segment_room(size: usize) -> u64 {
 }
 
 /// The bytes available where segments are created, reserve included, and
-/// the store's size: `/dev/shm`'s for `posix` segments, `pg_dynshmem`'s
-/// for `mmap` ones, unbounded for `sysv`; `None` if they cannot be read.
+/// the store's size: `/dev/shm`'s for `posix` segments on Linux,
+/// `pg_dynshmem`'s for `mmap` ones, unbounded for `sysv` and for `posix`
+/// elsewhere; `None` if they cannot be read.
 pub(crate) fn store_space() -> Option<(u64, u64)> {
     // SAFETY: reads a setting on the main thread.
     let kind = unsafe { pg_sys::dynamic_shared_memory_type } as u32;
-    match kind {
-        pg_sys::DSM_IMPL_POSIX => space(c"/dev/shm"),
-        pg_sys::DSM_IMPL_MMAP => space(c"pg_dynshmem"),
+    space_of(kind, POSIX_STORE)
+}
+
+/// Where `posix` segments are files that can be measured: `/dev/shm` on
+/// Linux. Elsewhere (macOS, the BSDs) `shm_open` objects live in no file
+/// system, and Postgres reserves them with `posix_fallocate` only on Linux,
+/// so a short store is no ERROR at creation to guard against.
+const POSIX_STORE: Option<&CStr> = if cfg!(target_os = "linux") { Some(c"/dev/shm") } else { None };
+
+/// [`store_space`] for segments of `kind`, `posix` ones measured in
+/// `posix_store`, or unbounded where there is none.
+fn space_of(kind: u32, posix_store: Option<&CStr>) -> Option<(u64, u64)> {
+    match (kind, posix_store) {
+        (pg_sys::DSM_IMPL_POSIX, Some(store)) => space(store),
+        (pg_sys::DSM_IMPL_MMAP, _) => space(c"pg_dynshmem"),
         _ => Some((u64::MAX, u64::MAX)),
     }
 }
@@ -82,6 +95,14 @@ mod tests {
         let (available, size) = space(c"/").unwrap();
         assert!(size > 0 && available <= size);
         assert_eq!(space(c"/no/such/directory"), None);
+    }
+
+    #[test]
+    fn posix_segments_created_where_none_can_measure_are_unbounded() {
+        let unbounded = Some((u64::MAX, u64::MAX));
+        assert_eq!(space_of(pg_sys::DSM_IMPL_POSIX, None), unbounded);
+        assert_eq!(space_of(pg_sys::DSM_IMPL_POSIX, Some(c"/")), space(c"/"));
+        assert_eq!(space_of(pg_sys::DSM_IMPL_SYSV, Some(c"/")), unbounded);
     }
 
     #[test]
