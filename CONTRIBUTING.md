@@ -250,34 +250,48 @@ format. To benchmark a new function, add a workload with `requires` to
      commits change none of it.
   2. Run the **Release (prepare)** workflow from main (Actions → Release
      (prepare) → Run workflow) with the version, and optionally the next
-     version (default `X.(Y+1).0`) and the release's name. It runs
-     `release/prepare.py` on a new branch `release-X.Y.Z`, opens the
-     release PR with CHANGELOG's section as its body, and dispatches CI on
-     the branch, Miri and `test/upgrade.py` included (a PR opened with
-     `GITHUB_TOKEN` starts no `pull_request` run; a dispatch does, and its
-     checks show on the PR).
-  3. Review the release PR and its CI. To change it, close it, delete the
-     branch, fix main and run the workflow again: a commit pushed on top
-     would not be in the tagged commit.
+     version (default `X.(Y+1).0`) and the release's name. Its first job
+     runs `release/prepare.py` on `release-X.Y.Z` with a read-only token
+     and hands the two commits on as a git bundle; its second job, which
+     runs no repository code, checks the bundle is exactly those two
+     commits on the dispatched main commit, touching only the files a
+     release touches, pushes the branch and dispatches CI on it, Miri and
+     `test/upgrade.py` included (a dispatch made with `GITHUB_TOKEN` starts
+     a run, and its checks show on the PR).
+  3. Open the release PR yourself from the compare link in the run's
+     summary: title `release: X.Y.Z`, body CHANGELOG's section (also in
+     the summary). The workflow does not open it: a token that may open
+     PRs could also approve them. Review the PR and its CI. To change it,
+     close it, delete the branch, fix main and run the workflow again: a
+     commit pushed on top would not be in the tagged commit.
   4. **Merge it with a merge commit**, never a squash or a rebase: the
      recorded commit to tag must be in main's history.
   5. The merge changes `sql/released.commits`, which starts **Release
-     (publish)**. It verifies every frozen install script, then waits for
-     a reviewer of the `release` environment to approve; it then tags the
-     recorded commit `vX.Y.Z` (annotated) and creates the GitHub Release
-     with CHANGELOG's section as its notes. A re-run succeeds if the tag
-     is already on the recorded commit and fails if it is on another; run
-     it by hand (with a version, or none for the latest) to publish again.
+     (publish)**. Its first job verifies every frozen install script and
+     that no version or commit is recorded twice, and shows
+     `vX.Y.Z → <commit>` and the notes in its summary; the publish job,
+     named after both, waits for a reviewer of the `release` environment.
+     Check the commit is the PR's `release: X.Y.Z` commit and approve. It
+     then pushes the annotated tag `vX.Y.Z` with the environment's deploy
+     key and creates the GitHub Release with CHANGELOG's section as its
+     notes. A re-run succeeds if the tag is already on the recorded commit
+     and fails if it is on another; run it by hand (with a version, or
+     none for the latest) to publish again.
 - **Manual fallback**, without the workflows: on a branch from main,
   `release/prepare.py X.Y.Z NEXT --title "..."` (it needs cargo-pgrx
   initialised for `$PG`, default pg16), push it and open the PR, run
   `test/upgrade.py` and Miri (`cargo +$MIRI_NIGHTLY miri test -p
   warren-core`) on it, and merge with a merge commit. Release (publish)
-  still runs on that merge; if it cannot, on an up-to-date main:
-  `release/publish.py verify && release/publish.py tag X.Y.Z && git push
-  origin vX.Y.Z`, then `release/changelog.py notes X.Y.Z` as the
+  still runs on that merge; if it cannot, an admin, on an up-to-date
+  main: `release/publish.py verify && release/publish.py tag X.Y.Z &&
+  git push origin vX.Y.Z`, then `release/changelog.py notes X.Y.Z` as the
   Release's notes (`gh release create vX.Y.Z --verify-tag --notes-file`).
-  Only a ruleset bypass actor can push the tag (below).
+  Only the deploy key and admins can push a `v*` tag (below).
+- **Residual risk**: the tag ruleset protects tags, not GitHub Releases.
+  Anyone with write access can still edit or delete a Release's notes and
+  assets, or create a draft Release, on an existing tag; the tag itself,
+  and so the released source, cannot be moved. Check a Release against
+  CHANGELOG.md and its tag if in doubt.
 - pg_warren is a **trusted** extension, so a non-superuser's `CREATE` or
   `ALTER EXTENSION` runs every install and upgrade script as the bootstrap
   superuser. Scripts create objects only in schema `warren`, schema-qualify
@@ -295,36 +309,44 @@ test/dump.py --pg-config "$(command -v pg_config)"   # pg_dump and restore of gr
 
 Set once in the repository's settings; the workflows assume them.
 
-1. **Environment `release`** (Settings → Environments → New environment):
+1. **Deploy key for tags.** Generate a key pair used for nothing else:
+   `ssh-keygen -t ed25519 -N "" -C "pg_warren release tags" -f
+   release_deploy_key`. In Settings → Deploy keys → Add deploy key, add
+   `release_deploy_key.pub` with the title `release tags` and tick
+   **Allow write access**.
+2. **Environment `release`** (Settings → Environments → New environment):
    *Required reviewers*: the people who may publish a release (with
    *Prevent self-review* if more than one); *Deployment branches and
-   tags*: *Selected branches and tags*, with the branch rule `main`. It
-   needs no secrets.
-2. **Tag ruleset for `v*`** (Settings → Rules → Rulesets → New ruleset →
+   tags*: *Selected branches and tags*, with the branch rule `main`;
+   *Environment secrets*: add `RELEASE_DEPLOY_KEY` with the whole private
+   key file `release_deploy_key`. Then delete both key files locally. The
+   secret reaches a job only after a reviewer approves it, and only on
+   `main`.
+3. **Tag ruleset for `v*`** (Settings → Rules → Rulesets → New ruleset →
    New tag ruleset): enforcement *Active*; target tags matching the
    pattern `v*`; rules *Restrict creations*, *Restrict updates* and
-   *Restrict deletions*; bypass list: the **GitHub Actions** app (*Add
-   bypass* → *GitHub Apps* → GitHub Actions, "Always allow"), since
-   `GITHUB_TOKEN` pushes as `github-actions[bot]`, that app's identity,
-   and *Repository admin* (the manual fallback). The bypass covers any
-   workflow whose token can write contents; of the workflows only the two
-   release ones ask for `contents: write`, Release (prepare) pushes only
-   its `release-*` branch, and Release (publish) tags only after the
-   `release` environment's approval. If the bypass picker does not offer
-   the GitHub Actions app, a GitHub App of your own is the alternative:
-   add it as the bypass, keep its key as a secret of the `release`
-   environment, and have the publish job push with its token
-   (`actions/create-github-app-token`) instead of `GITHUB_TOKEN`.
-3. **Actions → General → Workflow permissions**: keep the default
-   *Read repository contents and packages permissions* (each job asks
-   for what it needs), and tick **Allow GitHub Actions to create and
-   approve pull requests**: Release (prepare) opens the release PR with
-   `GITHUB_TOKEN`.
-4. **Pull requests** (Settings → General): keep *Allow merge commits*
-   enabled; release PRs must be merged with one. If `main`'s branch
-   protection requires status checks, the dispatched CI run's checks
-   satisfy them: they have the same names as a `pull_request` run's.
-5. **No secrets**: neither workflow needs a PAT or a GitHub App token.
+   *Restrict deletions*; bypass list: **Deploy keys** ("Always allow") and
+   *Repository admin* (for the manual fallback). Do not add the GitHub
+   Actions app: any branch workflow with `contents: write` pushes as it.
+   If your plan's ruleset bypass list does not offer *Deploy keys*, use a
+   GitHub App of your own instead: create it with *Contents: read and
+   write* on this repository only, add it as the bypass, keep its app id
+   and private key as secrets of the `release` environment, and have the
+   publish job push the tag with its installation token
+   (`actions/create-github-app-token`, pinned by commit) instead of the
+   deploy key.
+4. **Actions → General → Workflow permissions**: keep *Read repository
+   contents and packages permissions* (each job asks for what it needs),
+   and leave **Allow GitHub Actions to create and approve pull requests**
+   *unticked*: the release PR is opened by a person.
+5. **Branch protection for `main`** (a branch ruleset or classic
+   protection): require a pull request with at least one approval and
+   **Require approval of the most recent reviewable push**, so that no
+   one approves their own last push; if status checks are required, the
+   dispatched CI run's checks satisfy them on a release PR, as they have
+   the same names as a `pull_request` run's. Keep *Allow merge commits*
+   enabled (Settings → General → Pull requests): release PRs are merged
+   with one.
 
 ## Docker
 
