@@ -43,7 +43,7 @@ the server headers (`postgresql-server-dev-NN`), `clang`/`libclang-dev`, and
 cargo-pgrx at exactly the version the extension uses:
 
 ```sh
-git checkout v0.5.0   # the latest release; main is the version in development
+git checkout v0.6.0   # the latest release; main is the version in development
 cargo install cargo-pgrx --version 0.19.3 --locked
 cargo pgrx init --pg16 "$(command -v pg_config)"
 cd crates/pg_warren
@@ -282,22 +282,42 @@ Every SQL example in the README and `docs/` runs in CI, in
   slower; and Louvain and Leiden at 10M nodes still write several GB of
   level graphs ([docs/limits.md](docs/limits.md)).
 
-- **0.6.0** (in development, M10): identity, lifecycle and visibility:
-  `text` node ids, ownership transfer, cleanup when an owner role is
-  dropped, quotas on readers' vectors, and observability (DESIGN.md §13).
+- **0.6.0**: identity, lifecycle and visibility, milestone M10. Nodes
+  can be keyed on strings: `text` is a fourth id type, for IRIs and slugs,
+  compared bytewise (docs/semantics.md, "Text ids"). A graph's ownership
+  can be transferred (`warren.set_owner`); a dropped owner role's graphs,
+  vectors and reader entries are handled by `warren.reassign_owned` and
+  `warren.drop_owned`, an optional superuser's `DROP OWNED` trigger, and
+  `warren.orphans()` and `warren.drop_orphans()`; a graph's owner can
+  bound the vectors other roles persist on it
+  (`warren.set_vector_quota`). `warren.cache()`, `warren.backends()` and
+  `warren.progress()` show what each backend's cache holds and counts and
+  how far each long call has got (DESIGN.md §5.7). Upgrading needs `ALTER
+  EXTENSION pg_warren UPDATE` (see the changelog).
+
+  In the 100M-edge soak with IRIs as node ids, the version is 28% larger
+  than with `bigint` ids and the build takes 1.39× as long; `pagerank`,
+  `eigen` and the community detections are within 12%, the library within
+  1.0–1.4×, and calls that return a row per node (`bfs`, `components`)
+  take about twice as long, since they build each id's `text`. The build maps edge endpoints on the compute pool for every id
+  type: the `bigint` graph builds in 79 s, from 173 s in 0.5.0's soak. The
+  caveats: `walk` and `neighbours` still build their rows before
+  returning the first; and on PostgreSQL 15 and 16, other backends' rows
+  in `warren.backends()` and `warren.progress()` need
+  `shared_preload_libraries` ([docs/limits.md](docs/limits.md)).
+
+- **0.7.0** (in development, M11): proof at scale and in deployment: a
+  benchmark and test suite on a range of real graph datasets sourced
+  through [keepset](https://mearman.github.io/keepset/) (`bench/corpus`),
+  robustness behind connection poolers, on replicas and through crashes,
+  and packages (DESIGN.md §13).
 
 See [CHANGELOG.md](CHANGELOG.md). This is pre-1.0 software: the SQL surface
 may still change between minor versions, with an upgrade script each time.
 
-Not there yet: the rest of the road to 1.0 (DESIGN.md §13) is text ids,
-and observability (M10; ownership transfer, `warren.set_owner`, cleanup
-after a dropped role, `warren.reassign_owned`, `warren.drop_owned`, the
-optional `DROP OWNED` trigger and `warren.drop_orphans`, quotas on readers'
-vectors, `warren.set_vector_quota`, the cache's views, `warren.cache()` and
-`warren.backends()`, and progress, `warren.progress()` and
-`warren.report_progress()`, are built for 0.6.0);
-benchmarks and robustness on real graphs and deployments, and packages
-(M11); and a reviewed, frozen SQL surface (M12, 1.0.0). Incremental
+Not there yet: the rest of the road to 1.0 (DESIGN.md §13) is a
+benchmark and test suite on real graph datasets, robustness in real
+deployments, and packages (M11); and a reviewed, frozen SQL surface (M12, 1.0.0). Incremental
 maintenance, general sparse matrix algebra (contraction's `PᵀAP` is the
 one sparse product) and a GPU backend are left to 1.x
 ([docs/limits.md](docs/limits.md)).

@@ -17,7 +17,8 @@ SELECT warren.create_graph(name, node_query, edge_query,
 ```
 
 - `node_query` returns one column, the node's **external id**: `integer`,
-  `bigint` or `uuid`. Its type is the graph's **id type**.
+  `bigint`, `uuid` or `text` (`varchar` is read as `text`). Its type is
+  the graph's **id type** ([text ids](#text-ids)).
 - `edge_query` returns `src, dst` (of the id type), then a `text`
   **relation** if `has_relations`, then a `double precision` weight if
   `weighted`.
@@ -469,6 +470,10 @@ Functions are polymorphic over the id type and check it at run time.
   a typed NULL: `warren.components('social', NULL::bigint)`. `gather` takes a
   second witness for its result type.
 - `uuid` graphs work the same way (`ARRAY[$1::uuid]`, `NULL::uuid`).
+- `text` graphs too (`'https://example.org/a'::text`, `NULL::text`): a
+  lone string literal needs its `::text`, since Postgres cannot resolve an
+  untyped literal to `anyelement`, but `ARRAY['…']` is already `text[]`.
+  A `varchar` argument is widened where the result holds no ids.
 
 ```sql
 SELECT warren.neighbours('social', 3::bigint);
@@ -476,6 +481,30 @@ SELECT warren.degree('social', 3);
 SELECT * FROM warren.components('social', NULL::bigint);
 SELECT * FROM warren.vector_values('social', 'pr', NULL::bigint);   -- after pagerank('social', 'pr')
 ```
+
+### Text ids
+
+- Ids compare **bytewise** in the database encoding, which is `COLLATE "C"`
+  order, whatever the column's collation. Under a deterministic collation
+  (every default one) that is SQL's own equality, so an edge joins the
+  node SQL would join it to. A nondeterministic collation (for example
+  ICU's case-insensitive ones) makes `'Alice' = 'alice'`, which bytewise
+  ids cannot follow, so `create_graph` and `refresh` refuse such an id
+  column (`datatype_mismatch`, 42804): write `id COLLATE "C"` for exact
+  ids, or normalise in the query (`lower(id)`). `bpchar`, `name` and
+  `citext` ids are refused too, each with the cast to write.
+- The first build numbers dense ids in byte order (`node_order := 'id'`).
+- Ids have no length limit beyond memory; the empty string is an id, and a
+  NULL id is skipped, as for every id type.
+- A version records the database encoding, and one restored into a
+  database of another encoding is refused (55000): create the graph again
+  there.
+- A text graph's id map holds each id's bytes once plus 12 bytes a node
+  (at 10M nodes, 120 MB plus the ids; `bigint` takes 240 MB). Calls that
+  map more than 65,536 ids at once (`vector_from_query`, `gather`'s
+  messages, `similarity`'s pairs) build a hash index of 8 bytes a node for
+  the call, charged to `warren.max_compute_memory`, and search without it
+  if it does not fit.
 
 ## Unknown and tombstoned ids
 

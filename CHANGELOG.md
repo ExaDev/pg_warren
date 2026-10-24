@@ -1,9 +1,101 @@
 # Changelog
 
-## 0.6.0 — in development
+## 0.7.0 — in development
 
-### Added
+## 0.6.0 — identity, lifecycle and visibility (2026-10-24)
 
+Milestone M10 of DESIGN.md §13. Nodes can be keyed on strings: `text` is
+a fourth id type, for IRIs and slugs, and every function takes and
+returns `text` ids with no new signature. A graph's ownership can be
+transferred (`warren.set_owner`), and the graphs, vectors and reader
+entries of a dropped role no longer linger unseen: `reassign_owned` and
+`drop_owned` run before `DROP OWNED`, a superuser may opt into a `DROP
+OWNED` trigger, and `orphans()` and `drop_orphans()` find what is left. A
+graph's owner can bound the vectors other roles persist on it. A
+monitoring query can see what each backend's cache holds and counts
+(`warren.cache()`, `warren.backends()`), and how far each long call has
+got (`warren.progress()`). In the 100M-edge soak with IRIs as node ids, a
+text graph's version is 28% larger than with `bigint` ids and builds in
+1.39× the time; `pagerank` and `eigen` are within 12%, and the
+community detections within 3%. The build itself, for every id type,
+now maps edge endpoints on the compute pool, and the `bigint` graph
+builds in 79 s where 0.5.0's soak took 173 s (under Performance).
+
+### Upgrading
+
+- **If `pg_warren` is in `shared_preload_libraries`, restart the server**
+  after installing the new build. The postmaster keeps the library it loaded
+  at start, and every backend inherits it, so until a restart the server runs
+  the old code against the updated catalog. Without the preload, new sessions
+  load the new library.
+- **Run `ALTER EXTENSION pg_warren UPDATE;` in every database that has the
+  extension**, after installing the new build and before using the new
+  version. The new library is loaded at once, but the catalog changes only
+  with the update, so calls in between can fail. The update:
+  - creates twelve functions: `set_owner`; `reassign_owned`,
+    `drop_owned`, `on_drop_owned`, `orphans` and `drop_orphans`;
+    `set_vector_quota` and `vector_usage`; `cache` and `backends`;
+    `progress` and `report_progress` (all under New);
+  - adds the column `warren.graphs.reader_vector_quota` (existing graphs
+    have no quota), the table `warren.vector_quotas` (dumped with the
+    extension) and an index on `warren.vectors (graph_id, created_by)`;
+  - replaces the library's PL/pgSQL functions, `aggregate_neighbours`,
+    `components_vector`, `eigenvector_centrality`, `hits`,
+    `katz_centrality`, `label_propagation`, `label_propagation_majority`,
+    `pagerank`, `sssp_vector`, `louvain` and `leiden`, with the same
+    signatures, so that they report their progress. Their results are
+    unchanged.
+- The update never creates the `DROP OWNED` event trigger: a superuser
+  opts into it (under New).
+- `text` ids change nothing in the catalog. Existing `integer`, `bigint`
+  and `uuid` graphs, their segments and their shared versions are
+  unchanged, and read, refresh and compact as before. A build older than
+  0.6.0 cannot read a `text` graph, and downgrading is not supported.
+- The shared cache's registry is unchanged, so on PostgreSQL 17 and 18
+  versions stay shared across the upgrade without a restart.
+
+### Behaviour changes
+
+- `refresh` maps each batch of edge rows' endpoints to dense ids on the
+  compute pool, on up to `warren.threads` threads, for every id type; the
+  main thread still reads the rows. The edge list, and so the version, is
+  the one the row-by-row intake made. Each batch is charged to
+  `warren.max_build_memory`.
+- `grant`, `revoke` and `drop_graph` take the graph's row lock, as
+  `refresh` and the other writers do, so they wait behind a running
+  `refresh` of the same graph (under Fixes).
+- `components`, `minimum_spanning_forest`, `vector_topk` and
+  `most_similar` make each row's external ids as the row is returned,
+  rather than all rows before the first. Their rows and order are
+  unchanged. Such a call keeps the version it reads, private or mapped
+  from the shared cache, until its last row is read or it ends: a cursor
+  on one, read across statements, keeps the version after the statement
+  that opened it, even once it is evicted (under Performance).
+
+### New
+
+- **`text` node ids** (DESIGN.md §5.7, §14 items 41 and 42;
+  docs/semantics.md, "Text ids"). A graph's node query
+  may return `text` or `varchar` ids, such as IRIs or slugs; its id type
+  is then `text`. Every function that takes or returns ids does so in
+  `text`, with no new signature: a string literal needs its cast
+  (`warren.neighbours('kg', 'https://example.org/a'::text)`), `ARRAY['…']`
+  is already `text[]`, and the type witness is `NULL::text`.
+  - Ids compare bytewise in the database encoding (`COLLATE "C"` order),
+    which is SQL's own equality under every deterministic collation. An
+    id column whose collation is nondeterministic is refused by
+    `create_graph` and `refresh` (42804, hinting `COLLATE "C"` or
+    `lower()`), as are `bpchar`, `name` and `citext` ids, each with the
+    cast to write. There is no length limit beyond memory.
+  - A text version stores each id's bytes once, in dense-id order, with
+    their offsets and their sorted order: at 10M nodes 120 MB plus the
+    ids' bytes, against 240 MB for `bigint`. It is shared across backends
+    and read by parallel workers like any other version. One restored
+    into a database of another encoding is refused (55000).
+  - Calls that map more than 65,536 ids (`vector_from_query`, `gather`'s
+    messages, `similarity`'s pairs) build a hash index of the id map once
+    per call, charged to `warren.max_compute_memory` (80 MB at 10M
+    nodes), and keep the binary search if it does not fit.
 - **`warren.set_owner(name, owner regrole)`** gives a graph a new owner, as
   `ALTER MATERIALIZED VIEW … OWNER TO` does (DESIGN.md §5.7, §14 item 43).
   The caller must be a member of the current owner and able to `SET ROLE`
@@ -36,7 +128,6 @@
     owner (or a member with its privileges or the right to `SET ROLE` to
     it) as well as by a superuser (`drop_graph`, `drop_orphans`), and adopted by a superuser with `warren.set_owner`,
     which refused it before ("the owner no longer exists").
-
   - A `drop_vector`, a replacement or `compact`'s move that checked a
     vector's creator, and then waited behind a `reassign_owned` that changed
     it, fails with 40001 instead of deleting the new creator's vector.
@@ -110,7 +201,7 @@
   extension), an index on `warren.vectors (graph_id, created_by)` and the
   two functions; existing graphs have no quota.
 
-### Fixed
+### Fixes
 
 - `refresh`, `compact`, `promote`, `drop_version`, `grant`, `revoke`,
   `drop_graph` and `contract` into an existing quotient check ownership
@@ -118,6 +209,51 @@
   `drop_graph` now take it). They checked only before it, so a call queued behind an ownership
   transfer ran with an ownership its caller no longer had (harness test
   `set_owner_race`).
+
+### Performance
+
+- **The 100M-edge soak with `text` ids** (DESIGN.md §12, "Text node ids";
+  `bench/results/soak/a-text-m10.json` and `a-m10.json`; PG 16, 4 vCPUs,
+  `warren.threads = 4`, private cache). Case a with IRIs of 33–36 bytes as
+  node ids, against the same graph with `bigint` ids, every stage run:
+  - the version is 1.44 GB against 1.12 GB, and `refresh` takes 110.2 s
+    against 79.1 s, peaking 0.25 GB higher;
+  - calls that return a row per reached node build each id's `text` datum:
+    `bfs` (1.47M rows) 1.42 s against 0.66 s, `components` 10.6 s against
+    5.2 s, `reachable_set` 1.42× as long;
+  - `similarity` of 100,000 pairs builds its per-call index: 2.15 s
+    against 0.47 s;
+  - `pagerank` and `eigen` are within 12%; `eigenvector_centrality`,
+    `katz_centrality` and `hits` take 1.2–1.4× as long, the rest of the
+    library and `louvain` and `leiden` within 8%, with the same modularity
+    to 0.001.
+
+  §12's targets missed there, for both id types: `reachable_set` (13 and
+  19M edges/s, against 50M) and `bfs` against the recursive CTE (5.2× and
+  10.5× faster, against 20×); with `text` ids, `components` also misses
+  its 10 s.
+- **The build maps edge endpoints in parallel** (under Behaviour changes).
+  In the same soak the `bigint` graph builds in 79.1 s from its table
+  (0.5.0's soak: 173.1 s), 99.1 s from the generator query (184.5 s) and
+  88.3 s again with 0.1% fewer edges (165.3 s), on the same machine.
+- **0.5.0's fixes to level graphs and Leiden's refinement at 10M nodes**,
+  run at that scale for the first time in the same soak: on the
+  one-relation graph with little community structure, `leiden` completes
+  in 804 s (16 levels, modularity 0.186, an 8.10 GB peak), where 0.5.0's
+  soak was refused (53400), and `louvain` takes 528 s (627.5 s). The two
+  wrote 13.1 and 4.6 GB of level segments and 15.1 and 6.1 GB of WAL,
+  held until the run's transaction ends (docs/limits.md).
+- **Rows made as they are returned** (DESIGN.md §12): `components`,
+  `minimum_spanning_forest`, `vector_topk` and `most_similar` no longer
+  hold every row's ids until the call ends. At 5M nodes and 50M edges,
+  `components` peaks at 0.84 GB with `text` ids (1.28 GB before) and
+  0.73 GB with `bigint` (0.80 GB), and `minimum_spanning_forest` at
+  1.10 GB with `text` (1.77 GB), its `bigint` peak unchanged; times are
+  unchanged. `walk` and `neighbours` still build their rows first, bounded
+  by their arguments or by one node's degree (M11).
+- Progress reporting costs a few atomic stores per statement and per
+  poll: within noise for one `degree` per transaction and for `pagerank`,
+  and about 1.5 µs a `report_progress` call.
 
 ## 0.5.0 — the shared cache (2026-10-23)
 
