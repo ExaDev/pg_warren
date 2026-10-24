@@ -81,14 +81,22 @@ impl<'a, T: Target> CsrSlices<'a, T> {
             from if from <= rows.len() && (from == 0 || rows[from - 1] < source) => from,
             _ => 0,
         };
-        // rows[..lo] are below `source`.
-        let (mut lo, mut step) = (from, 1);
-        while lo + step <= rows.len() && rows[lo + step - 1] < source {
-            lo += step;
-            step *= 2;
-        }
-        let hi = (lo + step).min(rows.len());
-        let position = lo + rows[lo..hi].partition_point(|&row| row < source);
+        let position = match rows.get(from) {
+            // The common case of a sweep: the row is at the hint, or not
+            // stored and the hint's row comes after it.
+            Some(&next) if next >= source => from,
+            None => from,
+            Some(_) => {
+                // rows[..lo] are below `source`.
+                let (mut lo, mut step) = (from + 1, 1);
+                while lo + step <= rows.len() && rows[lo + step - 1] < source {
+                    lo += step;
+                    step *= 2;
+                }
+                let hi = (lo + step).min(rows.len());
+                lo + rows[lo..hi].partition_point(|&row| row < source)
+            }
+        };
         *hint = position;
         match rows.get(position) == Some(&source) {
             true => self.offsets[position] as usize..self.offsets[position + 1] as usize,
