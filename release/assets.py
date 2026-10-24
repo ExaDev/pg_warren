@@ -67,7 +67,8 @@ def members(deb, part):
     archive = tarfile.open(fileobj=io.BytesIO(done.stdout))
     found = {}
     for member in archive.getmembers():
-        name = member.name.removeprefix("./").rstrip("/").removeprefix(".")
+        name = member.name.removeprefix("./").rstrip("/")
+        name = "" if name == "." else name
         if name in found:
             raise AssetError(f"{deb.name}: {name or '.'} is in its {part} archive twice")
         found[name] = (member, archive)

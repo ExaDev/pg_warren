@@ -186,6 +186,12 @@ def test_a_file_outside_pg_warren_s_paths_is_refused(tmp_path, path):
         check_deb(build(tmp_path, files=files), "0.7.0")
 
 
+def test_a_path_that_differs_from_pg_warren_s_by_a_leading_dot_is_refused(tmp_path):
+    files = {".usr/lib/postgresql/16/lib/pg_warren.so": b"x", "usr/share/postgresql/16/extension/pg_warren.control": b"x"}
+    with pytest.raises(AssetError, match=r"\.usr"):
+        check_deb(build(tmp_path, files=files), "0.7.0")
+
+
 def test_a_package_without_the_library_is_refused(tmp_path):
     with pytest.raises(AssetError, match="pg_warren.so"):
         check_deb(build(tmp_path, files={"usr/share/postgresql/16/extension/pg_warren.control": b"x"}), "0.7.0")
