@@ -92,3 +92,116 @@ mod tests {
         }
     }
 }
+
+/// Every reader of relations' CSRs returns with sparse offsets exactly
+/// what it returns with dense ones.
+#[cfg(test)]
+mod readers {
+    use proptest::prelude::*;
+
+    use crate::community::{contract, Contraction};
+    use crate::compute::{
+        gather, spmv, triangles, AnyVector, Combiner, ComputeMemory, Gather, Messages, Product,
+        Semiring, Vector, Workers,
+    };
+    use crate::graph::{
+        CsrLayout, DenseId, Direction, EdgeList, GraphCsr, Membership, RelationDictionary,
+        RelationIndex, RelationSelection,
+    };
+    use crate::interrupts::Uninterrupted;
+    use crate::traversal::{bfs, components, dijkstra, Adjacency, Limits};
+
+    /// A graph of up to 30 relations over up to 80 nodes, whose relations
+    /// are mostly sparse, built (so with sparse offsets where they pay).
+    fn graphs() -> impl Strategy<Value = (GraphCsr, Vec<RelationIndex>)> {
+        (1usize..30, 8u64..80, any::<bool>(), any::<bool>()).prop_flat_map(
+            |(relation_count, id_space, store_merged, build_reverse)| {
+                let edge = (0..relation_count, 0..id_space, 0..id_space, 1u8..9);
+                prop::collection::vec(edge, 0..200).prop_map(move |rows| {
+                    let mut dictionary = RelationDictionary::new();
+                    let relations: Vec<RelationIndex> = (0..relation_count)
+                        .map(|r| dictionary.intern(&r.to_string()).unwrap())
+                        .collect();
+                    let mut edges = EdgeList::new(true);
+                    for &(r, source, target, weight) in &rows {
+                        edges.push(relations[r], source, target, f64::from(weight) / 4.0).unwrap();
+                    }
+                    let layout = CsrLayout { build_reverse, store_merged };
+                    let graph =
+                        GraphCsr::build_as(edges, relation_count, id_space, layout).unwrap();
+                    (graph, relations)
+                })
+            },
+        )
+    }
+
+    /// Every result the readers give for `graph`, as text.
+    fn read(graph: &GraphCsr, relations: &[RelationIndex]) -> Vec<String> {
+        let id_space = graph.all_relations().forward().id_space();
+        let (workers, memory) = (Workers::new(2).unwrap(), ComputeMemory::new(u64::MAX));
+        let mut never = Uninterrupted;
+        let some: Vec<RelationIndex> = relations.iter().copied().step_by(2).collect();
+        let selections = [RelationSelection::All, RelationSelection::Only(&some)];
+        let mut results = Vec::new();
+        for selection in selections {
+            for direction in [Direction::Out, Direction::In, Direction::Both] {
+                let Ok(adjacency) = Adjacency::new(graph, direction, selection) else { continue };
+                let visits = bfs(&adjacency, &[0], None, Limits::default(), &mut never);
+                results.push(format!("bfs {direction:?} {visits:?}"));
+                let path = dijkstra(&adjacency, 0, id_space - 1, &mut never);
+                results.push(format!("dijkstra {direction:?} {path:?}"));
+            }
+            let values = (0..id_space).map(|node| node as f64 + 0.5).collect();
+            let x = AnyVector::from(Vector::from_values(&memory, id_space, 1, values).unwrap());
+            for transpose in [false, true] {
+                let product = Product {
+                    transpose,
+                    relations: selection,
+                    ..Product::new(Semiring::PlusTimes)
+                };
+                let mut y = AnyVector::from(Vector::filled(&memory, id_space, 1, 0.0f64).unwrap());
+                let done = spmv(&workers, &memory, &mut never, graph, &product, &x, &mut y);
+                results.push(format!("spmv {transpose} {done:?} {y:?}"));
+            }
+            let mut messages = Messages::<f64>::new(&memory).unwrap();
+            (0..id_space).for_each(|node| messages.push(node, node as f64).unwrap());
+            for direction in [Direction::Out, Direction::In, Direction::Both] {
+                let sum = Gather { direction, relations: selection, ..Gather::new(Combiner::Sum) };
+                let gathered =
+                    gather(&workers, &memory, &mut never, graph, &sum, &messages).map(|gathered| {
+                        gathered.iter().map(|row| format!("{row:?}")).collect::<Vec<_>>()
+                    });
+                results.push(format!("gather {direction:?} {gathered:?}"));
+            }
+            let counted = triangles(&workers, &memory, &mut never, graph, selection);
+            results.push(format!("triangles {counted:?}"));
+        }
+        results.push(format!("components {:?}", components(graph, &mut never)));
+        let thirds: Vec<Option<DenseId>> = (0..id_space).map(|node| Some(node % 3)).collect();
+        let membership = Membership::new(&thirds, 3).unwrap();
+        let forward: Vec<_> = relations
+            .iter()
+            .zip(graph.relations())
+            .map(|(&relation, csrs)| (relation, csrs.forward()))
+            .collect();
+        let contraction = Contraction { weighted: true, drop_self_loops: false, undirected: false };
+        let memory = crate::graph::BuildMemory::unlimited();
+        let quotient = contract(&workers, &mut never, &forward, &membership, contraction, &memory);
+        results.push(format!("contract {quotient:?}"));
+        results
+    }
+
+    proptest! {
+        #[test]
+        fn readers_return_with_sparse_offsets_what_they_return_with_dense_ones(
+            (graph, relations) in graphs(),
+        ) {
+            let dense = graph.densified();
+            let (sparse, dense) = (read(&graph, &relations), read(&dense, &relations));
+            for (sparse, dense) in sparse.iter().zip(&dense) {
+                prop_assert_eq!(sparse, dense);
+            }
+            prop_assert_eq!(sparse.len(), dense.len());
+        }
+    }
+}

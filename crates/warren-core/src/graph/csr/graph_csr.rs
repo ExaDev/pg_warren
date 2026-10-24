@@ -277,6 +277,20 @@ impl GraphCsr {
         Self { layout: self.layout.shared_views(), deduplicated_edges: self.deduplicated_edges }
     }
 
+    /// The same graph with every CSR's offsets dense, so that tests read
+    /// both layouts.
+    #[cfg(test)]
+    pub(crate) fn densified(&self) -> Self {
+        let each = |relation: &RelationCsr| RelationCsr {
+            forward: densified(&relation.forward),
+            reverse: relation.reverse.as_ref().map(densified),
+        };
+        let relations = self.relations().iter().map(each).collect();
+        let merged = self.merged().map(each);
+        let layout = Layout::new(relations, merged).unwrap_or_else(|_| self.layout.clone());
+        Self { layout, deduplicated_edges: self.deduplicated_edges }
+    }
+
     /// The CSRs of each relation, in relation-index order.
     pub fn relations(&self) -> &[RelationCsr] {
         match &self.layout {
