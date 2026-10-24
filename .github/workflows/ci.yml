@@ -473,7 +473,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Go's checksum database verifies the module; shellcheck, on the
-      # runner, checks each run: script.
-      - run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-      - run: ~/go/bin/actionlint -color
+      # Both pinned, so a new release cannot change the verdict unannounced
+      # (the runner's own shellcheck flagged what 0.11.0 does not). Go's
+      # checksum database verifies actionlint; shellcheck, which actionlint
+      # runs on each run: script, is checked against its release's sha256.
+      # CONTRIBUTING.md runs the same versions locally.
+      - name: Install actionlint 1.7.12 and shellcheck 0.11.0
+        run: |
+          set -euo pipefail
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          tarball="$RUNNER_TEMP/shellcheck.tar.xz"
+          curl -fsSLo "$tarball" https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  $tarball" | sha256sum --check
+          tar -xJf "$tarball" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellcheck-v0.11.0" >>"$GITHUB_PATH"
+      - run: shellcheck --version && ~/go/bin/actionlint -color

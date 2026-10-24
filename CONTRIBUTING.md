@@ -59,7 +59,8 @@ sql/schema-drift.sh
 # warren-core must never depend on Postgres (DESIGN.md §15.4); this must print nothing
 cargo tree -p warren-core -e all | grep -E 'pgrx|pg[-_]sys'
 
-# The workflows (.github/workflows); with shellcheck on PATH it checks each run: script
+# The workflows (.github/workflows), with the versions CI pins: actionlint 1.7.12 runs
+# shellcheck 0.11.0 (https://github.com/koalaman/shellcheck/releases/tag/v0.11.0) on each run: script
 go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 && ~/go/bin/actionlint
 ```
 
