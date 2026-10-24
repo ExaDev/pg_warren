@@ -15,7 +15,7 @@ is set in the server's configuration and takes effect on reload.
 | `warren.max_compute_memory` | `4GB` | `64kB` up | memory one call holds: every vector it reads (once, cached or not), every vector and work buffer it allocates, and what its statement holds in the cache past `warren.max_cache_memory` | `configuration_limit_exceeded` (53400), before allocating or loading |
 | `warren.max_cache_memory` | `4GB` | `64kB` up | what this backend's cache holds *between* statements: cached versions, cached persisted vectors, and every role's transient vectors | versions and persisted vectors no running statement has read are evicted, least recently used first; a transient write that would go over is refused with 53400 |
 | `warren.shared_cache_memory` | `4GB` | `0` up; `0` turns it off | the cluster's shared versions and persisted vectors, of every database together; set in `postgresql.conf` (or `ALTER SYSTEM`) and reloaded, not per session ([the shared cache](#the-shared-cache)) | unpinned entries no backend maps are evicted, least recently used first; one that still does not fit is loaded into the reading backend's own cache, with a `NOTICE` |
-| `warren.max_build_memory` | `4GB` | `1MB` up | everything a `refresh` holds at once: the node ids, the id map, the edge list, the CSRs it is building and its sort and write buffers; and, separately, the CSR offsets of the whole version (8 bytes × (id_space + 1) per relation's CSR, and the merged CSR's if stored, per direction) | `configuration_limit_exceeded` (53400): before the edge query runs if the id map or the offsets do not fit, before the version is written if the build's estimate does not, else when the edge list grows past it |
+| `warren.max_build_memory` | `4GB` | `1MB` up | everything a `refresh` holds at once: the node ids, the id map, the edge list, the CSRs it is building and its sort and write buffers; and, separately, the offsets every version holds whatever its edges (the merged CSR's 8 bytes × (id_space + 1) if stored, and 8 bytes per relation's CSR, per direction) | `configuration_limit_exceeded` (53400): before the edge query runs if the id map or the offsets do not fit, before the version is written if the build's estimate does not, else when the edge list grows past it |
 | `warren.max_walk_paths` | `10000000` | 1 up | the largest `max_results` for a `walk` that returns a row per walk (`mode := 'paths'`, or `'ends'` without `distinct_ends`) | `program_limit_exceeded` (54000) |
 
 On the `kg` graph of [change-detection.md](change-detection.md):
@@ -38,13 +38,13 @@ Other built-in bounds:
 - A `refresh` streams each relation's CSRs to `warren.segments` as it builds
   them, so it holds the edge list (20 bytes per weighted edge, 12 unweighted,
   8 with one relation), the id map (24 bytes per `bigint` node), the
-  relation dictionary, and a group of relations' forward CSRs with one
-  reverse CSR: as many relations at once as fit half of what remains of the
-  budget, so a small graph builds in one pass and a large one in up to
-  about eight. With the merged CSR stored, its build peaks at about 28 bytes
+  relation dictionary, 8 bytes per node of row cursors while it builds the
+  relations, and a group of relations' forward CSRs with one reverse CSR
+  (each relation's offsets at most what its edges need): as many relations
+  at once as fit half of what remains of the budget, so a small graph
+  builds in one pass and a large one in up to about eight. With the merged CSR stored, its build peaks at about 28 bytes
   per weighted edge. A relation column with a distinct name per row is
-  refused while it is read (the dictionary is charged as it grows, and the
-  offsets checked as relations are added).
+  refused while it is read (the dictionary is charged as it grows).
 - A `refresh` reports the most build memory it held at `DEBUG1`.
 
 Every long call checks for interrupts (traversals every 65,536 units of work,
@@ -173,8 +173,12 @@ differs.
   soak run whose results are not committed, the backend was killed for
   memory at 12.8 GB).
 - Storage of a version, per direction: offsets 8 bytes × (id_space + 1) for
-  each relation, plus the merged CSR's when there is more than one relation
-  and the graph stores it (`store_merged`, the default; see below);
+  the merged CSR when there is more than one relation and the graph stores
+  it (`store_merged`, the default; see below), and for each relation whose
+  edges start from many of the nodes; one whose edges start from at most
+  about a sixth of them (an eighth above 2³² nodes) stores 12 bytes (16)
+  per node they start from instead (in the reverse CSR, per node they
+  reach);
   targets 4 bytes per edge (8 above 2³² nodes); weights 8 bytes per edge.
   The reverse CSR doubles it (`build_reverse := true`, the default). A
   persisted `f64` vector is 8 bytes × id_space × width (80 MB per column at
@@ -432,10 +436,23 @@ are unaffected. Without the merged CSR, a product over all relations
 (`spmv`, `spmm`, and so `eigen` and `distance`) also needs a row scratch on
 each worker thread, charged to `warren.max_compute_memory`: 16 bytes per
 entry of the longest row, at most 16 B × the relation count × the largest
-degree in one relation. Keep the default unless the merged CSR would not fit your
-memory limits. The choice is per graph, kept by `compact`, and shown by
-`warren.info(name) -> 'store_merged'`; it cannot be changed after
+degree in one relation, and 8 bytes a relation for where it last found
+each relation's row. Keep the default unless the merged CSR would not fit
+your memory limits. The choice is per graph, kept by `compact`, and shown
+by `warren.info(name) -> 'store_merged'`; it cannot be changed after
 `create_graph`.
+
+Since 0.7.0 a relation whose rows fill little of the id space stores
+sparse offsets, so on a graph of many sparse relations (a knowledge
+graph) leaving out the merged CSR saves less than it did, and costs
+more: the merged CSR is now cheap beside the relations (FB15k-237: 2.5
+of its 8.0 MB). Without it, BFS and `components` find each relation's
+rows in order and stay within 1.3× of what they cost with dense offsets,
+but an all-relations product (`spmv`, `spmm`, and so `pagerank`,
+`eigen` and `distance`) seeks every node's row in every
+relation: on FB15k-237 (237 relations, 14.5K nodes) `spmv` takes about
+18 ms where 0.6.0's dense offsets took 11, 1.6–2×. The default, with the
+merged CSR stored, is unaffected.
 
 ### Node order (locality)
 

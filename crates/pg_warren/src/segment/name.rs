@@ -25,6 +25,7 @@ pub(crate) fn csr_segment(direction: Direction, part: CsrPart, scope: CsrScope) 
         Direction::Reverse => "rev_",
     };
     let part = match part {
+        CsrPart::Rows => "rows",
         CsrPart::Offsets => "offsets",
         CsrPart::Targets => "targets",
         CsrPart::Weights => "weights",
@@ -49,5 +50,6 @@ mod tests {
             "rev_targets:12"
         );
         assert_eq!(csr_segment(Direction::Forward, Weights, CsrScope::Merged), "weights:merged");
+        assert_eq!(csr_segment(Direction::Reverse, Rows, CsrScope::Relation(3)), "rev_rows:3");
     }
 }

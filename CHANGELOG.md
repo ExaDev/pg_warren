@@ -2,6 +2,29 @@
 
 ## 0.7.0 — in development
 
+### Upgrading
+
+- **Refresh every graph after installing the new build.** A relation's
+  CSR can now store sparse offsets, so CSR segments have a new format
+  (2). Reading a version built by an earlier release fails with
+  `object_not_in_prerequisite_state` (55000) and a message naming
+  `warren.refresh`; a `refresh` builds on it as usual, and the version it
+  builds reads. Old versions are not converted. Vectors are bound to a
+  version, so recreate them on the new one.
+- **Restart the server if the shared cache is in use.** The shared cache's
+  registry is now `pg_warren.cache.4`, so backends of the old and the new
+  build never share a version; the old registry's segments are freed by a
+  restart.
+- `ALTER EXTENSION pg_warren UPDATE` drops and recreates the functions
+  that gain `per_relation`, keeping their privileges. Until the update,
+  0.6.0's definitions still work with the new library, counting a pair
+  once.
+- The update drops those functions without `CASCADE`, so it fails if a
+  view, or a function with a `BEGIN ATOMIC` body, calls one of them
+  ("cannot drop function ... because other objects depend on it"). Drop
+  the dependent objects, run `ALTER EXTENSION pg_warren UPDATE`, then
+  create them again.
+
 ### Behaviour changes
 
 - **An unweighted pair of nodes linked in several relations now counts
@@ -29,6 +52,17 @@
   components) the call ran past a 10-minute timeout. Those calls no
   longer warn of several components. Other results change in the last
   digits; a connected graph's 0 is now exactly 0.
+- A graph's number of relations no longer refuses its build on its own.
+  `warren.max_build_memory` used to be checked against 8 bytes per node
+  for every relation's CSR (and the merged CSR), in each direction; it is
+  now checked against the merged CSR's offsets and 8 bytes per relation,
+  and each relation's offsets count in the build's estimate by its edges.
+
+- **`bfs` expands each depth's nodes in ascending dense id order** (the
+  graph's internal node order), so within a depth its rows can come in a
+  different order than in 0.6.0, and a node reachable from several nodes
+  of the previous depth reports as `via` the one of smallest dense id.
+  Nodes and depths are unchanged.
 
 ### Added
 
@@ -43,17 +77,22 @@
   edge in each (one per relation, as parallel edges), for when that
   multiplicity is the signal.
 
-### Upgrading
+### Performance
 
-- `ALTER EXTENSION pg_warren UPDATE` drops and recreates the functions
-  that gain `per_relation`, keeping their privileges. Until the update,
-  0.6.0's definitions still work with the new library, counting a pair
-  once.
-- The update drops those functions without `CASCADE`, so it fails if a
-  view, or a function with a `BEGIN ATOMIC` body, calls one of them
-  ("cannot drop function ... because other objects depend on it"). Drop
-  the dependent objects, run `ALTER EXTENSION pg_warren UPDATE`, then
-  create them again.
+- A relation whose edges start from at most about a sixth of the nodes
+  (an eighth above 2³² nodes) stores its rows' ids and an offset per row
+  (12 bytes a row, 16 above 2³²) instead of 8 bytes per node, in each
+  direction on its own; the merged CSR is unchanged (DESIGN.md §5.3).
+  FB15k-237 (237 relations, 14.5K nodes, 310K edges) now takes 8.0 MB
+  where it took 60.5 MB, refreshes in about 0.2 s instead of 0.45 s and
+  loads cold in 60 ms instead of 113 ms. Reads restricted to relations
+  pay a binary search per row looked up: on FB15k-237, a BFS over its 10
+  largest relations takes 1.1× as long and an SpMV over them 1.2–1.4×;
+  reads over all relations are unchanged.
+- Without the merged CSR (`store_merged := false`), BFS and `components`
+  read the relations' rows in ascending order; on FB15k-237 they are
+  1.5–2.2× faster than in 0.6.0, and the version ten times smaller, but
+  an all-relations `spmv` takes 1.6–2× as long (docs/limits.md).
 
 ## 0.6.0 — identity, lifecycle and visibility (2026-10-24)
 

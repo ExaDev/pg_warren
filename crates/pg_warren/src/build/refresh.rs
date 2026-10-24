@@ -169,6 +169,7 @@ mod tests {
         let decode = |prefix: &str| {
             AnyCsr::decode(
                 200,
+                None,
                 &segment(version, &format!("{prefix}offsets:0")),
                 &segment(version, &format!("{prefix}targets:0")),
                 None,
@@ -214,6 +215,7 @@ mod tests {
         );
         let cites = AnyCsr::decode(
             3,
+            None,
             &segment(version, "offsets:0"),
             &segment(version, "targets:0"),
             Some(&segment(version, "weights:0")),

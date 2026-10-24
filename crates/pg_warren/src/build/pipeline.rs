@@ -517,7 +517,11 @@ mod tests {
             let weights = self
                 .has_segment(version, &weights_name)
                 .then(|| self.segment(version, &weights_name));
-            AnyCsr::decode(id_space, &offsets, &targets, weights.as_deref()).unwrap()
+            let rows_name = format!("{prefix}rows:{scope}");
+            let rows =
+                self.has_segment(version, &rows_name).then(|| self.segment(version, &rows_name));
+            AnyCsr::decode(id_space, rows.as_deref(), &offsets, &targets, weights.as_deref())
+                .unwrap()
         }
 
         fn stored_bytes(&self, version: VersionId) -> u64 {
@@ -858,34 +862,6 @@ mod tests {
         assert!(world.store.chunks.is_empty());
     }
 
-    #[test]
-    fn a_build_whose_offsets_exceed_the_budget_is_refused() {
-        let mut world = World::default();
-        let graph = GraphDefinition { has_relations: true, ..graph() };
-        let edges = (0..100).map(|r| typed_edge(r % 10, (r + 1) % 10, &r.to_string(), 0.0));
-        let source = MemorySource {
-            nodes: (0..10).collect(),
-            edges: edges.collect(),
-            ..MemorySource::default()
-        };
-        let request =
-            RefreshRequest { promote: true, label: None, chunk_size: 16, memory_budget: 10_000 };
-        let refused = world.try_refresh::<FixedKeys<i64>, _>(&graph, &request, &source);
-        // Refused at the 56th relation, while reading: 57 CSRs (with the
-        // merged one) × 2 directions × 11 offsets × 8 bytes, not after all 100.
-        assert!(
-            matches!(
-                refused,
-                Err(BuildError::Graph(GraphError::OffsetsOverBudget {
-                    required: 10_032,
-                    budget: 10_000
-                }))
-            ),
-            "{refused:?}"
-        );
-        assert!(world.catalog.versions.is_empty());
-    }
-
     /// The plan's estimate is an upper bound on what the build charges, so
     /// every budget too small for a build is refused before it writes; the
     /// locality order's scratch is charged before the plan's check, so the
@@ -941,23 +917,31 @@ mod tests {
         }
     }
 
-    /// The offsets of R relations over N nodes are refused as soon as the
-    /// relations the edge rows name take them over the budget, not after
-    /// the whole edge query has been read.
+    /// Relations of few edges store sparse offsets, so their dense ones
+    /// (201 CSRs × 2 directions × 1,001 offsets × 8 bytes, 3.2 MB) need not
+    /// fit the budget (DESIGN.md §5.3, §14 item 17).
     #[test]
-    fn relations_whose_offsets_exceed_the_budget_are_refused_while_reading() {
+    fn relations_of_few_edges_build_within_less_than_their_dense_offsets() {
         let mut world = World::default();
         let graph = GraphDefinition { has_relations: true, ..graph() };
-        let source = one_relation_per_row(10, 30_000, "relation");
+        let edges = (0..200).map(|r| typed_edge(r * 5, r * 5 + 1, &format!("relation-{r}"), 0.0));
+        let source = MemorySource {
+            nodes: (0..1000).collect(),
+            edges: edges.collect(),
+            ..MemorySource::default()
+        };
         let request =
-            RefreshRequest { promote: true, label: None, chunk_size: 16, memory_budget: 1 << 20 };
-        let refused = world.try_refresh::<FixedKeys<i64>, _>(&graph, &request, &source);
-        assert!(
-            matches!(refused, Err(BuildError::Graph(GraphError::OffsetsOverBudget { .. }))),
-            "{refused:?}"
-        );
-        assert!(source.rows_read.get() < 10_000, "{} rows read", source.rows_read.get());
-        assert!(world.catalog.versions.is_empty());
+            RefreshRequest { promote: true, label: None, chunk_size: 4096, memory_budget: 1 << 20 };
+        let version = world.try_refresh::<FixedKeys<i64>, _>(&graph, &request, &source).unwrap();
+        let sparse = |csr: AnyCsr| match csr {
+            AnyCsr::U32(csr) => csr.is_sparse(),
+            AnyCsr::U64(csr) => csr.is_sparse(),
+        };
+        for prefix in ["", "rev_"] {
+            assert!((0..200).all(|r| sparse(world.csr(version, prefix, &r.to_string()))));
+            assert!(!sparse(world.csr(version, prefix, "merged")));
+        }
+        assert_eq!(world.catalog.version(version).stats.edge_count, 200);
     }
 
     /// The relation dictionary is charged as it grows: with one node, its

@@ -1,6 +1,7 @@
 //! A CSR of either target width, behind a width-free read API.
 
 use std::iter::FusedIterator;
+use std::ops::Range;
 use std::slice::Iter;
 
 use super::{Csr, CsrSlices, Target, TargetWidth};
@@ -110,28 +111,28 @@ pub(crate) enum AnyCsrSlices<'a> {
 }
 
 impl<'a> AnyCsrSlices<'a> {
-    /// The targets of `source`'s row in ascending order; empty outside the
-    /// id space.
-    pub(crate) fn neighbours(&self, source: DenseId) -> Neighbours<'a> {
+    /// The positions of `source`'s row, sought from `hint`
+    /// ([`CsrSlices::seek`]).
+    pub(crate) fn seek(&self, source: DenseId, hint: &mut usize) -> Range<usize> {
         match self {
-            Self::U32(csr) => Neighbours(Row::U32(csr.neighbours(source).iter())),
-            Self::U64(csr) => Neighbours(Row::U64(csr.neighbours(source).iter())),
+            Self::U32(csr) => csr.seek(source, hint),
+            Self::U64(csr) => csr.seek(source, hint),
         }
     }
 
-    /// The weights of `source`'s row, aligned with [`Self::neighbours`].
-    pub(crate) fn neighbour_weights(&self, source: DenseId) -> Option<&'a [f64]> {
+    /// The targets of the entries at `positions`, in order.
+    pub(crate) fn neighbours_at(&self, positions: Range<usize>) -> Neighbours<'a> {
         match self {
-            Self::U32(csr) => csr.neighbour_weights(source),
-            Self::U64(csr) => csr.neighbour_weights(source),
+            Self::U32(csr) => Neighbours(Row::U32(csr.targets_at(positions).iter())),
+            Self::U64(csr) => Neighbours(Row::U64(csr.targets_at(positions).iter())),
         }
     }
 
-    /// The number of targets in `source`'s row.
-    pub(crate) fn degree(&self, source: DenseId) -> u64 {
+    /// The weights of the entries at `positions`, if weighted.
+    pub(crate) fn weights_at(&self, positions: Range<usize>) -> Option<&'a [f64]> {
         match self {
-            Self::U32(csr) => csr.degree(source),
-            Self::U64(csr) => csr.degree(source),
+            Self::U32(csr) => csr.weights_at(positions),
+            Self::U64(csr) => csr.weights_at(positions),
         }
     }
 }

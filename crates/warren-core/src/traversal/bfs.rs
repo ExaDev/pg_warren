@@ -23,7 +23,8 @@ pub struct Visit {
 }
 
 /// Every node reachable from `starts` along `adjacency`, once each, in BFS
-/// order (by depth; within a depth, in the order reached).
+/// order (by depth; within a depth, in the order reached, the previous
+/// depth's nodes expanded in ascending dense id order).
 ///
 /// Starts are at depth 0 and are always admitted; repeated starts count
 /// once. Other nodes are admitted only if they are in `filter`, when given,
@@ -162,6 +163,15 @@ mod tests {
     fn several_starts_are_all_at_depth_zero_and_repeats_are_dropped() {
         let found = run(&example(), Direction::Out, &[2, 4, 2], None, Limits::default()).unwrap();
         assert_eq!(found.result, [visit(2, 0, None), visit(4, 0, None), visit(3, 1, Some(2))]);
+    }
+
+    #[test]
+    fn a_level_is_expanded_in_ascending_dense_id_order() {
+        let found = run(&example(), Direction::Out, &[4, 1], None, Limits::default()).unwrap();
+        assert_eq!(
+            found.result,
+            [visit(4, 0, None), visit(1, 0, None), visit(2, 1, Some(1)), visit(3, 1, Some(4))]
+        );
     }
 
     #[test]

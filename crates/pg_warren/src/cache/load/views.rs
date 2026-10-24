@@ -44,8 +44,8 @@ fn relation_csr(
 }
 
 /// The CSR of `scope` in `direction`, if the region holds its offsets; its
-/// targets are as wide as their entry says, which `Csr::from_segments`
-/// checks against the id space.
+/// targets (and rows, with sparse offsets) are as wide as their entry
+/// says, which `Csr::from_segments` checks against the id space.
 fn csr(
     region: &Arc<Region>,
     id_space: u64,
@@ -57,17 +57,19 @@ fn csr(
         return Ok(None);
     };
     let weights = region.view::<f64>(array(CsrPart::Weights))?;
-    let targets = array(CsrPart::Targets);
+    let (targets, rows) = (array(CsrPart::Targets), array(CsrPart::Rows));
     let width = region.layout().entry(targets).map(|entry| entry.width);
     let missing = RegionError::MissingArray("CSR's targets");
     let csr = match width.ok_or(missing)? {
         4 => {
-            let targets = region.view::<u32>(targets)?.ok_or(missing)?;
-            AnyCsr::U32(Csr::from_segments(id_space, offsets, targets, weights)?)
+            let (rows, targets) = (region.view::<u32>(rows)?, region.view::<u32>(targets)?);
+            let targets = targets.ok_or(missing)?;
+            AnyCsr::U32(Csr::from_segments(id_space, rows, offsets, targets, weights)?)
         }
         _ => {
-            let targets = region.view::<u64>(targets)?.ok_or(missing)?;
-            AnyCsr::U64(Csr::from_segments(id_space, offsets, targets, weights)?)
+            let (rows, targets) = (region.view::<u64>(rows)?, region.view::<u64>(targets)?);
+            let targets = targets.ok_or(missing)?;
+            AnyCsr::U64(Csr::from_segments(id_space, rows, offsets, targets, weights)?)
         }
     };
     Ok(Some(csr))

@@ -86,6 +86,12 @@ impl<'c> Progress<'c> {
         self.work()
     }
 
+    /// Polls for interrupts now, before work that counts no unit (such as
+    /// sorting a frontier), leaving the count until the next poll as it is.
+    pub(crate) fn poll(&mut self) -> Result<(), TraversalError> {
+        Ok(self.interrupts.check()?)
+    }
+
     /// Polls for interrupts on the first unit of work and then every
     /// [`POLL_INTERVAL`]th.
     fn work(&mut self) -> Result<(), TraversalError> {

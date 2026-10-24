@@ -1,6 +1,6 @@
 //! The segment layout of a version (DESIGN.md §5.3): its id map's segments
 //! (`id_map`, or a text id map's three, §5.7), `tombstones`, `rel_dict`, and the `offsets`/`targets`/`weights` of each
-//! relation's forward and (if built) reverse CSR, plus the merged CSR's
+//! relation's forward and (if built) reverse CSR (and its `rows` if its offsets are sparse), plus the merged CSR's
 //! unless there is exactly one relation; and a contraction's `membership`
 //! (§6.6). `cache` reads the same layout.
 //! Segments are encoded a chunk at a time, so writing one holds a chunk,
@@ -132,8 +132,9 @@ impl<'s, S: SegmentStore> SegmentWriter<'s, S> {
         csr: &AnyCsr,
     ) -> Result<(), SegmentError> {
         let (chunk_size, memory) = (self.chunk_size, self.memory.clone());
-        let weights = csr.is_weighted().then_some(CsrPart::Weights);
-        for part in [CsrPart::Offsets, CsrPart::Targets].into_iter().chain(weights) {
+        // An unweighted CSR's weights and a dense one's rows encode to
+        // nothing, so no segment is stored for them.
+        for part in [CsrPart::Rows, CsrPart::Offsets, CsrPart::Targets, CsrPart::Weights] {
             self.chunked(&csr_segment(direction, part, scope), |each| {
                 Ok(csr.encode_part(part, chunk_size, &memory, each)?.unwrap_or(0))
             })?;

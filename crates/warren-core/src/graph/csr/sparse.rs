@@ -1,0 +1,308 @@
+//! When a CSR's offsets are sparse (DESIGN.md §5.3, §14 item 17): a
+//! relation's CSR stores sparse offsets, its rows' ids and one offset per
+//! stored row, when they take at most [`SPARSE_SHARE`] of dense offsets'
+//! bytes; the merged CSR's offsets are always dense, and so are a graph's
+//! only relation's, which is its all-relations CSR. The choice is made
+//! from the number of stored rows alone, so a CSR's layout is a function
+//! of its edges.
+
+use super::TargetWidth;
+
+/// Sparse offsets are stored when they take at most this share of the
+/// bytes of dense ones, so where a relation's rows fill at most about a
+/// sixth of the id space (an eighth at `u64` targets): past that a row
+/// lookup's binary search costs more than the few bytes it saves are worth
+/// (measured in DESIGN.md §5.3).
+const SPARSE_SHARE: (u64, u64) = (1, 4);
+
+/// The bytes of sparse offsets for `stored_rows` rows: a row id of the
+/// target width and an offset per row, and the end offset.
+fn sparse_bytes(stored_rows: u64, width: TargetWidth) -> u64 {
+    let id = match width {
+        TargetWidth::U32 => 4,
+        TargetWidth::U64 => 8,
+    };
+    stored_rows.saturating_mul(id + 8).saturating_add(8)
+}
+
+/// The bytes of dense offsets over `id_space`.
+pub(crate) fn dense_bytes(id_space: u64) -> u64 {
+    id_space.saturating_add(1).saturating_mul(8)
+}
+
+/// Whether a relation's CSR over `id_space` with `stored_rows` non-empty
+/// rows stores sparse offsets.
+pub(crate) fn stores_sparse(stored_rows: u64, id_space: u64, width: TargetWidth) -> bool {
+    let (share, of) = SPARSE_SHARE;
+    sparse_bytes(stored_rows, width).saturating_mul(of)
+        <= dense_bytes(id_space).saturating_mul(share)
+}
+
+/// The bytes of a relation CSR's offsets (and stored rows, if sparse)
+/// with `stored_rows` non-empty rows: the layout [`stores_sparse`] picks.
+/// It never decreases as rows are added, so at most `edges` rows bound a
+/// CSR of `edges` edges.
+fn offsets_bytes(stored_rows: u64, id_space: u64, width: TargetWidth) -> u64 {
+    match stores_sparse(stored_rows, id_space, width) {
+        true => sparse_bytes(stored_rows, width),
+        false => dense_bytes(id_space),
+    }
+}
+
+/// The most bytes of the offsets (and stored rows) of a relation's CSR of
+/// `edges` edges over `id_space`, at that id space's target width: its
+/// stored rows are at most its edges and the id space.
+pub(crate) fn offsets_bound(edges: u64, id_space: u64) -> u64 {
+    offsets_bytes(edges.min(id_space), id_space, TargetWidth::for_id_space(id_space))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offsets_are_sparse_where_they_take_at_most_a_quarter_of_the_bytes_of_dense_ones() {
+        // 1,000 nodes: dense offsets take 8,008 bytes; sparse ones 12 per
+        // row at u32, 16 at u64, and 8.
+        assert!(stores_sparse(0, 1000, TargetWidth::U32));
+        assert!(stores_sparse(166, 1000, TargetWidth::U32));
+        assert!(!stores_sparse(167, 1000, TargetWidth::U32));
+        assert!(stores_sparse(124, 1000, TargetWidth::U64));
+        assert!(!stores_sparse(125, 1000, TargetWidth::U64));
+        assert_eq!(offsets_bytes(2, 1000, TargetWidth::U32), 2 * 12 + 8);
+        assert_eq!(offsets_bytes(167, 1000, TargetWidth::U32), 8008);
+        // An empty id space's one offset is the same either way.
+        assert_eq!(offsets_bytes(0, 0, TargetWidth::U32), 8);
+    }
+
+    #[test]
+    fn a_relation_of_few_edges_is_bounded_by_its_edges_and_any_by_dense_offsets() {
+        assert_eq!(offsets_bound(2, 1_000_000), 2 * 12 + 8);
+        assert_eq!(offsets_bound(0, 1_000_000), 8);
+        assert_eq!(offsets_bound(5_000_000, 1_000_000), dense_bytes(1_000_000));
+        assert_eq!(offsets_bound(2, 1 << 33), 2 * 16 + 8);
+    }
+
+    #[test]
+    fn the_offsets_bytes_never_decrease_with_the_stored_rows() {
+        for width in [TargetWidth::U32, TargetWidth::U64] {
+            for id_space in [0, 1, 7, 100, 1000] {
+                let bytes: Vec<u64> =
+                    (0..=id_space).map(|rows| offsets_bytes(rows, id_space, width)).collect();
+                assert!(bytes.windows(2).all(|pair| pair[0] <= pair[1]), "{id_space}: {bytes:?}");
+                assert!(bytes.iter().all(|&b| b <= dense_bytes(id_space)));
+            }
+        }
+    }
+}
+
+/// Every reader of relations' CSRs returns with sparse offsets exactly
+/// what it returns with dense ones.
+#[cfg(test)]
+mod readers {
+    use proptest::prelude::*;
+
+    use crate::community::{contract, modularity, Contraction, Undirected, Weighting};
+    use crate::compute::{
+        betweenness_centrality, gather, spmv, triangles, AnyVector, BetweennessScale, Combiner,
+        ComputeMemory, Gather, Messages, Product, Sampling, Semiring, ShortestPaths, Vector,
+        Workers,
+    };
+    use crate::graph::{
+        AnyCsr, CsrLayout, DenseId, Direction, EdgeList, GraphCsr, Membership, RelationDictionary,
+        RelationIndex, RelationSelection, Tombstones,
+    };
+    use crate::interrupts::{Cancellation, Uninterrupted};
+    use crate::traversal::{bfs, components, dijkstra, Adjacency, Limits};
+
+    /// A graph of up to 30 relations over up to 80 nodes, whose relations
+    /// are mostly sparse, built (so with sparse offsets where they pay).
+    fn graphs() -> impl Strategy<Value = (GraphCsr, Vec<RelationIndex>)> {
+        (1usize..30, 8u64..80, any::<bool>(), any::<bool>()).prop_flat_map(
+            |(relation_count, id_space, store_merged, build_reverse)| {
+                let edge = (0..relation_count, 0..id_space, 0..id_space, 1u8..9);
+                prop::collection::vec(edge, 0..200).prop_map(move |rows| {
+                    let mut dictionary = RelationDictionary::new();
+                    let relations: Vec<RelationIndex> = (0..relation_count)
+                        .map(|r| dictionary.intern(&r.to_string()).unwrap())
+                        .collect();
+                    let mut edges = EdgeList::new(true);
+                    for &(r, source, target, weight) in &rows {
+                        edges.push(relations[r], source, target, f64::from(weight) / 4.0).unwrap();
+                    }
+                    let layout = CsrLayout { build_reverse, store_merged };
+                    let graph =
+                        GraphCsr::build_as(edges, relation_count, id_space, layout).unwrap();
+                    (graph, relations)
+                })
+            },
+        )
+    }
+
+    /// Every result the readers give for `graph`, as text.
+    fn read(graph: &GraphCsr, relations: &[RelationIndex]) -> Vec<String> {
+        let id_space = graph.all_relations().forward().id_space();
+        let (workers, memory) = (Workers::new(2).unwrap(), ComputeMemory::new(u64::MAX));
+        let mut never = Uninterrupted;
+        let some: Vec<RelationIndex> = relations.iter().copied().step_by(2).collect();
+        let selections = [RelationSelection::All, RelationSelection::Only(&some)];
+        let mut results = Vec::new();
+        for selection in selections {
+            for direction in [Direction::Out, Direction::In, Direction::Both] {
+                let Ok(adjacency) = Adjacency::new(graph, direction, selection) else { continue };
+                let visits = bfs(&adjacency, &[0], None, Limits::default(), &mut never);
+                results.push(format!("bfs {direction:?} {visits:?}"));
+                for per_relation in [false, true] {
+                    let path = dijkstra(&adjacency, 0, id_space - 1, per_relation, &mut never);
+                    results.push(format!("dijkstra {direction:?} {per_relation} {path:?}"));
+                }
+                let degrees: Vec<_> =
+                    (0..id_space).map(|node| adjacency.degree_per_relation(node)).collect();
+                results.push(format!("degree per relation {direction:?} {degrees:?}"));
+            }
+            let values = (0..id_space).map(|node| node as f64 + 0.5).collect();
+            let x = AnyVector::from(Vector::from_values(&memory, id_space, 1, values).unwrap());
+            for (transpose, per_relation) in
+                [(false, false), (true, false), (false, true), (true, true)]
+            {
+                let product = Product {
+                    transpose,
+                    relations: selection,
+                    per_relation,
+                    ..Product::new(Semiring::PlusTimes)
+                };
+                let mut y = AnyVector::from(Vector::filled(&memory, id_space, 1, 0.0f64).unwrap());
+                let done = spmv(&workers, &memory, &mut never, graph, &product, &x, &mut y);
+                results.push(format!("spmv {transpose} {per_relation} {done:?} {y:?}"));
+            }
+            let mut messages = Messages::<f64>::new(&memory).unwrap();
+            (0..id_space).for_each(|node| messages.push(node, node as f64).unwrap());
+            for direction in [Direction::Out, Direction::In, Direction::Both] {
+                for per_relation in [false, true] {
+                    let sum = Gather {
+                        direction,
+                        relations: selection,
+                        per_relation,
+                        ..Gather::new(Combiner::Sum)
+                    };
+                    let gathered = gather(&workers, &memory, &mut never, graph, &sum, &messages)
+                        .map(|gathered| {
+                            gathered.iter().map(|row| format!("{row:?}")).collect::<Vec<_>>()
+                        });
+                    results.push(format!("gather {direction:?} {per_relation} {gathered:?}"));
+                }
+            }
+            let tombstones = Tombstones::new(id_space).unwrap();
+            for (directed, per_relation) in [(true, false), (true, true), (false, true)] {
+                let paths = ShortestPaths {
+                    graph,
+                    relations: selection,
+                    tombstones: &tombstones,
+                    directed,
+                    weighted: Some(true),
+                    per_relation,
+                };
+                let sampling = Sampling { k: None, seed: 0, population: None };
+                let scale = BetweennessScale { normalized: false, endpoints: false };
+                let found =
+                    betweenness_centrality(&workers, &memory, &mut never, &paths, &sampling, scale);
+                results.push(format!("betweenness {directed} {per_relation} {found:?}"));
+            }
+            let counted = triangles(&workers, &memory, &mut never, graph, selection);
+            results.push(format!("triangles {counted:?}"));
+        }
+        results.push(format!("components {:?}", components(graph, &mut never)));
+        let thirds: Vec<Option<DenseId>> = (0..id_space).map(|node| Some(node % 3)).collect();
+        let membership = Membership::new(&thirds, 3).unwrap();
+        let forward: Vec<_> = relations
+            .iter()
+            .zip(graph.relations())
+            .map(|(&relation, csrs)| (relation, csrs.forward()))
+            .collect();
+        let labels: Vec<i64> = (0..id_space).map(|node| (node % 3) as i64).collect();
+        for weighted in [false, true] {
+            for per_relation in [false, true] {
+                for directed in [false, true] {
+                    let weighting = Weighting { weighted, per_relation };
+                    let b =
+                        Undirected::new(&memory, &Cancellation::new(), graph, weighting, directed);
+                    let rows = b.as_ref().map(|b| {
+                        let q = modularity(&memory, b, &labels, 1.0);
+                        let rows: Vec<_> = (0..id_space).map(|node| b.row(node).to_vec()).collect();
+                        format!("{rows:?} {:?} {q:?}", b.degrees())
+                    });
+                    results
+                        .push(format!("undirected {weighted} {per_relation} {directed} {rows:?}"));
+                }
+                let contraction = Contraction {
+                    weighted,
+                    drop_self_loops: false,
+                    undirected: false,
+                    per_relation,
+                };
+                let memory = crate::graph::BuildMemory::unlimited();
+                let quotient =
+                    contract(&workers, &mut never, &forward, &membership, contraction, &memory);
+                results.push(format!("contract {weighted} {per_relation} {quotient:?}"));
+            }
+        }
+        results
+    }
+
+    /// How many of `graph`'s relations' CSRs, forward and reverse, store
+    /// sparse offsets, and how many dense ones.
+    fn layouts(graph: &GraphCsr) -> (usize, usize) {
+        let csrs = graph.relations().iter().flat_map(|r| [Some(r.forward()), r.reverse()]);
+        let sparse: Vec<bool> = csrs
+            .flatten()
+            .map(|csr| match csr {
+                AnyCsr::U32(csr) => csr.is_sparse(),
+                AnyCsr::U64(csr) => csr.is_sparse(),
+            })
+            .collect();
+        let count = sparse.iter().filter(|&&sparse| sparse).count();
+        (count, sparse.len() - count)
+    }
+
+    #[test]
+    fn readers_agree_over_a_mix_of_sparse_and_dense_relations() {
+        // r0 has a row at every node (dense both ways); r1 links 3 nodes
+        // to 3 others (sparse both ways); r2 fans out from node 1 to every
+        // node (sparse forward, dense in reverse).
+        let id_space = 40;
+        let mut dictionary = RelationDictionary::new();
+        let relations: Vec<RelationIndex> =
+            (0..3).map(|r| dictionary.intern(&r.to_string()).unwrap()).collect();
+        let mut edges = EdgeList::new(true);
+        for node in 0..id_space {
+            edges.push(relations[0], node, (node * 7 + 3) % id_space, 1.5).unwrap();
+            edges.push(relations[2], 1, node, 0.25 + node as f64).unwrap();
+        }
+        for (source, target) in [(2, 30), (2, 31), (17, 30), (39, 0)] {
+            edges.push(relations[1], source, target, 2.0).unwrap();
+        }
+        for store_merged in [false, true] {
+            let layout = CsrLayout { build_reverse: true, store_merged };
+            let graph = GraphCsr::build_as(edges.clone(), 3, id_space, layout).unwrap();
+            assert_eq!(layouts(&graph), (3, 3));
+            assert_eq!(read(&graph, &relations), read(&graph.densified(), &relations));
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn readers_return_with_sparse_offsets_what_they_return_with_dense_ones(
+            (graph, relations) in graphs(),
+        ) {
+            // Several relations over a small id space are mostly sparse;
+            // a case where none is would test dense against dense.
+            prop_assume!(relations.len() == 1 || layouts(&graph).0 > 0);
+            let dense = graph.densified();
+            let (sparse, dense) = (read(&graph, &relations), read(&dense, &relations));
+            for (sparse, dense) in sparse.iter().zip(&dense) {
+                prop_assert_eq!(sparse, dense);
+            }
+            prop_assert_eq!(sparse.len(), dense.len());
+        }
+    }
+}

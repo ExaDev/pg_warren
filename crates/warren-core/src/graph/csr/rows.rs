@@ -5,8 +5,8 @@
 use std::iter::FusedIterator;
 
 use super::merge::RowMerge;
-use super::{AnyCsr, Csr, Neighbours, RelationCsr, Target};
-use crate::graph::DenseId;
+use super::{AnyCsr, AnyCsrSlices, Csr, CsrSlices, Neighbours, RelationCsr, Target};
+use crate::graph::{memory, DenseId, GraphError};
 
 /// The rows of one CSR (a relation's, or the stored merged CSR), or the
 /// all-relations rows merged on the fly from every relation's CSR in one
@@ -91,14 +91,6 @@ impl<'g> CsrRows<'g> {
         ) -> RowMerge<'g, T> {
             RowMerge::new(csrs.flatten().map(|csr| csr.neighbours(source)))
         }
-        let narrow = |csr: &'g AnyCsr| match csr {
-            AnyCsr::U32(csr) => Some(csr),
-            AnyCsr::U64(_) => None,
-        };
-        let wide = |csr: &'g AnyCsr| match csr {
-            AnyCsr::U64(csr) => Some(csr),
-            AnyCsr::U32(_) => None,
-        };
         match self.csrs().next() {
             Some(AnyCsr::U64(_)) => Typed::Wide(rows(self.csrs().map(wide), source)),
             _ => Typed::Narrow(rows(self.csrs().map(narrow), source)),
@@ -124,6 +116,99 @@ impl<'g> CsrRows<'g> {
     /// Whether the edge `source → target` exists in any of the CSRs.
     pub fn has_edge(&self, source: DenseId, target: DenseId) -> bool {
         self.csrs().any(|csr| csr.has_edge(source, target))
+    }
+
+    /// These rows, for reading sources mostly in ascending order: each
+    /// CSR's arrays borrowed once, with a hint per CSR (merging on the
+    /// fly, a buffer of a few words per relation).
+    pub fn sweep(&self) -> Result<RowSweep<'g>, GraphError> {
+        fn hinted<'g, T: Target>(
+            csrs: impl Iterator<Item = Option<&'g Csr<T>>>,
+            count: usize,
+        ) -> Result<Vec<Hinted<'g, T>>, GraphError> {
+            let mut hinted = memory::with_capacity(count)?;
+            hinted.extend(csrs.flatten().map(|csr| Hinted { slices: csr.slices(), hint: 0 }));
+            Ok(hinted)
+        }
+        if let Source::Csr(csr) = self.0 {
+            return Ok(RowSweep(Sweep::One(csr.slices(), 0)));
+        }
+        let count = self.csrs().count();
+        Ok(RowSweep(match self.csrs().next() {
+            Some(AnyCsr::U64(_)) => Sweep::Wide(hinted(self.csrs().map(wide), count)?),
+            _ => Sweep::Narrow(hinted(self.csrs().map(narrow), count)?),
+        }))
+    }
+}
+
+fn narrow(csr: &AnyCsr) -> Option<&Csr<u32>> {
+    match csr {
+        AnyCsr::U32(csr) => Some(csr),
+        AnyCsr::U64(_) => None,
+    }
+}
+
+fn wide(csr: &AnyCsr) -> Option<&Csr<u64>> {
+    match csr {
+        AnyCsr::U64(csr) => Some(csr),
+        AnyCsr::U32(_) => None,
+    }
+}
+
+/// [`CsrRows`] read with sources mostly ascending, as a sweep or a sorted
+/// frontier reads them: where a CSR's offsets are sparse, a row is sought
+/// from where that CSR's last one was found, galloping forward, so
+/// ascending sources cost O(1) a row rather than a binary search in each
+/// relation. A source below the last one is still found, by a search from
+/// the start. Every CSR of a graph version has one target width.
+#[derive(Debug)]
+pub struct RowSweep<'g>(Sweep<'g>);
+
+#[derive(Debug)]
+enum Sweep<'g> {
+    One(AnyCsrSlices<'g>, usize),
+    Narrow(Vec<Hinted<'g, u32>>),
+    Wide(Vec<Hinted<'g, u64>>),
+}
+
+/// One CSR's arrays and where its last row was found.
+#[derive(Debug)]
+struct Hinted<'g, T> {
+    slices: CsrSlices<'g, T>,
+    hint: usize,
+}
+
+impl<'g, T: Target> Hinted<'g, T> {
+    fn row(&mut self, source: DenseId) -> &'g [T] {
+        self.slices.targets_at(self.slices.seek(source, &mut self.hint))
+    }
+
+    fn degree(&mut self, source: DenseId) -> u64 {
+        self.slices.seek(source, &mut self.hint).len() as u64
+    }
+}
+
+impl<'g> RowSweep<'g> {
+    /// [`CsrRows::neighbours`].
+    pub fn neighbours(&mut self, source: DenseId) -> RowNeighbours<'g> {
+        RowNeighbours(match &mut self.0 {
+            Sweep::One(csr, hint) => Merge::One(csr.neighbours_at(csr.seek(source, hint))),
+            Sweep::Narrow(csrs) => {
+                Merge::Many(Typed::Narrow(RowMerge::new(csrs.iter_mut().map(|c| c.row(source)))))
+            }
+            Sweep::Wide(csrs) => {
+                Merge::Many(Typed::Wide(RowMerge::new(csrs.iter_mut().map(|c| c.row(source)))))
+            }
+        })
+    }
+
+    /// [`CsrRows::degree_bound`].
+    pub fn degree_bound(&mut self, source: DenseId) -> u64 {
+        match &mut self.0 {
+            Sweep::One(csr, hint) => csr.seek(source, hint).len() as u64,
+            Sweep::Narrow(csrs) => csrs.iter_mut().map(|csr| csr.degree(source)).sum(),
+            Sweep::Wide(csrs) => csrs.iter_mut().map(|csr| csr.degree(source)).sum(),
+        }
     }
 }
 
@@ -238,6 +323,44 @@ mod tests {
         let forward = CsrRows::merging(&relations, false);
         assert_eq!(forward.neighbours(4).count(), 0);
         assert_eq!(forward.degree(u64::MAX), 0);
+    }
+
+    /// `csr` with sparse offsets: only its non-empty rows stored.
+    fn sparse(csr: &Csr<u32>) -> Csr<u32> {
+        let (mut rows, mut offsets, mut targets) = (Vec::new(), vec![0], Vec::new());
+        for source in (0..csr.id_space()).filter(|&source| csr.degree(source) > 0) {
+            rows.push(source as u32);
+            targets.extend_from_slice(csr.neighbours(source));
+            offsets.push(targets.len() as u64);
+        }
+        Csr::from_sparse_parts(csr.id_space(), rows, offsets, targets, None).unwrap()
+    }
+
+    #[test]
+    fn a_sweep_reads_the_rows_lookups_read_in_any_order() {
+        let r0 = csr(&[&[1, 3], &[], &[2], &[], &[], &[0]]);
+        let r1 = csr(&[&[0, 3], &[2], &[], &[], &[5], &[]]);
+        let relations: Vec<_> = [r0, r1]
+            .iter()
+            .map(|forward| {
+                let reverse = transpose(forward).unwrap();
+                RelationCsr::new(sparse(forward).into(), Some(sparse(&reverse).into())).unwrap()
+            })
+            .collect();
+        let one = AnyCsr::from(sparse(&csr(&[&[1], &[], &[0, 1], &[]])));
+        let order = [0, 1, 2, 3, 4, 5, 6, 5, 2, 0, 4, 4, 1, u64::MAX, 3];
+        for reverse in [false, true] {
+            for rows in [CsrRows::merging(&relations, reverse), CsrRows::from(&one)] {
+                let mut sweep = rows.sweep().unwrap();
+                for source in order {
+                    assert_eq!(
+                        sweep.neighbours(source).collect::<Vec<_>>(),
+                        rows.neighbours(source).collect::<Vec<_>>(),
+                    );
+                    assert_eq!(sweep.degree_bound(source), rows.degree_bound(source));
+                }
+            }
+        }
     }
 
     #[test]

@@ -41,6 +41,10 @@ name = "relation_layout"
 harness = false
 
 [[bench]]
+name = "sparse_offsets"
+harness = false
+
+[[bench]]
 name = "spectral"
 harness = false
 

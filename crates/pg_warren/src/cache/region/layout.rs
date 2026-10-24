@@ -27,7 +27,7 @@ use crate::segment::{CsrPart, CsrScope, Direction};
 /// The alignment of a region and of every array in it.
 pub(crate) const ALIGNMENT: usize = 64;
 /// The format, changed whenever the layout does.
-pub(crate) const FORMAT: u32 = 1;
+pub(crate) const FORMAT: u32 = 2;
 const MAGIC: [u8; 4] = *b"WRRG";
 const HEADER_LEN: usize = 64;
 const ENTRY_LEN: usize = 32;
@@ -244,6 +244,7 @@ fn encode_array(array: Array) -> ArrayKey {
                 CsrPart::Offsets => 0,
                 CsrPart::Targets => 1,
                 CsrPart::Weights => 2,
+                CsrPart::Rows => 3,
             };
             let scope = match scope {
                 CsrScope::Relation(index) => index as u64,
@@ -279,6 +280,7 @@ fn decode_array(kind: u8, direction: u8, part: u8, scope: u64) -> Option<Array> 
                 0 => CsrPart::Offsets,
                 1 => CsrPart::Targets,
                 2 => CsrPart::Weights,
+                3 => CsrPart::Rows,
                 _ => return None,
             };
             let scope = match scope {
@@ -315,6 +317,7 @@ mod tests {
     fn arrays() -> Vec<(Array, usize, usize)> {
         let offsets = Array::Csr(Direction::Forward, CsrPart::Offsets, CsrScope::Relation(0));
         let targets = Array::Csr(Direction::Reverse, CsrPart::Targets, CsrScope::Merged);
+        let rows = Array::Csr(Direction::Reverse, CsrPart::Rows, CsrScope::Relation(2));
         vec![
             (Array::IdPairs, 16, 3),
             (Array::ByDense, 4, 3),
@@ -322,6 +325,7 @@ mod tests {
             (Array::RelationDictionary, 1, 21),
             (offsets, 8, 4),
             (targets, 4, 0),
+            (rows, 4, 2),
         ]
     }
 
@@ -330,7 +334,7 @@ mod tests {
         let layout = RegionLayout::plan(7, &arrays()).unwrap();
         let entries: Vec<_> = arrays().iter().map(|&(a, ..)| *layout.entry(a).unwrap()).collect();
         let first = entries[0].offset;
-        assert!(first >= 64 + 6 * 32, "{first}");
+        assert!(first >= 64 + 7 * 32, "{first}");
         let mut end = first;
         for (entry, &(array, width, elements)) in entries.iter().zip(&arrays()) {
             assert_eq!((entry.array, entry.width, entry.elements), (array, width, elements));
@@ -433,7 +437,7 @@ mod tests {
     fn an_array_with_two_entries_is_refused() {
         let mut twice = arrays();
         twice.push(twice[1]);
-        assert_eq!(RegionLayout::plan(7, &twice), Err(RegionError::Entry { index: 6 }));
+        assert_eq!(RegionLayout::plan(7, &twice), Err(RegionError::Entry { index: 7 }));
         let layout = RegionLayout::plan(7, &arrays()).unwrap();
         let mut region = vec![0u8; layout.len()];
         layout.write_header(&mut region);

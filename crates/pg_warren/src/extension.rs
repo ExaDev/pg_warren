@@ -20,8 +20,9 @@ use warren_core::graph::GraphError;
 mod warren {}
 
 /// The SQLSTATE of a graph error: out of memory, over the build memory
-/// budget, a size limit, an unknown node order, or (when decoding) corrupt
-/// data.
+/// budget, a size limit, an unknown node order, a version to build again
+/// (ids in another encoding, or segments of an earlier format), or (when
+/// decoding) corrupt data.
 pub(crate) fn graph_sqlstate(error: &GraphError) -> PgSqlErrorCode {
     match error {
         GraphError::OutOfMemory { .. } => PgSqlErrorCode::ERRCODE_OUT_OF_MEMORY,
@@ -32,7 +33,9 @@ pub(crate) fn graph_sqlstate(error: &GraphError) -> PgSqlErrorCode {
         | GraphError::IdSpaceTooLarge
         | GraphError::RelationNameTooLong => PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
         GraphError::UnknownNodeOrder(_) => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
-        GraphError::IdEncoding { .. } => PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+        GraphError::IdEncoding { .. } | GraphError::SegmentFormat { .. } => {
+            PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE
+        }
         _ => PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
     }
 }
@@ -122,6 +125,15 @@ mod tests {
 
     // `#[pg_test]` functions are not `#[test]` to clippy, so they propagate
     // SPI errors with `?` instead of unwrapping (workspace lints deny unwrap).
+
+    #[test]
+    fn a_version_to_build_again_is_not_in_its_prerequisite_state() {
+        use super::graph_sqlstate;
+        use warren_core::graph::GraphError;
+        let again = PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE;
+        assert_eq!(graph_sqlstate(&GraphError::SegmentFormat { found: 1 }), again);
+        assert_eq!(graph_sqlstate(&GraphError::IdEncoding { expected: 6, found: 8 }), again);
+    }
 
     /// The 0.6.0 install script.
     const RELEASED: &str = include_str!("../../../sql/pg_warren--0.6.0.sql");

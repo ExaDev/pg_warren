@@ -1,7 +1,8 @@
 //! Weakly connected components (DESIGN.md §9.3, `warren.components`).
 //!
-//! Union–find over the forward all-relations CSR: edge direction does not
-//! matter for weak connectivity, so no reverse CSR is needed. Unions always
+//! Union–find over the forward all-relations CSR, its rows swept in
+//! ascending order: edge direction does not matter for weak
+//! connectivity, so no reverse CSR is needed. Unions always
 //! hang the larger root under the smaller, so every root is the smallest
 //! dense id of its component and every node's parent is at most the node.
 
@@ -26,9 +27,10 @@ pub fn components(
     let mut progress = Progress::new(interrupts);
     let mut parents = memory::with_capacity(id_space as usize)?;
     parents.extend(0..id_space);
+    let mut rows = forward.sweep()?;
     for source in 0..id_space {
         progress.node_visited()?;
-        for target in forward.neighbours(source) {
+        for target in rows.neighbours(source) {
             progress.edge_traversed()?;
             unite(&mut parents, source, target);
         }
