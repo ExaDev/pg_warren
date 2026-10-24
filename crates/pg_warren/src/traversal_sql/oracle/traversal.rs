@@ -192,9 +192,19 @@ mod tests {
         Ok(())
     }
 
-    /// `warren.dijkstra` costs against Bellman–Ford in PL/pgSQL over the
-    /// cheapest arc between each pair, and every path's cost its arcs' sum.
+    /// `warren.dijkstra` costs against Bellman–Ford in PL/pgSQL over each
+    /// pair's arc, and every path's cost its arcs' sum. A pair's arc
+    /// weighs the sum of its relations' weights, or `per_relation` the
+    /// cheapest (DESIGN.md §5.3); read both ways, the lighter direction.
     fn check_dijkstra(shape: &Shape) -> Result<(), Error> {
+        for per_relation in [false, true] {
+            check_dijkstra_reading(shape, per_relation)?;
+        }
+        Ok(())
+    }
+
+    /// [`check_dijkstra`] for one reading of a pair in several relations.
+    fn check_dijkstra_reading(shape: &Shape, per_relation: bool) -> Result<(), Error> {
         let g = shape.name;
         let t = shape.id_type;
         let start = format!(
@@ -202,19 +212,29 @@ mod tests {
         );
         for direction in shape.directions() {
             for rels in shape.selections() {
-                let forward = format!("SELECT src AS a, dst AS b, w, rel FROM {g}_arc");
-                let backward = format!("SELECT dst AS a, src AS b, w, rel FROM {g}_arc");
-                let directed = match direction {
-                    "out" => forward,
-                    "in" => backward,
-                    _ => format!("{forward} UNION ALL {backward}"),
+                // Each direction's arcs over the selected relations, a pair's
+                // weights summed (an unweighted pair 1) unless per relation.
+                let once = if shape.weighted { "sum(w)" } else { "1::float8" };
+                let read = |a: &str, b: &str| match per_relation {
+                    true => format!(
+                        "SELECT {a} AS a, {b} AS b, w FROM {g}_arc
+                         WHERE {rels} IS NULL OR rel = ANY ({rels})"
+                    ),
+                    false => format!(
+                        "SELECT {a} AS a, {b} AS b, {once} AS w FROM {g}_arc
+                         WHERE {rels} IS NULL OR rel = ANY ({rels}) GROUP BY 1, 2"
+                    ),
                 };
-                // The cheapest arc between each pair over the selected relations.
+                let directed = match direction {
+                    "out" => read("src", "dst"),
+                    "in" => read("dst", "src"),
+                    _ => format!("{} UNION ALL {}", read("src", "dst"), read("dst", "src")),
+                };
+                // The cheapest of what links each pair.
                 Spi::run(&format!(
                     "DROP TABLE IF EXISTS {g}_warc;
                      CREATE TEMP TABLE {g}_warc AS
-                         SELECT a, b, min(w) AS w FROM ({directed}) x
-                         WHERE {rels} IS NULL OR rel = ANY ({rels}) GROUP BY a, b;
+                         SELECT a, b, min(w) AS w FROM ({directed}) x GROUP BY a, b;
                      CREATE INDEX ON {g}_warc (a, b);
                      ANALYZE {g}_warc;"
                 ))?;
@@ -239,10 +259,11 @@ mod tests {
                 ))?;
                 let found = format!(
                     "SELECT s.id AS target, d.path, d.cost FROM {g}_sample s
-                     LEFT JOIN LATERAL warren.dijkstra('{g}', {start}, s.id, {rels}, '{direction}') d
+                     LEFT JOIN LATERAL warren.dijkstra('{g}', {start}, s.id, {rels}, '{direction}',
+                                                       per_relation := {per_relation}) d
                          ON true"
                 );
-                let what = format!("{g} dijkstra {direction} {rels}");
+                let what = format!("{g} dijkstra {direction} {rels} per_relation {per_relation}");
                 let wrong = Spi::get_one::<String>(&format!(
                     "SELECT string_agg(format('%s: %s vs %s', f.target, f.cost, o.c), ', ')
                      FROM ({found}) f LEFT JOIN {g}_dist o ON o.n = f.target
