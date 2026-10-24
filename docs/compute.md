@@ -489,7 +489,7 @@ write an `f64` vector `out` and return how many sources they used. Each is
 NetworkX's function of the same name over the shortest paths under `rels`:
 along edges (`directed := true`, the default) or in the undirected simple
 graph (`directed := false`; a pair joined both ways weighs the lighter of
-its two), weighted if `weighted` (NULL: if the graph has weights; paths are
+its two, and is refused if either is NaN), weighted if `weighted` (NULL: if the graph has weights; paths are
 then the lightest, by Dijkstra: every edge a search follows must weigh more
 than 0 and every distance must stay finite, else 22023; a self-loop's
 weight is never read), else by edge count. An edge in several selected

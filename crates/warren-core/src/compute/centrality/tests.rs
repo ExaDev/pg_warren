@@ -176,6 +176,26 @@ fn a_weight_that_is_not_positive_is_refused() {
 }
 
 #[test]
+fn per_relation_a_nan_weight_in_one_relation_is_refused() {
+    // 0 → 1 weighs NaN in relation 0 and 1 in relation 1: read once the
+    // sum is NaN, and per relation the NaN must not be dropped either.
+    let graph = reference::graph(2, 2, &vec![(0, 0, 1, f64::NAN), (1, 0, 1, 1.0)], true, false);
+    for directed in [true, false] {
+        for per_relation in [false, true] {
+            let found = centrality_reading(
+                &graph,
+                &no_tombstones(2),
+                directed,
+                &every_source(),
+                Kind::Harmonic,
+                per_relation,
+            );
+            assert_eq!(found, Err(ComputeError::NonPositiveWeight), "{directed} {per_relation}");
+        }
+    }
+}
+
+#[test]
 fn an_interrupt_cancels_the_searches() {
     struct Stop;
     impl Interrupts for Stop {

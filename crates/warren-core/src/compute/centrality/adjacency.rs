@@ -109,7 +109,7 @@ impl<'g> Adjacency<'g> {
         match self {
             Self::Directed(matrix) if matrix.is_per_relation() => {
                 // A pair's entries are adjacent, in relation order: keep
-                // the lightest, as `WeightedSymmetric` does.
+                // the lightest (NaN if any is), as `WeightedSymmetric` does.
                 let mut pending: Option<(DenseId, f64)> = None;
                 matrix.for_each_entry(node, scratch, |target, weight| {
                     work.spend(1)?;
@@ -149,11 +149,12 @@ impl<'g> Adjacency<'g> {
     }
 }
 
-/// The lighter of two weights, in the order `WeightedSymmetric` sorts by.
+/// The lighter of two weights, or NaN if either is, so a NaN weight in any
+/// relation is refused as it is when the relations' weights are summed.
 fn lighter(a: f64, b: f64) -> f64 {
-    match b.total_cmp(&a) {
-        std::cmp::Ordering::Less => b,
-        _ => a,
+    match a.is_nan() || b.is_nan() {
+        true => f64::NAN,
+        false => a.min(b),
     }
 }
 
@@ -233,7 +234,8 @@ impl WeightedSymmetric {
     }
 
     /// Sorts every row by neighbour then weight and keeps the lightest
-    /// entry of each neighbour (moving it to the front of a run, so the
+    /// entry of each neighbour, or a NaN one if any, so a NaN weight is
+    /// refused whichever direction or relation holds it (moving it to the front of a run, so the
     /// row keeps its length: later duplicates are marked by
     /// [`DenseId::MAX`] and compacted out once all rows are sorted).
     fn sort(&mut self, cancellation: &Cancellation) -> Result<(), Cancelled> {
@@ -256,7 +258,10 @@ impl WeightedSymmetric {
             for node in nodes {
                 let row = (offsets[node] - base) as usize..(offsets[node + 1] - base) as usize;
                 let row = &mut chunk[row];
-                row.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+                row.sort_unstable_by(|a, b| {
+                    let nan_first = b.1.is_nan().cmp(&a.1.is_nan());
+                    a.0.cmp(&b.0).then(nan_first).then(a.1.total_cmp(&b.1))
+                });
                 for i in (1..row.len()).rev() {
                     if row[i].0 == row[i - 1].0 {
                         row[i].0 = DenseId::MAX;
