@@ -5,7 +5,7 @@ use super::TraversalError;
 use std::iter::{FusedIterator, Peekable};
 
 use crate::graph::{
-    AllRelations, AnyCsr, CsrRows, DenseId, Direction, GraphCsr, GraphError, RelationCsr,
+    memory, AllRelations, AnyCsr, CsrRows, DenseId, Direction, GraphCsr, GraphError, RelationCsr,
     RelationIndex, RelationSelection, RowNeighbours,
 };
 
@@ -138,6 +138,16 @@ impl<'g> Adjacency<'g> {
         DistinctNeighbours {
             rows: self.rows.iter().map(|csr| csr.neighbours(node).peekable()).collect(),
         }
+    }
+
+    /// [`Self::neighbours`] of `node`, collected into a buffer that borrows
+    /// nothing, reserved up front for every row entry of `node` (a failed
+    /// allocation is an error, not an abort).
+    pub fn collect_neighbours(&self, node: DenseId) -> Result<Vec<DenseId>, TraversalError> {
+        let entries = usize::try_from(self.row_entry_bound(node)).unwrap_or(usize::MAX);
+        let mut collected = memory::with_capacity(entries)?;
+        collected.extend(self.neighbours(node));
+        Ok(collected)
     }
 
     /// The number of [`Self::neighbours`] of `node`.
@@ -365,6 +375,24 @@ mod tests {
         assert_eq!(out.degree(1), 3);
         assert_eq!(out.neighbours(4).count(), 0);
         assert_eq!(out.degree(u64::MAX), 0);
+    }
+
+    #[test]
+    fn collected_neighbours_are_the_distinct_neighbours_in_a_buffer_of_their_own() {
+        // 0 → 1 and 0 → 2 in relations 0 and 1, 2 → 0 in relation 0
+        let graph = graph(
+            3,
+            2,
+            &[(0, 0, 1, 1.0), (1, 0, 1, 1.0), (0, 0, 2, 1.0), (1, 0, 2, 1.0), (0, 2, 0, 1.0)],
+            true,
+        );
+        let both = Adjacency::new(&graph, Direction::Both, RelationSelection::All).unwrap();
+        let collected = both.collect_neighbours(0).unwrap();
+        drop(both);
+        assert_eq!(collected, [1, 2]);
+        let out = Adjacency::new(&graph, Direction::Out, RelationSelection::All).unwrap();
+        assert_eq!(out.collect_neighbours(1).unwrap(), [] as [DenseId; 0]);
+        assert_eq!(out.collect_neighbours(u64::MAX).unwrap(), [] as [DenseId; 0]);
     }
 
     #[test]
