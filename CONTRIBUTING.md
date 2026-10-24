@@ -58,6 +58,9 @@ sql/schema-drift.sh
 
 # warren-core must never depend on Postgres (DESIGN.md §15.4); this must print nothing
 cargo tree -p warren-core -e all | grep -E 'pgrx|pg[-_]sys'
+
+# The workflows (.github/workflows); with shellcheck on PATH it checks each run: script
+go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 && ~/go/bin/actionlint
 ```
 
 `cargo test --workspace` is **not** how to test `pg_warren`: its tests need the
@@ -282,10 +285,11 @@ format. To benchmark a new function, add a workload with `requires` to
      Check that the run was started by the release PR's merge commit and
      that the commit shown is the PR's `release: X.Y.Z` commit, and
      approve. Both jobs read the commit that started the run (`github.sha`),
-     so what is shown is what is tagged. It
+     so what is shown is what is tagged. Before the gate, read-only jobs
+     build and test the packages (below); the publish job waits for them. It
      then pushes the annotated tag `vX.Y.Z` with the environment's deploy
-     key and creates the GitHub Release with CHANGELOG's section as its
-     notes. A re-run succeeds if the tag is already on the recorded commit
+     key, creates the GitHub Release with CHANGELOG's section as its
+     notes, and publishes the packages. A re-run succeeds if the tag is already on the recorded commit
      and fails if it is on another; run it by hand (with a version, or
      none for the latest) to publish again.
 - **Manual fallback**, without the workflows: on a branch from main,
@@ -315,6 +319,85 @@ test/upgrade.py --pg-config "$(command -v pg_config)"   # builds each release fr
 test/upgrade.py --no-install --trusted   # the same, installed and updated by a non-superuser
 test/dump.py --pg-config "$(command -v pg_config)"   # pg_dump and restore of graphs (plain, custom, trusted)
 ```
+
+### Packages
+
+Every release is published as (README.md, "Install"):
+
+- **`.deb` packages in a signed apt repository** on GitHub Pages
+  (`https://exadev.github.io/pg_warren/apt`, key at `.../apt/pg_warren.asc`):
+  `postgresql-NN-pg-warren` for PG 15–18, for Debian 12 (bookworm) and 13
+  (trixie) and Ubuntu 22.04 (jammy) and 24.04 (noble), on amd64 and arm64.
+  They follow PGDG's conventions, to make a later PGDG submission easy:
+  `packaging/debian` is a debhelper source package with `control.in`,
+  `debian/pgversions` and `pg_buildext`, one binary package per major,
+  `Depends: postgresql-NN`, built against `postgresql-server-dev-NN` from
+  apt.postgresql.org, files in PGDG's paths
+  (`/usr/lib/postgresql/NN/lib`, `/usr/share/postgresql/NN/extension`),
+  and the shared-library dependencies (`libc6 (>= …)`) computed by
+  `dh_shlibdeps` in each distribution's own container. The version is
+  `X.Y.Z-1~deb12` (`~deb13`, `~ubuntu22.04`, `~ubuntu24.04`): one pool holds
+  every distribution's, and an official PGDG build of the same release
+  (`X.Y.Z-1.pgdg…`) sorts above it. The postinst prints what to do next
+  (preload, restart, `CREATE EXTENSION`); it never edits `postgresql.conf`.
+  Unlike PGDG's offline builds, ours take Rust and cargo-pgrx from rustup
+  and crates.io (`packaging/build-deb.sh`, `dpkg-buildpackage -d`); a PGDG
+  submission would vendor the crates.
+- **Tarballs** `pg_warren-X.Y.Z-pgNN-linux-{x86_64,aarch64}.tar.gz`, the
+  jammy packages' files laid out as `pkglibdir/` and `sharedir/extension/`.
+- **Docker images** `ghcr.io/exadev/pg_warren:X.Y.Z-pgNN` (and `pgNN` for
+  the latest release), amd64 and arm64: `postgres:NN-trixie` with the
+  trixie package and pg_warren preloaded (`packaging/docker/Dockerfile`).
+- **A Homebrew formula** in the tap `exadev/homebrew-tap`
+  (`brew install exadev/tap/pg_warren`), rendered from
+  `packaging/homebrew/pg_warren.rb.in` by `release/homebrew.py`, modelled
+  on homebrew-core's pgvector (built for `postgresql@17` and `@18`), with a
+  bottle for Apple silicon (`arm64_sequoia`, built on macOS 15) and a build
+  from the release's source tarball elsewhere.
+- **The source tarball** `pg_warren-X.Y.Z.tar.gz` (`git archive` of the
+  release commit), which the formula builds from, and `SHA256SUMS`.
+
+`release-publish.yml` builds them in jobs that have only `contents: read`
+and no secrets, from the recorded release commit's source with the
+tooling (`release/`, `packaging/`) of the commit that started the run:
+`debs` (one job per distribution and arch, the four majors each, every
+package installed with apt into a clean container with PGDG's PostgreSQL,
+preloaded, restarted and smoke-tested; the tarballs on jammy, the images on
+trixie, each smoke-tested) and `homebrew` (`brew style`, `brew audit
+--strict`, `brew install --build-bottle`, `brew test`, `brew bottle`).
+Only after the `release` environment's approval does the publish job, which
+runs no build code, attach them to the GitHub Release (never replacing an
+asset already attached, so a re-run is safe), assemble the apt repository
+with aptly from **every** release's `.deb` assets (so each distribution
+keeps all versions; noble's reprepro would keep one), sign it with
+`RELEASE_APT_SIGNING_KEY`,
+push the images to GHCR and commit the formula to the tap with
+`HOMEBREW_TAP_DEPLOY_KEY`; the `pages` job then deploys the repository to
+GitHub Pages. Republishing an older release attaches and rebuilds the same
+way, but moves neither the images' `pgNN` tags nor the tap.
+
+CI keeps the path from rotting: `packages` builds `postgresql-16-pg-warren`
+for bookworm on every pull request with the same `release/packages.py`,
+installs it with apt into a clean container, preloads, restarts and runs
+`packaging/smoke.sql`, makes the tarball, and builds and checks the Docker
+image; `packages-arm64` does the same for noble on arm64 off the
+pull-request path (as Miri); `macos` runs `brew style` and `brew audit` on
+the formula. Locally, with Docker:
+
+```sh
+release/packages.py deb bookworm . dist --majors 16     # build (about 15 min)
+release/packages.py check dist/postgresql-16-pg-warren_*.deb
+release/packages.py tarball dist/postgresql-16-pg-warren_*.deb dist
+release/packages.py image dist/postgresql-16-pg-warren_*.deb pg_warren:local-pg16
+```
+
+Not built yet: RPM packages (yum/dnf) and a PGXN release (a `META.json`
+and an upload with a PGXN credential kept in the `release` environment);
+both are later steps.
+
+GitHub Pages serves at most 1 GB, and every release adds its 32 packages
+to the repository. When it nears that, prune old releases' `.deb` assets
+(the repository is rebuilt from the Releases' assets each time).
 
 ### Release settings (owner setup)
 
@@ -355,7 +438,43 @@ Set once in the repository's settings; the workflows assume them.
    contents and packages permissions* (each job asks for what it needs),
    and leave **Allow GitHub Actions to create and approve pull requests**
    *unticked*: the release PR is opened by a person.
-5. **Protect `main`** (a branch ruleset or classic protection): require
+5. **The apt repository's signing key** (a key used for nothing else, no
+   passphrase, as the job signs unattended):
+
+   ```sh
+   export GNUPGHOME="$(mktemp -d)"
+   gpg --batch --passphrase '' --quick-gen-key "pg_warren apt repository" ed25519 sign never
+   gpg --armor --export-secret-keys "pg_warren apt repository" >apt-signing-key.asc
+   ```
+
+   In the `release` environment, add the secret `RELEASE_APT_SIGNING_KEY`
+   with the whole file `apt-signing-key.asc`; then delete it and
+   `$GNUPGHOME`. The publish job exports the public key to
+   `https://exadev.github.io/pg_warren/apt/pg_warren.asc` on every
+   release. Keep the same key: users trust it once, and a new key breaks
+   their `apt update` until they fetch it again.
+6. **GitHub Pages**: Settings → Pages → *Build and deployment* → Source
+   **GitHub Actions**. This creates the `github-pages` environment, which
+   admits only `main`; the `pages` job deploys to it after the publish job,
+   so only after a release's approval. The whole site is the apt
+   repository (`/apt/`).
+7. **The Docker images' package**: after the first release, Settings of
+   the org's package `pg_warren` (Packages → pg_warren → Package settings)
+   → *Change visibility* → **Public**, and under *Manage Actions access*
+   check that this repository has write access (the publish job pushes with
+   `GITHUB_TOKEN`).
+8. **The Homebrew tap**: create the public repository
+   `ExaDev/homebrew-tap` (with a README, so that `main` exists). Generate
+   a key pair used for nothing else:
+   `ssh-keygen -t ed25519 -N "" -C "pg_warren homebrew tap" -f tap_deploy_key`.
+   In **the tap's** Settings → Deploy keys, add `tap_deploy_key.pub` with
+   **Allow write access**; in this repository's `release` environment, add
+   the secret `HOMEBREW_TAP_DEPLOY_KEY` with the private key file
+   `tap_deploy_key`; delete both files. The key can write only to the tap,
+   so it widens nothing here: this repository's tag ruleset bypass (step 3)
+   is for this repository's own deploy keys. Without the secret, the publish
+   job skips the tap with a warning.
+9. **Protect `main`** (a branch ruleset or classic protection): require
    a pull request (and status checks if wanted); block force-pushes and
    deletions. This also keeps the deploy key, which can write, from
    pushing to `main`: a direct push is refused. If anyone other than the
