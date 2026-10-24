@@ -1,0 +1,91 @@
+name: Release (publish)
+
+# Publishes a release once its release PR has merged: a push to main that
+# changes sql/released.commits, which only a release's freeze commit does
+# (and so also the manual fallback, CONTRIBUTING.md "Releases and
+# upgrades"). After the `release` environment's reviewers approve, it tags
+# the recorded commit vX.Y.Z and creates the GitHub Release with CHANGELOG's
+# section as its notes. A re-run succeeds once the tag is on the recorded
+# commit, and fails if a tag of that name is on any other.
+# workflow_dispatch publishes a given release (or the latest) again.
+
+on:
+  push:
+    branches: [main]
+    paths: [sql/released.commits]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The release to publish, X.Y.Z (default the last in sql/released.commits)
+        required: false
+        type: string
+
+concurrency:
+  group: release-publish
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  verify:
+    name: Verify the frozen release
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Every frozen install script matches sql/released.sha256
+        run: python3 release/publish.py verify
+      - name: The release to publish
+        id: release
+        env:
+          REQUESTED: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          version="${REQUESTED:-$(python3 release/publish.py latest)}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must be X.Y.Z, not '$version'"
+            exit 1
+          fi
+          python3 release/changelog.py notes "$version" >/dev/null
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+
+  publish:
+    name: Tag and release v${{ needs.verify.outputs.version }}
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Every branch and tag: the recorded commit's history, and any
+          # tag v$VERSION already pushed.
+          fetch-depth: 0
+      - name: Every frozen install script matches sql/released.sha256
+        run: python3 release/publish.py verify
+      - name: Tag the recorded commit v${{ env.VERSION }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python3 release/publish.py tag "$VERSION"
+          git push origin "refs/tags/v$VERSION"
+      - name: GitHub Release v${{ env.VERSION }}
+        run: |
+          set -euo pipefail
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "GitHub Release v$VERSION already exists"
+            exit 0
+          fi
+          python3 release/changelog.py notes "$VERSION" >"$RUNNER_TEMP/notes.md"
+          gh release create "v$VERSION" --verify-tag --title "pg_warren $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
