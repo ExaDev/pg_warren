@@ -140,10 +140,13 @@ Findings:
     A larger basis takes it to about 25 s (§14 item 50); not the default,
     for its memory.
 - **`aggregate_neighbours` on roadnet-tx took 8.4 s in run 3** (9.0 s
-  repeated), against 2.3 s in run 2, at lower load; usroads-48's went
-  0.43 → 0.22 s. The `eigen` change does not touch it; the commits between
-  1ffdcd9 and dcb9d2b that do (per-relation products, sparse offsets) are
-  where to look. Not investigated here.
+  repeated), against 2.3 s in run 2; usroads-48's went 0.43 → 0.22 s.
+  This is noise, not a regression. A controlled A/B on roadnet-tx in the
+  suite's session order took 2.15–2.40 s with 1ffdcd9 and 2.24–2.43 s with
+  96df7d4 (main after sparse per-relation offsets). The kernel itself
+  takes 0.05 s in both; the stage's time goes on its mean `vector_map` and
+  on persisting about 700 MB of vectors, which is disk-bound and varied
+  2.2× between runs on this shared disk.
 - **Versions of graphs with many relations are mostly per-relation offsets.**
   fb15k-237's version is 60.5 MB for 310K stored edges and 14.5K nodes,
   against dblp's 27 MB for 2.1M edges and 317K nodes: 237 relations × 14,542
