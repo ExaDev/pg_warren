@@ -154,16 +154,71 @@ jobs:
           [[ "$(git log -1 --format=%s "$tagged")" == "release: $VERSION" ]] || fail "unexpected subject of $tagged"
           [[ "$(git log -1 --format=%s "$branch")" == "release: freeze $VERSION, develop $NEXT" ]] \
             || fail "unexpected subject of the freeze commit"
+          # A file's changed lines, without the diff's headers: everything
+          # before a file's first hunk is a header, everything after is
+          # content, whatever it starts with (SQL comments start with "--").
+          changes() {
+            git diff -U0 --no-color --no-renames "$1" "$2" -- "$3" \
+              | awk '/^diff --git /{header=1; next} /^@@ /{header=0; next} !header'
+          }
           expect() {
             diff <(git diff --no-renames --name-status "$1" "$2" | sort) <(printf '%s\n' "${@:3}" | sort) \
               || fail "$2 changes other files than a release does"
           }
-          expect "$GITHUB_SHA" "$tagged" "M	CHANGELOG.md" "M	README.md"
+          same() { diff <(printf '%s\n' "$1") <(printf '%s\n' "$2") >/dev/null || fail "$3"; }
+          # The commit to tag: CHANGELOG's heading dated, and README's install
+          # line at v$VERSION unless it already was (release/prepare.py).
+          if git diff --quiet "$GITHUB_SHA" "$tagged" -- README.md; then
+            expect "$GITHUB_SHA" "$tagged" "M	CHANGELOG.md"
+          else
+            expect "$GITHUB_SHA" "$tagged" "M	CHANGELOG.md" "M	README.md"
+            readme="$(changes "$GITHUB_SHA" "$tagged" README.md)"
+            [[ "$readme" =~ ^-git\ checkout\ v[0-9]+\.[0-9]+\.[0-9]+(\ \ \ \#\ the\ latest\ release[^$'\n']*)$'\n'\+git\ checkout\ v"$VERSION"(.*)$ ]] \
+              && [[ "${BASH_REMATCH[1]}" == "${BASH_REMATCH[2]}" ]] \
+              || fail "README.md: the commit to tag changes more than its install line"
+          fi
+          heading="$(changes "$GITHUB_SHA" "$tagged" CHANGELOG.md)"
+          [[ "$heading" =~ ^-\#\#\ "$VERSION"\ —\ in\ development$'\n'\+\#\#\ "$VERSION"(\ —\ [^$'\n']+)?\ \([0-9]{4}-[0-9]{2}-[0-9]{2}\)$ ]] \
+            || fail "CHANGELOG.md: the commit to tag changes more than $VERSION's heading"
+          # The freeze commit.
           expect "$tagged" "$branch" "M	CHANGELOG.md" "M	Cargo.lock" "M	Cargo.toml" \
             "A	sql/pg_warren--$NEXT.sql" "A	sql/pg_warren--$VERSION--$NEXT.sql" \
             "M	sql/released.commits" "M	sql/released.sha256"
-          diff <(git diff -U0 "$tagged" "$branch" -- sql/released.commits | grep '^[-+][^-+]') \
-            <(echo "+$tagged  $VERSION") || fail "sql/released.commits does not record $tagged for $VERSION"
+          same "$(changes "$tagged" "$branch" CHANGELOG.md | sort)" "$(printf '+\n+## %s — in development' "$NEXT")" \
+            "CHANGELOG.md: the freeze commit changes more than opening $NEXT's section"
+          same "$(changes "$tagged" "$branch" Cargo.toml)" "$(printf -- '-version = "%s"\n+version = "%s"' "$VERSION" "$NEXT")" \
+            "Cargo.toml: the freeze commit changes more than the workspace version"
+          # Cargo.lock: only version lines, and only the workspace's own
+          # packages (those without a source), each from $VERSION to $NEXT.
+          lock="$(changes "$tagged" "$branch" Cargo.lock)"
+          if grep -qvxF -e "-version = \"$VERSION\"" -e "+version = \"$NEXT\"" <<<"$lock"; then
+            fail "Cargo.lock: the freeze commit changes more than version lines"
+          fi
+          packages() {
+            git show "$1:Cargo.lock" | awk '/^\[\[package\]\]$/{if (n) print n, v, s; n = v = s = ""}
+              /^name = /{n = $3} /^version = /{v = $3} /^source = /{s = $3} END{if (n) print n, v, s}'
+          }
+          moved="$(diff <(packages "$tagged") <(packages "$branch") | grep '^[<>]' || true)"
+          members="$(sed -n 's/^< \("[^"]*"\) "'"$VERSION"'" $/\1/p' <<<"$moved" | sort)"
+          [[ -n "$members" ]] || fail "Cargo.lock: no workspace package moves to $NEXT"
+          expected="$(awk -v from="$VERSION" -v to="$NEXT" \
+            '{print "< " $0 " \"" from "\" "; print "> " $0 " \"" to "\" "}' <<<"$members" | sort)"
+          same "$(sort <<<"$moved")" "$expected" \
+            "Cargo.lock: the freeze commit moves more than the workspace's packages from $VERSION to $NEXT"
+          same "$(wc -l <<<"$members") $(wc -l <<<"$members")" "$(grep -c '^-' <<<"$lock") $(grep -c '^+' <<<"$lock")" \
+            "Cargo.lock: not one version line per workspace package"
+          frozen="$(git show "$branch:sql/pg_warren--$VERSION.sql" | sha256sum | cut -d' ' -f1)"
+          same "$(changes "$tagged" "$branch" sql/released.sha256)" "+$frozen  pg_warren--$VERSION.sql" \
+            "sql/released.sha256 does not add exactly the sha256 of sql/pg_warren--$VERSION.sql"
+          same "$(changes "$tagged" "$branch" sql/released.commits)" "+$tagged  $VERSION" \
+            "sql/released.commits does not record $tagged for $VERSION"
+          # The upgrade script is the header main's release/prepare.py writes,
+          # read as data, byte for byte.
+          cmp <(git show "$branch:sql/pg_warren--$VERSION--$NEXT.sql") \
+            <(sed -e "s/@START@/$VERSION/g" -e "s/@END@/$NEXT/g" release/upgrade-header.sql.in) \
+            || fail "sql/pg_warren--$VERSION--$NEXT.sql is not the header-only upgrade script"
+          # sql/pg_warren--$NEXT.sql is generated by pgrx and cannot be checked
+          # here: the release PR's review covers it (CONTRIBUTING.md).
       - name: Push release-${{ inputs.version }}
         env:
           TOKEN: ${{ github.token }}
