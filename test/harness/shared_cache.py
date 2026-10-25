@@ -17,6 +17,13 @@ MODES = {
 
 DEFAULT_MODE = "on"
 
+# Whether a cluster shares versions: a cap is set and the registry exists
+# (PG 17 and later, or pg_warren preloaded), as include/shared_cache.sql's
+# :shared reads it.
+SHARES = ("SELECT coalesce(current_setting('warren.shared_cache_memory', true), '0') <> '0' "
+          "AND (current_setting('server_version_num')::int >= 170000 "
+          "OR current_setting('shared_preload_libraries') ~ 'pg_warren')")
+
 
 def settings(mode):
     """The postgresql.conf lines of `mode`."""

@@ -16,7 +16,17 @@ recursive CTEs / NetworkX on generated fixtures, and the Appendix A use cases
 - `dump.py` checks that a `pg_dump` of graphs, versions and vectors
   restores (plain through psql, custom through pg_restore), and that a
   trusted install's installer can dump and restore without the catalog.
-- `harness/` is the Python behind both; `tests/` are its pytest tests.
+- `concurrent_refresh.py` runs many backends reading, computing on and
+  refreshing one graph at once for a bounded time, preloaded and not, and
+  checks every read against the oracle of the source generation its
+  version was built from, every failure's SQLSTATE, what is left once
+  they disconnect, and the server log (DESIGN.md §13, M11).
+- `crash_recovery.py` stops refreshes mid-way (waiting to read edges,
+  writing segments, before commit) by `pg_terminate_backend`, SIGKILL
+  and an immediate shutdown, and checks that each recovery leaves the
+  catalog and the graph's answers as before, the shared cache working
+  and a new refresh succeeding (DESIGN.md §13, M11).
+- `harness/` is the Python behind them; `tests/` are its pytest tests.
 
 ## Writing a SQL test
 
