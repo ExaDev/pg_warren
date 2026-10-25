@@ -26,6 +26,16 @@ recursive CTEs / NetworkX on generated fixtures, and the Appendix A use cases
   and an immediate shutdown, and checks that each recovery leaves the
   catalog and the graph's answers as before, the shared cache working
   and a new refresh succeeding (DESIGN.md §13, M11).
+- `replicas.py` starts a primary, a physical streaming hot standby of it
+  (`pg_basebackup -R`) and a cascading standby of the standby, builds
+  graphs, versions and vectors on the primary, and checks on each
+  standby, once it has replayed them, that every read answers as on the
+  primary, that every write is refused with 25006, and that the shared
+  cache and the activity table work; that a version retired on the
+  primary under a standby query is read consistently or the query
+  cancelled by the recovery conflict (40001), with and without
+  `hot_standby_feedback`; and that the standby, promoted, writes and its
+  cascade follows it (DESIGN.md §5.1, §13, M11).
 
 - `sql_fuzz.py` calls every `warren.*` function (read from `pg_proc`)
   with generated arguments, valid ones from the fixture's graphs,
@@ -43,9 +53,10 @@ recursive CTEs / NetworkX on generated fixtures, and the Appendix A use cases
   with its seed, as a psql script that reproduces it from a fresh cluster
   (`harness/sql_fuzz/`; DESIGN.md §13, M11).
 
-  None of them hangs: each of their sessions has a 120 s `statement_timeout`,
-  a session still busy when it is closed is killed, and worker threads
-  that do not stop in time are reported, not waited for.
+  None of them hangs: each of their sessions has a 120 s
+  `statement_timeout` (the fuzzer's, 3 s, and a watchdog), a session still busy when it is closed is killed,
+  and worker threads that do not stop in time are reported, not waited
+  for.
 - `harness/` is the Python behind them; `tests/` are its pytest tests.
 
 ## Writing a SQL test

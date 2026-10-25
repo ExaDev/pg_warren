@@ -9,7 +9,7 @@ use pgrx::PgOid;
 use super::version::VersionId;
 use super::CatalogError;
 use crate::access::{as_catalog_owner, require_owner};
-use crate::read_only::read_one;
+use crate::read_only::{read_one, writing};
 use crate::source::IdType;
 use warren_core::graph::NodeOrder;
 
@@ -232,7 +232,7 @@ impl GraphDefinition {
         // statement would be the one from before the wait. The re-read,
         // as a statement of its own, takes a snapshot after the lock.
         let (stored, current, node_order, owner, readers) = as_catalog_owner(|| {
-            Spi::connect_mut(|client| {
+            writing(|client| {
                 let locked = client.update(LOCK, Some(1), &[self.graph_id.into()])?.len();
                 if locked == 0 {
                     return Err(CatalogError::GraphNotFound(self.name.clone()));
@@ -263,7 +263,7 @@ impl GraphDefinition {
     /// under this lock (DESIGN.md §6.6).
     pub(crate) fn share(&self, version: i64) -> Result<(), CatalogError> {
         let found = as_catalog_owner(|| {
-            Spi::connect_mut(|client| {
+            writing(|client| {
                 let locked = client.update(SHARE, Some(1), &[self.graph_id.into()])?.len();
                 if locked == 0 {
                     return Err(CatalogError::GraphNotFound(self.name.clone()));
@@ -323,7 +323,7 @@ impl GraphDefinition {
     /// Renames the graph to `name`, which no graph may have already.
     pub(crate) fn rename(&mut self, name: String) -> Result<(), CatalogError> {
         as_catalog_owner(|| {
-            Spi::connect_mut(|client| {
+            writing(|client| {
                 let taken = client
                     .update(
                         "SELECT 1 FROM warren.graphs WHERE name = $1",
@@ -348,7 +348,7 @@ impl GraphDefinition {
 
     pub(crate) fn set_node_order(&mut self, order: NodeOrder) -> Result<(), CatalogError> {
         as_catalog_owner(|| {
-            Spi::connect_mut(|client| {
+            writing(|client| {
                 client.update(
                     "UPDATE warren.graphs SET node_order = $2 WHERE graph_id = $1",
                     None,
@@ -364,7 +364,7 @@ impl GraphDefinition {
     /// Deletes the graph, and with it every version, segment and vector.
     pub(crate) fn drop_graph(&self) -> Result<(), CatalogError> {
         as_catalog_owner(|| {
-            Spi::connect_mut(|client| {
+            writing(|client| {
                 client.update(
                     "DELETE FROM warren.graphs WHERE graph_id = $1",
                     None,
@@ -379,7 +379,7 @@ impl GraphDefinition {
     /// roles that no longer exist.
     pub(crate) fn set_reader(&self, role: pg_sys::Oid, add: bool) -> Result<(), CatalogError> {
         as_catalog_owner(|| {
-            Spi::connect_mut(|client| {
+            writing(|client| {
                 client.update(
                     "UPDATE warren.graphs SET readers = ARRAY(
                          SELECT DISTINCT r.oid FROM pg_catalog.pg_roles r
@@ -400,7 +400,7 @@ impl GraphDefinition {
     /// ([`lock`](Self::lock)).
     pub(crate) fn set_owner(&mut self, owner: pg_sys::Oid) -> Result<(), CatalogError> {
         as_catalog_owner(|| {
-            Spi::connect_mut(|client| {
+            writing(|client| {
                 client.update(
                     &format!("UPDATE warren.graphs SET {NEW_OWNER} WHERE graph_id = $1"),
                     None,
@@ -431,7 +431,7 @@ impl NewGraph<'_> {
     pub(crate) fn create(&self) -> Result<(), CatalogError> {
         let graph = self;
         as_catalog_owner(|| {
-            Spi::connect_mut(|client| {
+            writing(|client| {
                 let exists = client
                     .select(
                         "SELECT 1 FROM warren.graphs WHERE name = $1",

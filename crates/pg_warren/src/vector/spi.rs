@@ -10,7 +10,7 @@ use warren_core::compute::Dtype;
 use super::{Binding, Checked, ChunkSource, VectorError, VectorId, VectorRecord, VectorStore};
 use crate::access::as_catalog_owner;
 use crate::catalog::VersionId;
-use crate::read_only::read_one;
+use crate::read_only::{read_one, writing};
 use crate::segment::{each_chunk, EachChunk};
 
 /// `warren.vectors` and `warren.vector_chunks`.
@@ -42,7 +42,7 @@ fn record(row: &SpiHeapTupleData<'_>) -> Result<VectorRecord, VectorError> {
 /// UPDATE`: the other order deadlocks with it.
 fn lock_version(binding: &Binding<'_>) -> Result<(), VectorError> {
     let locked = as_catalog_owner(|| {
-        Spi::connect_mut(|client| {
+        writing(|client| {
             client.update(
                 "SELECT FROM warren.graphs WHERE graph_id = $1 FOR KEY SHARE",
                 None,
@@ -112,7 +112,7 @@ impl VectorStore for SpiVectorStore {
         // in progress, which the insert waits for) is a conflict, reported
         // as a concurrent write rather than as a raw unique_violation.
         let id = as_catalog_owner(|| {
-            Spi::connect_mut(|client| {
+            writing(|client| {
                 let rows = client.update(
                     "INSERT INTO warren.vectors
                          (graph_id, version_id, name, dtype, width, length, created_by)
@@ -149,7 +149,7 @@ impl VectorStore for SpiVectorStore {
         source: &mut ChunkSource<'_>,
     ) -> Result<(), VectorError> {
         as_catalog_owner(|| {
-            Spi::connect_mut(|client| {
+            writing(|client| {
                 let insert = client.prepare_mut(
                     "INSERT INTO warren.vector_chunks (vector_id, chunk_no, data)
                      VALUES ($1, $2, $3)",
@@ -188,7 +188,7 @@ impl VectorStore for SpiVectorStore {
 
     fn lock(&mut self, vector: VectorId) -> Result<Option<pg_sys::Oid>, VectorError> {
         as_catalog_owner(|| {
-            Spi::connect_mut(|client| {
+            writing(|client| {
                 // By id alone, and the creator as locked: a `reassign_owned`
                 // that held the row gave it to another role, and the row it
                 // committed is the one returned (EvalPlanQual).
@@ -208,7 +208,7 @@ impl VectorStore for SpiVectorStore {
 
     fn delete(&mut self, checked: Checked) -> Result<bool, VectorError> {
         as_catalog_owner(|| {
-            Spi::connect_mut(|client| {
+            writing(|client| {
                 // The creator too: a `reassign_owned` that held the row may
                 // have given it to another role, which the caller's check
                 // was not of (EvalPlanQual re-checks both on the new row).

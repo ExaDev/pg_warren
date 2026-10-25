@@ -2,6 +2,12 @@
 of a given `pg_config`. It listens only on a Unix socket in its own
 directory, so it never collides with another cluster's port.
 
+Given a running `primary`, the cluster is instead its physical streaming
+hot standby: a base backup of it (`pg_basebackup -R`, which writes
+`standby.signal` and the `primary_conninfo` that streams from the
+primary's socket), with this cluster's own socket and `settings`. A
+standby's `primary` may itself be a standby (cascading replication).
+
 initdb and postgres refuse to run as root; as root the cluster runs as
 `runas` (default `postgres`) through sudo, as in CONTRIBUTING.md. `parent`
 puts the cluster directory somewhere other than the system temporary
@@ -22,27 +28,45 @@ SUPERUSER = "postgres"
 
 
 class Cluster:
-    def __init__(self, pg_config, runas="postgres", keep=False, parent=None, settings=()):
+    def __init__(self, pg_config, runas="postgres", keep=False, parent=None, settings=(), primary=None):
         self.bindir = Path(_pg_config(pg_config, "--bindir"))
         self.runas = runas if os.geteuid() == 0 else None
         self.keep = keep
         self.parent = parent
         self.settings = tuple(settings)
+        self.primary = primary
         self.directory = None
 
     def __enter__(self):
         self.directory = Path(tempfile.mkdtemp(prefix="warren-cluster-", dir=self.parent))
+        try:
+            self._make()
+        except BaseException:
+            # `with` calls __exit__ only once __enter__ has returned.
+            self.__exit__(*sys.exc_info())
+            raise
+        return self
+
+    def _make(self):
+        """Makes the cluster in `directory`, configures and starts it."""
         if self.runas:
             user = pwd.getpwnam(self.runas)
             os.chown(self.directory, user.pw_uid, user.pw_gid)
         data = self.directory / "data"
-        self._run("initdb", "-D", data, "-U", SUPERUSER, "-A", "trust", "-E", "UTF8", "--locale=C", "--no-sync")
+        self._create(data)
         with open(data / "postgresql.conf", "a") as conf:
             conf.write(f"listen_addresses = ''\nunix_socket_directories = '{self.directory}'\nport = {PORT}\n"
                        "fsync = off\nsynchronous_commit = off\nfull_page_writes = off\n")
             conf.writelines(f"{line}\n" for line in self.settings)
         self.start()
-        return self
+
+    def _create(self, data):
+        """Makes the data directory `data`: a new cluster, or a base backup of `primary`."""
+        if self.primary is None:
+            self._run("initdb", "-D", data, "-U", SUPERUSER, "-A", "trust", "-E", "UTF8", "--locale=C", "--no-sync")
+        else:
+            self._run("pg_basebackup", "-D", data, "-R", "-X", "stream", "-c", "fast", "--no-sync",
+                      "-h", self.primary.directory, "-p", PORT, "-U", SUPERUSER)
 
     @property
     def log(self):
@@ -55,6 +79,10 @@ class Cluster:
     def restart(self):
         """Restarts the server, for a setting that needs it or a clean shared memory."""
         self._run("pg_ctl", "-D", self.directory / "data", "-l", self.log, "-m", "fast", "-w", "restart")
+
+    def promote(self):
+        """Ends a standby's recovery (`pg_ctl promote`) and waits until it accepts writes."""
+        self._run("pg_ctl", "-D", self.directory / "data", "-w", "promote")
 
     def running(self):
         """Whether the server is running (`pg_ctl status`)."""

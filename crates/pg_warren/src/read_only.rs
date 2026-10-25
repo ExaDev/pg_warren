@@ -13,15 +13,24 @@
 //! non-read-only (a command counter increment and a fresh snapshot).
 //! [`read_one_latest`] reads the latest committed state (and the
 //! transaction's own earlier writes) instead of the statement's snapshot,
-//! for what must not depend on how old the caller's snapshot is. Depends on no other feature.
+//! for what must not depend on how old the caller's snapshot is.
+//!
+//! Every write goes through [`writing`], the one way to open a writable
+//! SPI connection. Its `update` assigns a transaction id, which a standby
+//! (in recovery) refuses with an internal error ("cannot assign
+//! TransactionIds during recovery"), so `writing` first refuses in a
+//! read-only transaction, which every transaction on a standby is, with
+//! the read-only SQLSTATE (DESIGN.md §5.1, §7). Depends on no other
+//! feature.
 
 use std::ffi::{c_char, CString};
 use std::ptr;
 
 use pgrx::datum::DatumWithOid;
+use pgrx::pg_sys::panic::ErrorReport;
 use pgrx::prelude::*;
-use pgrx::spi::{SpiError, SpiErrorCodes, SpiResult};
-use pgrx::{FromDatum, IntoDatum};
+use pgrx::spi::{SpiClient, SpiError, SpiErrorCodes, SpiResult};
+use pgrx::{FromDatum, IntoDatum, PgLogLevel, PgSqlErrorCode};
 
 /// The first column of the first row `query` returns, read-only.
 pub(crate) fn read_one<A: FromDatum + IntoDatum>(
@@ -37,6 +46,34 @@ pub(crate) fn read_two<A: FromDatum + IntoDatum, B: FromDatum + IntoDatum>(
     args: &[DatumWithOid<'_>],
 ) -> SpiResult<(Option<A>, Option<B>)> {
     Spi::connect(|client| client.select(query, Some(1), args)?.first().get_two())
+}
+
+/// Runs `f` on a writable SPI connection (`Spi::connect_mut`), after
+/// refusing, with `read_only_sql_transaction` (25006), in a read-only
+/// transaction: there the write would fail anyway, and on a standby
+/// assigning the transaction id that `update` takes would fail first,
+/// as an internal error.
+#[allow(clippy::disallowed_methods)] // The one writable connection, checked first.
+pub(crate) fn writing<R>(f: impl FnOnce(&mut SpiClient<'_>) -> R) -> R {
+    // SAFETY: reads the main thread's transaction state flags.
+    let (read_only, in_recovery) = unsafe { (pg_sys::XactReadOnly, pg_sys::RecoveryInProgress()) };
+    if read_only {
+        let refusal = ErrorReport::new(
+            PgSqlErrorCode::ERRCODE_READ_ONLY_SQL_TRANSACTION,
+            "cannot change pg_warren's catalog in a read-only transaction",
+            "writing",
+        );
+        let refusal = if in_recovery {
+            refusal.set_hint(
+                "This server is a standby. Change graphs, versions and persisted vectors on the \
+                 primary; persist := false keeps a vector in this session only.",
+            )
+        } else {
+            refusal
+        };
+        refusal.report(PgLogLevel::ERROR);
+    }
+    Spi::connect_mut(f)
 }
 
 /// Whether [`read_one_latest`] can read: not in parallel mode, where
@@ -106,4 +143,64 @@ pub(crate) fn read_one_latest<A: FromDatum + IntoDatum>(
             Ok(A::try_from_datum(datum, null, pg_sys::SPI_gettypeid(descriptor, 1))?)
         }
     })
+}
+
+#[cfg(any(test, feature = "pg_test"))]
+#[pgrx::pg_schema]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
+mod tests {
+    use pgrx::prelude::*;
+    use pgrx::spi::Error;
+
+    use crate::fixture::{refresh, ring};
+
+    /// What `call` failed with, as `SQLSTATE: message`, in a read-only
+    /// transaction (as every transaction on a standby is), or `None`. It
+    /// runs in a subtransaction, whose abort (forced if `call` succeeds)
+    /// makes the transaction read-write again.
+    fn refused_read_only(call: &str) -> Result<Option<String>, Error> {
+        Spi::run("CREATE TEMP TABLE IF NOT EXISTS refused (what text); TRUNCATE refused")?;
+        Spi::run(&format!(
+            "DO $do$ BEGIN
+                 PERFORM pg_catalog.set_config('transaction_read_only', 'on', true);
+                 PERFORM {call};
+                 RAISE SQLSTATE 'P0001' USING MESSAGE = 'succeeded';
+             EXCEPTION WHEN OTHERS THEN
+                 IF SQLERRM <> 'succeeded' THEN
+                     INSERT INTO refused VALUES (SQLSTATE || ': ' || SQLERRM);
+                 END IF;
+             END $do$"
+        ))?;
+        Spi::get_one::<String>("SELECT max(what) FROM refused")
+    }
+
+    #[pg_test]
+    fn writers_are_refused_in_a_read_only_transaction_before_they_write() -> Result<(), Error> {
+        ring("ro", 5, 2)?;
+        refresh("ro", true)?;
+        Spi::run("SELECT warren.vector_const('ro', 'c', 1)")?;
+        let writers = [
+            "warren.refresh('ro')",
+            "warren.vector_const('ro', 'd', 1)",
+            "warren.drop_vector('ro', 'c')",
+            "warren.set_vector_quota('ro', 0)",
+            "warren.create_graph('ro2', 'SELECT 1::bigint', 'SELECT 1::bigint, 1::bigint')",
+        ];
+        for writer in writers {
+            assert_eq!(
+                refused_read_only(writer)?.as_deref(),
+                Some("25006: cannot change pg_warren's catalog in a read-only transaction"),
+                "{writer}"
+            );
+        }
+        Ok(())
+    }
+
+    #[pg_test]
+    fn a_transient_vector_is_written_in_a_read_only_transaction() -> Result<(), Error> {
+        ring("rt", 5, 2)?;
+        refresh("rt", true)?;
+        assert_eq!(refused_read_only("warren.vector_const('rt', 't', 1, persist := false)")?, None);
+        Ok(())
+    }
 }
