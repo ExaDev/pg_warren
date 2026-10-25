@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """The real-graph suite (DESIGN.md §12, §13 M11): datasets from keepset,
 fetched and pinned, loaded into `nodes`/`edges`, checked against NetworkX
-and timed on the §12 matrix. bench/corpus/README.md has the details.
+and igraph and timed on the §12 matrix. bench/corpus/README.md has the details.
 
     bench/corpus/suite.py fetch --tier tiny            # fetch, pin, convert to tables
-    bench/corpus/suite.py check --tier tiny --pg-config ...   # correctness against NetworkX
+    bench/corpus/suite.py check --tier tiny --pg-config ...   # correctness against NetworkX and igraph
+    bench/corpus/suite.py check --tier medium --oracle igraph --pg-config ...   # igraph alone
     bench/corpus/suite.py time --tier medium --pg-config ... --extension-revision ... --extension-profile release
     bench/corpus/suite.py ids hetionet yago3-10        # text id lengths and front coding
     bench/corpus/suite.py summary                      # the results as Markdown tables
@@ -83,18 +84,22 @@ def command_check(args, datasets):
             print(f"{dataset.name}:", flush=True)
             started = time.monotonic()
             name, database = _database(cluster, dataset, directory)
-            reference = oracle.Reference.read(directory, dataset)
-            version, findings = checks.run(checks.Warren(database, dataset), reference, dataset,
+            source = oracle.Source.read(directory, dataset)
+            references = [oracle.LIBRARIES[name](source) for name in args.oracle]
+            version, findings = checks.run(checks.Warren(database, dataset), source, references, dataset,
                                            tables.create_graph_sql(dataset, "g"))
             for finding in findings:
-                print(f"  {finding['status']:>11} {finding['check']}", flush=True)
-            failed += [f"{dataset.name}/{f['check']}" for f in findings if f["status"] != "match"]
+                print(f"  {finding['status']:>11} {finding['check']} ({finding['against']})", flush=True)
+            failed += [f"{dataset.name}/{f['check']} ({f['against']})" for f in findings
+                       if f["status"] not in checks.AGREEING]
             cluster.database().execute(f'DROP DATABASE "{name}"')
             _write(args.results / "correctness" / f"{dataset.name}.json", {
                 "provenance": _provenance(args), "hardware": hardware(), "dataset": dataset.name,
                 "tier": dataset.tier, "fetched": json.loads((directory / "dataset.json").read_text()),
-                "version": version, "seconds": round(time.monotonic() - started, 1), "findings": findings})
-    print(f"not matching: {', '.join(failed)}" if failed else "every check matched", flush=True)
+                "oracles": {name: oracle.LIBRARIES[name].VERSION for name in args.oracle}, "version": version,
+                "seconds": round(time.monotonic() - started, 1), "findings": findings})
+    print(f"not matching: {', '.join(failed)}" if failed else "every check matched or differs as documented",
+          flush=True)
     return 1 if failed else 0
 
 
@@ -133,10 +138,11 @@ def command_summary(args, datasets):
         found = [directory / f"{d.name}.json" for d in datasets]
         return [json.loads(path.read_text()) for path in found if path.exists()]
 
-    print(summary.correctness(results(args.results / "correctness")), end="\n\n")
+    print(summary.correctness(results(args.results / "correctness")))
     timed = results(args.results)
-    print(summary.timings(timed, summary.SECTION_12), end="\n\n")
-    print(summary.timings(timed, summary.LIBRARY))
+    if timed:
+        print("\n" + summary.timings(timed, summary.SECTION_12), end="\n\n")
+        print(summary.timings(timed, summary.LIBRARY))
     return 0
 
 
@@ -163,9 +169,12 @@ def main(argv):
     options.add_argument("--parent", type=Path, default=Path("/var/tmp"), help="where the cluster directory goes")
     options.add_argument("--ignore-memory", action="store_true",
                          help="fetch even when keepset's heap estimate exceeds the available memory")
+    options.add_argument("--oracle", action="append", choices=sorted(oracle.LIBRARIES), default=[],
+                         help="the oracles `check` compares with (repeatable; default: every one)")
     options.add_argument("--threads", type=int, default=os.cpu_count(), help="warren.threads for timings")
     args = options.parse_args(argv)
     args.argv = argv
+    args.oracle = args.oracle or sorted(oracle.LIBRARIES)
     read = manifest.read(args.manifest)
     datasets = read.select(names=args.datasets, tiers=args.tier or ["tiny", "medium"])
     return COMMANDS[args.command](args, datasets)

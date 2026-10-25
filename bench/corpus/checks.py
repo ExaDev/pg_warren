@@ -1,9 +1,12 @@
-"""The correctness layer: pg_warren's results on a dataset against the
-NetworkX references of `oracle`, as findings (dicts, written to the
-results as JSON). `compare` and `compare_partitions` are exact unless given
-a tolerance; community detection is held to a quality bound, not equality:
-pg_warren's modularity at least NetworkX Louvain's less `slack`, each
-partition scored by `warren.modularity` so both are measured alike.
+"""The correctness layer: pg_warren's results on a dataset against each
+reference of the `oracle` port (NetworkX, igraph), as findings (dicts,
+written to the results as JSON), each naming what it was checked
+`against`: an oracle, or the tables themselves. pg_warren is asked once
+per check, however many oracles there are. `compare` and
+`compare_partitions` are exact unless given a tolerance; community
+detection is held to a quality bound, not equality: pg_warren's modularity
+at least the oracle's Louvain's less `slack`, each partition scored by
+`warren.modularity` so both are measured alike.
 
 `Warren` is the adapter: it reads graph `g` of a database through SQL."""
 
@@ -12,13 +15,18 @@ import random
 
 EXAMPLES = 5
 PAGERANK_TOLERANCE = 1e-9   # max absolute difference; both converged to 1e-12
+PAGERANK_STOP = 1e-12       # tol: the iteration stops when the L1 change is below N·tol
+PAGERANK_DAMPING = 0.85
 CLUSTERING_TOLERANCE = 1e-12
+BETWEENNESS_TOLERANCE = 1e-12  # max absolute difference of normalised values
 MODULARITY_TOLERANCE = 1e-9
 QUALITY_SLACK = 0.02
 SELF_LOOP = ("clustering counts a node with a self-loop among its own neighbours (vector_degree), NetworkX "
              "leaves the self-loop out (docs/compute.md, DESIGN.md §6.7)")
+AGREEING = ("match", "documented difference")  # a finding with another status fails `check`
 PATH_PAIRS = 25
 PATH_SEED = 1
+TABLES = "tables"  # `against` for the checks of the build against the tables themselves
 
 
 def compare(check, warren, oracle, tolerance=0.0, documented=None):
@@ -113,8 +121,14 @@ class Warren:
         return float(rows[0][0]) if rows else None
 
     def pagerank(self):
-        self.database.execute("SELECT warren.pagerank('g', 'pagerank', tol := 1e-12, max_iter := 10000)")
+        self.database.execute(f"SELECT warren.pagerank('g', 'pagerank', tol := {PAGERANK_STOP}, max_iter := 10000)")
         return self.vector("pagerank")
+
+    def betweenness(self):
+        """Exact (every node a source), normalised, along edges, weighted
+        when the graph is: the defaults."""
+        self.database.execute("SELECT warren.betweenness_centrality('g', 'betweenness')")
+        return self.vector("betweenness")
 
     def library(self, function):
         """`triangles`, `clustering` or `core_number` into a vector of its name."""
@@ -138,78 +152,110 @@ class Warren:
             f"SELECT warren.modularity('g', 'given_labels', per_relation := {str(per_relation).lower()})")[0][0])
 
 
+def pagerank_tolerance(reference, nodes):
+    """pg_warren's PageRank is NetworkX's iteration, stopped when the L1
+    change is below N·tol: an iterate within N·tol·α/(1 − α) of the fixed
+    point in L1. A reference that solves for the fixed point
+    (`PAGERANK_SOLVED`) is allowed that much more."""
+    if not reference.PAGERANK_SOLVED:
+        return PAGERANK_TOLERANCE
+    return PAGERANK_TOLERANCE + nodes * PAGERANK_STOP * PAGERANK_DAMPING / (1 - PAGERANK_DAMPING)
+
+
+def _against(references, check, warren, answer, **options):
+    """`check` of pg_warren's `warren` against `answer(reference)` of each
+    reference."""
+    return [{**compare(check, warren, answer(reference), **options), "against": reference.NAME}
+            for reference in references]
+
+
 def _path_pairs(nodes, count, seed):
     chooser = random.Random(seed)
     return [tuple(chooser.sample(nodes, 2)) for _ in range(count)]
 
 
-def _path_findings(warren, reference, nodes, weighted):
-    lengths_w, lengths_o, invalid, costs_w, costs_o = {}, {}, [], {}, {}
-    for source, target in _path_pairs(nodes, PATH_PAIRS, PATH_SEED):
-        key = f"{source}->{target}"
-        path = warren.shortest_path(source, target)
-        lengths_w[key] = None if path is None else len(path) - 1
-        lengths_o[key] = reference.path_length(source, target)
-        if path is not None and (path[0], path[-1]) != (source, target) or \
-                path is not None and not all(reference.has_edge(a, b) for a, b in zip(path, path[1:])):
-            invalid.append(key)
+def _path_findings(warren, references, nodes, weighted):
+    pairs = {f"{source}->{target}": (source, target) for source, target in _path_pairs(nodes, PATH_PAIRS, PATH_SEED)}
+    paths = {key: warren.shortest_path(*pair) for key, pair in pairs.items()}
+    lengths = {key: None if path is None else len(path) - 1 for key, path in paths.items()}
+    costs = {key: warren.path_cost(*pair) for key, pair in pairs.items()} if weighted else {}
+    findings = []
+    for reference in references:
+        invalid = [key for key, path in paths.items() if path is not None and (
+            (path[0], path[-1]) != pairs[key] or not all(reference.has_edge(a, b) for a, b in zip(path, path[1:])))]
+        findings += [{**compare("shortest_path length", lengths,
+                                {key: reference.path_length(*pair) for key, pair in pairs.items()}),
+                      "against": reference.NAME},
+                     {"check": "shortest_path edges", "status": "mismatch" if invalid else "match",
+                      "compared": len(paths), "invalid": invalid[:EXAMPLES], "against": reference.NAME}]
         if weighted:
-            costs_w[key] = warren.path_cost(source, target)
-            costs_o[key] = reference.path_cost(source, target)
-    findings = [compare("shortest_path length", lengths_w, lengths_o),
-                {"check": "shortest_path edges", "status": "mismatch" if invalid else "match",
-                 "compared": len(lengths_w), "invalid": invalid[:EXAMPLES]}]
-    if weighted:
-        findings.append(compare("dijkstra cost", costs_w, costs_o, tolerance=1e-9))
+            findings.append({**compare("dijkstra cost", costs,
+                                       {key: reference.path_cost(*pair) for key, pair in pairs.items()},
+                                       tolerance=1e-9), "against": reference.NAME})
     return findings
 
 
-def _modularity_finding(check, warren, oracle, status_if_different, note):
-    return {"check": check, "status": "match" if abs(warren - oracle) <= MODULARITY_TOLERANCE else status_if_different,
+def _modularity_finding(check, warren, oracle, note):
+    return {"check": check, "status": "match" if abs(warren - oracle) <= MODULARITY_TOLERANCE else "mismatch",
             "warren": warren, "oracle": oracle, "difference": warren - oracle, "note": note}
 
 
-def _community_findings(warren, reference, relations):
-    nx_labels, nx_q = reference.louvain()
-    warren_on_nx = warren.modularity(nx_labels)
-    findings = [_modularity_finding("modularity definition", warren_on_nx, nx_q, "mismatch",
-                                    "warren.modularity and NetworkX scoring NetworkX's Louvain partition")]
-    if relations:
-        each = reference.modularity(nx_labels, reference.undirected_view(per_relation=True))
-        findings.append(_modularity_finding(
-            "modularity per relation", warren.modularity(nx_labels, per_relation=True), each, "mismatch",
-            "per_relation := true against NetworkX with A at k for an unweighted pair in k relations"))
-    for function in ("louvain", "leiden"):
-        labels, q = warren.community(function)
-        returned = reference.modularity({n: label for n, label in labels.items()})
-        findings.append(quality_bound(function, q, warren_on_nx))
-        findings.append({"check": f"{function} returned modularity",
-                         "status": "match" if abs(returned - q) <= MODULARITY_TOLERANCE else "mismatch",
-                         "warren": q, "oracle": returned, "difference": q - returned,
-                         "communities": len(set(labels.values()))})
+def _community_findings(warren, references, relations):
+    """Per oracle: `warren.modularity` of the oracle's Louvain partition
+    against the oracle's score of it, and `louvain` and `leiden` held to
+    the bound that score sets, their returned modularity rescored."""
+    detected = {function: warren.community(function) for function in ("louvain", "leiden")}
+    findings = []
+    for reference in references:
+        labels, q = reference.louvain()
+        warren_on_oracle = warren.modularity(labels)
+        found = [_modularity_finding("modularity definition", warren_on_oracle, q,
+                                     f"warren.modularity and {reference.NAME} scoring {reference.NAME}'s Louvain "
+                                     "partition")]
+        if relations:
+            found.append(_modularity_finding(
+                "modularity per relation", warren.modularity(labels, per_relation=True),
+                reference.modularity(labels, per_relation=True),
+                f"per_relation := true against {reference.NAME} with A at k for an unweighted pair in k relations"))
+        for function, (communities, returned) in detected.items():
+            rescored = reference.modularity(communities)
+            found.append(quality_bound(function, returned, warren_on_oracle))
+            found.append({"check": f"{function} returned modularity",
+                          "status": "match" if abs(rescored - returned) <= MODULARITY_TOLERANCE else "mismatch",
+                          "warren": returned, "oracle": rescored, "difference": returned - rescored,
+                          "communities": len(set(communities.values()))})
+        findings += [{**f, "against": reference.NAME} for f in found]
     return findings
 
 
-def run(warren, reference, dataset, create_graph_sql):
-    """Every check on `dataset`: its build, then each function against the
-    reference. Returns the build's version row and the findings."""
+def run(warren, source, references, dataset, create_graph_sql):
+    """Every check on `dataset`: its build against its tables (`source`),
+    then each function against each reference. Returns the build's version
+    row and the findings."""
     version = warren.build(create_graph_sql)
-    graph = reference.graph
-    nodes = sorted(graph)
-    findings = [compare("node_count", {"nodes": version["node_count"]}, {"nodes": graph.number_of_nodes()}),
-                compare("dropped_edges", {"edges": version["dropped_edges"]}, {"edges": 0})]
-    directions = ("out", "in", "both") if dataset.directed else ("out",)
-    findings += [compare(f"degree {d}", warren.degrees(d), reference.degrees(d)) for d in directions]
-    hub = max(nodes, key=lambda n: (graph.degree(n), n))
-    for source in (hub, random.Random(PATH_SEED).choice(nodes)):
-        findings.append({**compare("bfs depths", warren.bfs_depths(source), reference.bfs_depths(source)),
-                         "source": source})
-    findings.append(compare_partitions("components", warren.components(), reference.components()))
-    findings += _path_findings(warren, reference, nodes, dataset.weighted)
-    findings.append(compare("pagerank", warren.pagerank(), reference.pagerank(), tolerance=PAGERANK_TOLERANCE))
-    findings.append(compare("triangles", warren.library("triangles"), reference.triangles()))
-    findings.append(compare("clustering", warren.library("clustering"), reference.clustering(),
-                            tolerance=CLUSTERING_TOLERANCE, documented=(reference.self_loop_nodes(), SELF_LOOP)))
-    findings.append(compare("core_number", warren.library("core_number"), reference.core_number()))
-    findings += _community_findings(warren, reference, dataset.relations)
+    nodes = sorted(source.nodes)
+    findings = [{**compare("node_count", {"nodes": version["node_count"]}, {"nodes": len(nodes)}), "against": TABLES},
+                {**compare("dropped_edges", {"edges": version["dropped_edges"]}, {"edges": 0}), "against": TABLES}]
+    for direction in ("out", "in", "both") if dataset.directed else ("out",):
+        findings += _against(references, f"degree {direction}", warren.degrees(direction),
+                             lambda r, d=direction: r.degrees(d))
+    for start in (source.hub(), random.Random(PATH_SEED).choice(nodes)):
+        findings += [{**found, "source": start} for found in
+                     _against(references, "bfs depths", warren.bfs_depths(start), lambda r, s=start: r.bfs_depths(s))]
+    components = warren.components()
+    findings += [{**compare_partitions("components", components, r.components()), "against": r.NAME}
+                 for r in references]
+    findings += _path_findings(warren, references, nodes, dataset.weighted)
+    pagerank = warren.pagerank()
+    findings += [{**compare("pagerank", pagerank, r.pagerank(), tolerance=pagerank_tolerance(r, len(nodes))),
+                  "against": r.NAME} for r in references]
+    findings += _against(references, "triangles", warren.library("triangles"), lambda r: r.triangles())
+    findings += _against(references, "clustering", warren.library("clustering"), lambda r: r.clustering(),
+                         tolerance=CLUSTERING_TOLERANCE, documented=(source.self_loop_nodes(), SELF_LOOP))
+    findings += _against(references, "core_number", warren.library("core_number"), lambda r: r.core_number())
+    affording = [r for r in references if len(nodes) * len(source.edges) <= r.BETWEENNESS_WORK]
+    if affording:
+        findings += _against(affording, "betweenness", warren.betweenness(), lambda r: r.betweenness(),
+                             tolerance=BETWEENNESS_TOLERANCE)
+    findings += _community_findings(warren, references, dataset.relations)
     return version, findings

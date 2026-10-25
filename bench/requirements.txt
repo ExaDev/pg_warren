@@ -4,4 +4,5 @@
 numpy==2.5.3
 networkx==3.7
 scipy==1.18.1  # networkx.pagerank
+igraph==1.0.0  # bench/corpus: the second oracle
 pytest==9.1.1

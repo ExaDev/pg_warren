@@ -3,14 +3,15 @@
 The real-graph suite (DESIGN.md §12, §13 M11): datasets from the
 [keepset](https://mearman.github.io/keepset/) catalogue, fetched by keepset's
 own recipes, pinned by checksum, loaded into the `nodes` and `edges` tables
-`warren.create_graph` reads, checked against NetworkX and timed on the §12
-matrix. Raw data never enters git: it lives in a cache (default
+`warren.create_graph` reads, checked against NetworkX and igraph and timed on
+the §12 matrix. Raw data never enters git: it lives in a cache (default
 `/var/tmp/warren-corpus`, `--cache` or `$WARREN_CORPUS_CACHE`).
 
 ```sh
 bench/corpus/suite.py fetch --tier tiny                 # fetch, pin and convert to tables
 bench/corpus/suite.py check --tier tiny --pg-config $T/usr/lib/postgresql/16/bin/pg_config \
     --extension-revision "$(git rev-parse --short HEAD)" --extension-profile release
+bench/corpus/suite.py check --tier medium --oracle igraph --pg-config ... # one oracle only
 bench/corpus/suite.py time --tier medium --pg-config ... --extension-revision ... --extension-profile release
 bench/corpus/suite.py ids --tier tiny --tier medium     # text id lengths and front coding
 ```
@@ -57,18 +58,34 @@ fetch whose bytes differ fails (`PinMismatch`) and leaves nothing behind.
 ## Correctness (`check`)
 
 For each dataset, graph `g` is built as the manifest describes it and compared
-with NetworkX on the same tables (`oracle.py`, under pg_warren's definitions:
-deduplicated edges, neighbours counted once, the undirected simple graph for
-triangles, clustering and cores, the undirected view for modularity):
+with each oracle on the same tables. `oracle/` is a port: `Source` reads the
+tables once under pg_warren's definitions (deduplicated edges, neighbours
+counted once, the undirected simple graph for triangles, clustering and cores,
+the undirected view for modularity), and each library's reference
+(`NetworkXReference`, `IGraphReference`: NetworkX 3.7 and python-igraph 1.0.0,
+pinned in `bench/requirements.txt`) answers the same questions from it, so
+`checks.py` does not know which library answered. pg_warren is asked once per
+check and its answer compared with every oracle's; each finding records what
+it was checked `against` (`--oracle` picks them; by default both). igraph is
+independent of NetworkX (its C core) and much faster: with igraph alone a
+medium dataset's check took 5–88 s, against 19–777 s with NetworkX alone
+(`--oracle igraph`). The checks:
 the version's node count and dropped edges; degree (out, and in and both when
 directed); BFS depths from the busiest node and a seeded random one;
 components (as partitions); shortest path lengths and validity for 25 seeded
 pairs, and Dijkstra costs when weighted; PageRank (within 1e-9, both converged
-to 1e-12); triangles; clustering (within 1e-12); core numbers;
-`warren.modularity` against NetworkX's on NetworkX's Louvain partition; and
-`louvain` and `leiden` held to a quality bound (at least NetworkX Louvain's
-modularity less 0.02) with the modularity they return checked against
-NetworkX's of their partition.
+to 1e-12; against igraph, which solves for the fixed point, within that plus
+N·tol·α/(1 − α), how far an iteration that stops at an L1 change of N·tol
+can be from it); triangles; clustering (within 1e-12); core numbers; exact
+normalised betweenness (within 1e-12) where the oracle can afford it
+(N·M up to 10⁸ for NetworkX, 5·10⁹ for igraph: every tiny graph but
+transport-airline, facebook and WN18RR for NetworkX, all of them and
+FB15k-237 for igraph); `warren.modularity` against the oracle's on the
+oracle's Louvain partition (and per relation where there are relations); and
+`louvain` and `leiden` held to a quality bound (at least the oracle's
+Louvain's modularity less 0.02) with the modularity they return checked
+against the oracle's of their partition. `check` fails if any finding is
+neither a match nor a documented difference (clustering at self-loops).
 
 ## A CI job (proposed, not added)
 

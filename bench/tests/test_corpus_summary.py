@@ -27,3 +27,24 @@ def test_timings_take_the_server_time_where_there_is_one():
 
 def test_reads_under_ten_milliseconds_are_shown_in_milliseconds():
     assert summary.seconds({"median_seconds": 1.0, "server_median_seconds": 0.00012}) == "0.12 ms"
+
+
+def test_what_did_not_match_names_the_oracle_and_each_oracles_louvain_is_shown():
+    findings = [{"check": "node_count", "status": "match", "against": "tables"},
+                {"check": "pagerank", "status": "match", "against": "networkx"},
+                {"check": "pagerank", "status": "mismatch", "against": "igraph"},
+                {"check": "louvain", "status": "match", "warren": 0.4, "oracle": 0.41, "against": "networkx"},
+                {"check": "louvain", "status": "match", "warren": 0.4, "oracle": 0.43, "against": "igraph"},
+                {"check": "leiden", "status": "match", "warren": 0.42, "oracle": 0.41, "against": "networkx"},
+                {"check": "leiden", "status": "match", "warren": 0.42, "oracle": 0.43, "against": "igraph"}]
+    row = summary.correctness([{"dataset": "a", "tier": "tiny", "version": {"node_count": 3, "edge_count": 4},
+                                "seconds": 1.0, "findings": findings}]).splitlines()[2]
+    assert row == "| a | tiny | 3 | 4 | 6 of 7 | pagerank against igraph (mismatch) | 0.400 / 0.420 / 0.410 (igraph 0.430) | 1.0 |"
+
+
+def test_the_igraph_louvain_alone_is_shown_as_such():
+    findings = [{"check": "louvain", "status": "match", "warren": 0.4, "oracle": 0.43, "against": "igraph"},
+                {"check": "leiden", "status": "match", "warren": 0.42, "oracle": 0.43, "against": "igraph"}]
+    row = summary.correctness([{"dataset": "a", "tier": "medium", "version": {"node_count": 3, "edge_count": 4},
+                                "seconds": 1.0, "findings": findings}]).splitlines()[2]
+    assert row.endswith("| 0.400 / 0.420 / (igraph 0.430) | 1.0 |")
