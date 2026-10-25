@@ -48,7 +48,8 @@ before changing code. Commands, toolchain setup and environment gotchas are in
      progress frames, `warren.progress()` and `warren.report_progress()`),
      `cache/` (loader; `introspection`, `warren.cache()`; `shared`, the shared cache across backends, and `shared::introspection`, `warren.shared_cache()`), `build/`,
      `version_sql/` (compact, diff), `interrupts` (the main-thread poll),
-     `read_only` (single-row SPI reads that assign no transaction id),
+     `read_only` (single-row SPI reads that assign no transaction id, and
+     `writing`, the one writable SPI connection),
      `parallel_worker` (what a parallel worker records and raises),
      `external_ids/` (id arguments ↔ dense ids), `selection/` (direction and
      relations), `traversal_sql/`, `vector/` (persistence and cache of named
@@ -136,15 +137,19 @@ before changing code. Commands, toolchain setup and environment gotchas are in
     (policy in CONTRIBUTING.md "Lints").
 - Reserve graph-sized buffers with `try_reserve`; an allocation failure is a
   SQL error, never an abort.
-- SPI writes need `Spi::connect_mut` + `update()`. `Spi::connect` is read-only.
+- SPI writes need `read_only::writing` + `update()`. `Spi::connect` is read-only.
 - **Reads never assign a transaction id.** pgrx's `Spi::get_one*`,
   `get_two*` and `run*` go through `update()`, which calls
   `GetCurrentTransactionId()`; in parallel mode (a `PARALLEL RESTRICTED`
   function in the leader of a parallel plan) that raises "cannot assign
   XIDs during a parallel operation". Outside tests, read with
   `read_only::read_one`/`read_two` or `Spi::connect` + `select`, and write
-  with `Spi::connect_mut` + `update`. Clippy's `disallowed-methods`
-  (`clippy.toml`) enforces this; test modules allow it on the `mod` item.
+  with `read_only::writing` + `update`: on a standby every transaction is
+  read-only and none can be assigned a transaction id, so `writing`
+  refuses there (25006) before `update` would fail with an internal
+  error (DESIGN.md §5.1). Clippy's `disallowed-methods` (`clippy.toml`)
+  enforces this, `Spi::connect_mut` included; test modules allow it on
+  the `mod` item.
 - **Parallel labels** (DESIGN.md §9.3): writers and anything that may persist
   are `PARALLEL UNSAFE`; anything that reads a vector, or a graph in a way
   §9.3 does not list as safe, is `PARALLEL RESTRICTED`; graph reads that use

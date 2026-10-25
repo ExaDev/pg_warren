@@ -8,7 +8,7 @@ use warren_core::graph::{GraphCsr, IdKeys, IdMap, TargetWidth};
 use super::retention::{retention, Kept, VersionSummary};
 use super::{CatalogError, GraphDefinition};
 use crate::access::as_catalog_owner;
-use crate::read_only::read_one;
+use crate::read_only::{read_one, writing};
 
 /// A version id: `warren.versions.version_id`.
 pub(crate) type VersionId = i64;
@@ -108,7 +108,7 @@ pub(crate) fn insert_version(
 ) -> Result<VersionId, CatalogError> {
     let stats = &new.stats;
     let version = as_catalog_owner(|| {
-        Spi::connect_mut(|client| {
+        writing(|client| {
             Ok::<_, CatalogError>(
                 client
                     .update(
@@ -158,7 +158,7 @@ pub(crate) fn record_contents(
     bytes: u64,
 ) -> Result<(), CatalogError> {
     as_catalog_owner(|| {
-        Spi::connect_mut(|client| {
+        writing(|client| {
             client.update(
                 "UPDATE warren.versions
                  SET node_count = $2, id_space = $3, edge_count = $4, dropped_edges = $5,
@@ -189,7 +189,7 @@ pub(crate) fn promote_version(
     version: VersionId,
 ) -> Result<(), CatalogError> {
     let outcome = as_catalog_owner(|| {
-        Spi::connect_mut(|client| {
+        writing(|client| {
             client.update(
                 "WITH promoted AS (
                      UPDATE warren.versions SET staged = false WHERE version_id = $1)
@@ -423,7 +423,7 @@ pub(crate) fn drop_version(
         return Err(CatalogError::DropCurrent { graph: graph.name.clone(), version });
     }
     as_catalog_owner(|| {
-        Spi::connect_mut(|client| {
+        writing(|client| {
             client.update(
                 "DELETE FROM warren.versions WHERE version_id = $1",
                 None,

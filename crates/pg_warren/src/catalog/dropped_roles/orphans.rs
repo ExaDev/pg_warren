@@ -6,6 +6,7 @@ use pgrx::prelude::*;
 
 use super::super::CatalogError;
 use crate::access::{as_catalog_owner, entry, is_owner, may_drop_orphans, require_orphan_dropper};
+use crate::read_only::writing;
 
 /// Every reference to a dropped role, as `(kind, graph, role, owner)`:
 /// graphs whose owner was dropped, quotas on readers' vectors, reader
@@ -145,7 +146,7 @@ fn sweep() -> Result<i64, CatalogError> {
     // misses a role created by the transaction it waited for, and so would
     // drop a graph adopted for that role, or prune a reader just granted.
     let dropped = as_catalog_owner(|| {
-        Spi::connect_mut(|client| {
+        writing(|client| {
             let mut changed = Vec::with_capacity(PASSES.len());
             for (lock, change) in PASSES {
                 let keys = client

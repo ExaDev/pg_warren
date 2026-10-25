@@ -9,6 +9,7 @@ use crate::access::{
 };
 use crate::catalog::quota::vector_bytes;
 use crate::catalog::GraphDefinition;
+use crate::read_only::writing;
 
 /// What `set_vector_quota` does, for its errors.
 const ACTION: &str = "set a vector quota on";
@@ -60,7 +61,7 @@ fn set_quota(name: &str, bytes: Option<i64>, role: Option<pg_sys::Oid>) -> Resul
     };
     let role = role.unwrap_or(pg_sys::Oid::INVALID);
     as_catalog_owner(|| {
-        Spi::connect_mut(|client| {
+        writing(|client| {
             client.update(statement, None, &[graph.graph_id.into(), role.into(), bytes.into()])?;
             Ok::<_, QuotaError>(())
         })

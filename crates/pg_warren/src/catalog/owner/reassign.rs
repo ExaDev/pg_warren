@@ -12,6 +12,7 @@ use crate::access::{
     as_catalog_owner, entry, may_drop_orphans, refuse_bootstrap_superuser, require_can_receive,
     require_privileges_of, role_name,
 };
+use crate::read_only::writing;
 
 /// `warren.reassign_owned(old regrole, new regrole)`: gives every graph
 /// `old` owns to `new`, with `set_owner`'s rules except its source check
@@ -100,7 +101,7 @@ fn reassign(old: pg_sys::Oid, new: pg_sys::Oid) -> Result<i64, CatalogError> {
     let caller = unsafe { pg_sys::GetUserId() };
     let exempt = may_drop_orphans()?;
     let (moved, counted) = as_catalog_owner(|| {
-        Spi::connect_mut(|client| {
+        writing(|client| {
             let graphs = client
                 .update(
                     &format!(
