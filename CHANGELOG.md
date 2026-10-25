@@ -82,6 +82,17 @@
   edge in each (one per relation, as parallel edges), for when that
   multiplicity is the signal.
 
+### Fixes
+
+- **A persisted vector written to a version that retention or
+  `drop_version` deleted meanwhile fails with `undefined_object` (42704),
+  "version … no longer exists: vector … was not written to it".** It
+  failed with a raw foreign-key violation on `warren.vectors` (23503).
+  Every persisted write (`spmv`, `pagerank`, `vector_const` and the rest)
+  now locks the graph's and the version's rows before it writes, waiting
+  for a deletion in progress (harness tests `vector_retention_race` and
+  `test/concurrent_refresh.py`).
+
 ### Performance
 
 - A relation whose edges start from at most about a sixth of the nodes
