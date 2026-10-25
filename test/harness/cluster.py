@@ -39,6 +39,16 @@ class Cluster:
 
     def __enter__(self):
         self.directory = Path(tempfile.mkdtemp(prefix="warren-cluster-", dir=self.parent))
+        try:
+            self._make()
+        except BaseException:
+            # `with` calls __exit__ only once __enter__ has returned.
+            self.__exit__(*sys.exc_info())
+            raise
+        return self
+
+    def _make(self):
+        """Makes the cluster in `directory`, configures and starts it."""
         if self.runas:
             user = pwd.getpwnam(self.runas)
             os.chown(self.directory, user.pw_uid, user.pw_gid)
@@ -49,7 +59,6 @@ class Cluster:
                        "fsync = off\nsynchronous_commit = off\nfull_page_writes = off\n")
             conf.writelines(f"{line}\n" for line in self.settings)
         self.start()
-        return self
 
     def _create(self, data):
         """Makes the data directory `data`: a new cluster, or a base backup of `primary`."""

@@ -77,3 +77,16 @@ def test_promote_ends_a_standbys_recovery_and_waits_for_it(tmp_path):
     standby = recording(tmp_path, primary=recording(tmp_path))
     standby.promote()
     assert standby.ran == [("pg_ctl", "-D", str(tmp_path / "data"), "-w", "promote")]
+
+
+def test_a_cluster_that_fails_to_start_is_removed_and_the_failure_raised(tmp_path):
+    scratch = Cluster.__new__(Cluster)
+    scratch.parent, scratch.runas, scratch.keep, scratch.primary = tmp_path, None, False, None
+    scratch.running = lambda: False
+
+    def run(program, *arguments):
+        raise RuntimeError(f"{program} failed: could not initiate base backup")
+    scratch._run = run
+    with pytest.raises(RuntimeError, match="initdb failed"):
+        scratch.__enter__()
+    assert list(tmp_path.iterdir()) == []
