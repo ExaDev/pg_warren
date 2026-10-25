@@ -285,8 +285,9 @@ impl GraphCsr {
     }
 
     /// The same graph with every CSR's offsets dense, so that tests read
-    /// both layouts.
-    #[cfg(test)]
+    /// both layouts. Not under Miri, where its only readers (in
+    /// `sparse::readers`) are compiled out.
+    #[cfg(all(test, not(miri)))]
     pub(crate) fn densified(&self) -> Self {
         let each = |relation: &RelationCsr| RelationCsr {
             forward: densified(&relation.forward),
