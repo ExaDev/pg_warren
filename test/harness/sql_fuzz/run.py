@@ -19,7 +19,7 @@ from ..concurrent_refresh import until
 from ..session import BackendLost, Session
 from . import world as world_module
 from .actions import CONNECT, STATEMENT_TIMEOUT
-from .verdict import Finding, judge, signature
+from .verdict import Finding, changes, judge, signature
 
 # How long past its statement timeout a statement may run before the
 # watchdog kills its psql (its backend then stops within a second).
@@ -180,7 +180,9 @@ class Run:
     # Actions.
 
     def perform(self, action):
-        """Runs planned `action` (`actions`), then checks for leaks."""
+        """Runs planned `action` (`actions`), then judges what it changed
+        and checks for leaks; the world is then read again."""
+        before = self.world
         if action.kind == "connect":
             self.connect(action.role, action.search_path)
         elif action.kind == "call":
@@ -193,7 +195,23 @@ class Run:
         else:
             self._transaction(action)
         self.end_action()
+        self.after_action(action.role, before)
+
+    def after_action(self, role, before):
+        """Reads the world again, judges what `role`'s last action changed
+        in it since `before` (`verdict.changes`), and checks for leaks."""
+        for finding in changes(role, before, self.refresh_world()):
+            self._found(finding, self._culprit(finding))
         self.check_leaks()
+
+    def _culprit(self, finding):
+        """The last action's last call that names the graph `finding` is
+        about (else its last statement): what the finding is filed under."""
+        action = self.transcript[-1] if self.transcript else [Executed(SUPERUSER, "")]
+        calls = [e for e in action if e.call is not None]
+        named = [e for e in calls
+                 if any(f"graph {g}," in finding.detail or f" of {g}," in finding.detail for g in e.call.graphs)]
+        return (named or calls or action)[-1]
 
     def _unit(self, role, unit):
         """Runs `unit`'s call; its outcome, or None if the backend was lost."""
@@ -250,8 +268,9 @@ class Run:
 def replay(run, actions):
     """Runs recorded `actions` again on `run` (a fresh database); the first
     failure it finds, or None."""
+    run.refresh_world()
     for action in actions:
-        run.refresh_world()
+        before = run.world
         for executed in action:
             if executed.sql == CONNECT:
                 old = run.sessions.pop(executed.role, None)
@@ -263,7 +282,8 @@ def replay(run, actions):
             if run.failures:
                 return next(iter(run.failures.values()))
         run.end_action()
-        run.check_leaks()
+        roles = [executed.role for executed in action if executed.sql != CONNECT]
+        run.after_action(roles[-1] if roles else SUPERUSER, before)
         if run.failures:
             return next(iter(run.failures.values()))
     return None

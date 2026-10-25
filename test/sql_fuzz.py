@@ -118,8 +118,8 @@ def run_seed(cluster, functions, parallel, seed, seconds, mode, shrinker, out):
     run = Run(cluster, database)
     deadline = time.monotonic() + seconds
     try:
+        run.refresh_world()
         while time.monotonic() < deadline:
-            run.refresh_world()
             run.perform(planner.next(run.world))
     finally:
         run.close()

@@ -13,7 +13,8 @@ fixture's hostile operators raise when they run elevated.
 
 A success is a breach when a role that is not a superuser reads a graph
 it neither owns nor reads, does what only the owner may to a graph it
-does not own, or has the function run SQL that reads `public.secret`,
+does not own (`contract` into an existing graph included), or has the
+function run SQL that reads `public.secret`,
 which only the superuser may read; except a call Postgres never made (a
 STRICT function given a NULL), `evict`, which anyone may call (it then
 frees only the caller's own copies), and `report_progress` with a NULL
@@ -113,7 +114,45 @@ def _breach(role, call, world):
             return Finding("access", f"{role}, neither owner nor reader, called {call.function.name} on {name}")
         if call.function.name in OWNER_ONLY and role != graph.owner:
             return Finding("access", f"{role}, not the owner, called {call.function.name} on {name}")
+    out = call.argument("out_graph") if call.function.name == "contract" else None
+    into = world.graph(out[1:-1]) if out and out.startswith("'") else None
+    if into is not None and role != into.owner:
+        return Finding("access", f"{role}, not the owner, contracted into {into.name}")
     return None
+
+
+def changes(role, before, after):
+    """What `role`'s action, between worlds `before` and `after`, changed
+    that it may not: a graph it does not own dropped, given away, granted
+    or revoked, or its versions or current version changed (whatever the
+    function: `reassign_owned`, `drop_owned` and `drop_orphans` included);
+    or a persisted vector of another role dropped or replaced on a graph it
+    does not own (DESIGN.md §7: a vector's creator or a member of the
+    owner role). No fixture role is a member of another, so owning is
+    being the owner."""
+    if role == SUPERUSER:
+        return []
+    found = []
+    for graph in before.graphs:
+        if graph.owner == role:
+            continue
+        now = after.graph(graph.name)
+        shape = (graph.owner, graph.readers, graph.current, _versions(before, graph.name))
+        if now is None or (now.owner, now.readers, now.current, _versions(after, graph.name)) != shape:
+            what = "dropped" if now is None else "changed"
+            found.append(Finding("access", f"{role} {what} graph {graph.name}, owned by {graph.owner}"))
+    owners = {graph.name: graph.owner for graph in before.graphs}
+    kept = set(after.vectors)
+    for vector in before.vectors:
+        graph, name, _, creator, *_ = vector
+        if creator != role and owners.get(graph) != role and vector not in kept:
+            found.append(Finding("access", f"{role} dropped or replaced vector {name} of {graph}, "
+                                           f"created by {creator}"))
+    return found
+
+
+def _versions(world, name):
+    return sorted((version, staged) for graph, version, staged in world.versions if graph == name)
 
 
 def signature(function, finding):

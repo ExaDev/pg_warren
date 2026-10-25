@@ -93,6 +93,13 @@ class Call:
         return self.function.strict and any(sql.startswith("NULL") for sql in
                                             (*self.positional, *(sql for _, sql in self.named)))
 
+    def argument(self, name):
+        """The SQL given for argument `name`, or None if it is not given."""
+        position = next((i for i, a in enumerate(self.function.arguments) if a.name == name), None)
+        if position is not None and position < len(self.positional):
+            return self.positional[position]
+        return dict(self.named).get(name)
+
     def without(self, name):
         """This call without the named argument `name`."""
         return replace(self, named=tuple((n, sql) for n, sql in self.named if n != name))

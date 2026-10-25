@@ -6,7 +6,7 @@ import re
 from harness.session import Outcome
 from harness.sql_fuzz.fixture import ESCALATED, OWNER, READER, STRANGER
 from harness.sql_fuzz.surface import Argument, Call, Function
-from harness.sql_fuzz.verdict import LOG_EXPECTED, Finding, allowed, judge, log_faults, signature
+from harness.sql_fuzz.verdict import LOG_EXPECTED, Finding, allowed, changes, judge, log_faults, signature
 from harness.sql_fuzz.world import Graph, World
 
 WORLD = World((Graph("g8", "bigint", OWNER, (READER,)),))
@@ -117,3 +117,53 @@ def test_the_server_log_flags_internal_faults_and_expects_documented_warnings():
                      prefix + "42501 ERROR:  permission denied for table edges8",
                      prefix + '42P01 ERROR:  relation "warren.graphs" does not exist'))
     assert log_faults(log) == [log.splitlines()[0], log.splitlines()[2]]
+
+
+BEFORE = World((Graph("g8", "bigint", OWNER, (READER,), current=3),),
+               versions=(("g8", 2, False), ("g8", 3, False)),
+               vectors=(("g8", "pr", 3, OWNER, "7:100"), ("g8", "mine", 3, READER, "8:101")))
+
+
+def after(**changes):
+    graph = Graph("g8", "bigint", changes.pop("owner", OWNER), changes.pop("readers", (READER,)),
+                  current=changes.pop("current", 3))
+    graphs = () if changes.pop("dropped", False) else (graph,)
+    return World(graphs, versions=changes.pop("versions", BEFORE.versions),
+                 vectors=changes.pop("vectors", BEFORE.vectors))
+
+
+def test_a_non_owner_changing_a_graph_it_does_not_own_is_a_breach():
+    for changed in (after(dropped=True), after(owner=STRANGER), after(readers=(READER, STRANGER)),
+                    after(current=2), after(versions=(*BEFORE.versions, ("g8", 4, False))),
+                    after(versions=(("g8", 3, False),))):
+        for role in (READER, STRANGER):
+            found = changes(role, BEFORE, changed)
+            assert [f.kind for f in found] == ["access"], (role, changed, found)
+            assert "g8" in found[0].detail
+
+
+def test_the_owner_or_a_superuser_may_change_the_graph():
+    for changed in (after(dropped=True), after(owner=READER), after(current=2), after(vectors=())):
+        assert changes(OWNER, BEFORE, changed) == []
+        assert changes("postgres", BEFORE, changed) == []
+
+
+def test_a_reader_may_drop_or_replace_its_own_vector_but_not_anothers():
+    own = after(vectors=(BEFORE.vectors[0], ("g8", "mine", 3, READER, "9:102")))
+    assert changes(READER, BEFORE, own) == []
+    assert changes(READER, BEFORE, after(vectors=(BEFORE.vectors[0],))) == []
+    for changed in (after(vectors=(BEFORE.vectors[1],)),
+                    after(vectors=(("g8", "pr", 3, READER, "9:102"), BEFORE.vectors[1])),
+                    after(vectors=(("g8", "pr", 3, OWNER, "7:200"), BEFORE.vectors[1]))):
+        found = changes(READER, BEFORE, changed)
+        assert [f.kind for f in found] == ["access"] and "pr" in found[0].detail, found
+
+
+def test_contracting_into_an_existing_graph_is_the_owners_alone():
+    contract = Function("contract", (Argument("graph", "text"), Argument("labels", "text"),
+                                     Argument("out_graph", "text")), 0, False, "bigint")
+    world = World((Graph("g8", "bigint", OWNER, (READER,)), Graph("gq", "bigint", OWNER, (READER,))))
+    into_gq = Call(contract, ("'g8'", "'lbl'", "'gq'"), graphs=("g8", "gq"))
+    assert judge(READER, into_gq, OK, world).kind == "access"
+    assert judge(OWNER, into_gq, OK, world) is None
+    assert judge(READER, Call(contract, ("'g8'", "'lbl'", "'fz1'"), graphs=("g8",)), OK, world) is None
