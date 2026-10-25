@@ -15,6 +15,13 @@ MESSAGE = "@@warren-message@@"
 END = "@@warren-end@@"
 SEPARATOR = "\t"
 SUCCESS = "00000"
+# Every session's settings: notices off, a statement that hangs (a lock
+# never released, a server that never answers) fails rather than holding
+# the run forever, and a backend whose psql was killed (`Session.close`)
+# stops its statement within a second rather than at its end.
+SESSION_SETTINGS = ("client_min_messages = warning", "statement_timeout = '120s'",
+                    "client_connection_check_interval = '1s'")
+CLOSE_SECONDS = 10
 
 
 class BackendLost(RuntimeError):
@@ -66,7 +73,7 @@ class Session:
         # Notices go to stderr, which nothing reads: discarded, so it never fills.
         self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                         stderr=subprocess.DEVNULL, text=True, bufsize=1)
-        for setting in ("client_min_messages = warning", *settings):
+        for setting in (*SESSION_SETTINGS, *settings):
             self._set(setting)
         self.pid = int(self.run("SELECT pg_backend_pid()").value())
 
@@ -81,12 +88,19 @@ class Session:
     def __exit__(self, *_):
         self.close()
 
-    def close(self):
+    def close(self, seconds=CLOSE_SECONDS):
+        """Ends psql: at once if it is idle; if a statement is still
+        running after `seconds`, by killing it (its backend then stops the
+        statement, `client_connection_check_interval`)."""
         try:
             self.process.stdin.close()
         except BrokenPipeError:
             pass
-        self.process.wait()
+        try:
+            self.process.wait(timeout=seconds)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait()
 
     def run(self, sql):
         """Runs `sql`; its outcome. Raises `BackendLost` if psql ends first."""

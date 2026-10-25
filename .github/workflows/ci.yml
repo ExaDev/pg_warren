@@ -352,6 +352,10 @@ jobs:
     # run of the benchmark matrix.
     name: Generators + SQL harness (PG 16)
     runs-on: ubuntu-latest
+    # About 7.5 min with warm caches (the concurrent refresh and crash
+    # recovery runs about 2 of them), up to about 20 min cold: a run that
+    # hangs fails instead of holding a runner for the default 6 hours.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:

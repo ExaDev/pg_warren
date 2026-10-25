@@ -1,8 +1,11 @@
 """A psql session's statement outcomes: rows, or the SQLSTATE and message."""
 
+import subprocess
+import time
+
 import pytest
 
-from harness.session import END, MESSAGE, Outcome, outcome, script
+from harness.session import END, MESSAGE, SESSION_SETTINGS, Outcome, Session, outcome, script
 
 
 def test_the_script_runs_the_statement_and_then_echoes_both_markers():
@@ -34,3 +37,17 @@ def test_value_of_a_failure_names_it():
 def test_value_needs_exactly_one_row():
     with pytest.raises(RuntimeError, match="one row"):
         Outcome([["1"], ["2"]], "00000", "").value()
+
+
+def test_every_session_bounds_its_statements_and_notices_a_lost_client():
+    assert "statement_timeout = '120s'" in SESSION_SETTINGS
+    assert "client_connection_check_interval = '1s'" in SESSION_SETTINGS
+
+
+def test_closing_a_session_whose_psql_does_not_end_kills_it():
+    session = Session.__new__(Session)
+    session.process = subprocess.Popen(["sleep", "60"], stdin=subprocess.PIPE, text=True)
+    started = time.monotonic()
+    session.close(seconds=0.2)
+    assert session.process.returncode is not None
+    assert time.monotonic() - started < 10

@@ -32,6 +32,10 @@ PROMOTIONS = "public.promotions"
 RETAIN = 2
 LOCK_TIMEOUT = "200ms"
 STAGED_DROP_ATTEMPTS = 50
+# How long the workers have, together, to see the end of the run and stop:
+# beyond one statement's timeout (harness.session), so that a statement
+# that hangs fails, and is reported, before its worker is.
+JOIN_SECONDS = 180
 
 # The failures each operation may have, as SQLSTATE and message, and why
 # (DESIGN.md §5.2, §6.2, §7): a version named by id was retired or dropped
@@ -194,8 +198,8 @@ class Run:
             thread.start()
         self.stop.wait(seconds)
         self.stop.set()
-        for thread in threads:
-            thread.join()
+        for stuck in joined(threads, JOIN_SECONDS):
+            self.tally.mismatch(f"{stuck} did not stop within {JOIN_SECONDS} s of the end of the run")
         with self.session() as s:
             for version, name in s.run("SELECT version_id, name FROM warren.vectors").rows:
                 self._record("cleanup", s.run(f"SELECT warren.drop_vector('{GRAPH}', '{name}', {version})"))
@@ -211,7 +215,8 @@ class Run:
             except Exception as error:  # noqa: BLE001: any failure of a worker fails the run, and says why
                 self.tally.mismatch(f"{work.__name__} {number} stopped: {error}")
                 self.stop.set()
-        return threading.Thread(target=body, name=f"{work.__name__}-{number}")
+        # A daemon: one that never stops is reported (`joined`), and never holds the run open.
+        return threading.Thread(target=body, name=f"{work.__name__}-{number}", daemon=True)
 
     def _record(self, operation, done):
         self.tally.count(operation, done)
@@ -416,6 +421,15 @@ class Run:
 UNNAMED_SHARED_BYTES = ("SELECT coalesce(sum(CASE WHEN kind = 'cluster' THEN bytes ELSE -bytes END), 0)::bigint "
                         "FROM warren.shared_cache()")
 SETTLE_SECONDS = 10
+
+
+def joined(threads, seconds):
+    """Waits, `seconds` in all, for `threads` to end; the names of those
+    that have not."""
+    deadline = time.monotonic() + seconds
+    for thread in threads:
+        thread.join(max(0.0, deadline - time.monotonic()))
+    return [thread.name for thread in threads if thread.is_alive()]
 
 
 def until(s, sql, seconds=SETTLE_SECONDS):

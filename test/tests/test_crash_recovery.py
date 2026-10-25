@@ -1,8 +1,14 @@
 """The crash recovery check's scenarios, its comparison and what each way
 of stopping a refresh may leave in the server log."""
 
+import threading
+
+import pytest
+
+from harness import crash_recovery
 from harness.crash_recovery import (EDGE_QUERY, GATE, KINDS, POINTS, SNAPSHOT, Interrupted, Scenario, differences,
                                     log_problems, setup_sql)
+from harness.session import BackendLost, Outcome
 
 PREFIX = "2026-10-25 10:00:00.001 UTC [7]"
 
@@ -65,3 +71,36 @@ def test_a_refresh_stopped_before_commit_shows_no_progress():
 
 def test_where_another_backends_progress_does_not_show_the_point_is_not_checked():
     assert scenario("reading edges").point_reached(Interrupted(1, None, None)) == []
+
+
+class StuckSession:
+    """A session whose refresh blocks until the session is closed, as one
+    waiting on the gate does, and whose other statements succeed."""
+
+    def __init__(self, sessions):
+        self.pid, self.closed = 1000 + len(sessions), threading.Event()
+        sessions.append(self)
+
+    def run(self, sql):
+        if "warren.refresh" in sql:
+            self.closed.wait()
+            raise BackendLost("closed")
+        return Outcome([["1"]], "00000", "")
+
+    def close(self):
+        self.closed.set()
+
+
+def test_an_interruption_that_fails_closes_its_sessions_and_ends_its_worker(monkeypatch):
+    sessions = []
+    run = scenario("reading edges")
+    monkeypatch.setattr(run, "session", lambda: StuckSession(sessions))
+
+    def never(*_args, **_kwargs):
+        raise RuntimeError("gave up waiting")
+    monkeypatch.setattr(crash_recovery, "until", never)
+    before = threading.active_count()
+    with pytest.raises(RuntimeError, match="gave up waiting"):
+        run.interrupt()
+    assert [session.closed.is_set() for session in sessions] == [True, True]
+    assert threading.active_count() == before

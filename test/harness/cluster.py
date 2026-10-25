@@ -11,6 +11,7 @@ import os
 import pwd
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -67,12 +68,22 @@ class Cluster:
         next `start` recovers from the WAL."""
         self._run("pg_ctl", "-D", self.directory / "data", "-m", "immediate", "-w", "stop")
 
-    def __exit__(self, *_):
-        self._run("pg_ctl", "-D", self.directory / "data", "-m", "fast", "-w", "stop")
-        if self.keep:
-            print(f"kept cluster directory {self.directory}")
-        else:
-            shutil.rmtree(self.directory, ignore_errors=True)
+    def __exit__(self, kind, _error, _traceback):
+        """Stops the server if it runs, and removes the cluster directory
+        (unless kept) whatever happens. A failed stop is raised only if
+        nothing else ended the run, so it never hides that error."""
+        try:
+            if self.running():
+                self._run("pg_ctl", "-D", self.directory / "data", "-m", "fast", "-w", "stop")
+        except RuntimeError as stop:
+            if kind is None:
+                raise
+            print(f"while handling the run's error, {stop}", file=sys.stderr)
+        finally:
+            if self.keep:
+                print(f"kept cluster directory {self.directory}")
+            else:
+                shutil.rmtree(self.directory, ignore_errors=True)
 
     def database(self, name="postgres", user=SUPERUSER):
         return Database(str(self.bindir / "psql"), self.connection(name, user))

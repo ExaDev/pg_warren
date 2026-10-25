@@ -34,6 +34,7 @@ NODE_QUERY = "SELECT id FROM public.nodes"
 EDGE_QUERY = f"SELECT src, dst FROM public.edges, (SELECT pg_advisory_xact_lock_shared({GATE})) AS gate"
 WRITTEN = 1 << 20  # segment bytes a refresh has written when it is stopped writing them
 RECOVERY_SECONDS = 120
+JOIN_SECONDS = 60  # for a stopped refresh's worker to see its backend gone
 
 # Where a refresh is stopped: waiting to read its edges (no version row yet);
 # writing its segments (its version row and some segments written); and
@@ -133,7 +134,25 @@ class Scenario:
         return failures
 
     def interrupt(self):
-        monitor, refresher = self.session(), self.session()
+        """Stops a refresh at `point` by `kind`; what it saw then. Its
+        sessions are closed and its worker ended however it ends: the
+        monitor otherwise kept holding the gate, and the next scenario's
+        refresh waited for it."""
+        sessions, workers = [], []
+        try:
+            interrupted = self._interrupt(sessions, workers)
+        except BaseException:
+            end(sessions, workers)
+            raise
+        if not end(sessions, workers):
+            raise RuntimeError(f"the refresh stopped at {self.point} did not end within {JOIN_SECONDS} s")
+        return interrupted
+
+    def _interrupt(self, sessions, workers):
+        monitor = self.session()
+        sessions.append(monitor)
+        refresher = self.session()
+        sessions.append(refresher)
         # The refresher reads the current version first, so that it maps it
         # (shared) or holds it (private) when it is stopped.
         refresher.run(f"SELECT warren.degree('{GRAPH}', 1::bigint)").value()
@@ -147,28 +166,23 @@ class Scenario:
 
         if self.point == "reading edges":
             monitor.run(f"SELECT pg_advisory_lock({GATE})").value()
-            worker = threading.Thread(target=refresh, args=(f"SELECT warren.refresh('{GRAPH}')",))
-            worker.start()
+            workers.append(refreshing(refresh))
             until(monitor, f"SELECT count(*) = 0 FROM pg_stat_activity WHERE pid = {refresher.pid} "
                            "AND wait_event_type = 'Lock'")
         elif self.point == "writing segments":
             base = int(monitor.run("SELECT pg_total_relation_size('warren.segments')").value())
-            worker = threading.Thread(target=refresh, args=(f"SELECT warren.refresh('{GRAPH}')",))
-            worker.start()
+            workers.append(worker := refreshing(refresh))
             until(monitor, f"SELECT pg_total_relation_size('warren.segments') <= {base + WRITTEN}",
                   give_up=lambda: not worker.is_alive())
         else:
             refresher.run("BEGIN")
             refresher.run(f"SELECT warren.refresh('{GRAPH}')").value()
-            worker = None
         seen = monitor.run(f"SELECT phase, version FROM warren.progress() WHERE pid = {refresher.pid}").rows
         phase, version = (field or None for field in seen[0]) if seen else (None, None)
         interrupted = Interrupted(refresher.pid, phase, version)
         self.stop(monitor, refresher.pid)
-        if worker is not None:
-            worker.join()
-        for session in (monitor, refresher):
-            session.close()
+        for worker in workers:
+            worker.join(JOIN_SECONDS)
         if "refresh" in outcome and outcome["refresh"].ok:
             raise RuntimeError(f"the refresh finished before it was stopped at {self.point}")
         return interrupted
@@ -257,6 +271,24 @@ def refresh_builds_the_source(s):
     if stats != source:
         return [f"the refresh after recovery built (nodes, edges) {stats}, the source has {source}"]
     return []
+
+
+def end(sessions, workers):
+    """Closes `sessions` (the monitor first: it releases the gate) and
+    waits for `workers`; whether they all ended."""
+    for session in sessions:
+        session.close()
+    for worker in workers:
+        worker.join(JOIN_SECONDS)
+    return not any(worker.is_alive() for worker in workers)
+
+
+def refreshing(refresh):
+    """A started daemon thread that runs `refresh` of the graph: one left
+    behind never holds the run open."""
+    worker = threading.Thread(target=refresh, args=(f"SELECT warren.refresh('{GRAPH}')",), daemon=True)
+    worker.start()
+    return worker
 
 
 def until(s, sql, give_up=lambda: False, seconds=RECOVERY_SECONDS):

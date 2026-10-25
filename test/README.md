@@ -26,6 +26,10 @@ recursive CTEs / NetworkX on generated fixtures, and the Appendix A use cases
   and an immediate shutdown, and checks that each recovery leaves the
   catalog and the graph's answers as before, the shared cache working
   and a new refresh succeeding (DESIGN.md §13, M11).
+
+  Neither hangs: each of their sessions has a 120 s `statement_timeout`,
+  a session still busy when it is closed is killed, and worker threads
+  that do not stop in time are reported, not waited for.
 - `harness/` is the Python behind them; `tests/` are its pytest tests.
 
 ## Writing a SQL test

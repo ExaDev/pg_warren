@@ -1,8 +1,11 @@
 """The concurrent refresh check's reads, their oracle answers, the failures
 it allows and what it counts as proving too little."""
 
-from harness.concurrent_refresh import (MUST_SUCCEED, READS, Tally, allowed, expected, generation, read_sql,
-                                        repr_cost, summary, too_little)
+import threading
+import time
+
+from harness.concurrent_refresh import (MUST_SUCCEED, READS, Tally, allowed, expected, generation, joined,
+                                        read_sql, repr_cost, summary, too_little)
 from harness.generations import MARK, Source, oracle
 from harness.session import Outcome
 
@@ -79,3 +82,16 @@ def test_a_run_without_every_operation_and_promotions_proves_too_little():
         tally.promoted(order, order + 10)
     assert too_little(tally, shares=False) == []
     assert too_little(tally, shares=True) == ["the cluster shares versions, but warren.shared_cache() never listed one"]
+
+
+def test_joining_reports_the_workers_that_do_not_stop_in_time():
+    release = threading.Event()
+    stuck = threading.Thread(target=release.wait, name="stuck", daemon=True)
+    done = threading.Thread(target=lambda: None, name="done")
+    for thread in (stuck, done):
+        thread.start()
+    started = time.monotonic()
+    assert joined([stuck, done], 0.2) == ["stuck"]
+    assert time.monotonic() - started < 5
+    release.set()
+    assert joined([stuck, done], 5) == []
