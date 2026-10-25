@@ -186,16 +186,22 @@ impl VectorStore for SpiVectorStore {
         })
     }
 
-    fn lock(&mut self, checked: Checked) -> Result<bool, VectorError> {
+    fn lock(&mut self, vector: VectorId) -> Result<Option<pg_sys::Oid>, VectorError> {
         as_catalog_owner(|| {
             Spi::connect_mut(|client| {
+                // By id alone, and the creator as locked: a `reassign_owned`
+                // that held the row gave it to another role, and the row it
+                // committed is the one returned (EvalPlanQual).
                 let locked = client.update(
-                    "SELECT FROM warren.vectors WHERE vector_id = $1 AND created_by::oid = $2
+                    "SELECT created_by::oid FROM warren.vectors WHERE vector_id = $1
                      FOR UPDATE",
                     None,
-                    &[checked.vector.into(), checked.created_by.into()],
+                    &[vector.into()],
                 )?;
-                Ok(!locked.is_empty())
+                Ok(match locked.is_empty() {
+                    true => None,
+                    false => locked.first().get::<pg_sys::Oid>(1)?,
+                })
             })
         })
     }

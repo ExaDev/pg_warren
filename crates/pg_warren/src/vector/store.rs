@@ -124,10 +124,11 @@ pub(crate) trait VectorStore {
     ) -> Result<(), VectorError>;
 
     /// Locks vector `vector` until the transaction ends, so that no other
-    /// transaction drops or replaces it meanwhile, if it still exists as
-    /// checked (waiting for a transaction that holds it); returns whether
-    /// it does.
-    fn lock(&mut self, vector: Checked) -> Result<bool, VectorError>;
+    /// transaction drops, replaces or reassigns it meanwhile, if it still
+    /// exists (waiting for a transaction that holds it); returns the role
+    /// that wrote it as locked (`reassign_owned` may have changed it since
+    /// it was listed), or `None` if it no longer exists.
+    fn lock(&mut self, vector: VectorId) -> Result<Option<pg_sys::Oid>, VectorError>;
 
     /// Deletes vector `vector` (its chunks with it) if it still exists as
     /// checked, written by the role checked; returns whether it did.
@@ -231,9 +232,8 @@ pub(crate) mod tests {
             Ok(())
         }
 
-        fn lock(&mut self, checked: Checked) -> Result<bool, VectorError> {
-            let found = self.rows.get(&checked.vector);
-            Ok(found.is_some_and(|(_, record)| record.created_by == checked.created_by))
+        fn lock(&mut self, vector: VectorId) -> Result<Option<pg_sys::Oid>, VectorError> {
+            Ok(self.rows.get(&vector).map(|(_, record)| record.created_by))
         }
 
         fn delete(&mut self, checked: Checked) -> Result<bool, VectorError> {

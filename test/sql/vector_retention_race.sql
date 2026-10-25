@@ -1,8 +1,10 @@
 -- DESIGN.md §7: retention never deletes a version that has vectors bound
 -- to it, even one a concurrent transaction writes while the promotion
 -- runs; and a vector written to a version that retention deletes meanwhile
--- fails as for a version that does not exist (42704), not with a raw
--- foreign-key violation. Found by test/concurrent_refresh.py (M11).
+-- fails as for a version that does not exist (42704), or as a
+-- serialization failure (40001) under REPEATABLE READ or SERIALIZABLE,
+-- not with a raw foreign-key violation. Found by test/concurrent_refresh.py
+-- (M11).
 CREATE EXTENSION dblink;
 CREATE TABLE nodes AS SELECT generate_series(1, 4)::bigint AS id;
 CREATE TABLE edges AS SELECT id AS src, id % 4 + 1 AS dst FROM nodes;
@@ -60,6 +62,23 @@ SELECT dblink_error_message('writer') AS writer_error \gset
 SELECT assert.that(:'writer_error' LIKE format('%%version %s no longer exists%%', :v2),
                    'and says so: ' || :'writer_error');
 SELECT count(*) FROM dblink_get_result('writer') AS t(x text);  -- the empty result ending the query
+SELECT assert.equal((SELECT count(*) FROM warren.vectors), 0::bigint, 'no vector is left');
+
+-- 3. As case 2 under REPEATABLE READ, whose snapshot still sees v3: the
+-- write waits, then fails with serialization_failure (retry).
+SELECT warren.refresh('g') AS v3 \gset
+SELECT dblink_exec('writer', 'BEGIN ISOLATION LEVEL REPEATABLE READ');
+SELECT * FROM dblink('writer', format('SELECT count(*) FROM warren.versions WHERE version_id = %s', :v3))
+    AS t(n bigint);
+SELECT dblink_exec('refresher', 'BEGIN');
+SELECT * FROM dblink('refresher', $$SELECT warren.refresh('g')$$) AS t(version bigint);
+SELECT dblink_send_query('writer', format($$SELECT warren.vector_const('g', 'z', 1, version := %s)$$, :v3));
+SELECT until_waiting(:writer);
+SELECT dblink_exec('refresher', 'COMMIT');
+SELECT assert.raises($$SELECT * FROM dblink_get_result('writer') AS t(id bigint)$$,
+                     'the write fails as a serialization failure', '40001');
+SELECT count(*) FROM dblink_get_result('writer') AS t(x text);  -- the empty result ending the query
+SELECT dblink_exec('writer', 'ROLLBACK');
 SELECT assert.equal((SELECT count(*) FROM warren.vectors), 0::bigint, 'no vector is left');
 
 SELECT dblink_disconnect('writer');
