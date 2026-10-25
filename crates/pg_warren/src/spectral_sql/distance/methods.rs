@@ -128,9 +128,11 @@ pub(super) fn subspace<E: CachedIds>(
     k: usize,
     compared: ComparedRows,
 ) -> Result<Value, SpectralSqlError> {
-    let names: Vec<String> = (1..=k).map(|i| format!("{prefix}_{i}")).collect();
-    let before = names.iter().map(|n| pair.before_vector(n)).collect::<Result<Vec<_>, _>>()?;
-    let after = names.iter().map(|n| pair.after_vector(n)).collect::<Result<Vec<_>, _>>()?;
+    // Each name is made as it is read, so a `k` past the vectors stored
+    // fails at the first missing one, having made no more.
+    let name = |i| format!("{prefix}_{i}");
+    let before = (1..=k).map(|i| pair.before_vector(&name(i))).collect::<Result<Vec<_>, _>>()?;
+    let after = (1..=k).map(|i| pair.after_vector(&name(i))).collect::<Result<Vec<_>, _>>()?;
     let (before, after): (Vec<&AnyVector>, Vec<&AnyVector>) =
         (before.iter().map(|v| &**v).collect(), after.iter().map(|v| &**v).collect());
     let pool = workers()?;

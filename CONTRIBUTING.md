@@ -330,9 +330,10 @@ test/upgrade.py --no-install --trusted   # the same, installed and updated by a 
 test/dump.py --pg-config "$(command -v pg_config)"   # pg_dump and restore of graphs (plain, custom, trusted)
 ```
 
-Robustness under concurrency, crashes and replication (DESIGN.md §13,
-M11), each in a scratch cluster per shared-cache mode (default `preload`,
-then `on`), and holding `/tmp/pgrx-test.lock` for the whole run:
+Robustness under concurrency, crashes, replication and hostile input
+(DESIGN.md §13, M11), each in a scratch cluster per shared-cache mode
+(default `preload`, then `on`), and holding `/tmp/pgrx-test.lock` for the
+whole run:
 
 ```sh
 # 8 readers, 3 refreshers and a vector churner on one graph for --seconds
@@ -347,7 +348,18 @@ test/crash_recovery.py --no-install --pg-config "$(command -v pg_config)"
 # 25006, a version retired under a standby query is read consistently or
 # the query cancelled (40001), and the standby, promoted, writes
 test/replicas.py --no-install --pg-config "$(command -v pg_config)"
+# SQL-surface fuzzing: every warren.* function with generated arguments,
+# as four roles, --seconds per seed and mode (CI: 20 s; seeds 1 and 2 on
+# pull requests, 1 and one from the clock on main and nightly); each
+# failure is written to --out as a psql script, with its seed, the first
+# --max-shrinks (default 3) shrunk first. A long run, e.g. before a release:
+test/sql_fuzz.py --no-install --pg-config "$(command -v pg_config)" \
+    --seeds 1 2 3 4 5 time --seconds 300 --shared-cache preload on off
 ```
+
+A long fuzz run need not hold the lock if it uses a Postgres tree of its
+own (as for the benchmarks, above): install the build there and pass
+`--no-lock` (which implies `--no-install`) with that tree's `pg_config`.
 
 ### Packages
 

@@ -26,6 +26,9 @@ mod oracle;
 mod paths;
 mod stats;
 mod step;
+#[cfg(any(test, feature = "pg_test"))]
+#[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
+mod stored_ids;
 mod walk;
 mod walk_rows;
 

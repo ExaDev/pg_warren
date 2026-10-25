@@ -117,6 +117,35 @@
   transaction on a primary now gets the same refusal before it assigns a
   transaction id.
 
+- **`refresh` with a NULL `name` or `promote`, and `prewarm` with a NULL
+  `name`, are refused with `null_value_not_allowed` (22004)**, "… must not
+  be NULL". They failed with an internal error, "argument 0 must not be
+  null" (XX000). Found by the SQL fuzzer.
+
+- **`eigen` with `vectors_prefix` and a `k` larger than the graph, and
+  `distance(..., 'subspace')` with a `k` larger than the vectors stored,
+  no longer crash the server.** Each made a name for every one of the `k`
+  vectors before anything else, and with `k` near 2^31 that allocation
+  failed and aborted the backend (signal 6), which restarted every
+  backend. With `vectors_prefix`, `eigen` now admits the eigenproblem
+  before it makes or checks a name for each eigenvector: a `k` past the
+  dimension is refused with `invalid_parameter_value` (22023), "cannot
+  compute k eigenpairs of a matrix of dimension n", and a working set
+  that cannot fit with 53400, which now comes before a refusal to replace
+  another role's eigenvectors (42501). `subspace` makes each name as it reads it,
+  failing at the first missing vector with `undefined_object` (42704).
+  Found by the SQL fuzzer.
+
+- **An array of node ids whose last element is NULL no longer fails with
+  an internal error** ("assertion failed: array.is_within_bounds", XX000)
+  in debug builds: a `bfs` or `reachable_set` start, a `node_filter`, a
+  step's `filter` (`warren.s`). The NULL is skipped, as a NULL elsewhere
+  in the array always was. Found by the SQL fuzzer
+  (`test/sql_fuzz.py`). The ids are read while the array is alive,
+  including an array read from a table column, which a function gets
+  detoasted into a copy (tested with short, compressed and out-of-line
+  `text[]` and `uuid[]` arrays).
+
 - **A persisted vector written to a version that retention or
   `drop_version` deleted meanwhile fails with `undefined_object` (42704),
   "version … no longer exists: vector … was not written to it".** It

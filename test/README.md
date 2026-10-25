@@ -37,8 +37,30 @@ recursive CTEs / NetworkX on generated fixtures, and the Appendix A use cases
   `hot_standby_feedback`; and that the standby, promoted, writes and its
   cascade follows it (DESIGN.md §5.1, §13, M11).
 
+- `sql_fuzz.py` calls every `warren.*` function (read from `pg_proc`)
+  with generated arguments, valid ones from the fixture's graphs,
+  versions, vectors and node ids (id arrays as literals or read from a
+  table column, short or compressed and out of line) mixed with hostile
+  ones (NULLs, extremes, NaN, wrong types, huge arrays, injections, SQL
+  that writes or reads a secret), as the superuser, an owner, a reader and
+  a stranger, in transactions and savepoints that roll back at random,
+  under `SET LOCAL`s that bound memory and time or force parallel plans,
+  and with a hostile `search_path`. It fails on a crash, a hang, an
+  internal error or any SQLSTATE outside the documented classes, an
+  allowed one about the extension's own objects (a privilege error on
+  its schema or catalog, a missing `warren.*` relation), a call that
+  succeeds beyond its caller's privileges, an action that changed a graph
+  its role does not own or another role's vector (the catalog compared
+  before and after), a hostile operator run elevated, a leak (a pin
+  between statements, an activity row of a backend that has gone), a
+  catalog left inconsistent or not empty once every graph is dropped, and
+  trouble in the server log. Seeded: each failure is written, with its
+  seed, as a psql script that reproduces it from a fresh cluster, the
+  first `--max-shrinks` (3) of a run shrunk first
+  (`harness/sql_fuzz/`; DESIGN.md §13, M11).
+
   None of them hangs: each of their sessions has a 120 s
-  `statement_timeout`, a session still busy when it is closed is killed,
+  `statement_timeout` (the fuzzer's, 3 s, and a watchdog), a session still busy when it is closed is killed,
   and worker threads that do not stop in time are reported, not waited
   for.
 - `harness/` is the Python behind them; `tests/` are its pytest tests.

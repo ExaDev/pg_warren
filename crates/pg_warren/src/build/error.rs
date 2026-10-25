@@ -40,6 +40,9 @@ pub(crate) enum BuildError {
     /// Mapping edge endpoints on the compute pool failed or was cancelled.
     #[error(transparent)]
     Compute(#[from] ComputeError),
+    /// A required argument is NULL.
+    #[error("{0} must not be NULL")]
+    NullArgument(&'static str),
 }
 
 impl SqlError for BuildError {
@@ -53,6 +56,7 @@ impl SqlError for BuildError {
             Self::Spi(_) => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
             Self::Graph(error) => graph_sqlstate(error),
             Self::Compute(error) => compute_sqlstate(error),
+            Self::NullArgument(_) => PgSqlErrorCode::ERRCODE_NULL_VALUE_NOT_ALLOWED,
         }
     }
 }

@@ -11,6 +11,8 @@ that `outcome` parses."""
 import subprocess
 from dataclasses import dataclass
 
+from .cluster import SUPERUSER
+
 MESSAGE = "@@warren-message@@"
 END = "@@warren-end@@"
 SEPARATOR = "\t"
@@ -67,9 +69,9 @@ def outcome(lines):
 
 
 class Session:
-    def __init__(self, cluster, database, settings=()):
+    def __init__(self, cluster, database, settings=(), user=SUPERUSER):
         command = [cluster.client("psql"), "-X", "-q", "-A", "-t", "-F", SEPARATOR, "-v", "ON_ERROR_STOP=0",
-                   *cluster.connection(database)]
+                   *cluster.connection(database, user)]
         # Notices go to stderr, which nothing reads: discarded, so it never fills.
         self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                         stderr=subprocess.DEVNULL, text=True, bufsize=1)

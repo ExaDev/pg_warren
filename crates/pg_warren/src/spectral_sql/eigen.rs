@@ -24,7 +24,8 @@ type Row = (i32, f64, f64);
 /// Solves `operator` on `vectors`' version and stores the eigenvectors as
 /// `<prefix>_1..k` if a prefix is given (transient unless `persist`),
 /// dropping `<prefix>_<i>` for `i > k` left by an earlier, larger solve
-/// first. Whether the caller may write (and drop) those vectors, and
+/// first. With a prefix, the eigenproblem is admitted first (its count
+/// and working set, `admit`). Whether the caller may write (and drop) those vectors, and
 /// whether transient eigenvectors fit `warren.max_cache_memory` (with the
 /// transient ones they replace or drop released), is checked before
 /// solving, so a refusal writes none.
@@ -37,6 +38,9 @@ fn solve<E: CachedIds>(
 ) -> Result<Vec<Row>, SpectralSqlError> {
     let (names, stale) = match prefix {
         Some(prefix) => {
+            // A count past the dimension or a working set that cannot fit
+            // is refused before a name is made, or checked, for each of k.
+            admit(&vectors, operator, options)?;
             let names: Vec<String> = (1..=options.k).map(|i| format!("{prefix}_{i}")).collect();
             let stale: Vec<String> = vectors
                 .names()?
@@ -291,14 +295,15 @@ mod tests {
 
     #[pg_test]
     fn vectors_it_may_not_replace_are_refused_before_solving() -> Result<(), Error> {
-        // lap_1 belongs to the session user; a reader cannot replace it, and
-        // is told so although the solve would not fit the memory cap.
+        // lap_1 belongs to the session user; a reader cannot replace it.
+        // (A solve that cannot fit is refused first, with 53400, before a
+        // name is made: bad_eigenproblems_are_errors.)
         path()?;
         Spi::run(
             "SELECT * FROM warren.eigen('p', 1, vectors_prefix := 'lap');
              CREATE ROLE p_reader; SELECT warren.grant('p', 'p_reader');
              CREATE TEMP TABLE IF NOT EXISTS failure (what text); GRANT ALL ON failure TO p_reader;
-             SET LOCAL warren.max_compute_memory = '64kB'; SET ROLE p_reader",
+             SET ROLE p_reader",
         )?;
         let found = failure("warren.eigen('p', 1, vectors_prefix := 'lap')")?.unwrap_or_default();
         Spi::run("RESET ROLE")?;
@@ -505,6 +510,11 @@ mod tests {
             ("'p', NULL", "22004: k must not be NULL"),
             ("'p', 0", "22023: k must be positive, not 0"),
             ("'p', 7", "22023: cannot compute 7 eigenpairs of a matrix of dimension 6"),
+            // Refused before a name is made for each eigenvector.
+            (
+                "'p', 2147483647, vectors_prefix := 'q'",
+                "22023: cannot compute 2147483647 eigenpairs of a matrix of dimension 6",
+            ),
             ("'p', 1, 'svd'", "22023: unknown matrix \"svd\""),
             ("'p', 1, which := 'middle'", "22023: unknown which \"middle\""),
             ("'p', 1, dtype := 'i64'", "22023: unknown precision \"i64\""),
@@ -525,6 +535,11 @@ mod tests {
              SELECT warren.refresh('b')",
         )?;
         let found = failure("warren.eigen('b', 2)")?.unwrap_or_default();
+        assert!(found.starts_with("53400: compute memory limit exceeded"), "{found}");
+        // With a prefix, too: admitted before a name is made or checked,
+        // so the reserved prefix is not what refuses it.
+        let found = failure("warren.eigen('b', 2, vectors_prefix := '_warren_e')")?;
+        let found = found.unwrap_or_default();
         assert!(found.starts_with("53400: compute memory limit exceeded"), "{found}");
         Ok(())
     }
