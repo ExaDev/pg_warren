@@ -93,6 +93,12 @@
   for a deletion in progress (harness tests `vector_retention_race` and
   `test/concurrent_refresh.py`).
 
+- **A read of a shared version that another backend was evicting at that
+  moment could fail with an internal error**, "cannot pin a segment that
+  is already pinned" (XX000): the evicting backend unpinned the version's
+  segment after releasing the shared cache's lock, so a reader could
+  revive the version first. It now unpins under the lock (found by
+  `test/concurrent_refresh.py`, preloaded).
 - **`compact` could fail with `data_corrupted` (XX001), "vector has 0
   bytes", when a vector bound to the version it compacts was dropped
   while it ran.** It now locks each vector before moving it and skips one

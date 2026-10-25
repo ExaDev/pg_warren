@@ -170,8 +170,9 @@ impl Backend {
 
     /// Runs `f` on the registry and this backend's session under the
     /// registry's lock, held exclusively. `f` is pure Rust, or calls only
-    /// Postgres functions that check for no interrupts (`dsm_detach`, and
-    /// `dsm_attach` and `dsm_pin_segment` to revive a draining version).
+    /// Postgres functions that check for no interrupts (`dsm_detach`;
+    /// `dsm_unpin_segment` to evict; and `dsm_attach` and `dsm_pin_segment`
+    /// to revive a draining version).
     fn locked<R>(
         &mut self,
         f: impl FnOnce(
@@ -285,12 +286,19 @@ impl SharedVersions for Dsm {
     fn claim(&mut self, key: Key, bytes: u64) -> Claimed<Loading> {
         let limits = Limits { cap: setting::cap(), store_room: segment::store_room() };
         let claim = with_backend(|backend| {
-            backend.locked(|registry, session| session.claim(registry, key, bytes, limits))
+            backend.locked(|registry, session| {
+                let claim = session.claim(registry, key, bytes, limits);
+                if let Claim::Load { evicted: unpinned, .. }
+                | Claim::Refused { drained: unpinned, .. } = &claim
+                {
+                    unpinned.iter().copied().for_each(segment::unpin);
+                }
+                claim
+            })
         });
         match claim {
             Some(Claim::Load { ticket, evicted }) => {
                 count_shared_evictions(evicted.len() as u64);
-                evicted.into_iter().for_each(segment::unpin);
                 match segment::create(bytes, key) {
                     Some(segment) => {
                         let region = segment.region();
@@ -305,7 +313,6 @@ impl SharedVersions for Dsm {
             Some(Claim::Taken) => Claimed::Taken,
             Some(Claim::Refused { refusal, drained }) => {
                 count_shared_evictions(drained.len() as u64);
-                drained.into_iter().for_each(segment::unpin);
                 Claimed::Refused(refusal)
             }
             None => broken("this backend's state is in use"),
@@ -420,11 +427,15 @@ impl SharedVersions for Dsm {
     }
 
     fn evict(&mut self, which: &dyn Fn(&Key) -> bool) -> usize {
-        let evicted = with_backend(|backend| backend.locked(|registry, _| registry.evict(which)));
-        let evicted = evicted.unwrap_or_default();
-        let count = evicted.len();
+        let count = with_backend(|backend| {
+            backend.locked(|registry, _| {
+                let evicted = registry.evict(which);
+                evicted.iter().copied().for_each(segment::unpin);
+                evicted.len()
+            })
+        })
+        .unwrap_or_default();
         count_shared_evictions(count as u64);
-        evicted.into_iter().for_each(segment::unpin);
         count
     }
 
