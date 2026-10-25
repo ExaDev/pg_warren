@@ -17,7 +17,14 @@ does not own, or has the function run SQL that reads `public.secret`,
 which only the superuser may read; except a call Postgres never made (a
 STRICT function given a NULL), `evict`, which anyone may call (it then
 frees only the caller's own copies), and `report_progress` with a NULL
-command, which only clears the caller's frame (DESIGN.md §5.7)."""
+command, which only clears the caller's frame (DESIGN.md §5.7).
+
+An allowed class still hides a fault of the extension's own SQL: a
+privilege error on its schema, its catalog tables or sequences or a
+function it calls, or a missing `warren.*` relation or function other
+than the one the statement itself calls. Those are `internal` findings,
+in a call's result or the server log (`log_faults`), where the
+extension's documented warnings (`LOG_EXPECTED`) are expected."""
 
 import re
 from dataclasses import dataclass
@@ -27,6 +34,19 @@ from .fixture import ESCALATED, SECRET
 
 ALLOWED_CLASSES = frozenset({"22", "42", "53", "54", "55", "0A", "21", "2B", "3F", "40"})
 ALLOWED_STATES = frozenset({"57014", "25006", "39P03"})
+CATALOG_RELATIONS = r"(graphs|versions|segments|vectors|vector_chunks|vector_quotas)\w*"
+INTERNAL = re.compile(r"permission denied for (schema warren\b|(table|sequence|view) " + CATALOG_RELATIONS
+                      + r"|function \w+)|relation \"(warren\.\w+|" + CATALOG_RELATIONS + r')" does not exist')
+MISSING_FUNCTION = re.compile(r"function warren\.(\w+)\(.*\) does not exist")
+# What the server log may show besides errors of allowed SQLSTATEs: the
+# warnings the extension documents (an iteration that did not converge,
+# a matrix of several components), and a parallel worker that exits after
+# the error it raised (the leader raises it again) or that its leader
+# stops after an error of its own.
+LOG_EXPECTED = (r"WARNING:  \w+ did not (converge|stabilise) in \d+ (iterations|steps)",
+                r"WARNING:  the matrix has \d+ connected components",
+                r'background worker "parallel worker" \(PID \d+\) exited with exit code 1',
+                r'FATAL:  terminating background worker "parallel worker" due to administrator command')
 OPEN = frozenset({"evict"})
 OWNER_ONLY = frozenset({"refresh", "promote", "drop_version", "drop_graph", "compact", "grant", "revoke",
                         "set_owner", "set_vector_quota"})
@@ -50,10 +70,32 @@ def judge(role, call, outcome, world):
             return Finding("escalation", outcome.message)
         if not allowed(outcome.sqlstate):
             return Finding("sqlstate", f"{outcome.sqlstate}: {outcome.message}")
+        if _internal(outcome.message, call):
+            return Finding("internal", f"{outcome.sqlstate}: {outcome.message}")
         return None
     if call is None or role == SUPERUSER or call.skipped() or call.function.name in OPEN or _clears(call):
         return None
     return _breach(role, call, world)
+
+
+def _internal(message, call):
+    """Whether `message` is about the extension's own objects rather than
+    the caller's or the statement's (`call`'s) own function."""
+    if INTERNAL.search(message):
+        return True
+    missing = MISSING_FUNCTION.search(message)
+    return missing is not None and (call is None or not _calls(call.expression(), missing[1]))
+
+
+def _calls(sql, name):
+    return f"warren.{name}(" in sql or f'warren."{name}"(' in sql
+
+
+def log_faults(text):
+    """The lines of server log `text` that show an internal fault an
+    allowed SQLSTATE hides (the log does not say which call it was, so a
+    missing function is left to the call's own result)."""
+    return [line for line in text.splitlines() if INTERNAL.search(line)]
 
 
 def _clears(call):

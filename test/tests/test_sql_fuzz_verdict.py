@@ -1,10 +1,12 @@
 """The fuzzer's oracle: which SQLSTATEs a call may fail with, and which
 successes are breaches of the caller's privileges."""
 
+import re
+
 from harness.session import Outcome
 from harness.sql_fuzz.fixture import ESCALATED, OWNER, READER, STRANGER
 from harness.sql_fuzz.surface import Argument, Call, Function
-from harness.sql_fuzz.verdict import Finding, allowed, judge, signature
+from harness.sql_fuzz.verdict import LOG_EXPECTED, Finding, allowed, judge, log_faults, signature
 from harness.sql_fuzz.world import Graph, World
 
 WORLD = World((Graph("g8", "bigint", OWNER, (READER,)),))
@@ -81,3 +83,37 @@ def test_a_report_without_a_command_only_clears_the_callers_frame():
                                           Argument("phase", "text")), 0, False, "void")
     assert judge(STRANGER, Call(report, ("NULL", "'g8'", "'p'"), graphs=("g8",)), OK, WORLD) is None
     assert judge(STRANGER, Call(report, ("'c'", "'g8'", "'p'"), graphs=("g8",)), OK, WORLD).kind == "access"
+
+
+def test_an_allowed_privilege_or_missing_object_error_about_warrens_own_objects_is_internal():
+    call = Call(INFO, ("'g8'",))
+    for state, message in (("42501", "permission denied for table segments"),
+                           ("42501", "permission denied for schema warren"),
+                           ("42501", "permission denied for sequence graphs_graph_id_seq"),
+                           ("42501", "permission denied for function vector_map"),
+                           ("42P01", 'relation "warren.versions" does not exist'),
+                           ("42883", "function warren.vector_map(unknown, unknown) does not exist")):
+        assert judge(OWNER, call, failed(state, message), WORLD) == Finding("internal", f"{state}: {message}")
+
+
+def test_errors_about_the_callers_own_objects_or_call_are_not_internal():
+    call = Call(INFO, ("'g8'",))
+    for state, message in (("42501", "permission denied for table edges8"),
+                           ("42501", 'must be a member of role "fuzz_owner" to refresh graph "g8"'),
+                           ("42P01", 'relation "nosuch" does not exist'),
+                           ("42883", "function warren.info(integer) does not exist")):
+        assert judge(STRANGER, call, failed(state, message), WORLD) is None, message
+
+
+def test_the_server_log_flags_internal_faults_and_expects_documented_warnings():
+    prefix = "2026-10-25 22:00:00.000 UTC [42] "
+    expected = ("WARNING:  pagerank did not converge in 20 iterations",
+                "WARNING:  leiden did not stabilise in 100 iterations",
+                "WARNING:  eigen did not converge in 25 steps; the largest residual is 1e-3",
+                "WARNING:  the matrix has 2 connected components: eigenvalues repeat")
+    for line in expected:
+        assert any(re.search(pattern, prefix + "01000 " + line) for pattern in LOG_EXPECTED), line
+    log = "\n".join((prefix + "42501 ERROR:  permission denied for table segments",
+                     prefix + "42501 ERROR:  permission denied for table edges8",
+                     prefix + '42P01 ERROR:  relation "warren.graphs" does not exist'))
+    assert log_faults(log) == [log.splitlines()[0], log.splitlines()[2]]

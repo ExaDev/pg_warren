@@ -30,17 +30,10 @@ from harness.sql_fuzz.actions import Planner
 from harness.sql_fuzz.run import Run
 from harness.sql_fuzz.settled import settled
 from harness.sql_fuzz.shrink import Shrinker, fixture_script, script
-from harness.sql_fuzz.verdict import allowed
+from harness.sql_fuzz.verdict import LOG_EXPECTED, allowed, log_faults
 
 TEMPLATE = "fuzz_template"
 SETTINGS = (*server_log.SETTINGS, "log_min_error_statement = warning")
-# What the server log may show besides errors of allowed SQLSTATEs: the
-# library's WARNINGs that an iteration did not converge, and a parallel
-# worker that exits after the error it raised (the leader raises it again)
-# or that its leader stops after an error of its own.
-EXPECTED = (r"WARNING:  \w+ did not (converge|stabilise) in \d+ (iterations|steps)",
-            r'background worker "parallel worker" \(PID \d+\) exited with exit code 1',
-            r'FATAL:  terminating background worker "parallel worker" due to administrator command')
 
 
 class AllowedStates:
@@ -140,7 +133,8 @@ def run_seed(cluster, functions, parallel, seed, seconds, mode, shrinker, out):
     with open(cluster.log, "rb") as log:
         log.seek(log_start)
         text = log.read().decode(errors="replace")
-    failures += [f"seed {seed}: server log: {line}" for line in server_log.problems(text, AllowedStates(), EXPECTED)]
+    failures += [f"seed {seed}: server log: {line}" for line in server_log.problems(text, AllowedStates(), LOG_EXPECTED)]
+    failures += [f"seed {seed}: server log: internal fault: {line}" for line in log_faults(text)]
     for number, failure in enumerate(run.failures.values()):
         failures.append(report(failure, seed, mode, number, shrinker, out))
     cluster.database().execute(f"DROP DATABASE {database} WITH (FORCE)")
