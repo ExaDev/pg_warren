@@ -330,9 +330,9 @@ test/upgrade.py --no-install --trusted   # the same, installed and updated by a 
 test/dump.py --pg-config "$(command -v pg_config)"   # pg_dump and restore of graphs (plain, custom, trusted)
 ```
 
-Robustness under concurrency and crashes (DESIGN.md §13, M11), each in a
-scratch cluster per shared-cache mode (default `preload`, then `on`), and
-holding `/tmp/pgrx-test.lock` for the whole run:
+Robustness under concurrency, crashes and replication (DESIGN.md §13,
+M11), each in a scratch cluster per shared-cache mode (default `preload`,
+then `on`), and holding `/tmp/pgrx-test.lock` for the whole run:
 
 ```sh
 # 8 readers, 3 refreshers and a vector churner on one graph for --seconds
@@ -342,6 +342,11 @@ test/concurrent_refresh.py --pg-config "$(command -v pg_config)" --seconds 20
 # Refreshes stopped mid-way by pg_terminate_backend, SIGKILL and an
 # immediate shutdown (--kinds, --points to choose; --edges sizes the graph)
 test/crash_recovery.py --no-install --pg-config "$(command -v pg_config)"
+# A primary, a hot standby (pg_basebackup -R) and a cascading standby:
+# reads answer on the standbys as on the primary, writes are refused with
+# 25006, a version retired under a standby query is read consistently or
+# the query cancelled (40001), and the standby, promoted, writes
+test/replicas.py --no-install --pg-config "$(command -v pg_config)"
 ```
 
 ### Packages
