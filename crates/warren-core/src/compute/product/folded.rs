@@ -139,7 +139,11 @@ impl FoldedRows {
     }
 }
 
+// Not under Miri: the fold sorts its rows on the compute pool, whose work
+// stealing runs through crossbeam-epoch, which Miri's Stacked Borrows model
+// rejects (as in `compute::tests`).
 #[cfg(test)]
+#[cfg(not(miri))]
 mod tests {
     use super::*;
 
