@@ -15,6 +15,8 @@ from .values import (EXPRESSIONS, FREE_TEXT, GRAPH_ARGUMENTS, HOSTILE, HOSTILE_E
 
 OPTIONAL_SHARE = 0.4
 NEW_GRAPHS = 12
+# The functions whose graph argument names a graph they make.
+MAKERS = frozenset({"create_graph", "contract"})
 NEW_VECTORS = ("v0", "v1", "v2", "ones", "pr", "lbl")
 # Each id type's source tables and the edge columns they have beyond src, dst.
 SOURCES = {
@@ -76,7 +78,7 @@ class Arguments:
     def _graph(self, function, name):
         """An existing graph, mostly; for a graph to be made, mostly a new
         name; sometimes one that does not exist or a hostile name."""
-        making = function.name == "create_graph" or name == "out_graph"
+        making = function.name in MAKERS
         roll = self.rng.random()
         if roll < self.hostility * 0.5:
             sql = self.rng.choice(HOSTILE["text"])

@@ -11,6 +11,7 @@ server to come back and goes on with new sessions."""
 
 import threading
 import time
+from collections import Counter
 from dataclasses import dataclass
 
 from ..cluster import SUPERUSER
@@ -75,6 +76,7 @@ class Run:
         self.action = []  # the current action's statements so far
         self.failures = {}  # signature → Failure
         self.statements = 0
+        self.outcomes = Counter()  # (function, SQLSTATE) of every call
 
     # Sessions.
 
@@ -125,6 +127,8 @@ class Run:
                         executed)
             self.recover()
             return None
+        if call is not None:
+            self.outcomes[(call.function.name, done.sqlstate)] += 1
         found = judge(role, call, done, self.world)
         if found is not None:
             self._found(found, executed)
@@ -181,6 +185,11 @@ class Run:
             self.connect(action.role, action.search_path)
         elif action.kind == "call":
             self._unit(action.role, action.units[0])
+        elif action.kind == "build":
+            for sql in action.script:
+                done = self.statement(action.role, sql)
+                if done is None or not done.ok:
+                    break
         else:
             self._transaction(action)
         self.end_action()

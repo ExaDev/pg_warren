@@ -143,32 +143,41 @@ BEGIN
 END $f$;""" + "".join(operators)
 
 
-# The graphs, by their owner, then a reader's own vector.
-GRAPHS = (
-    "SELECT warren.create_graph('g8', 'SELECT id FROM public.nodes8', 'SELECT src, dst, rel, w FROM public.edges8', "
-    "weighted => true, has_relations => true, retain_versions => 3)",
-    "SELECT warren.refresh('g8')",
-    "SELECT warren.refresh('g8')",
-    "SELECT warren.refresh('g8', promote => false, label => 'staged')",
-    "SELECT warren.create_graph('g4', 'SELECT id FROM public.nodes4', 'SELECT src, dst FROM public.edges4', "
-    "directed => false, build_reverse => false)",
-    "SELECT warren.refresh('g4')",
-    "SELECT warren.create_graph('gt', 'SELECT id FROM public.nodes_text', 'SELECT src, dst, w FROM public.edges_text', "
-    "weighted => true, store_merged => false, node_order => 'locality')",
-    "SELECT warren.refresh('gt')",
-    "SELECT warren.create_graph('gu', 'SELECT id FROM public.nodes_uuid', 'SELECT src, dst FROM public.edges_uuid')",
-    "SELECT warren.refresh('gu')",
-    *(f"SELECT warren.vector_const('{g}', 'ones', 1)" for g in ("g8", "g4", "gt", "gu")),
-    "SELECT warren.pagerank('g8', 'pr')",
-    "SELECT warren.label_propagation('g8', 'lbl')",
-    "SELECT warren.contract('g8', 'lbl', 'gq')",
-    "SELECT warren.vector_const('gq', 'ones', 1)",
-    *(f"SELECT warren.grant('{g}', '{READER}')" for g in ("g8", "gt", "gq")),
-    "SELECT warren.set_vector_quota('g8', 1000000)",
-)
+# Each graph, as its owner builds it (in this order: gq is contracted from
+# g8). A run builds a graph again this way once it has been dropped.
+BUILDS = {
+    "g8": ("SELECT warren.create_graph('g8', 'SELECT id FROM public.nodes8', "
+           "'SELECT src, dst, rel, w FROM public.edges8', weighted => true, has_relations => true, "
+           "retain_versions => 3)",
+           "SELECT warren.refresh('g8')",
+           "SELECT warren.refresh('g8')",
+           "SELECT warren.refresh('g8', promote => false, label => 'staged')",
+           "SELECT warren.vector_const('g8', 'ones', 1)",
+           "SELECT warren.pagerank('g8', 'pr')",
+           f"SELECT warren.grant('g8', '{READER}')",
+           "SELECT warren.set_vector_quota('g8', 1000000)"),
+    "g4": ("SELECT warren.create_graph('g4', 'SELECT id FROM public.nodes4', 'SELECT src, dst FROM public.edges4', "
+           "directed => false, build_reverse => false)",
+           "SELECT warren.refresh('g4')",
+           "SELECT warren.vector_const('g4', 'ones', 1)"),
+    "gt": ("SELECT warren.create_graph('gt', 'SELECT id FROM public.nodes_text', "
+           "'SELECT src, dst, w FROM public.edges_text', weighted => true, store_merged => false, "
+           "node_order => 'locality')",
+           "SELECT warren.refresh('gt')",
+           "SELECT warren.vector_const('gt', 'ones', 1)",
+           f"SELECT warren.grant('gt', '{READER}')"),
+    "gu": ("SELECT warren.create_graph('gu', 'SELECT id FROM public.nodes_uuid', 'SELECT src, dst FROM public.edges_uuid')",
+           "SELECT warren.refresh('gu')",
+           "SELECT warren.vector_const('gu', 'ones', 1)"),
+    "gq": ("SELECT warren.label_propagation('g8', 'lbl')",
+           "SELECT warren.contract('g8', 'lbl', 'gq')",
+           "SELECT warren.vector_const('gq', 'ones', 1)",
+           f"SELECT warren.grant('gq', '{READER}')"),
+}
 READS = ("SELECT warren.vector_const('g8', 'mine', 2)",)
 
 
 def steps():
     """The fixture as (role, statement) pairs, in order."""
-    return [(SUPERUSER, source_sql()), *((OWNER, sql) for sql in GRAPHS), *((READER, sql) for sql in READS)]
+    return [(SUPERUSER, source_sql()), *((OWNER, sql) for build in BUILDS.values() for sql in build),
+            *((READER, sql) for sql in READS)]

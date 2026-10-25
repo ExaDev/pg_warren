@@ -2,7 +2,9 @@
 leaves a transaction open: a call on its own (autocommit), a transaction
 of calls (some in savepoints that are rolled back or released, after
 `SET LOCAL`s that bound resources or change the plan) that commits or
-rolls back, or a new session (a new backend, a new `search_path`).
+rolls back, or a new session (a new backend, a new `search_path`); and,
+once one of the fixture's graphs has been dropped, its owner building it
+again, so that the run keeps graphs with versions and vectors to call.
 
 How an action runs, and what it does when a call fails, is the driver's
 (`run`); here it is only planned, from the seed."""
@@ -10,11 +12,12 @@ How an action runs, and what it does when a call fails, is the driver's
 from dataclasses import dataclass, field
 
 from .arguments import Arguments
-from .fixture import ROLES
+from .fixture import BUILDS, OWNER, ROLES
 
 ROLE_WEIGHTS = (3, 4, 3, 2)
 HOSTILITY = (0.0, 0.1, 0.25, 0.6)
 CONNECT = "\\connect"
+REBUILD_SHARE = 0.3
 SEARCH_PATHS = (None, "hostile, pg_catalog, public", "public", "pg_temp, public", '""')
 # Statement timeout of every fuzz session: long enough for any call on the
 # fixture's graphs, short enough that a call that spins wastes little.
@@ -47,11 +50,12 @@ class Unit:
 @dataclass(frozen=True)
 class Action:
     role: str
-    kind: str  # call, transaction, connect
+    kind: str  # call, transaction, connect, build
     units: tuple = ()
     begin: tuple = ()  # what follows BEGIN: isolation, then SET LOCALs
     end: str = "COMMIT"
     search_path: str | None = None
+    script: tuple = ()  # a build's statements
 
 
 @dataclass
@@ -64,6 +68,9 @@ class Planner:
     def next(self, world):
         """The next action, generated in `world`."""
         self.made += 1
+        missing = [name for name in BUILDS if world.graph(name) is None]
+        if missing and self.rng.random() < REBUILD_SHARE:
+            return Action(OWNER, "build", script=BUILDS[missing[0]])
         role = self.rng.choices(ROLES, weights=ROLE_WEIGHTS)[0]
         kind = self.rng.choices(("call", "transaction", "connect"), weights=(55, 40, 5))[0]
         if kind == "connect":

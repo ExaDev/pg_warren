@@ -10,7 +10,7 @@ API, nothing left in the catalog."""
 
 from ..concurrent_refresh import until
 from ..session import Session
-from .fixture import BIGINT_IDS, EDGE_ROWS, INTEGER_IDS, SECRET, SECRET_ROWS, TEXT_IDS, UUID_IDS, literal
+from .fixture import BIGINT_IDS, EDGE_ROWS, INTEGER_IDS, SECRET, SECRET_ROWS, TEXT_IDS, UUID_IDS
 
 SOURCES = {"public.nodes8": len(BIGINT_IDS), "public.nodes4": len(INTEGER_IDS), "public.nodes_text": len(TEXT_IDS),
            "public.nodes_uuid": len(UUID_IDS), **EDGE_ROWS, SECRET: SECRET_ROWS, "public.canary": 0}
@@ -56,26 +56,27 @@ def _catalog(s):
         rows = s.run(sql).rows
         if rows:
             failures.append(f"{what}: {rows}")
-    for graph, version in s.run("SELECT g.name, v.version_id FROM warren.versions v "
-                                "JOIN warren.graphs g USING (graph_id) ORDER BY v.version_id").rows:
-        loaded = s.run(f"SELECT warren.prewarm({literal(graph)}, {version})")
+    # By id, the names read in the same statement: a name may hold a tab or
+    # a newline, which psql's rows would split.
+    for (version,) in s.run("SELECT version_id FROM warren.versions ORDER BY version_id").rows:
+        loaded = s.run(f"SELECT warren.prewarm(g.name, v.version_id) FROM warren.versions v "
+                       f"JOIN warren.graphs g USING (graph_id) WHERE v.version_id = {version}")
         if not loaded.ok:
-            failures.append(f"version {version} of graph {graph!r} does not load: {loaded.sqlstate} {loaded.message}")
-    for graph, name, version in s.run("SELECT g.name, x.name, x.version_id FROM warren.vectors x "
-                                      "JOIN warren.graphs g USING (graph_id) ORDER BY x.vector_id").rows:
-        read = s.run(f"SELECT warren.vector_stats({literal(graph)}, {literal(name)}, {version})")
+            failures.append(f"version {version} does not load: {loaded.sqlstate} {loaded.message}")
+    for (vector,) in s.run("SELECT vector_id FROM warren.vectors ORDER BY vector_id").rows:
+        read = s.run(f"SELECT warren.vector_stats(g.name, x.name, x.version_id) FROM warren.vectors x "
+                     f"JOIN warren.graphs g USING (graph_id) WHERE x.vector_id = {vector}")
         if not read.ok:
-            failures.append(f"vector {name!r} of graph {graph!r} at version {version} does not read: "
-                            f"{read.sqlstate} {read.message}")
+            failures.append(f"vector {vector} does not read: {read.sqlstate} {read.message}")
     return failures
 
 
 def _dropped(s):
     failures = []
-    for (graph,) in s.run("SELECT name FROM warren.graphs ORDER BY name").rows:
-        dropped = s.run(f"SELECT warren.drop_graph({literal(graph)})")
+    for (graph,) in s.run("SELECT graph_id FROM warren.graphs ORDER BY graph_id").rows:
+        dropped = s.run(f"SELECT warren.drop_graph(name) FROM warren.graphs WHERE graph_id = {graph}")
         if not dropped.ok:
-            failures.append(f"drop_graph({graph!r}) failed: {dropped.sqlstate} {dropped.message}")
+            failures.append(f"dropping graph {graph} failed: {dropped.sqlstate} {dropped.message}")
     for table in CATALOG:
         left = s.run(f"SELECT count(*) FROM {table}").value()
         if left != "0":

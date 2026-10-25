@@ -36,9 +36,11 @@ TEMPLATE = "fuzz_template"
 SETTINGS = (*server_log.SETTINGS, "log_min_error_statement = warning")
 # What the server log may show besides errors of allowed SQLSTATEs: the
 # library's WARNINGs that an iteration did not converge, and a parallel
-# worker that exits after the error it raised (the leader raises it again).
-EXPECTED = (r"WARNING:  \w+ did not (converge|stabilise) in \d+ iterations",
-            r'background worker "parallel worker" \(PID \d+\) exited with exit code 1')
+# worker that exits after the error it raised (the leader raises it again)
+# or that its leader stops after an error of its own.
+EXPECTED = (r"WARNING:  \w+ did not (converge|stabilise) in \d+ (iterations|steps)",
+            r'background worker "parallel worker" \(PID \d+\) exited with exit code 1',
+            r'FATAL:  terminating background worker "parallel worker" due to administrator command')
 
 
 class AllowedStates:
@@ -130,6 +132,10 @@ def run_seed(cluster, functions, parallel, seed, seconds, mode, shrinker, out):
         run.close()
     print(f"seed {seed} ({mode}): {planner.made} actions, {run.statements} statements, "
           f"{len(run.failures)} distinct failures", flush=True)
+    succeeded = {function for function, sqlstate in run.outcomes if sqlstate == "00000"}
+    never = sorted({f.name for f in functions} - succeeded)
+    print(f"  calls that succeeded: {sum(n for (_, s), n in run.outcomes.items() if s == '00000')} of "
+          f"{sum(run.outcomes.values())}; functions that never did: {' '.join(never) or 'none'}", flush=True)
     failures = [f"seed {seed}: {problem}" for problem in settled(cluster, database)]
     with open(cluster.log, "rb") as log:
         log.seek(log_start)
