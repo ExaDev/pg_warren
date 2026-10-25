@@ -98,7 +98,11 @@ mod tests {
 
 /// Every reader of relations' CSRs returns with sparse offsets exactly
 /// what it returns with dense ones.
+// Not under Miri: the readers run on the compute pool, whose work stealing
+// runs through crossbeam-epoch, which Miri's Stacked Borrows model rejects
+// (as in `compute::workers`).
 #[cfg(test)]
+#[cfg(not(miri))]
 mod readers {
     use proptest::prelude::*;
 

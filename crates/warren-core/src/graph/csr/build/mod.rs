@@ -309,12 +309,13 @@ mod tests {
     use super::*;
     use crate::graph::RelationDictionary;
 
-    /// Five relations of 2,000 edges over 1,000 nodes, weighted.
+    /// Five relations of 2,000 edges over 1,000 nodes, weighted; under
+    /// Miri, where three builds of them take minutes, of 400 edges.
     fn edges(memory: &BuildMemory) -> EdgeList {
         let mut relations = RelationDictionary::new();
         let indexes: Vec<_> = (0..5).map(|r| relations.intern(&r.to_string()).unwrap()).collect();
         let mut edges = EdgeList::within(1000, true, memory);
-        for edge in 0..10_000u64 {
+        for edge in 0..if cfg!(miri) { 2_000u64 } else { 10_000 } {
             let relation = indexes[(edge % 5) as usize];
             edges.push(relation, edge % 1000, (edge * 7) % 1000, 0.5).unwrap();
         }
@@ -350,7 +351,9 @@ mod tests {
         let memory = BuildMemory::unlimited();
         let mut relations = RelationDictionary::new();
         let relation = relations.intern("only").unwrap();
-        let nodes = 1_000_000u64;
+        // Row cursors would cost 8 bytes a node at any size; under Miri a
+        // million edges take hours to push and count.
+        let nodes = if cfg!(miri) { 1_000u64 } else { 1_000_000 };
         let mut edges = EdgeList::within(nodes, false, &memory);
         (0..nodes).for_each(|node| edges.push(relation, node, (node + 1) % nodes, 1.0).unwrap());
         let layout = CsrLayout { build_reverse: false, store_merged: false };
