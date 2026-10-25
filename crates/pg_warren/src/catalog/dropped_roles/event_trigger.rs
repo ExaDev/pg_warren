@@ -9,7 +9,7 @@ use pgrx::PgList;
 use super::super::CatalogError;
 use super::{clean_up_after, Cleaner};
 use crate::access::{as_catalog_owner, entry, has_privileges_of, role_name};
-use crate::read_only::read_one;
+use crate::read_only::{read_one, writing};
 
 /// `warren.on_drop_owned()`: for `CREATE EVENT TRIGGER … ON
 /// ddl_command_start WHEN TAG IN ('DROP OWNED') EXECUTE FUNCTION
@@ -79,7 +79,7 @@ fn refuse_or_clean_up(roles: &[pg_sys::Oid]) -> Result<(), CatalogError> {
     }
     let by = Cleaner::current()?;
     as_catalog_owner(|| {
-        Spi::connect_mut(|client| {
+        writing(|client| {
             for &role in roles {
                 clean_up_after(client, role, by)?;
             }

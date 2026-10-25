@@ -6,6 +6,7 @@ use pgrx::prelude::*;
 use super::super::CatalogError;
 use super::{clean_up_after, Cleaner};
 use crate::access::{as_catalog_owner, entry, refuse_bootstrap_superuser, require_privileges_of};
+use crate::read_only::writing;
 
 /// `warren.drop_owned(role regrole)`: drops every graph `role` owns (with
 /// its versions and everyone's vectors, as `drop_graph` does), deletes the
@@ -29,7 +30,7 @@ fn drop_everything_of(role: pg_sys::Oid) -> Result<i64, CatalogError> {
     refuse_bootstrap_superuser(role, "drop")?;
     let by = Cleaner::current()?;
     let dropped = as_catalog_owner(|| {
-        Spi::connect_mut(|client| {
+        writing(|client| {
             // Deleting a graph's row takes its lock, waiting for a running
             // refresh or set_owner, and re-checks `owner` once it holds it
             // (EvalPlanQual), as `drop_graph`'s lock does (DESIGN.md §5.7).

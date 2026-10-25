@@ -10,7 +10,7 @@ use super::chunk::EachChunk;
 use super::{SegmentError, SegmentStore};
 use crate::access::as_catalog_owner;
 use crate::catalog::VersionId;
-use crate::read_only::read_one;
+use crate::read_only::{read_one, writing};
 
 /// `warren.segments`.
 pub(crate) struct SpiSegmentStore;
@@ -24,7 +24,7 @@ impl SegmentStore for SpiSegmentStore {
         data: &[u8],
     ) -> Result<(), SegmentError> {
         as_catalog_owner(|| {
-            Spi::connect_mut(|client| {
+            writing(|client| {
                 client.update(
                     "INSERT INTO warren.segments (version_id, segment, chunk_no, data)
                      VALUES ($1, $2, $3, $4)",

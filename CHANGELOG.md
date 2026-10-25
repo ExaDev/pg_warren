@@ -103,6 +103,20 @@
 
 ### Fixes
 
+- **On a physical standby, every function that writes fails with
+  `read_only_sql_transaction` (25006), "cannot change pg_warren's catalog
+  in a read-only transaction", with a hint that the server is a
+  standby.** It failed with an internal error (XX000), "cannot assign
+  TransactionIds during recovery": pgrx's writable SPI calls assign a
+  transaction id before the write, which a standby refuses. That covers
+  `create_graph`, `refresh`, `promote`, `compact`, the `drop_*` functions,
+  access and quota changes, `contract`, persisted vector writes and the
+  library functions, which persist their result. Reads, and compute with
+  `persist := false`, work on a standby and answer as on the primary
+  (DESIGN.md §5.1, *Standbys*; found by `test/replicas.py`). A read-only
+  transaction on a primary now gets the same refusal before it assigns a
+  transaction id.
+
 - **A persisted vector written to a version that retention or
   `drop_version` deleted meanwhile fails with `undefined_object` (42704),
   "version … no longer exists: vector … was not written to it".** It
