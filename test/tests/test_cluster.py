@@ -46,3 +46,34 @@ def test_a_failed_stop_after_a_clean_run_is_raised(tmp_path):
     with pytest.raises(RuntimeError, match="pg_ctl failed"):
         scratch.__exit__(None, None, None)
     assert not scratch.directory.exists()
+
+
+def recording(tmp_path, primary=None):
+    """A `Cluster` in `tmp_path` that records the programs it runs instead of running them."""
+    scratch = Cluster.__new__(Cluster)
+    scratch.directory, scratch.primary, scratch.ran = tmp_path, primary, []
+    scratch._run = lambda program, *arguments: scratch.ran.append((program, *map(str, arguments)))
+    return scratch
+
+
+def test_a_new_cluster_is_initialised(tmp_path):
+    scratch = recording(tmp_path)
+    scratch._create(tmp_path / "data")
+    assert [command[0] for command in scratch.ran] == ["initdb"]
+
+
+def test_a_standby_is_a_base_backup_of_its_primary_that_streams_from_it(tmp_path):
+    primary = recording(tmp_path / "primary")
+    standby = recording(tmp_path / "standby", primary=primary)
+    standby._create(tmp_path / "standby" / "data")
+    [command] = standby.ran
+    assert command[0] == "pg_basebackup"
+    assert ("-D", str(tmp_path / "standby" / "data")) == command[command.index("-D"):command.index("-D") + 2]
+    assert "-R" in command, "writes standby.signal and primary_conninfo"
+    assert ("-h", str(tmp_path / "primary")) == command[command.index("-h"):command.index("-h") + 2]
+
+
+def test_promote_ends_a_standbys_recovery_and_waits_for_it(tmp_path):
+    standby = recording(tmp_path, primary=recording(tmp_path))
+    standby.promote()
+    assert standby.ran == [("pg_ctl", "-D", str(tmp_path / "data"), "-w", "promote")]
