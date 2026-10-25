@@ -54,10 +54,15 @@ def run_mode(args, mode):
         build.execute(replicas.setup_sql())
         with Cluster(args.pg_config, args.runas, args.keep, settings=settings, primary=primary) as standby, \
                 Cluster(args.pg_config, args.runas, args.keep, settings=settings, primary=standby) as cascade:
-            failures += check(primary, standby, cascade)
             servers = {"primary": primary, "standby": standby, "cascade": cascade}
-            for name, server in servers.items():
-                failures += [f"{name} {problem}" for problem in replicas.log_problems(server.log.read_text())]
+            try:
+                failures += check(primary, standby, cascade)
+            finally:
+                # Read before teardown deletes the logs, even when a check raised.
+                for name, server in servers.items():
+                    failures += [f"{name} {problem}" for problem in replicas.log_problems(server.log.read_text())]
+                if sys.exc_info()[0] is not None:
+                    print("\n".join(failures), file=sys.stderr, flush=True)
     return failures
 
 
@@ -104,12 +109,15 @@ def promoted(primary, standby, cascade):
         if not done.ok:
             return failures + [f"writing on the promoted standby: {done.sqlstate} {done.message}"]
         follow = "SELECT warren.info('social') ->> 'current_version', warren.vector_reduce('social', 'after', 'sum')"
-        wanted = s.run(follow).rows
+        wanted = s.run(follow)
+        if not wanted.ok or not wanted.rows:
+            return failures + [f"reading on the promoted standby: {wanted.sqlstate} {wanted.message or wanted.rows}"]
+        wanted = wanted.rows
         lsn = replicas.flush_lsn(s)
     with Session(cascade, DATABASE) as c:
         replicas.wait_for_replay(c, lsn)
         found = c.run(follow)
-        if found.rows != wanted:
+        if not found.ok or found.rows != wanted:
             failures.append(f"the cascade read {found.sqlstate} {found.message or found.rows} after the promotion, "
                             f"the promoted standby {wanted}")
     return failures

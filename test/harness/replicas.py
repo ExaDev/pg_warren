@@ -439,14 +439,15 @@ class Retirement:
             expected = writer.run(CHURN_READ.format(version=old)).rows
             with Session(self.standby, self.database) as holder, \
                     Session(self.standby, self.database) as sleeper:
-                holder.run("BEGIN ISOLATION LEVEL REPEATABLE READ")
+                checked(holder, "BEGIN ISOLATION LEVEL REPEATABLE READ")
                 failures = self.consistent("the open transaction's first read", holder.run(CHURN_READ.format(
                     version=old)), expected)
                 sleeping = Statement(sleeper, f"SELECT n.* FROM pg_sleep(4), ({CHURN_READ.format(version=old)}) n")
+                wait_until_sleeping(watcher, sleeper.pid)
                 done = writer.run("DELETE FROM public.churn_edges WHERE src = 50; SELECT warren.refresh('churn')")
                 if not done.ok:
                     return [f"refreshing churn on the primary: {done.sqlstate} {done.message}"]
-                writer.run("VACUUM warren.segments, warren.versions, warren.vectors, warren.graphs")
+                checked(writer, "VACUUM warren.segments, warren.versions, warren.vectors, warren.graphs")
                 wait_for_replay(watcher, flush_lsn(writer))
                 failures += self.reread("the open transaction", holder, old, expected)
                 failures += self.finish(sleeping, expected)
@@ -511,6 +512,24 @@ def send_feedback(primary, standby, seconds=REPLAY_SECONDS):
     while primary.run("SELECT count(*) FROM pg_stat_replication WHERE backend_xmin IS NOT NULL").value() == "0":
         if time.monotonic() > deadline:
             raise RuntimeError(f"the standby's feedback did not reach the primary in {seconds} s")
+        time.sleep(0.05)
+
+
+def checked(s, sql):
+    """Runs setup statement `sql` in session `s`, raising if it fails."""
+    done = s.run(sql)
+    if not done.ok:
+        raise RuntimeError(f"{sql}: {done.sqlstate} {done.message}")
+
+
+def wait_until_sleeping(s, pid, seconds=REPLAY_SECONDS):
+    """Waits until backend `pid` is in its `pg_sleep`, so its statement has
+    taken its snapshot before anything retires what it reads."""
+    sql = f"SELECT wait_event = 'PgSleep' FROM pg_stat_activity WHERE pid = {pid}"
+    deadline = time.monotonic() + seconds
+    while s.run(sql).value() != "t":
+        if time.monotonic() > deadline:
+            raise RuntimeError(f"backend {pid} did not reach its pg_sleep in {seconds} s")
         time.sleep(0.05)
 
 
