@@ -33,6 +33,15 @@ pub(crate) enum VectorError {
         /// The version.
         version: VersionId,
     },
+    /// The version was deleted (by retention or `drop_version`) after the
+    /// writer opened it (DESIGN.md §7).
+    #[error("version {version} no longer exists: vector \"{name}\" was not written to it")]
+    VersionGone {
+        /// The vector's name.
+        name: String,
+        /// The version.
+        version: VersionId,
+    },
     /// A stored dtype is not one this library knows.
     #[error("vector {vector} has an unknown dtype \"{dtype}\"")]
     UnknownDtype {
@@ -64,6 +73,7 @@ impl SqlError for VectorError {
             }
             Self::TooManyChunks(_) => PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
             Self::WrittenConcurrently { .. } => PgSqlErrorCode::ERRCODE_T_R_SERIALIZATION_FAILURE,
+            Self::VersionGone { .. } => PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT,
             Self::Compute(ComputeError::MemoryLimit { .. }) => {
                 PgSqlErrorCode::ERRCODE_CONFIGURATION_LIMIT_EXCEEDED
             }
