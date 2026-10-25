@@ -103,6 +103,11 @@
 
 ### Fixes
 
+- **`refresh` with a NULL `name` or `promote`, and `prewarm` with a NULL
+  `name`, are refused with `null_value_not_allowed` (22004)**, "… must not
+  be NULL". They failed with an internal error, "argument 0 must not be
+  null" (XX000). Found by the SQL fuzzer.
+
 - **An array of node ids whose last element is NULL no longer fails with
   an internal error** ("assertion failed: array.is_within_bounds", XX000)
   in debug builds: a `bfs` or `reachable_set` start, a `node_filter`, a

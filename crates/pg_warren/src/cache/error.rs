@@ -69,6 +69,9 @@ pub(crate) enum CacheError {
     /// An SPI call failed.
     #[error(transparent)]
     Spi(#[from] pgrx::spi::Error),
+    /// A required argument is NULL.
+    #[error("{0} must not be NULL")]
+    NullArgument(&'static str),
 }
 
 impl SqlError for CacheError {
@@ -82,6 +85,7 @@ impl SqlError for CacheError {
                 PgSqlErrorCode::ERRCODE_CONFIGURATION_LIMIT_EXCEEDED
             }
             Self::Spi(_) => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            Self::NullArgument(_) => PgSqlErrorCode::ERRCODE_NULL_VALUE_NOT_ALLOWED,
         }
     }
 }

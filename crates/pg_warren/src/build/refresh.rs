@@ -21,11 +21,14 @@ use crate::source::{with_id_type, with_pinned_snapshot};
 /// is made current if `promote`, and is otherwise left staged.
 #[pg_extern(schema = "warren")]
 fn refresh(
-    name: &str,
-    promote: default!(bool, true),
+    name: Option<&str>,
+    promote: default!(Option<bool>, true),
     label: default!(Option<&str>, "NULL"),
 ) -> i64 {
-    entry(|_| refresh_graph(name, promote, label))
+    entry(|_| {
+        let name = name.ok_or(BuildError::NullArgument("name"))?;
+        refresh_graph(name, promote.ok_or(BuildError::NullArgument("promote"))?, label)
+    })
 }
 
 fn refresh_graph(name: &str, promote: bool, label: Option<&str>) -> Result<VersionId, BuildError> {
@@ -118,6 +121,23 @@ mod tests {
         }
         Spi::run(&format!("SELECT warren.promote('rstray_a', {own})"))?;
         assert_eq!(failure("warren.refresh('rstray_a')")?, None);
+        Ok(())
+    }
+
+    /// Found by the SQL fuzzer: a NULL name or promote failed with an
+    /// internal error ("argument 0 must not be null").
+    #[pg_test]
+    fn refresh_refuses_a_null_name_or_promote() -> Result<(), Error> {
+        use crate::fixture::failure;
+        ring()?;
+        assert_eq!(
+            failure("warren.refresh(NULL)")?.as_deref(),
+            Some("22004: name must not be NULL")
+        );
+        assert_eq!(
+            failure("warren.refresh('ring', promote := NULL)")?.as_deref(),
+            Some("22004: promote must not be NULL")
+        );
         Ok(())
     }
 

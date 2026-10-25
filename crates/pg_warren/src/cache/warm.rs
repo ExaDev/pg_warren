@@ -16,8 +16,8 @@ use crate::vector::{evict_transients, evict_vectors};
 /// version if NULL) into this backend's cache and returns its id. Owners
 /// and readers may call it.
 #[pg_extern(schema = "warren", volatile, parallel_restricted)]
-fn prewarm(name: &str, version: default!(Option<i64>, "NULL")) -> i64 {
-    entry(|_| prewarm_version(name, version))
+fn prewarm(name: Option<&str>, version: default!(Option<i64>, "NULL")) -> i64 {
+    entry(|_| prewarm_version(name.ok_or(CacheError::NullArgument("name"))?, version))
 }
 
 fn prewarm_version(name: &str, version: Option<VersionId>) -> Result<VersionId, CacheError> {
@@ -60,6 +60,17 @@ mod tests {
 
     use crate::cache::end_statement;
     use crate::fixture::{refresh, ring};
+
+    /// Found by the SQL fuzzer: a NULL name failed with an internal error
+    /// ("argument 0 must not be null").
+    #[pg_test]
+    fn prewarm_refuses_a_null_name() -> Result<(), Error> {
+        assert_eq!(
+            crate::fixture::failure("warren.prewarm(NULL)")?.as_deref(),
+            Some("22004: name must not be NULL")
+        );
+        Ok(())
+    }
 
     #[pg_test]
     fn prewarm_loads_the_current_version_and_evict_frees_it() -> Result<(), Error> {
