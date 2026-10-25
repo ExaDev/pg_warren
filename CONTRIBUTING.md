@@ -349,9 +349,10 @@ test/crash_recovery.py --no-install --pg-config "$(command -v pg_config)"
 # the query cancelled (40001), and the standby, promoted, writes
 test/replicas.py --no-install --pg-config "$(command -v pg_config)"
 # SQL-surface fuzzing: every warren.* function with generated arguments,
-# as four roles, --seconds per seed and mode (CI: 20 s, seeds 1 and one
-# from the clock); each failure is shrunk and written to --out as a psql
-# script, with its seed. A long run, e.g. before a release:
+# as four roles, --seconds per seed and mode (CI: 20 s; seeds 1 and 2 on
+# pull requests, 1 and one from the clock on main and nightly); each
+# failure is written to --out as a psql script, with its seed, the first
+# --max-shrinks (default 3) shrunk first. A long run, e.g. before a release:
 test/sql_fuzz.py --no-install --pg-config "$(command -v pg_config)" \
     --seeds 1 2 3 4 5 time --seconds 300 --shared-cache preload on off
 ```

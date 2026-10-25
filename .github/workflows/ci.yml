@@ -423,10 +423,18 @@ jobs:
         run: python test/replicas.py --no-install --pg-config "$PG_CONFIG"
       - name: SQL-surface fuzzing (test/sql_fuzz.py)
         # DESIGN.md §13, M11: every warren.* function called with generated
-        # arguments as four roles, 20 s per seed and mode: seed 1 and one
-        # from the clock (printed, with each failure's script), preloaded
-        # and at the default configuration.
-        run: python test/sql_fuzz.py --no-install --seconds 20 --seeds 1 time --shrink-seconds 30 --pg-config "$PG_CONFIG"
+        # arguments as four roles, 20 s per seed and mode, preloaded and at
+        # the default configuration: fixed seeds on pull requests, so a
+        # change is judged on what it changed; on main and nightly, seed 1
+        # and one from the clock (printed, with each failure's script).
+        # At most 3 failures are shrunk, 30 s each.
+        timeout-minutes: 10
+        env:
+          SEEDS: ${{ github.event_name == 'pull_request' && '1 2' || '1 time' }}
+        run: |
+          read -ra seeds <<< "$SEEDS"
+          python test/sql_fuzz.py --no-install --seconds 20 --seeds "${seeds[@]}" --shrink-seconds 30 \
+            --max-shrinks 3 --pg-config "$PG_CONFIG"
       - name: Benchmark matrix smoke run
         run: bench/run.sh smoke --no-install --pg-config "$PG_CONFIG" --results bench/tmp
 

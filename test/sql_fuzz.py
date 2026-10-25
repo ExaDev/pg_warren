@@ -7,8 +7,8 @@ calls every warren.* function with generated arguments, as roles of
 different privilege, in transactions and savepoints, for --seconds,
 judging every outcome (harness/sql_fuzz/verdict.py) and checking what is
 left (harness/sql_fuzz/settled.py) and the server log. Each failure is
-shrunk and written, with its seed, as a psql script that reproduces it
-from a fresh cluster. Holds /tmp/pgrx-test.lock for the whole run (unless
+written, with its seed, as a psql script that reproduces it from a fresh
+cluster, the first --max-shrinks of them shrunk first. Holds /tmp/pgrx-test.lock for the whole run (unless
 --no-lock, for a --pg-config tree nobody else installs into).
 
 Seeds are integers, or `time` for one taken from the clock (printed)."""
@@ -56,6 +56,8 @@ def main(argv):
     options.add_argument("--shared-cache", nargs="+", choices=sorted(shared_cache.MODES), default=["preload", "on"],
                          help="the shared-cache modes to run in (default: preload on)")
     options.add_argument("--shrink-seconds", type=float, default=60, help="time to shrink each failure (default 60)")
+    options.add_argument("--max-shrinks", type=int, default=3,
+                         help="failures shrunk per run; the rest are reported whole (default 3)")
     options.add_argument("--out", type=Path, help="where to write the failures' scripts (default: a new temporary "
                                                   "directory)")
     args = options.parse_args(argv)
@@ -80,7 +82,7 @@ def run_mode(args, mode, seeds, out):
     failures = []
     with Cluster(args.pg_config, args.runas, args.keep, settings=(*shared_cache.settings(mode), *SETTINGS)) as cluster:
         functions, parallel = build_template(cluster)
-        shrinker = Shrinker(cluster, TEMPLATE, args.shrink_seconds)
+        shrinker = Shrinker(cluster, TEMPLATE, args.shrink_seconds, args.max_shrinks)
         for seed in seeds:
             failures += run_seed(cluster, functions, parallel, seed, args.seconds, mode, shrinker, out)
     return failures
@@ -143,15 +145,17 @@ def run_seed(cluster, functions, parallel, seed, seconds, mode, shrinker, out):
 
 def report(failure, seed, mode, number, shrinker, out):
     """Shrinks `failure`, writes its script, and says what failed where."""
-    shrunk = shrinker.shrink(failure)
+    tried = shrinker.take()
+    shrunk = shrinker.shrink(failure) if tried else None
     actions = shrunk or failure.transcript
+    state = ("shrunk" if shrunk else "not reproduced on replay; the whole transcript" if tried
+             else "not shrunk (the run's cap of shrinks was reached); the whole transcript")
     path = out / f"{mode}-seed{seed}-{number}.sql"
     path.write_text(f"-- pg_warren SQL fuzz: {failure.finding.kind}: {failure.finding.detail}\n"
-                    f"-- seed {seed}, shared cache {mode}, seen {failure.occurrences} times; "
-                    f"{'shrunk' if shrunk else 'not reproduced on replay; the whole transcript'}.\n"
+                    f"-- seed {seed}, shared cache {mode}, seen {failure.occurrences} times; {state}.\n"
                     f"-- Run in a fresh database of a fresh cluster: CREATE EXTENSION pg_warren, then\n"
                     f"-- psql -f this file.\n{fixture_script()}\n-- The failure\n{script(actions)}\n")
-    shown = script(actions[-3:]) if shrunk else f"(not reproduced; {len(actions)} actions)"
+    shown = script(actions[-3:]) if shrunk else f"({state.split(';')[0]}; {len(actions)} actions)"
     return (f"seed {seed}: {failure.finding.kind} in {failure.signature[0]}: {failure.finding.detail[:500]} "
             f"(x{failure.occurrences}; {path})\n{shown}")
 

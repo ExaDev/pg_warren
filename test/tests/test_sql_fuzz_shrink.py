@@ -2,8 +2,8 @@
 script a shrunk failure is printed as."""
 
 from harness.sql_fuzz.actions import CONNECT
-from harness.sql_fuzz.run import Executed
-from harness.sql_fuzz.shrink import _growing, ddmin, fixture_script, script
+from harness.sql_fuzz.run import Executed, replay
+from harness.sql_fuzz.shrink import Shrinker, _growing, ddmin, fixture_script, script
 
 
 def test_ddmin_finds_the_two_items_that_together_make_the_failure():
@@ -42,3 +42,19 @@ def test_the_fixture_script_ends_as_the_superuser():
     assert text.startswith("\\c - postgres\n")
     assert "\\c - fuzz_owner\nSELECT warren.create_graph('g8'" in text
     assert text.endswith("\\c - postgres\n")
+
+
+def test_a_run_shrinks_at_most_its_cap_of_failures():
+    shrinker = Shrinker(None, "fuzz_template", 60, cap=2)
+    assert [shrinker.take() for _ in range(4)] == [True, True, False, False]
+
+
+def test_a_replay_stops_at_the_deadline():
+    class Untouched:
+        failures = {}
+
+        def __getattr__(self, name):
+            raise AssertionError(f"replayed past the deadline: {name}")
+
+    actions = [[Executed("fuzz_owner", "SELECT 1")]]
+    assert replay(Untouched(), actions, more=lambda: False) is None

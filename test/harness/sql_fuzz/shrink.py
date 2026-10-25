@@ -4,7 +4,9 @@ first the failing action alone, then with ever more of the actions before
 it until it reproduces; then delta debugging (`ddmin`) over those earlier
 actions and over the failing action's own earlier statements; then the
 failing call without each optional argument in turn. Bounded by a time
-budget: what is left when it runs out is reported as it stands."""
+budget, which also stops a replay between actions: what is left when it
+runs out is reported as it stands. A run shrinks only its first few
+failures; the rest are reported whole, with their seed."""
 
 import math
 import time
@@ -42,12 +44,21 @@ def ddmin(items, test, more=lambda: True):
 
 class Shrinker:
     """Shrinks failures found in a database copied from `template` of
-    `cluster`, spending at most `seconds` on each."""
+    `cluster`, spending at most `seconds` on each (a replay included) and
+    shrinking at most `cap` of them (`take`)."""
 
-    def __init__(self, cluster, template, seconds):
+    def __init__(self, cluster, template, seconds, cap=3):
         self.cluster, self.template, self.seconds = cluster, template, seconds
+        self.left = cap
         self.deadline = 0.0
         self.replays = 0
+
+    def take(self):
+        """Whether one more failure may be shrunk (counting it if so)."""
+        if self.left <= 0:
+            return False
+        self.left -= 1
+        return True
 
     def _more(self):
         return time.monotonic() < self.deadline
@@ -63,7 +74,7 @@ class Shrinker:
         admin.execute(f"CREATE DATABASE {REPLAY_DATABASE} TEMPLATE {self.template}")
         run = Run(self.cluster, REPLAY_DATABASE, quiet=True)
         try:
-            found = replay_actions(run, actions)
+            found = replay_actions(run, actions, self._more)
         finally:
             run.close()
         return found is not None and found.signature == target

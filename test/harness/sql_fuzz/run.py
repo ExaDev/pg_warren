@@ -265,11 +265,16 @@ class Run:
         self._found(Finding("leak", detail), last)
 
 
-def replay(run, actions):
+def replay(run, actions, more=lambda: True):
     """Runs recorded `actions` again on `run` (a fresh database); the first
-    failure it finds, or None."""
+    failure it finds, or None (also once `more()` is false, checked before
+    each action)."""
+    if not more():
+        return None
     run.refresh_world()
     for action in actions:
+        if not more():
+            return None
         before = run.world
         for executed in action:
             if executed.sql == CONNECT:
