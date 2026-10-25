@@ -10,10 +10,11 @@ API, nothing left in the catalog."""
 
 from ..concurrent_refresh import until
 from ..session import Session
-from .fixture import BIGINT_IDS, EDGE_ROWS, INTEGER_IDS, SECRET, SECRET_ROWS, TEXT_IDS, UUID_IDS
+from .fixture import BIGINT_IDS, EDGE_ROWS, INTEGER_IDS, SECRET, SECRET_ROWS, STORED_IDS, TEXT_IDS, UUID_IDS
 
 SOURCES = {"public.nodes8": len(BIGINT_IDS), "public.nodes4": len(INTEGER_IDS), "public.nodes_text": len(TEXT_IDS),
-           "public.nodes_uuid": len(UUID_IDS), **EDGE_ROWS, SECRET: SECRET_ROWS, "public.canary": 0}
+           "public.nodes_uuid": len(UUID_IDS), **EDGE_ROWS, SECRET: SECRET_ROWS, "public.canary": 0,
+           STORED_IDS: 2}
 CATALOG = ("warren.graphs", "warren.versions", "warren.segments", "warren.vectors", "warren.vector_chunks",
            "warren.vector_quotas")
 

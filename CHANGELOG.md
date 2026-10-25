@@ -138,7 +138,10 @@
   in debug builds: a `bfs` or `reachable_set` start, a `node_filter`, a
   step's `filter` (`warren.s`). The NULL is skipped, as a NULL elsewhere
   in the array always was. Found by the SQL fuzzer
-  (`test/sql_fuzz.py`).
+  (`test/sql_fuzz.py`). The ids are read while the array is alive,
+  including an array read from a table column, which a function gets
+  detoasted into a copy (tested with short, compressed and out-of-line
+  `text[]` and `uuid[]` arrays).
 
 - **A persisted vector written to a version that retention or
   `drop_version` deleted meanwhile fails with `undefined_object` (42704),

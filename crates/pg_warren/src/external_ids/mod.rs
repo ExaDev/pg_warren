@@ -80,25 +80,38 @@ pub(crate) fn elements<E: IdDatum>(
     array: AnyArray,
 ) -> Result<Vec<E::Owned>, ExternalIdError> {
     check_type::<E>(graph, argument, array.oid(), true)?;
-    // SAFETY: `check_type` found an array of a type E reads.
-    let ids = datums(&array)
-        .into_iter()
-        .flatten()
-        .filter_map(|datum| unsafe { E::in_place(datum, false) });
-    Ok(ids.map(|id| E::owned(id.borrow())).collect())
+    Ok(with_datums(&array, |datums| {
+        // SAFETY: `check_type` found an array of a type E reads, and each
+        // datum is owned here, while the array it points into is alive.
+        datums
+            .flatten()
+            .filter_map(|datum| unsafe { E::in_place(datum, false) })
+            .map(|id| E::owned(id.borrow()))
+            .collect()
+    }))
 }
 
-/// The elements of `array`, NULL as `None`, read through pgrx's
-/// by-reference iterator: its by-value one, behind `&AnyArray`, asserts
-/// that its data pointer is in bounds before it checks for NULL, which
-/// fails (in debug builds) on a trailing NULL element.
-pub(crate) fn datums(array: &AnyArray) -> Vec<Option<pg_sys::Datum>> {
+/// `read` of the elements of `array`, NULL as `None`. A by-reference
+/// element points into the array, which is detoasted into a copy if it was
+/// stored with a short header, compressed or out of line (as any array
+/// read from a table can be), and that copy is freed when `read` returns:
+/// `read` must copy out what it keeps. The elements are read through
+/// pgrx's by-reference iterator: its by-value one, behind `&AnyArray`,
+/// asserts that its data pointer is in bounds before it checks for NULL,
+/// which fails (in debug builds) on a trailing NULL element.
+pub(crate) fn with_datums<R>(
+    array: &AnyArray,
+    read: impl FnOnce(&mut dyn Iterator<Item = Option<pg_sys::Datum>>) -> R,
+) -> R {
     // SAFETY: an `anyarray` (or array `"any"`) argument's datum is an array
     // of its own type, which lives for the call.
-    let read = unsafe {
+    let detoasted = unsafe {
         Array::<pg_sys::Datum>::from_polymorphic_datum(array.datum(), false, array.oid())
     };
-    read.map(|read| read.iter().collect()).unwrap_or_default()
+    match detoasted {
+        Some(detoasted) => read(&mut detoasted.iter()),
+        None => read(&mut std::iter::empty()),
+    }
 }
 
 /// The dense ids of the live nodes among `ids`, in order.

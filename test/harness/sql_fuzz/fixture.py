@@ -10,6 +10,9 @@ built from them, and the traps the oracle watches.
 - `public.canary` is writable by anyone and `public.scribble()` writes to
   it: the caller's SQL a `warren.*` function runs is read-only (DESIGN.md
   §7), so the canary stays empty (`settled`).
+- `public.stored_ids` holds id arrays of each id type in a table column,
+  short (stored with a one-byte header) and large (compressed and out of
+  line), which a function reads detoasted, unlike a literal (`arguments`).
 - Schema `hostile` defines `=` and `||` that call `hostile.escalated()`,
   which raises SQLSTATE `WF001` if it runs as a superuser on behalf of a
   session that is not one: a caller's operator run elevated (§7).
@@ -32,6 +35,11 @@ SEED = 7
 # source tables hold (and still hold after a run, `settled`).
 EDGE_ROWS = {"public.edges8": 160, "public.edges4": 80, "public.edges_text": 70, "public.edges_uuid": 40}
 SECRET_ROWS = 40
+STORED_IDS = "public.stored_ids"
+# Its column of each id type's arrays, and how many times the large row
+# repeats the ids (enough to be compressed and stored out of line).
+STORED_COLUMNS = {"bigint": "b", "integer": "i", "text": "t", "uuid": "u"}
+STORED_REPEATS = 400
 
 # Node ids by id type, as SQL literals of that type.
 BIGINT_IDS = tuple(range(1, 41)) + (1_000_000_000_000,)
@@ -99,6 +107,11 @@ CREATE TABLE public.edges_uuid (src uuid, dst uuid);
 INSERT INTO public.edges_uuid VALUES {_edges(rng, UUID_IDS, EDGE_ROWS['public.edges_uuid'], as_uuid, weighted=False)};
 GRANT SELECT ON public.nodes8, public.edges8, public.nodes4, public.edges4, public.nodes_text,
     public.edges_text, public.nodes_uuid, public.edges_uuid TO {OWNER}, {READER};
+CREATE TABLE {STORED_IDS} (kind text, b bigint[], i integer[], t text[], u uuid[]);
+INSERT INTO {STORED_IDS} VALUES
+    ('short', {_short()}),
+    ('large', {_large()});
+GRANT SELECT ON {STORED_IDS} TO PUBLIC;
 CREATE TABLE {SECRET} (id bigint, src bigint, dst bigint, w float8);
 INSERT INTO {SECRET} SELECT i, i, i % 40 + 1, 1 FROM pg_catalog.generate_series(1, {SECRET_ROWS}) i;
 CREATE TABLE public.canary (note text);
@@ -111,6 +124,18 @@ SET ROLE {STRANGER};
 {_hostile_sql()}
 RESET ROLE;
 """
+
+
+def _short():
+    """The short row's arrays: two ids of each type, small enough for a
+    one-byte header."""
+    return ", ".join(f"ARRAY[{', '.join(NODES[t][:2])}]" for t in STORED_COLUMNS)
+
+
+def _large():
+    """The large row's arrays: every id of each type, repeated."""
+    return ", ".join(f"pg_catalog.array_cat(ARRAY[{', '.join(NODES[t])}], pg_catalog.array_fill({NODES[t][-1]}, "
+                     f"ARRAY[{STORED_REPEATS * len(NODES[t])}]))" for t in STORED_COLUMNS)
 
 
 def _hostile_sql():

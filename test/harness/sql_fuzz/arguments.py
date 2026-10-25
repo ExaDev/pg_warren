@@ -7,7 +7,7 @@ is the context of the arguments after it, so a node has that graph's id
 type and a version is one of its versions, unless hostility says
 otherwise."""
 
-from .fixture import NODES, ROLES, literal
+from .fixture import NODES, ROLES, STORED_COLUMNS, STORED_IDS, literal
 from .surface import Call
 from .values import (EXPRESSIONS, FREE_TEXT, GRAPH_ARGUMENTS, HOSTILE, HOSTILE_EXPRESSIONS, NUMBERS, ODD_WORDS,
                      QUERIES, QUERY_ARGUMENTS, REALS, RELATION_ARRAYS, SMALL, VECTOR_ARGUMENTS, VERSION_ARGUMENTS,
@@ -15,6 +15,10 @@ from .values import (EXPRESSIONS, FREE_TEXT, GRAPH_ARGUMENTS, HOSTILE, HOSTILE_E
 
 OPTIONAL_SHARE = 0.4
 NEW_GRAPHS = 12
+# The share of id arrays read from a table column rather than written as
+# literals: a stored array reaches the function with a short header, or
+# compressed and out of line, and is read detoasted.
+STORED_SHARE = 0.2
 # The functions whose graph argument names a graph they make.
 MAKERS = frozenset({"create_graph", "contract"})
 NEW_VECTORS = ("v0", "v1", "v2", "ones", "pr", "lbl")
@@ -101,6 +105,9 @@ class Arguments:
 
     def _nodes(self):
         id_type = self._id_type()
+        if self.rng.random() < STORED_SHARE:
+            kind = self.rng.choice(("short", "large"))
+            return f"(SELECT {STORED_COLUMNS[id_type]} FROM {STORED_IDS} WHERE kind = '{kind}')"
         nodes = self.rng.sample(NODES[id_type], self.rng.randint(1, 3))
         return f"ARRAY[{', '.join(nodes)}]::{id_type}[]"
 

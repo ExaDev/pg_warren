@@ -19,7 +19,7 @@ use warren_core::traversal::{HopRange, NodeSet, Step};
 use super::ids::parse;
 use super::{entry, TraversalSqlError};
 use crate::cache::{CachedIds, LoadedVersion};
-use crate::external_ids::{datums, element_type};
+use crate::external_ids::{element_type, with_datums};
 use crate::selection::{direction, relations};
 
 pgrx::extension_sql!(
@@ -137,19 +137,21 @@ fn texts(array: &AnyArray) -> Result<Vec<Option<String>>, TraversalSqlError> {
     // SAFETY: the out-pointers point to live locals; an unknown type raises
     // an ERROR.
     unsafe { pg_sys::getTypeOutputInfo(element, &mut output, &mut varlena) };
-    Ok(datums(array)
-        .into_iter()
-        .map(|value| {
-            value.map(|datum| {
-                // SAFETY: `output` is the element type's output function and
-                // the datum is an element of that type; it returns a palloc'd
-                // NUL-terminated string.
-                let text = unsafe { pg_sys::OidOutputFunctionCall(output, datum) };
-                // SAFETY: as above.
-                unsafe { std::ffi::CStr::from_ptr(text) }.to_string_lossy().into_owned()
+    Ok(with_datums(array, |datums| {
+        datums
+            .map(|value| {
+                value.map(|datum| {
+                    // SAFETY: `output` is the element type's output function
+                    // and the datum is an element of that type, alive while
+                    // `with_datums` reads; it returns a palloc'd
+                    // NUL-terminated string, copied out here.
+                    let text = unsafe { pg_sys::OidOutputFunctionCall(output, datum) };
+                    // SAFETY: as above.
+                    unsafe { std::ffi::CStr::from_ptr(text) }.to_string_lossy().into_owned()
+                })
             })
-        })
-        .collect())
+            .collect()
+    }))
 }
 
 /// The steps of a walk, read into `warren-core` steps over `loaded`.

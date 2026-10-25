@@ -17,6 +17,8 @@ DEGREE = Function("degree", (Argument("graph", "text"), Argument("node", "anyele
 CREATE = Function("create_graph", (Argument("name", "text"), Argument("node_query", "text"),
                                    Argument("edge_query", "text"), Argument("weighted", "boolean"),
                                    Argument("has_relations", "boolean")), 2, False, "void")
+BFS = Function("bfs", (Argument("graph", "text"), Argument("start", "anyarray"),
+                       Argument("max_depth", "integer")), 0, True, "record")
 QUERY = Function("vector_from_query", (Argument("graph", "text"), Argument("name", "text"),
                                        Argument("query", "text")), 0, False, "bigint")
 
@@ -87,3 +89,13 @@ def test_a_vector_name_with_a_quote_stays_inside_a_hostile_expressions_literal()
         expr = Arguments(random.Random(seed), world, 0.5).call(explain).positional[1]
         if "it'" in expr:
             assert "it's" not in expr.replace("''", ""), expr
+
+
+def test_some_id_arrays_are_read_from_a_table_column_of_the_graphs_id_type():
+    stored = [c.positional[1] for c in calls(BFS, 0) if "public.stored_ids" in c.positional[1]]
+    assert stored, "no start array read from a table"
+    for value in stored:
+        assert "public.stored_ids" in value and "kind" in value
+    for call in calls(BFS, 0):
+        if call.positional[0] == "'gt'" and "stored_ids" in call.positional[1]:
+            assert "SELECT t FROM" in call.positional[1]
