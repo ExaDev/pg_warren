@@ -1863,7 +1863,8 @@ Test it by installing as a non-superuser in CI and running the suite. **Make the
 **M12 — 1.0.0: the stable surface.** A review of the whole SQL surface before it is frozen:
 - argument order, names and defaults (`persist` and `version` placement, the type witnesses such as `NULL::bigint`);
 - SQLSTATEs used consistently;
-- the GUCs.
+- the GUCs;
+- *sufficiency (owner, 2026-10-25):* a list of current methods (graph kernels, node embeddings, GNN inference, motif counting, community detection, centralities, path problems) each expressed with the public primitives alone, as worked examples like the graph kernels' (§13, "Left to 1.x"). A gap found is filled before 1.0 or recorded as a 1.x primitive; the library is not the measure, the primitives are.
 
 Renames are cheap before 1.0 and costly after. Also a written stability and deprecation policy: within 1.x, functions and their behaviour change only additively, and removals go through a deprecation release. Release candidates first.
 
@@ -1878,6 +1879,19 @@ Renames are cheap before 1.0 and costly after. Also a written stability and depr
   - BFS-vs-CTE and `reachable_set` are bounded by row emission; count, summary or vector output modes would close them;
   - `eigen` on uniform random graphs, where shift-invert is the lever, and on road networks' clustered smallest eigenvalues, where a larger basis is the cheap lever and shift-invert the one that resolves them (§14 item 50);
   - parallel traversal.
+- *Planned for 1.x (owner, 2026-10-25): primitives, not a kernel library, for shape similarity.* The use is fraud shape: the nodes and subgraphs shaped like a known ring, and how alike two communities or subgraphs are. The owner's rule: pg_warren will never hold every method, and state-of-the-art methods will always be missing from its library, so the question is whether its primitives let a user build them, not whether it ships them. Graph kernels were checked against that rule, and most compose from what exists:
+  - *Weisfeiler–Lehman labels.* Each round, `gather` with `collect` (§6.4) gives every node its neighbours' labels, SQL hashes the sorted array with the node's own label, and `vector_from_query` stores the round's label vector; nodes with equal labels after k rounds have k-hop neighbourhoods WL cannot tell apart. It works, at N + M rows through the executor a round.
+  - *The WL optimal-assignment kernel* (Kriege et al.), graded similarity of node sets that one changed edge degrades rather than breaks: with a label vector per round it is, per round, the sum over labels of the smaller of the two sets' counts, a `GROUP BY` over `vector_values`. A node set is a community of a label vector (`louvain`, `leiden`), a k-hop neighbourhood (`reachable_set`), or a query's.
+  - *Continuous WL* (Togninalli et al.): `aggregate_neighbours` or `spmm` on a feature matrix, round by round, which also carries attributes a hash would lose. The Wasserstein distance between two node sets' embeddings is not graph computation; `matrix_rows` hands the embeddings to SQL, pgvector or a client.
+  - *A diffusion (heat) kernel applied to a vector*, `exp(−tL)·x`: a PL/pgSQL loop of `spmv` and `vector_map`, a Taylor or Chebyshev series, beside personalised PageRank and Katz (the von Neumann kernel's row sums). Never the n×n kernel matrix, which is dense.
+  - *Structural embeddings with similarity search:* `matrix_rows` of any of the above (or `eigen`'s vectors) into pgvector, so "nodes shaped like these" is an indexed nearest-neighbour query.
+
+  Kernels between many small graphs (classifying molecules with random-walk, shortest-path or graphlet kernels, GraKeL's workload) are a different workload and not planned. Three primitives are missing, planned in this order:
+  1. *A multiset-fingerprint combiner for `gather`:* a canonical hash of each receiver's sorted messages, deterministic for any thread count and across versions (as `mode`'s tie-break is). It makes a WL round one kernel call instead of N + M rows through the executor (as `mode` did for `label_propagation_majority`), and serves any canonical neighbourhood signature: deduplicating structurally identical nodes, MinHash-style sketches. With `per_relation` (§5.3) a pair linked in several relations is part of the signature.
+  2. *A masked sparse matrix–matrix product* (GraphBLAS's masked `mxm`, the "sparse matrix algebra beyond SpMV" above): motif and short-cycle counts per node (triangles are `A·A` masked by `A`; 4-cycles and closed walks are diagonals of powers), which SpMV cannot compose at a reasonable cost. A ring is a cycle, so this, rather than one function per motif, is the primitive for ring shapes.
+  3. *A row-wise dense transform of a matrix:* each node's row times a small dense weight matrix, then an element-wise function (ReLU, tanh, sigmoid). With `spmm` that is one layer of a graph neural network (GCN, GraphSAGE, GIN; GIN is as expressive as WL, with learned aggregation), so a model trained outside the database runs inside it, its weights an array. Training stays outside. It is the common case of the WASM tier (§6.8), much cheaper to provide.
+
+  The compositions above become worked examples, each a test in `test/sql` built only from public functions and checked against an oracle (WL labels and the optimal-assignment kernel against a Python implementation, the diffusion kernel against `scipy.sparse.linalg.expm_multiply`, continuous WL against NumPy); each is rewritten onto its primitive when the primitive lands, and documented as a recipe. A published method built from public functions alone is the evidence that the surface suffices.
 
 ## 14. Open decisions (make a call, record it in DESIGN.md, move on)
 
