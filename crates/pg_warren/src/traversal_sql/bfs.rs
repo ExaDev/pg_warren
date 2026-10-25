@@ -310,6 +310,22 @@ mod tests {
         Ok(())
     }
 
+    /// Found by the SQL fuzzer: an id array whose last element is NULL
+    /// failed with an internal error (pgrx's by-value array iterator
+    /// asserted its data pointer before checking for NULL).
+    #[pg_test]
+    fn a_trailing_null_start_or_filter_member_is_skipped() -> Result<(), Error> {
+        small("t")?;
+        assert_eq!(bfs("'t', ARRAY[1, NULL]::bigint[], 1")?.as_deref(), Some("1:0:- 2:1:1 4:1:1"));
+        assert_eq!(bfs("'t', ARRAY[NULL::bigint], 1")?.as_deref(), Some(""));
+        let found = bfs("'t', ARRAY[1::bigint], 9, node_filter := ARRAY[2, NULL]::bigint[]")?;
+        assert_eq!(found.as_deref(), Some("1:0:- 2:1:1"));
+        let step =
+            Spi::get_one::<String>("SELECT warren.s(NULL, 'out', ARRAY[2, NULL]::bigint[])::text")?;
+        assert!(step.is_some());
+        Ok(())
+    }
+
     #[pg_test]
     fn max_results_truncates_and_says_so() -> Result<(), Error> {
         small("t")?;

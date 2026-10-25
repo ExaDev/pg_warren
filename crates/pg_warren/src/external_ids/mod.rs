@@ -20,7 +20,7 @@ pub(crate) use lookup::DenseIds;
 use std::borrow::Borrow;
 
 use pgrx::prelude::*;
-use pgrx::{AnyArray, AnyElement, FromDatum};
+use pgrx::{AnyArray, AnyElement, Array, FromDatum};
 use warren_core::graph::{DenseId, IdMap};
 
 use crate::source::{type_name, IdDatum};
@@ -80,7 +80,25 @@ pub(crate) fn elements<E: IdDatum>(
     array: AnyArray,
 ) -> Result<Vec<E::Owned>, ExternalIdError> {
     check_type::<E>(graph, argument, array.oid(), true)?;
-    Ok((&array).into_iter().flatten().filter_map(owned::<E>).collect())
+    // SAFETY: `check_type` found an array of a type E reads.
+    let ids = datums(&array)
+        .into_iter()
+        .flatten()
+        .filter_map(|datum| unsafe { E::in_place(datum, false) });
+    Ok(ids.map(|id| E::owned(id.borrow())).collect())
+}
+
+/// The elements of `array`, NULL as `None`, read through pgrx's
+/// by-reference iterator: its by-value one, behind `&AnyArray`, asserts
+/// that its data pointer is in bounds before it checks for NULL, which
+/// fails (in debug builds) on a trailing NULL element.
+pub(crate) fn datums(array: &AnyArray) -> Vec<Option<pg_sys::Datum>> {
+    // SAFETY: an `anyarray` (or array `"any"`) argument's datum is an array
+    // of its own type, which lives for the call.
+    let read = unsafe {
+        Array::<pg_sys::Datum>::from_polymorphic_datum(array.datum(), false, array.oid())
+    };
+    read.map(|read| read.iter().collect()).unwrap_or_default()
 }
 
 /// The dense ids of the live nodes among `ids`, in order.

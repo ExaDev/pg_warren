@@ -103,6 +103,13 @@
 
 ### Fixes
 
+- **An array of node ids whose last element is NULL no longer fails with
+  an internal error** ("assertion failed: array.is_within_bounds", XX000)
+  in debug builds: a `bfs` or `reachable_set` start, a `node_filter`, a
+  step's `filter` (`warren.s`). The NULL is skipped, as a NULL elsewhere
+  in the array always was. Found by the SQL fuzzer
+  (`test/sql_fuzz.py`).
+
 - **A persisted vector written to a version that retention or
   `drop_version` deleted meanwhile fails with `undefined_object` (42704),
   "version … no longer exists: vector … was not written to it".** It
