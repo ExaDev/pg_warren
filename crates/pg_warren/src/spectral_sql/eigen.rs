@@ -35,6 +35,11 @@ fn solve<E: CachedIds>(
     prefix: Option<&str>,
     persist: bool,
 ) -> Result<Vec<Row>, SpectralSqlError> {
+    if u64::try_from(options.k).map_or(true, |k| k > vectors.id_space()) {
+        // More eigenpairs than nodes: refused (by the count check `admit`
+        // makes first) before a name is made for each.
+        admit(&vectors, operator, options)?;
+    }
     let (names, stale) = match prefix {
         Some(prefix) => {
             let names: Vec<String> = (1..=options.k).map(|i| format!("{prefix}_{i}")).collect();
@@ -505,6 +510,11 @@ mod tests {
             ("'p', NULL", "22004: k must not be NULL"),
             ("'p', 0", "22023: k must be positive, not 0"),
             ("'p', 7", "22023: cannot compute 7 eigenpairs of a matrix of dimension 6"),
+            // Refused before a name is made for each eigenvector.
+            (
+                "'p', 2147483647, vectors_prefix := 'q'",
+                "22023: cannot compute 2147483647 eigenpairs of a matrix of dimension 6",
+            ),
             ("'p', 1, 'svd'", "22023: unknown matrix \"svd\""),
             ("'p', 1, which := 'middle'", "22023: unknown which \"middle\""),
             ("'p', 1, dtype := 'i64'", "22023: unknown precision \"i64\""),

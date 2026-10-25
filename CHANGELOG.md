@@ -122,6 +122,17 @@
   be NULL". They failed with an internal error, "argument 0 must not be
   null" (XX000). Found by the SQL fuzzer.
 
+- **`eigen` with `vectors_prefix` and a `k` larger than the graph, and
+  `distance(..., 'subspace')` with a `k` larger than the vectors stored,
+  no longer crash the server.** Each made a name for every one of the `k`
+  vectors before anything else, and with `k` near 2^31 that allocation
+  failed and aborted the backend (signal 6), which restarted every
+  backend. `eigen` now refuses the count first, with
+  `invalid_parameter_value` (22023), "cannot compute k eigenpairs of a
+  matrix of dimension n", and `subspace` makes each name as it reads it,
+  failing at the first missing vector with `undefined_object` (42704).
+  Found by the SQL fuzzer.
+
 - **An array of node ids whose last element is NULL no longer fails with
   an internal error** ("assertion failed: array.is_within_bounds", XX000)
   in debug builds: a `bfs` or `reachable_set` start, a `node_filter`, a

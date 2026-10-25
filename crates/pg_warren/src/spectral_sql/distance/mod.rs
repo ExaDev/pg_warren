@@ -532,6 +532,11 @@ mod tests {
                 format!("'g', {v}, {v}, 'subspace', vectors_prefix := 'none', k := 1"),
                 "42704: graph \"g\" has no vector \"none_1\"",
             ),
+            // Refused at the first missing vector, before any more names are made.
+            (
+                format!("'g', {v}, {v}, 'subspace', vectors_prefix := 'none', k := 2147483647"),
+                "42704: graph \"g\" has no vector \"none_1\"",
+            ),
             (
                 format!("'g', {v}, {u}, 'edit', graph2 := 'u'"),
                 "42804: graphs \"g\" and \"u\" have different id types",
