@@ -17,8 +17,9 @@
   restart.
 - `ALTER EXTENSION pg_warren UPDATE` drops and recreates the functions
   that gain `per_relation`, keeping their privileges. Until the update,
-  0.6.0's definitions still work with the new library, counting a pair
-  once.
+  0.6.0's definitions still work with the new library, reading a pair as
+  the new default does, except 0.6.0's `sssp_vector` (PL/pgSQL), which
+  still sums a pair's weights until the update.
 - The update drops those functions without `CASCADE`, so it fails if a
   view, or a function with a `BEGIN ATOMIC` body, calls one of them
   ("cannot drop function ... because other objects depend on it"). Drop
@@ -34,9 +35,27 @@
   pairs their results differ from 0.6.0's. A counting `contract` counts
   the pair in the first of its relations. Weighted pairs are unchanged:
   their weights are summed across relations.
-- **`dijkstra` now costs a weighted pair linked in several relations the
-  sum of their weights**, as `sssp_vector` and the centralities do. It
-  took the cheapest relation's weight; `per_relation := true` still does.
+- **Functions that read edge weights as costs now take a weighted pair
+  linked in several relations at its best edge, not the sum of its
+  relations' weights**: `sssp_vector`, `betweenness_centrality`,
+  `closeness_centrality`, `harmonic_centrality` and
+  `minimum_spanning_forest` its lightest relation's weight,
+  `dag_longest_path` its heaviest. Strengths add, costs don't: a road of
+  5 km and a railway of 3 km between two towns are a route of 3 km, not
+  8. Through 0.6.0 these functions summed the weights, so on weighted
+  graphs with such pairs their results differ from 0.6.0's. `dijkstra`
+  already took the cheapest relation through 0.6.0, and still does.
+  Functions that read weights as strengths (`spmv`, `spmm`, `pagerank`
+  and the other spectral centralities, the community functions,
+  `contract`, `eigen`, `distance`) still sum them; `spmv` with `min_plus`
+  reads the sum too unless given `per_relation := true`. Unweighted calls
+  are unchanged. See docs/semantics.md, "A pair in several relations".
+- **`per_relation := true` gives the cost functions the same result as
+  the default** (`dijkstra`, `sssp_vector`, the three shortest-path
+  centralities, `dag_longest_path`, `minimum_spanning_forest`): as
+  parallel edges, a path takes the cheapest (longest paths the heaviest).
+  They accept it, and refuse NULL (22004), so that `per_relation` means
+  one thing on every function.
 - **Undirected weighted centralities refuse a pair whose weight is NaN in
   one direction** (22023), as they refuse a NaN anywhere else. They used
   the other direction's weight.

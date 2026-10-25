@@ -372,7 +372,6 @@ mod tests {
                 tombstones: &tombstones,
                 directed,
                 weighted: None,
-                per_relation: false,
             };
             let sampling = Sampling { k, seed, population: None };
             for wf_improved in [true, false] {

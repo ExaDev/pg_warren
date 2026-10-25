@@ -45,7 +45,6 @@ fn bench_centrality(c: &mut Criterion) {
         tombstones: &none,
         directed: true,
         weighted: Some(false),
-        per_relation: false,
     };
     let mut quiet = Uninterrupted;
     let mut group = c.benchmark_group("centrality");

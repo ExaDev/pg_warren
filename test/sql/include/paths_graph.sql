@@ -1,7 +1,7 @@
 -- Graph g for oracle_paths*.sql: the fixture's edges in relation a with
--- weights 1–4, again in relation b where (src + dst) % 5 = 0 (weight 2,
--- summed), self-loops on ids divisible by 13, and node 7 deleted after the
--- first build.
+-- weights 1–4, again in relation b where (src + dst) % 5 = 0 (weight 2: a
+-- pair in both weighs its lighter relation), self-loops on ids divisible
+-- by 13, and node 7 deleted after the first build.
 CREATE TABLE g_nodes AS SELECT id FROM nodes;
 CREATE TABLE g_edges AS
 SELECT src, dst, 'a'::text AS rel, (1 + (src * 3 + dst) % 4)::float8 AS w FROM edges

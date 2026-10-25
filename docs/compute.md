@@ -110,6 +110,10 @@ pair is an entry in each of its relations instead, as parallel edges: `⊕`
 folds them, so `plus_times` and `plus_first` sum their weights (2 for an
 unweighted pair in two relations), `min_plus` takes the cheapest and
 `plus_pair` counts each ([semantics.md](semantics.md#a-pair-in-several-relations)).
+`A` is the same whatever the semiring, so by default `min_plus` and
+`max_plus` read such a pair's summed weight: to read weights as costs
+(a road of 5 and a railway of 3 are a route of 3), pass `per_relation :=
+true`, as `sssp_vector` does.
 With `transpose :=
 false`, `y_i` combines node i's **out**-neighbours' values; with `transpose :=
 true`, its **in**-neighbours' (as PageRank does). `spmm` is the same over a
@@ -321,7 +325,7 @@ intermediates transient, and persists only `out`.
 | `pagerank(graph, out, damping := 0.85, tol := 1e-6, max_iter := 100, seed := NULL, rels, weighted, per_relation := false)` | PageRank as NetworkX computes it; `seed` (a vector) personalises it; `out` sums to 1 | iterations |
 | `components_vector(graph, out, rels)` | each node's component, as the minimum dense id in it (min-label propagation, both directions) | iterations |
 | `label_propagation(graph, out, seed := NULL, max_iter := 100, mask := NULL, rels)` | min-label propagation from `seed` labels, restricted to `mask` | iterations |
-| `sssp_vector(graph, out, source, rels, weighted, max_iter, per_relation := false)` | distance from `source` (Bellman-Ford); unreachable is `Infinity`; a negative cycle reachable from `source` is an error (22023) | iterations |
+| `sssp_vector(graph, out, source, rels, weighted, max_iter, per_relation := false)` | distance from `source` (Bellman-Ford); unreachable is `Infinity`; a negative cycle reachable from `source` is an error (22023); a pair in several relations costs its cheapest relation's weight, with `per_relation` or without ([semantics.md](semantics.md#a-pair-in-several-relations)) | iterations |
 | `degree_vector(graph, out, direction := 'out', rels, per_relation := false)` | distinct-neighbour degree; with `per_relation`, a neighbour once in each relation linking it | vector id |
 | `aggregate_neighbours(graph, x, out, agg := 'mean', hops := 1, rels, direction := 'out', per_relation := false)` | `mean`, `sum` or `max` of neighbours' rows of matrix `x` (a "one-layer GNN"); with `per_relation`, a neighbour's row once in each relation linking it | void |
 | `triangles(graph, out, rels := NULL, persist := true)` | per-node triangle count in the undirected simple graph | vector id |
@@ -434,14 +438,18 @@ check for cancellation as they go, and charge their scratch to
 `warren.max_compute_memory`: about 16 bytes per stored edge plus 32 per node
 for `core_number`, at most 56 per node for `strong_components_vector`, 16
 for `topological_order` and `dag_longest_path`, and 40 for
-`minimum_spanning_forest` plus up to 48 for its result, and, for the last
-three when they read several relations' CSRs, a row scratch of 16 bytes per
-entry of the longest row (DESIGN.md §6.7).
-Edges are read under `rels` as the products read them: an edge in several
-selected relations is one edge, its weights summed. With `per_relation :=
-true` (both functions) it is an edge in each relation, so, weighted, a
-longest path takes the heaviest and the forest the lightest
-([semantics.md](semantics.md#a-pair-in-several-relations)).
+`minimum_spanning_forest` plus up to 48 for its result. When
+`topological_order` reads several relations' CSRs (a selection of several,
+or all of them without the merged CSR), it adds a row scratch of 16 bytes per entry of the longest row;
+`dag_longest_path` and `minimum_spanning_forest` instead fold the
+relations' rows once, 8 bytes per node and 16 per stored edge of the
+selected relations (DESIGN.md §5.3, §6.7).
+**A pair linked in several selected relations is one edge whose weight is
+a length, not a sum**: weighted, a longest path takes its heaviest
+relation's weight, and the forest its lightest; unweighted, it weighs 1.
+`per_relation := true` (both functions) gives the same result: as
+parallel edges, a longest path takes the heavier and the forest the
+lighter ([semantics.md](semantics.md#a-pair-in-several-relations)).
 
 - `core_number` and `minimum_spanning_forest` ignore direction and
   self-loops. `core_number` returns the graph's degeneracy (its largest core
@@ -492,12 +500,17 @@ graph (`directed := false`; a pair joined both ways weighs the lighter of
 its two, and is refused if either is NaN), weighted if `weighted` (NULL: if the graph has weights; paths are
 then the lightest, by Dijkstra: every edge a search follows must weigh more
 than 0 and every distance must stay finite, else 22023; a self-loop's
-weight is never read), else by edge count. An edge in several selected
-relations is one edge, its weights summed; weighted, `per_relation := true`
-makes it an edge in each relation, so paths take the lightest
+weight is never read), else by edge count. **An edge in several selected
+relations weighs its lightest relation's weight, not their sum**: a road
+of 5 and a railway of 3 are a path of 3. `per_relation := true` gives the
+same result: as parallel edges, paths take the lighter, and a parallel
+edge is never an extra shortest path
 ([semantics.md](semantics.md#a-pair-in-several-relations)). Unweighted,
-`per_relation` changes nothing: parallel edges change no path's length and
-no count of shortest paths. Closeness and harmonic
+a pair is one edge either way: parallel edges change no path's length and
+no count of shortest paths. Where several relations' CSRs are read
+(weighted, always), the rows a search follows are folded once per call:
+8 bytes per node and 16 per stored edge of the selected relations
+(both directions, undirected), charged to `warren.max_compute_memory`. Closeness and harmonic
 centrality use the distances *to* each node, as NetworkX does on a directed
 graph.
 

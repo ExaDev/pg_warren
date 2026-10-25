@@ -42,6 +42,11 @@ impl<'a, T: Target> CsrSlices<'a, T> {
         self.weights.map(|weights| &weights[row])
     }
 
+    /// The number of entries it stores.
+    pub(crate) fn edge_count(&self) -> u64 {
+        self.targets.len() as u64
+    }
+
     /// The number of targets in `source`'s row.
     pub(crate) fn degree(&self, source: DenseId) -> u64 {
         self.row(source).len() as u64

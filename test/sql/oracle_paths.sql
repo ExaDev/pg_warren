@@ -1,16 +1,16 @@
 -- The shortest-path centralities against NetworkX (DESIGN.md §6.7, §12),
 -- exact and from given sources, on one directed random graph widened with
 -- self-loops, parallel edges in one relation (deduplicated, weights summed)
--- and in a second relation (summed across relations), and a node deleted
+-- and in a second relation (the lighter relation taken), and a node deleted
 -- after the first build (a tombstone, never a source and not counted in
 -- n): weighted betweenness (exact, directed), weighted closeness (exact,
 -- undirected: a pair's lighter direction) and weighted harmonic centrality
 -- from the nodes with id % 10 = 3 (directed). The oracles read the same
 -- rows, node 7 left out; every score within 1e-9, relatively.
 -- fixture: random --nodes 300 --edges 900 --directed --seed 13
--- oracle: betweenness --weighted --directed --nodes-sql 'SELECT id FROM nodes WHERE id <> 7' --edges-sql 'SELECT src, dst, w FROM (SELECT src, dst, (1 + (src * 3 + dst) % 4)::float8 AS w FROM edges UNION ALL SELECT src, dst, 2::float8 FROM edges WHERE (src + dst) % 5 = 0 UNION ALL SELECT id, id, 1::float8 FROM nodes WHERE id % 13 = 0) e WHERE 7 NOT IN (src, dst)'
--- oracle: closeness --weighted --undirected --directed --nodes-sql 'SELECT id FROM nodes WHERE id <> 7' --edges-sql 'SELECT src, dst, w FROM (SELECT src, dst, (1 + (src * 3 + dst) % 4)::float8 AS w FROM edges UNION ALL SELECT src, dst, 2::float8 FROM edges WHERE (src + dst) % 5 = 0 UNION ALL SELECT id, id, 1::float8 FROM nodes WHERE id % 13 = 0) e WHERE 7 NOT IN (src, dst)'
--- oracle: harmonic --weighted --directed --sources-sql 'SELECT id FROM nodes WHERE id % 10 = 3 AND id <> 7' --nodes-sql 'SELECT id FROM nodes WHERE id <> 7' --edges-sql 'SELECT src, dst, w FROM (SELECT src, dst, (1 + (src * 3 + dst) % 4)::float8 AS w FROM edges UNION ALL SELECT src, dst, 2::float8 FROM edges WHERE (src + dst) % 5 = 0 UNION ALL SELECT id, id, 1::float8 FROM nodes WHERE id % 13 = 0) e WHERE 7 NOT IN (src, dst)'
+-- oracle: betweenness --weighted --directed --nodes-sql 'SELECT id FROM nodes WHERE id <> 7' --edges-sql 'SELECT src, dst, min(w) FROM (SELECT src, dst, rel, sum(w) AS w FROM (SELECT src, dst, 0 AS rel, (1 + (src * 3 + dst) % 4)::float8 AS w FROM edges UNION ALL SELECT src, dst, 1, 2::float8 FROM edges WHERE (src + dst) % 5 = 0 UNION ALL SELECT id, id, 0, 1::float8 FROM nodes WHERE id % 13 = 0) e WHERE 7 NOT IN (src, dst) GROUP BY 1, 2, 3) r GROUP BY 1, 2'
+-- oracle: closeness --weighted --undirected --directed --nodes-sql 'SELECT id FROM nodes WHERE id <> 7' --edges-sql 'SELECT src, dst, min(w) FROM (SELECT src, dst, rel, sum(w) AS w FROM (SELECT src, dst, 0 AS rel, (1 + (src * 3 + dst) % 4)::float8 AS w FROM edges UNION ALL SELECT src, dst, 1, 2::float8 FROM edges WHERE (src + dst) % 5 = 0 UNION ALL SELECT id, id, 0, 1::float8 FROM nodes WHERE id % 13 = 0) e WHERE 7 NOT IN (src, dst) GROUP BY 1, 2, 3) r GROUP BY 1, 2'
+-- oracle: harmonic --weighted --directed --sources-sql 'SELECT id FROM nodes WHERE id % 10 = 3 AND id <> 7' --nodes-sql 'SELECT id FROM nodes WHERE id <> 7' --edges-sql 'SELECT src, dst, min(w) FROM (SELECT src, dst, rel, sum(w) AS w FROM (SELECT src, dst, 0 AS rel, (1 + (src * 3 + dst) % 4)::float8 AS w FROM edges UNION ALL SELECT src, dst, 1, 2::float8 FROM edges WHERE (src + dst) % 5 = 0 UNION ALL SELECT id, id, 0, 1::float8 FROM nodes WHERE id % 13 = 0) e WHERE 7 NOT IN (src, dst) GROUP BY 1, 2, 3) r GROUP BY 1, 2'
 \ir include/paths_graph.sql
 
 SELECT assert.equal(warren.betweenness_centrality('g', 'b'), 299::bigint, 'every live node is a source');

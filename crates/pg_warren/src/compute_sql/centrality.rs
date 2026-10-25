@@ -30,6 +30,8 @@ struct Arguments<'a> {
     directed: Option<bool>,
     rels: Option<Vec<Option<String>>>,
     weighted: Option<bool>,
+    /// Checked, not read: paths take a pair's lightest relation either way
+    /// (DESIGN.md §5.3).
     per_relation: Option<bool>,
 }
 
@@ -53,8 +55,7 @@ fn centrality(
     let persist = persist.ok_or(ComputeSqlError::NullArgument("persist"))?;
     let seed = arguments.seed.ok_or(ComputeSqlError::NullArgument("seed"))?;
     let directed = arguments.directed.ok_or(ComputeSqlError::NullArgument("directed"))?;
-    let per_relation =
-        arguments.per_relation.ok_or(ComputeSqlError::NullArgument("per_relation"))?;
+    arguments.per_relation.ok_or(ComputeSqlError::NullArgument("per_relation"))?;
     let k = match arguments.k {
         Some(k) if k < 1 => {
             return Err(ComputeSqlError::InvalidArgument(format!("k must be at least 1, not {k}")))
@@ -73,7 +74,6 @@ fn centrality(
             tombstones: loaded.id_map.tombstones(),
             directed,
             weighted: arguments.weighted,
-            per_relation,
         };
         let population = population.as_deref().map(|vector| Mask { vector, complement: false });
         let sampling = Sampling { k, seed: seed as u64, population };
@@ -90,10 +90,13 @@ fn centrality(
 /// NetworkX's `betweenness_centrality(G, k, normalized, weight,
 /// endpoints)`: from every live node if `k` is NULL, else from `k` sampled
 /// with `seed` (among the nodes vector `sources` selects, if given).
-/// Weighted, a pair in several relations weighs their sum, or with
-/// `per_relation` is a parallel edge in each, so paths take the lightest
-/// (DESIGN.md §5.3); unweighted, `per_relation` changes nothing. Returns
-/// the number of sources.
+/// Weighted, a pair in several relations weighs its lightest relation's
+/// weight, not their sum: two parallel edges are no shorter a path than
+/// the lighter. `per_relation`, accepted as every function that reads such
+/// a pair accepts it, changes nothing: as parallel edges the pair is the
+/// same lightest edge, and unweighted, parallel edges change no path's
+/// length or count of shortest paths (DESIGN.md §5.3). Returns the number
+/// of sources.
 #[pg_extern(
     schema = "warren",
     sql = r#"
@@ -237,7 +240,7 @@ mod tests {
     use pgrx::spi::Error;
 
     use crate::fixture::{
-        failure, refresh, rows, same_as_expanded, small, weighted_relation_expansions,
+        cost_as_folded, failure, refresh, road_and_rail, rows, small, weighted_relation_expansions,
     };
 
     /// The live rows of vector `name` of graph `t`, as `id:value`.
@@ -309,17 +312,17 @@ mod tests {
         Ok(())
     }
 
-    /// Weighted, `per_relation` reads a pair in k relations as k parallel
-    /// edges, so paths take its lightest relation (the min-folded
-    /// expansion); by default the pair weighs their sum. Unweighted, it
-    /// changes nothing.
+    /// Weighted, paths take a pair's lightest relation (the min-folded
+    /// expansion), by default and with `per_relation` alike: two parallel
+    /// edges are no longer a path than the lighter (DESIGN.md §5.3).
+    /// Unweighted, `per_relation` changes nothing either.
     #[pg_test]
-    fn per_relation_paths_take_a_pair_s_lightest_relation() -> Result<(), Error> {
+    fn paths_take_a_pair_s_lightest_relation_either_way() -> Result<(), Error> {
         weighted_relation_expansions("ce", "min")?;
         for call in ["betweenness_centrality", "closeness_centrality", "harmonic_centrality"] {
             for directed in [true, false] {
                 let call = format!("warren.{call}('{{g}}', 'out', directed := {directed}");
-                same_as_expanded("ce", &format!("SELECT {call}{{per}})"), "out")?;
+                cost_as_folded("ce", &format!("SELECT {call}{{per}})"), "out")?;
                 let unweighted = |per: &str| {
                     Spi::run(
                         &format!("SELECT {call}, weighted := false{per})").replace("{g}", "ce_u"),
@@ -330,6 +333,22 @@ mod tests {
             }
             let null = failure(&format!("warren.{call}('ce_s', 'out', per_relation := NULL)"))?;
             assert_eq!(null.as_deref(), Some("22004: per_relation must not be NULL"), "{call}");
+        }
+        Ok(())
+    }
+
+    /// Road 5 and rail 3 from town 1 to town 2: town 2 is 3 away, not 8.
+    #[pg_test]
+    fn a_road_and_a_rail_are_as_far_as_the_rail() -> Result<(), Error> {
+        road_and_rail("rr")?;
+        for per in ["", ", per_relation := true"] {
+            Spi::run(&format!("SELECT warren.harmonic_centrality('rr', 'h'{per})"))?;
+            let harmonic = rows(
+                "SELECT node_id || ':' || round(value::numeric, 4)
+                 FROM warren.vector_values('rr', 'h', NULL::bigint)",
+            )?;
+            // 2 is 3 from 1; 3 is 1 from 2 and 4 from 1.
+            assert_eq!(harmonic.as_deref(), Some("1:0.0000 2:0.3333 3:1.2500"), "{per}");
         }
         Ok(())
     }

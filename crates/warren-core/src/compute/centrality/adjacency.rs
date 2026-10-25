@@ -1,66 +1,57 @@
 //! The edges a centrality's shortest paths follow: the selected relations'
 //! forward rows (directed), or the undirected simple graph under them.
 //!
-//! Directed, a node's row is row `i` of `A` (§6.3): an edge in several
-//! selected relations is one entry whose weight is their sum, as for
-//! products and `dag_longest_path`. Undirected, edge directions and
-//! self-loops are ignored: unweighted, through `triangles`' symmetric
-//! adjacency; weighted, through a symmetric copy of `A`'s entries in which
-//! a pair joined both ways keeps the lighter of `A[i][j]` and `A[j][i]`,
-//! as `minimum_spanning_forest` reads them.
+//! Directed, a node's row is its row of the selected relations: weighted,
+//! an edge in several of them is one entry weighing its lightest
+//! relation's weight, not their sum, since two parallel edges are no
+//! shorter a path than the lighter (§5.3); unweighted, one entry, and
+//! parallel edges change no path's length or count of shortest paths. The
+//! same holds of `dijkstra`, `dag_longest_path` (the heaviest) and
+//! `minimum_spanning_forest`. Undirected, edge directions and self-loops
+//! are ignored: unweighted, through `triangles`' symmetric adjacency;
+//! weighted, through symmetric rows in which a pair keeps the lightest of
+//! its relations' weights in either direction, as
+//! `minimum_spanning_forest` reads them.
 
-use rayon::prelude::*;
-
-use super::super::product::{Matrix, RowScratch};
+use super::super::product::{FoldedRows, Matrix, RowScratch};
 use super::super::symmetric::{distinct, selected_rows, Symmetric};
-use super::super::{ComputeError, ComputeMemory, MemoryCharge};
+use super::super::{ComputeError, ComputeMemory};
 use super::ShortestPaths;
-use crate::graph::{CsrRows, DenseId, GraphCsr, RelationSelection};
-use crate::interrupts::{Cancellation, Cancelled, Work};
+use crate::graph::DenseId;
+use crate::interrupts::{Cancellation, Work};
 
 /// The rows a search reads.
 pub(super) enum Adjacency<'g> {
-    /// The selected relations' forward rows.
+    /// The selected relations' forward rows, a pair's relations folded.
     Directed(Matrix<'g>),
     /// Both directions, unweighted.
     Undirected(Symmetric),
-    /// Both directions, with the lighter weight of a pair.
-    UndirectedWeighted(WeightedSymmetric),
+    /// Both directions, with the lightest weight of a pair.
+    UndirectedWeighted(FoldedRows),
 }
 
 impl<'g> Adjacency<'g> {
-    /// The matrix the adjacency reads (whose weightedness it takes): per
-    /// relation only when weighted, since unweighted it changes nothing.
+    /// The matrix the adjacency reads (whose weightedness it takes): a cost
+    /// reading's ([`Matrix::costs`]).
     pub(super) fn matrix(
         paths: &ShortestPaths<'_, 'g>,
         memory: &ComputeMemory,
     ) -> Result<Matrix<'g>, ComputeError> {
-        let read = |per_relation| {
-            Matrix::new(paths.graph, paths.relations, false, paths.weighted, per_relation, memory)
-        };
-        let matrix = read(false)?;
-        match paths.per_relation && matrix.is_weighted() {
-            true => read(true),
-            false => Ok(matrix),
-        }
+        Matrix::costs(paths.graph, paths.relations, paths.weighted, memory)
     }
 
     /// At most the bytes [`Self::new`] charges, beyond the row scratch a
     /// multi-relation matrix grows on the pool.
     pub(super) fn bytes(paths: &ShortestPaths<'_, 'g>, matrix: &Matrix<'g>) -> u64 {
-        if paths.directed {
-            return 0;
-        }
-        let forward = match matrix.is_per_relation() {
-            true => each_relation_rows(paths.graph, paths.relations),
-            false => selected_rows(paths.graph, paths.relations).unwrap_or_default(),
-        };
         let id_space = paths.tombstones.id_space();
-        let symmetric = Symmetric::bytes(&forward, id_space);
-        match matrix.is_weighted() {
-            // Two 16-byte entries per stored edge, against Symmetric's 8.
-            true => symmetric.saturating_mul(2),
-            false => symmetric,
+        match (paths.directed, matrix.is_weighted()) {
+            (true, _) => matrix.folded_bytes(),
+            (false, false) => {
+                let forward = selected_rows(paths.graph, paths.relations).unwrap_or_default();
+                Symmetric::bytes(&forward, id_space)
+            }
+            // Each stored entry in both directions.
+            (false, true) => FoldedRows::bytes(id_space, matrix.stored_entries().saturating_mul(2)),
         }
     }
 
@@ -73,17 +64,24 @@ impl<'g> Adjacency<'g> {
     ) -> Result<Self, ComputeError> {
         let id_space = paths.tombstones.id_space();
         Ok(match (paths.directed, matrix.is_weighted()) {
-            (true, _) => Self::Directed(matrix),
+            (true, _) => Self::Directed(matrix.folded(lighter, cancellation)?),
             (false, false) => {
                 let forward = selected_rows(paths.graph, paths.relations)?;
                 Self::Undirected(Symmetric::new(memory, cancellation, &forward, id_space)?)
             }
-            (false, true) => Self::UndirectedWeighted(WeightedSymmetric::new(
-                memory,
-                cancellation,
-                &matrix,
-                id_space,
-            )?),
+            (false, true) => {
+                let each_edge = |edge: &mut dyn FnMut(DenseId, DenseId, f64)| {
+                    let mut work = Work::new(cancellation);
+                    matrix.each_stored_entry(&mut work, &mut |u, v, weight| {
+                        if u != v {
+                            edge(u, v, weight);
+                            edge(v, u, weight);
+                        }
+                    })
+                };
+                let rows = FoldedRows::new(memory, cancellation, id_space, each_edge, lighter)?;
+                Self::UndirectedWeighted(rows)
+            }
         })
     }
 
@@ -107,26 +105,6 @@ impl<'g> Adjacency<'g> {
         mut edge: impl FnMut(DenseId, f64) -> Result<(), ComputeError>,
     ) -> Result<(), ComputeError> {
         match self {
-            Self::Directed(matrix) if matrix.is_per_relation() => {
-                // A pair's entries are adjacent, in relation order: keep
-                // the lightest (NaN if any is), as `WeightedSymmetric` does.
-                let mut pending: Option<(DenseId, f64)> = None;
-                matrix.for_each_entry(node, scratch, |target, weight| {
-                    work.spend(1)?;
-                    match pending {
-                        Some((held, lightest)) if held == target => {
-                            pending = Some((held, lighter(lightest, weight)));
-                        }
-                        Some((held, lightest)) => {
-                            edge(held, lightest)?;
-                            pending = Some((target, weight));
-                        }
-                        None => pending = Some((target, weight)),
-                    }
-                    Ok(())
-                })?;
-                pending.map_or(Ok(()), |(target, weight)| edge(target, weight))
-            }
             Self::Directed(matrix) => matrix.for_each_entry(node, scratch, |target, weight| {
                 work.spend(1)?;
                 edge(target, weight)
@@ -138,8 +116,8 @@ impl<'g> Adjacency<'g> {
                 }
                 Ok(())
             }
-            Self::UndirectedWeighted(symmetric) => {
-                for &(target, weight) in symmetric.row(node as usize) {
+            Self::UndirectedWeighted(rows) => {
+                for &(target, weight) in rows.row(node) {
                     work.spend(1)?;
                     edge(target, weight)?;
                 }
@@ -150,149 +128,10 @@ impl<'g> Adjacency<'g> {
 }
 
 /// The lighter of two weights, or NaN if either is, so a NaN weight in any
-/// relation is refused as it is when the relations' weights are summed.
+/// relation or direction is refused.
 fn lighter(a: f64, b: f64) -> f64 {
     match a.is_nan() || b.is_nan() {
         true => f64::NAN,
         false => a.min(b),
-    }
-}
-
-/// The forward rows of each selected relation, every relation's own rather
-/// than the merged CSR, as a per-relation matrix reads them.
-fn each_relation_rows<'g>(
-    graph: &'g GraphCsr,
-    relations: RelationSelection<'_>,
-) -> Vec<CsrRows<'g>> {
-    match relations {
-        RelationSelection::All => graph.relations().iter().map(|r| r.forward().into()).collect(),
-        RelationSelection::Only(_) => selected_rows(graph, relations).unwrap_or_default(),
-    }
-}
-
-/// The nodes one sort task handles; a task checks the cancellation flag
-/// first. Small under test, so tests cross task boundaries.
-const NODES_PER_TASK: usize = if cfg!(test) { 3 } else { 4096 };
-
-/// Each node's neighbours in either direction with the lighter weight of
-/// the pair (self-loops dropped), one entry per neighbour, rows sorted.
-pub(super) struct WeightedSymmetric {
-    /// `id_space + 1` positions into `entries`.
-    offsets: Vec<u64>,
-    entries: Vec<(DenseId, f64)>,
-    _charges: [MemoryCharge; 2],
-}
-
-impl WeightedSymmetric {
-    fn new(
-        memory: &ComputeMemory,
-        cancellation: &Cancellation,
-        matrix: &Matrix<'_>,
-        id_space: u64,
-    ) -> Result<Self, ComputeError> {
-        let mut scratch = matrix.scratch()?;
-        let mut work = Work::new(cancellation);
-        let mut each_edge = |f: &mut dyn FnMut(DenseId, DenseId, f64)| {
-            for u in 0..id_space {
-                work.spend(1)?;
-                matrix.for_each_entry(u, &mut scratch, |v, weight| {
-                    if v != u {
-                        f(u, v, weight);
-                    }
-                    Ok(work.spend(1)?)
-                })?;
-            }
-            Ok::<_, ComputeError>(())
-        };
-        let (mut offsets, offsets_charge) = memory.filled(id_space as usize + 1, 0u64)?;
-        each_edge(&mut |u, v, _| {
-            offsets[u as usize] += 1;
-            offsets[v as usize] += 1;
-        })?;
-        let mut end = 0;
-        for offset in &mut offsets[..id_space as usize] {
-            end += *offset;
-            *offset = end;
-        }
-        offsets[id_space as usize] = end;
-        let (mut entries, entries_charge) = memory.filled(end as usize, (0 as DenseId, 0.0))?;
-        each_edge(&mut |u, v, weight| {
-            for (row, target) in [(u, v), (v, u)] {
-                let offset = &mut offsets[row as usize];
-                *offset -= 1;
-                entries[*offset as usize] = (target, weight);
-            }
-        })?;
-        let mut symmetric = Self { offsets, entries, _charges: [offsets_charge, entries_charge] };
-        symmetric.sort(cancellation)?;
-        Ok(symmetric)
-    }
-
-    /// The row of `node`.
-    fn row(&self, node: usize) -> &[(DenseId, f64)] {
-        &self.entries[self.offsets[node] as usize..self.offsets[node + 1] as usize]
-    }
-
-    /// Sorts every row by neighbour then weight and keeps the lightest
-    /// entry of each neighbour, or a NaN one if any, so a NaN weight is
-    /// refused whichever direction or relation holds it (moving it to the front of a run, so the
-    /// row keeps its length: later duplicates are marked by
-    /// [`DenseId::MAX`] and compacted out once all rows are sorted).
-    fn sort(&mut self, cancellation: &Cancellation) -> Result<(), Cancelled> {
-        let offsets = &self.offsets;
-        let nodes = offsets.len() - 1;
-        let mut tasks = Vec::new();
-        let mut rest = self.entries.as_mut_slice();
-        for first in (0..nodes).step_by(NODES_PER_TASK) {
-            let last = nodes.min(first + NODES_PER_TASK);
-            let len = (offsets[last] - offsets[first]) as usize;
-            let (chunk, tail) = std::mem::take(&mut rest).split_at_mut(len);
-            tasks.push((first..last, chunk));
-            rest = tail;
-        }
-        tasks.into_par_iter().try_for_each(|(nodes, chunk)| {
-            if cancellation.is_cancelled() {
-                return Err(Cancelled);
-            }
-            let base = offsets[nodes.start];
-            for node in nodes {
-                let row = (offsets[node] - base) as usize..(offsets[node + 1] - base) as usize;
-                let row = &mut chunk[row];
-                row.sort_unstable_by(|a, b| {
-                    let nan_first = b.1.is_nan().cmp(&a.1.is_nan());
-                    a.0.cmp(&b.0).then(nan_first).then(a.1.total_cmp(&b.1))
-                });
-                for i in (1..row.len()).rev() {
-                    if row[i].0 == row[i - 1].0 {
-                        row[i].0 = DenseId::MAX;
-                    }
-                }
-            }
-            Ok(())
-        })?;
-        self.compact(cancellation)
-    }
-
-    /// Drops the duplicates [`Self::sort`] marked, moving rows down.
-    fn compact(&mut self, cancellation: &Cancellation) -> Result<(), Cancelled> {
-        let mut work = Work::new(cancellation);
-        let mut kept = 0;
-        let mut start = 0;
-        for node in 0..self.offsets.len() - 1 {
-            let end = self.offsets[node + 1] as usize;
-            self.offsets[node] = kept as u64;
-            for i in start..end {
-                work.spend(1)?;
-                if self.entries[i].0 != DenseId::MAX {
-                    self.entries[kept] = self.entries[i];
-                    kept += 1;
-                }
-            }
-            start = end;
-        }
-        let nodes = self.offsets.len() - 1;
-        self.offsets[nodes] = kept as u64;
-        self.entries.truncate(kept);
-        Ok(())
     }
 }

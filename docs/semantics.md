@@ -58,33 +58,68 @@ Edges are cleaned at build time, and counted, never silently:
 ### A pair in several relations
 
 Two nodes can be linked in several relations at once, `1 → 2` as both
-`phone` and `address`. Functions whose result this can change take
-`per_relation boolean DEFAULT false`:
+`phone` and `address`, or two towns by both `road` and `rail`. Functions
+whose result this can change take `per_relation boolean DEFAULT false`.
+What the default does depends on what the function reads weights as:
 
-- **By default the pair is one edge**, the merged CSR's: its weights
-  summed, 1 when unweighted. This is the simple graph of distinct pairs,
-  what topology wants.
-- **`per_relation := true` makes it an edge in each relation**, each with
-  its relation's weight (1 when unweighted), as if they were parallel
-  edges: an unweighted pair in three relations weighs 3 in modularity,
-  and a sum of weights is the same either way.
+> **Strengths add; costs don't.** A pair linked by phone (2) and by
+> address (3) is linked with strength 5. A road of 5 km and a railway of
+> 3 km are a route of 3 km, not 8: two parallel routes are not a longer
+> route than either.
 
-`rels` restricts both to the selected relations. Use `per_relation` when
-the multiplicity is the signal, such as two accounts sharing a phone, an
-address and a device. Through 0.6.0 the community functions counted such
-a pair once per relation and the rest once; see DESIGN.md §5.3 for the
+| The function reads weights as | Functions | By default, a pair in several relations is | `per_relation := true` |
+|---|---|---|---|
+| **strengths** | `spmv`, `spmm`, `pagerank`, `katz_centrality`, `eigenvector_centrality`, `hits`, `modularity`, `louvain`, `leiden`, `local_moving`, `leiden_refine`, `contract`, `eigen`, `distance`, `degree`, `vector_degree`, `degree_vector`, `aggregate_neighbours`, `gather`, `label_propagation_majority` | one edge, its relations' weights **summed** (1 when unweighted) | an edge in each relation |
+| **costs** (lengths) | `dijkstra`, `sssp_vector`, `betweenness_centrality`, `closeness_centrality`, `harmonic_centrality`, `minimum_spanning_forest` | one edge, its **cheapest** relation's weight | the same result |
+| **costs** (lengths), longest | `dag_longest_path` | one edge, its **heaviest** relation's weight | the same result |
+
+With `road` 5 and `rail` 3 from town 1 to town 2:
+
+```sql
+SELECT cost FROM warren.dijkstra('towns', 1, 2);       -- 3: the railway
+SELECT cost FROM warren.dijkstra('towns', 1, 2, per_relation := true);  -- 3 as well
+SELECT warren.spmv('towns', 'x', 'y');                  -- A[1][2] = 8: strengths add
+SELECT warren.pagerank('towns', 'pr');                  -- 1 → 2 weighs 8
+```
+
+For the cost functions `per_relation := true` reads the pair as two
+parallel edges, a road of 5 and a railway of 3, and a shortest path takes
+the cheaper of them (a longest path the heavier), so both values give the
+same result: a parallel edge is never an extra shortest path either. They
+take the argument anyway, so `per_relation` means one thing everywhere,
+and refuse NULL as the others do. Unweighted, every edge costs 1 and a pair
+is one hop however many relations link it, so nothing changes there.
+
+For the strength functions, **the default is the simple graph** of
+distinct pairs, what topology wants, and **`per_relation := true` makes
+the pair an edge in each relation**, each with its relation's weight (1
+when unweighted), as if they were parallel edges: an unweighted pair in
+three relations weighs 3 in modularity, and a sum of weights is the same
+either way. Use it when the multiplicity is the signal, such as two
+accounts sharing a phone, an address and a device.
+
+`spmv` and `spmm` are primitives over the matrix `A`, whose entry is the
+pair's summed weight whatever the semiring, so `min_plus` reads 8 for the
+pair above by default; pass `per_relation := true` to have its `min` take
+the cheapest relation (`sssp_vector` does this itself).
+
+`rels` restricts both readings to the selected relations. Through 0.6.0
+the community functions counted such a pair once per relation and the
+rest once; `dijkstra` took the cheapest relation, as it still does, but
+`sssp_vector`, the shortest-path centralities, `dag_longest_path` and
+`minimum_spanning_forest` summed the weights. See DESIGN.md §5.3 for the
 whole table.
 
 | Functions | `per_relation` |
 |---|---|
 | `modularity`, `louvain`, `leiden`, `local_moving`, `leiden_refine` | yes |
 | `contract` | yes: counting (`weighted := false`, or an unweighted graph), the default counts the pair once, in the first of its relations; per relation in each. Weights are summed either way |
-| `spmv`, `spmm` | yes: an entry in each relation, which `⊕` folds |
+| `spmv`, `spmm` | yes: an entry in each relation, which `⊕` folds (`min_plus` then takes the cheapest) |
 | `pagerank`, `katz_centrality`, `eigenvector_centrality`, `hits` | yes: unweighted, the pair weighs k |
-| `sssp_vector`, `dijkstra` | yes: the cheapest of its relations (by default their weights' sum) |
-| `betweenness_centrality`, `closeness_centrality`, `harmonic_centrality` | yes: weighted, paths take the cheapest of its relations (by default their weights' sum); unweighted it changes nothing |
-| `dag_longest_path` | yes: weighted, the heaviest of its relations (by default their weights' sum) |
-| `minimum_spanning_forest` | yes: weighted, the lightest of its relations (by default their weights' sum) |
+| `sssp_vector`, `dijkstra` | accepted, same result: the cheapest of its relations either way |
+| `betweenness_centrality`, `closeness_centrality`, `harmonic_centrality` | accepted, same result: weighted, paths take the cheapest of its relations either way; unweighted it changes nothing |
+| `dag_longest_path` | accepted, same result: weighted, the heaviest of its relations either way |
+| `minimum_spanning_forest` | accepted, same result: weighted, the lightest of its relations either way |
 | `degree`, `vector_degree`, `degree_vector` | yes: a neighbour once in each relation linking it (with `direction := 'both'`, once per relation even if linked both ways) |
 | `aggregate_neighbours` | yes: a neighbour's row once in each relation linking it |
 | `eigen`, `distance` (`spectral`, `degree`) | yes: unweighted, a pair weighs the number of its relations; `distance('edit')` and `diff` already count (relation, source, target) |

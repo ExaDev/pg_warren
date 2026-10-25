@@ -134,9 +134,12 @@ fn topological_order(
 /// `rels` (all if NULL): the sum of its edges' weights if `weighted` (NULL:
 /// if the graph has weights), else its number of edges, and at least 0,
 /// as NetworkX's `dag_longest_path`. Weighted, a pair in several relations
-/// weighs their sum, or with `per_relation` is a parallel edge in each, so
-/// the heaviest lengthens a path (DESIGN.md §5.3). A cycle is an error
-/// (22023). Returns the longest, NetworkX's `dag_longest_path_length`.
+/// weighs its heaviest relation's weight, not their sum: two parallel
+/// edges are no longer a path than the heavier. `per_relation`, accepted
+/// as every function that reads such a pair accepts it, changes nothing:
+/// as parallel edges the pair is the same heaviest edge (DESIGN.md §5.3).
+/// A cycle is an error (22023). Returns the longest, NetworkX's
+/// `dag_longest_path_length`.
 #[pg_extern(
     schema = "warren",
     sql = r#"
@@ -159,7 +162,8 @@ fn dag_longest_path(
 ) -> Option<f64> {
     let per_relation = added_flag(fcinfo, 6);
     entry(|_| {
-        let per_relation = per_relation.ok_or(ComputeSqlError::NullArgument("per_relation"))?;
+        // Checked, not read: either way the heaviest relation (§5.3).
+        per_relation.ok_or(ComputeSqlError::NullArgument("per_relation"))?;
         let graph = graph.ok_or(ComputeSqlError::NullArgument("graph"))?;
         let out = out.ok_or(ComputeSqlError::NullArgument("out"))?;
         let persist = persist.ok_or(ComputeSqlError::NullArgument("persist"))?;
@@ -174,7 +178,7 @@ fn dag_longest_path(
                 &mut PostgresInterrupts,
                 &loaded.graph,
                 selection(selected.as_deref()),
-                compute::Reading { weighted, per_relation },
+                weighted,
                 vectors.tombstones(),
             )?;
             vectors.save(out, found.lengths.into(), persist)?;
@@ -188,9 +192,11 @@ fn dag_longest_path(
 /// relations `rels` (all if NULL), self-loops ignored, each as its stored
 /// direction with its weight (1 if not `weighted`; NULL: if the graph has
 /// weights), ascending by source and target dense id. A pair in several
-/// relations weighs their sum, or with `per_relation` is a parallel edge
-/// in each, so the lightest is the candidate (DESIGN.md §5.3). `id_type`
-/// fixes the id columns' type, as `warren.components`'s does.
+/// relations weighs its lightest relation's weight, not their sum.
+/// `per_relation`, accepted as every function that reads such a pair
+/// accepts it, changes nothing: as parallel edges the lightest is the
+/// candidate (DESIGN.md §5.3). `id_type` fixes the id columns' type, as
+/// `warren.components`'s does.
 #[pg_extern(
     schema = "warren",
     sql = r#"
@@ -214,15 +220,15 @@ fn minimum_spanning_forest(
 > {
     let per_relation = added_flag(fcinfo, 5);
     entry(|_| {
-        let per_relation = per_relation.ok_or(ComputeSqlError::NullArgument("per_relation"))?;
-        let reading = compute::Reading { weighted, per_relation };
+        // Checked, not read: either way the lightest relation (§5.3).
+        per_relation.ok_or(ComputeSqlError::NullArgument("per_relation"))?;
         let graph = graph.ok_or(ComputeSqlError::NullArgument("graph"))?;
         let resolved = resolve(graph, version, "read")?;
         let rows = with_id_type!(resolved.graph.id_type, E => {
             // SAFETY: fcinfo is this call's, and argument 1 exists.
             let witness = unsafe { pgrx::fcinfo::pg_getarg_type(fcinfo, 1) };
             check_type::<E>(graph, "id_type", witness, false)?;
-            forest_rows::<E>(&resolved, rels.as_deref(), reading)?
+            forest_rows::<E>(&resolved, rels.as_deref(), weighted)?
         });
         Ok(TableIterator::new(rows))
     })
@@ -232,7 +238,7 @@ fn minimum_spanning_forest(
 fn forest_rows<E: CachedIds>(
     resolved: &Resolved,
     rels: Option<&[Option<String>]>,
-    reading: compute::Reading,
+    weighted: Option<bool>,
 ) -> Result<ForestRows, ComputeSqlError> {
     let loaded = cached::<E>(resolved)?;
     let memory = compute_memory();
@@ -243,7 +249,7 @@ fn forest_rows<E: CachedIds>(
         &mut PostgresInterrupts,
         &loaded.graph,
         selection(selected.as_deref()),
-        reading,
+        weighted,
     )?;
     // Each row's external ids are made when it is returned (DESIGN.md
     // §12): the forest stays in its charged buffer, and only the current
@@ -267,8 +273,8 @@ mod tests {
     use pgrx::spi::Error;
 
     use crate::fixture::{
-        failure, held_after_first_row, iri_path, refresh, rows, same_as_expanded, small,
-        weighted_relation_expansions,
+        cost_as_folded, failure, held_after_first_row, iri_path, refresh, road_and_rail, rows,
+        small, weighted_relation_expansions,
     };
 
     /// The live rows of vector `name` of graph `graph`, as `id:value`.
@@ -421,36 +427,49 @@ mod tests {
         Ok(())
     }
 
-    /// Weighted, `per_relation` reads a pair in k relations as k parallel
-    /// edges, so a longest path takes its heaviest relation (the
-    /// max-folded expansion); by default the pair weighs their sum.
+    /// Weighted, a longest path takes a pair's heaviest relation (the
+    /// max-folded expansion), by default and with `per_relation` alike:
+    /// two parallel edges are no longer a path than the heavier (DESIGN.md
+    /// §5.3).
     #[pg_test]
-    fn per_relation_a_longest_path_takes_a_pair_s_heaviest_relation() -> Result<(), Error> {
+    fn a_longest_path_takes_a_pair_s_heaviest_relation_either_way() -> Result<(), Error> {
         weighted_relation_expansions("dl", "max")?;
-        same_as_expanded("dl", "SELECT warren.dag_longest_path('{g}', 'out'{per})", "out")?;
+        cost_as_folded("dl", "SELECT warren.dag_longest_path('{g}', 'out'{per})", "out")?;
+        road_and_rail("rr")?;
+        for per in ["", ", per_relation := true"] {
+            let longest = format!("SELECT warren.dag_longest_path('rr', 'l'{per})");
+            // The road, 5, then 1 more: 6, not 9.
+            assert_eq!(Spi::get_one::<f64>(&longest)?, Some(6.0), "{per}");
+            assert_eq!(values("rr", "l")?.as_deref(), Some("1:0 2:5 3:6"), "{per}");
+        }
         let null = failure("warren.dag_longest_path('dl_s', 'out', per_relation := NULL)")?;
         assert_eq!(null.as_deref(), Some("22004: per_relation must not be NULL"));
         Ok(())
     }
 
-    /// Weighted, `per_relation` reads a pair in k relations as k parallel
-    /// edges, so the forest takes its lightest relation (the min-folded
-    /// expansion's forest); by default the pair weighs their sum.
+    /// Weighted, the forest takes a pair's lightest relation (the
+    /// min-folded expansion's forest), by default and with `per_relation`
+    /// alike (DESIGN.md §5.3).
     #[pg_test]
-    fn per_relation_the_forest_takes_a_pair_s_lightest_relation() -> Result<(), Error> {
+    fn the_forest_takes_a_pair_s_lightest_relation_either_way() -> Result<(), Error> {
         weighted_relation_expansions("sf", "min")?;
         let forest = |graph: &str, per: &str| {
             rows(&format!(
                 "SELECT source || '-' || target || ':' || weight
-                 FROM warren.minimum_spanning_forest('sf_{graph}', NULL::bigint{per})"
+                 FROM warren.minimum_spanning_forest('{graph}', NULL::bigint{per})"
             ))
         };
-        let (each, once) = (forest("each", "")?, forest("once", "")?);
-        for graph in ["s", "u"] {
-            assert_eq!(forest(graph, ", per_relation := true")?, each, "{graph}");
-            assert_eq!(forest(graph, "")?, once, "{graph}");
+        let each = forest("sf_each", "")?;
+        for graph in ["sf_s", "sf_u"] {
+            for per in ["", ", per_relation := true"] {
+                assert_eq!(forest(graph, per)?, each, "{graph}{per}");
+            }
         }
-        assert_ne!(each, once);
+        assert_ne!(forest("sf_once", "")?, each);
+        road_and_rail("rr")?;
+        for per in ["", ", per_relation := true"] {
+            assert_eq!(forest("rr", per)?.as_deref(), Some("1-2:3 2-3:1"), "{per}");
+        }
         let null =
             failure("warren.minimum_spanning_forest('sf_s', NULL::bigint, per_relation := NULL)")?;
         assert_eq!(null.as_deref(), Some("22004: per_relation must not be NULL"));

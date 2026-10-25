@@ -111,6 +111,14 @@ pub(crate) enum AnyCsrSlices<'a> {
 }
 
 impl<'a> AnyCsrSlices<'a> {
+    /// The number of entries it stores ([`CsrSlices::edge_count`]).
+    pub(crate) fn edge_count(&self) -> u64 {
+        match self {
+            Self::U32(csr) => csr.edge_count(),
+            Self::U64(csr) => csr.edge_count(),
+        }
+    }
+
     /// The positions of `source`'s row, sought from `hint`
     /// ([`CsrSlices::seek`]).
     pub(crate) fn seek(&self, source: DenseId, hint: &mut usize) -> Range<usize> {

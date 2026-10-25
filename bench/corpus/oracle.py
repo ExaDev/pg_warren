@@ -2,7 +2,9 @@
 `tables` wrote) under pg_warren's definitions, so a difference is a
 finding and not a convention:
 - parallel edges are one edge, their weights summed (§14 item 4); an edge
-  in several relations is one edge of the all-relations graph;
+  in several relations is one edge of the all-relations graph, weighing
+  its relations' sum (a strength, as `spmv` reads it) or, as a length, its
+  cheapest relation's weight (`dijkstra`, §5.3);
 - degree counts each neighbour once, a self-loop's node included (§9.3);
 - triangles, clustering and core numbers are of the undirected simple
   graph (§6.7);
@@ -45,10 +47,12 @@ class Reference:
             relation = row[2] if dataset.relations else None
             weights.setdefault(key, {})
             # Duplicates within a relation sum (the build's deduplication);
-            # the all-relations graph sums across relations too (A of §6.3).
+            # the all-relations graph sums across relations too (A of §6.3),
+            # but a path's cost takes the cheapest relation (§5.3).
             weights[key][relation] = weights[key].get(relation, 0.0) + weight
         for (source, target), per_relation in weights.items():
-            graph.add_edge(source, target, weight=sum(per_relation.values()), relations=len(per_relation))
+            graph.add_edge(source, target, weight=sum(per_relation.values()),
+                           cost=min(per_relation.values()), relations=len(per_relation))
         return cls(graph, dataset.weighted)
 
     def _weight(self):
@@ -81,7 +85,7 @@ class Reference:
 
     def path_cost(self, source, target):
         try:
-            return nx.dijkstra_path_length(self.graph, source, target, weight="weight")
+            return nx.dijkstra_path_length(self.graph, source, target, weight="cost")
         except nx.NetworkXNoPath:
             return None
 

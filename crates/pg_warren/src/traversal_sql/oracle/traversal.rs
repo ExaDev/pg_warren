@@ -194,8 +194,9 @@ mod tests {
 
     /// `warren.dijkstra` costs against Bellman–Ford in PL/pgSQL over each
     /// pair's arc, and every path's cost its arcs' sum. A pair's arc
-    /// weighs the sum of its relations' weights, or `per_relation` the
-    /// cheapest (DESIGN.md §5.3); read both ways, the lighter direction.
+    /// weighs its cheapest relation's weight, by default and
+    /// `per_relation` alike (DESIGN.md §5.3); read both ways, the lighter
+    /// direction.
     fn check_dijkstra(shape: &Shape) -> Result<(), Error> {
         for per_relation in [false, true] {
             check_dijkstra_reading(shape, per_relation)?;
@@ -203,7 +204,7 @@ mod tests {
         Ok(())
     }
 
-    /// [`check_dijkstra`] for one reading of a pair in several relations.
+    /// [`check_dijkstra`] for one value of `per_relation`.
     fn check_dijkstra_reading(shape: &Shape, per_relation: bool) -> Result<(), Error> {
         let g = shape.name;
         let t = shape.id_type;
@@ -212,18 +213,13 @@ mod tests {
         );
         for direction in shape.directions() {
             for rels in shape.selections() {
-                // Each direction's arcs over the selected relations, a pair's
-                // weights summed (an unweighted pair 1) unless per relation.
-                let once = if shape.weighted { "sum(w)" } else { "1::float8" };
-                let read = |a: &str, b: &str| match per_relation {
-                    true => format!(
+                // Each direction's arcs over the selected relations, one per
+                // relation.
+                let read = |a: &str, b: &str| {
+                    format!(
                         "SELECT {a} AS a, {b} AS b, w FROM {g}_arc
                          WHERE {rels} IS NULL OR rel = ANY ({rels})"
-                    ),
-                    false => format!(
-                        "SELECT {a} AS a, {b} AS b, {once} AS w FROM {g}_arc
-                         WHERE {rels} IS NULL OR rel = ANY ({rels}) GROUP BY 1, 2"
-                    ),
+                    )
                 };
                 let directed = match direction {
                     "out" => read("src", "dst"),

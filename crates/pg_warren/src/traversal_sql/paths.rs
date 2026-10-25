@@ -112,9 +112,11 @@ fn shortest_path(
 
 /// `warren.dijkstra`: a cheapest path from `start` to `target` and its
 /// cost (edge weights; 1 per edge if the graph is unweighted); no row if
-/// there is none. An edge in several selected relations costs their
-/// weights' sum, as `spmv`'s `A` holds it, or with `per_relation` its
-/// cheapest relation's weight (DESIGN.md §5.3).
+/// there is none. An edge in several selected relations costs its
+/// cheapest relation's weight, not their sum: two parallel edges are no
+/// shorter a route than the cheaper. `per_relation`, accepted as every
+/// function that reads such a pair accepts it, changes nothing: as
+/// parallel edges the pair is the same cheapest edge (DESIGN.md §5.3).
 #[pg_extern(
     schema = "warren",
     sql = r#"
@@ -146,10 +148,11 @@ fn dijkstra(
         widen: false,
     };
     entry(|| {
-        let per_relation = per_relation.ok_or(TraversalSqlError::NullArgument("per_relation"))?;
+        // Checked, not read: either way the cheapest relation (§5.3).
+        per_relation.ok_or(TraversalSqlError::NullArgument("per_relation"))?;
         let opened = call.open()?;
         let row = with_id_type!(opened.id_type(), E => opened.run::<E, _>(|loaded, adjacency, start, target| {
-            let found = cheapest_path(adjacency, start, target, per_relation, &mut PostgresInterrupts)?;
+            let found = cheapest_path(adjacency, start, target, &mut PostgresInterrupts)?;
             let row = found.result.and_then(|weighted| {
                 Some((external_array(&loaded.id_map, &weighted.path)?, weighted.cost))
             });
@@ -238,7 +241,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
-    use crate::fixture::{failure, small, weighted_relation_expansions};
+    use crate::fixture::{failure, road_and_rail, small, weighted_relation_expansions};
 
     fn one(query: &str) -> Result<Option<String>, Error> {
         Spi::get_one::<String>(query)
@@ -290,11 +293,11 @@ mod tests {
         Ok(())
     }
 
-    /// A pair in several relations costs their weights' sum (the
-    /// deduplicated graph's edge), or with `per_relation` its cheapest
-    /// relation's weight (the min-folded expansion's), in every direction.
+    /// A pair in several relations costs its cheapest relation's weight
+    /// (the min-folded expansion's edge), by default and with
+    /// `per_relation` alike, in every direction (DESIGN.md §5.3).
     #[pg_test]
-    fn dijkstra_reads_a_pair_once_or_per_relation() -> Result<(), Error> {
+    fn dijkstra_takes_a_pair_s_cheapest_relation_either_way() -> Result<(), Error> {
         weighted_relation_expansions("dj", "min")?;
         for direction in ["out", "in", "both"] {
             let costs = |graph: &str, per: &str| {
@@ -305,12 +308,22 @@ mod tests {
                                           direction := '{direction}'{per})"
                 ))
             };
-            let (each, once) = (costs("each", "")?, costs("once", "")?);
+            let each = costs("each", "")?;
             for graph in ["s", "u"] {
-                assert_eq!(costs(graph, ", per_relation := true")?, each, "{graph} {direction}");
-                assert_eq!(costs(graph, "")?, once, "{graph} {direction}");
+                for per in ["", ", per_relation := true", ", per_relation := false"] {
+                    assert_eq!(costs(graph, per)?, each, "{graph}{per} {direction}");
+                }
             }
-            assert_ne!(each, once, "{direction}");
+            assert_ne!(costs("once", "")?, each, "{direction}: summing would differ");
+        }
+        road_and_rail("rr")?;
+        for per in ["", ", per_relation := true"] {
+            let found = one(&format!(
+                "SELECT string_agg(path::text || ':' || cost, ' ')
+                 FROM warren.dijkstra('rr', 1::bigint, 3::bigint{per})"
+            ))?;
+            // The rail, 3, then the road, 1: 4, not 9.
+            assert_eq!(found.as_deref(), Some("{1,2,3}:4"), "{per}");
         }
         let null = failure("warren.dijkstra('dj_s', 1::bigint, 2::bigint, per_relation := NULL)")?;
         assert_eq!(null.as_deref(), Some("22004: per_relation must not be NULL"));

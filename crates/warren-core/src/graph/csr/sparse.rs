@@ -156,10 +156,8 @@ mod readers {
                 let Ok(adjacency) = Adjacency::new(graph, direction, selection) else { continue };
                 let visits = bfs(&adjacency, &[0], None, Limits::default(), &mut never);
                 results.push(format!("bfs {direction:?} {visits:?}"));
-                for per_relation in [false, true] {
-                    let path = dijkstra(&adjacency, 0, id_space - 1, per_relation, &mut never);
-                    results.push(format!("dijkstra {direction:?} {per_relation} {path:?}"));
-                }
+                let path = dijkstra(&adjacency, 0, id_space - 1, &mut never);
+                results.push(format!("dijkstra {direction:?} {path:?}"));
                 let degrees: Vec<_> =
                     (0..id_space).map(|node| adjacency.degree_per_relation(node)).collect();
                 results.push(format!("degree per relation {direction:?} {degrees:?}"));
@@ -197,20 +195,19 @@ mod readers {
                 }
             }
             let tombstones = Tombstones::new(id_space).unwrap();
-            for (directed, per_relation) in [(true, false), (true, true), (false, true)] {
+            for directed in [true, false] {
                 let paths = ShortestPaths {
                     graph,
                     relations: selection,
                     tombstones: &tombstones,
                     directed,
                     weighted: Some(true),
-                    per_relation,
                 };
                 let sampling = Sampling { k: None, seed: 0, population: None };
                 let scale = BetweennessScale { normalized: false, endpoints: false };
                 let found =
                     betweenness_centrality(&workers, &memory, &mut never, &paths, &sampling, scale);
-                results.push(format!("betweenness {directed} {per_relation} {found:?}"));
+                results.push(format!("betweenness {directed} {found:?}"));
             }
             let counted = triangles(&workers, &memory, &mut never, graph, selection);
             results.push(format!("triangles {counted:?}"));
