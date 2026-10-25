@@ -320,7 +320,9 @@ fn extending_an_owned_base_charges_the_move_of_a_reallocation() {
 
 #[test]
 fn an_id_longer_than_the_arena_grows_by_is_taken() {
-    let long = vec![b'x'; 1 << 20];
+    // The arena grows by at least 1,024 bytes; a mebibyte-long id takes
+    // over ten minutes to hash and compare under Miri.
+    let long = vec![b'x'; if cfg!(miri) { 1 << 12 } else { 1 << 20 }];
     let memory = BuildMemory::unlimited();
     let ids = ids_in(&memory, &[b"a", &long, b"b"]);
     let id_map = IdMap::<TextKeys>::new().rebuild_within(ids).unwrap().0;
