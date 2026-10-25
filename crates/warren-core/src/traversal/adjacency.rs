@@ -14,9 +14,8 @@ use crate::graph::{
 /// Unweighted traversals read the all-relations rows when every relation
 /// is selected (the stored merged CSR, or the relations' rows merged on
 /// the fly, which read the same). Weighted traversals read each relation's
-/// CSR instead: per relation, a shortest path takes the cheapest of an
-/// edge's relations, and over any selection, read once, it sums them
-/// (DESIGN.md §5.3).
+/// CSR instead, so a shortest path takes the cheapest of an edge's
+/// relations (DESIGN.md §5.3).
 #[derive(Debug, Clone)]
 pub struct Adjacency<'g> {
     direction: Direction,
@@ -25,8 +24,8 @@ pub struct Adjacency<'g> {
     weighted_relations: Vec<&'g RelationCsr>,
     rows: Vec<CsrRows<'g>>,
     weighted_rows: Vec<&'g AnyCsr>,
-    summed_relation: Option<&'g RelationCsr>,
-    summed_rows: Vec<&'g AnyCsr>,
+    /// Whether the relations carry weights.
+    weighted: bool,
     labelled: Vec<(RelationIndex, &'g RelationCsr)>,
     labelled_rows: Vec<LabelledRows<'g>>,
 }
@@ -74,12 +73,6 @@ impl<'g> Adjacency<'g> {
         direction: Direction,
         relations: RelationSelection<'_>,
     ) -> Result<Self, TraversalError> {
-        // One CSR holds the selection's summed weights: the stored merged
-        // CSR, or the only relation selected.
-        let summed_relation = match graph.selected(relations) {
-            Ok(selected) if selected.len() == 1 => selected.first().copied(),
-            _ => None,
-        };
         let (relations, weighted_relations, labelled) = match relations {
             RelationSelection::All => {
                 let each = graph.relations().iter().collect();
@@ -109,29 +102,28 @@ impl<'g> Adjacency<'g> {
             }
         };
         let id_space = graph.all_relations().forward().id_space();
-        let read = Read { direction, id_space, summed_relation };
+        let read = Read { direction, id_space };
         read.adjacency(relations, weighted_relations, labelled)
     }
 }
 
 /// What an [`Adjacency`] is read from besides its relations.
-struct Read<'g> {
+struct Read {
     direction: Direction,
     id_space: u64,
-    summed_relation: Option<&'g RelationCsr>,
 }
 
-impl<'g> Read<'g> {
-    fn adjacency(
+impl Read {
+    fn adjacency<'g>(
         self,
         relations: Selected<'g>,
         weighted_relations: Vec<&'g RelationCsr>,
         labelled: Vec<(RelationIndex, &'g RelationCsr)>,
     ) -> Result<Adjacency<'g>, TraversalError> {
-        let Self { direction, id_space, summed_relation } = self;
+        let Self { direction, id_space } = self;
         let rows = relations.rows(direction)?;
         let weighted_rows = scanned(&weighted_relations, direction)?;
-        let summed_rows = scanned(summed_relation.as_slice(), direction)?;
+        let weighted = weighted_relations.iter().any(|relation| relation.forward().is_weighted());
         let labelled_rows = labelled
             .iter()
             .map(|&(relation, csr)| LabelledRows::read(relation, csr, direction))
@@ -143,8 +135,7 @@ impl<'g> Read<'g> {
             weighted_relations,
             rows,
             weighted_rows,
-            summed_relation,
-            summed_rows,
+            weighted,
             labelled,
             labelled_rows,
         })
@@ -154,11 +145,7 @@ impl<'g> Read<'g> {
 impl<'g> Adjacency<'g> {
     /// The same relations read in the opposite direction.
     pub fn reversed(&self) -> Result<Self, TraversalError> {
-        let read = Read {
-            direction: self.direction.reversed(),
-            id_space: self.id_space,
-            summed_relation: self.summed_relation,
-        };
+        let read = Read { direction: self.direction.reversed(), id_space: self.id_space };
         read.adjacency(
             self.relations.clone(),
             self.weighted_relations.clone(),
@@ -250,35 +237,26 @@ impl<'g> Adjacency<'g> {
         })
     }
 
-    /// The CSRs, one per direction read, whose rows hold each pair once
-    /// with the selected relations' weights summed in relation order (the
-    /// stored merged CSR, or the only relation selected); empty if the
-    /// relations' rows must be summed as they are read
-    /// ([`Self::relation_rows`]).
-    pub(crate) fn summed_rows(&self) -> &[&'g AnyCsr] {
-        &self.summed_rows
-    }
-
-    /// Each selected relation's CSRs, in relation order, each with whether
-    /// it is read in the second direction of [`Direction::Both`].
-    pub(crate) fn relation_rows(&self) -> impl Iterator<Item = (bool, &'g AnyCsr)> + '_ {
-        self.labelled_rows.iter().flat_map(|rows| {
-            std::iter::once((false, rows.first)).chain(rows.second.map(|csr| (true, csr)))
-        })
-    }
-
-    /// The nodes one edge away from `node` with each edge's weight (1 when
-    /// the graph is unweighted), one entry per relation the edge is in.
+    /// The nodes one edge away from `node` with what the edge costs a
+    /// shortest path: weighted, an entry per relation the edge is in, with
+    /// its relation's weight, so a search takes the cheapest (DESIGN.md
+    /// §5.3); unweighted, [`Self::row_entries`], each costing 1, since a
+    /// pair is one hop however many relations link it.
     pub(crate) fn weighted_neighbours(
         &self,
         node: DenseId,
     ) -> impl Iterator<Item = (DenseId, f64)> + '_ {
-        self.weighted_rows.iter().flat_map(move |csr| {
+        let (weighted, unit) = match self.weighted {
+            true => (self.weighted_rows.as_slice(), &[][..]),
+            false => (&[][..], self.rows.as_slice()),
+        };
+        let weighted = weighted.iter().flat_map(move |csr| {
             let weights = csr.neighbour_weights(node);
             csr.neighbours(node).enumerate().map(move |(i, target)| {
                 (target, weights.and_then(|w| w.get(i)).map_or(1.0, |&w| w))
             })
-        })
+        });
+        weighted.chain(unit.iter().flat_map(move |rows| rows.neighbours(node).map(|t| (t, 1.0))))
     }
 }
 

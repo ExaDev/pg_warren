@@ -420,6 +420,21 @@ pub(crate) fn relation_expansions(name: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// Weighted graph `name`: towns 1, 2 and 3, linked `1 → 2` by road (5)
+/// and by rail (3), and `2 → 3` by road (1), refreshed. A cost reading
+/// takes the rail (DESIGN.md §5.3): 1 to 2 costs 3, not 8.
+pub(crate) fn road_and_rail(name: &str) -> Result<(), Error> {
+    Spi::run(&format!(
+        "CREATE TABLE {name}_towns (id bigint); INSERT INTO {name}_towns VALUES (1), (2), (3);
+         CREATE TABLE {name}_links (src bigint, dst bigint, rel text, km float8);
+         INSERT INTO {name}_links VALUES (1, 2, 'road', 5), (1, 2, 'rail', 3), (2, 3, 'road', 1);
+         SELECT warren.create_graph('{name}', 'SELECT id FROM {name}_towns',
+                                    'SELECT src, dst, rel, km FROM {name}_links',
+                                    weighted := true, has_relations := true)"
+    ))?;
+    refresh(name, true).map(|_| ())
+}
+
 /// Weighted directed acyclic graphs over one edge list in three relations,
 /// a pair's weight differing between its relations, its pairs linked in
 /// one, two or three of them, as [`relation_expansions`]: `<name>_s` and
@@ -454,8 +469,7 @@ pub(crate) fn weighted_relation_expansions(name: &str, fold: &str) -> Result<(),
     Ok(())
 }
 
-/// Runs `statement` on the graphs of [`relation_expansions`] (or
-/// [`weighted_relation_expansions`]) `name`, with
+/// Runs `statement` on the graphs of [`relation_expansions`] `name`, with
 /// `{g}` replaced by the graph's name and `{per}` by `, per_relation :=
 /// true` on `<name>_s` and `<name>_u` and by nothing on `<name>_each`, then
 /// without it on all three and `<name>_once`, and asserts that vector `out`
@@ -467,16 +481,7 @@ pub(crate) fn same_as_expanded(
     statement: &str,
     out: &str,
 ) -> Result<(String, String), Error> {
-    let on = |graph: &str, per: &str| -> Result<String, Error> {
-        let graph = format!("{name}_{graph}");
-        Spi::run(&statement.replace("{g}", &graph).replace("{per}", per))?;
-        rows(&format!(
-            "SELECT node_id || ':' || CASE WHEN value = 0 THEN '0'
-                                           ELSE to_char(value::float8, '9.99999999EEEE') END
-             FROM warren.vector_values('{graph}', '{out}', NULL::bigint) ORDER BY node_id"
-        ))?
-        .ok_or(Error::InvalidPosition)
-    };
+    let on = |graph: &str, per: &str| vector_after(&format!("{name}_{graph}"), statement, per, out);
     let each = on("each", "")?;
     let once = on("once", "")?;
     for graph in ["s", "u"] {
@@ -485,4 +490,34 @@ pub(crate) fn same_as_expanded(
     }
     assert_ne!(each, once, "{statement}: the readings differ on this graph");
     Ok((each, once))
+}
+
+/// Runs `statement` on `graph` with `{g}` replaced by its name and `{per}`
+/// by `per`, and returns vector `out`'s values, rounded to 9 significant
+/// digits.
+fn vector_after(graph: &str, statement: &str, per: &str, out: &str) -> Result<String, Error> {
+    Spi::run(&statement.replace("{g}", graph).replace("{per}", per))?;
+    rows(&format!(
+        "SELECT node_id || ':' || CASE WHEN value = 0 THEN '0'
+                                       ELSE to_char(value::float8, '9.99999999EEEE') END
+         FROM warren.vector_values('{graph}', '{out}', NULL::bigint) ORDER BY node_id"
+    ))?
+    .ok_or(Error::InvalidPosition)
+}
+
+/// Runs `statement` as [`same_as_expanded`] does, for a cost reading
+/// (DESIGN.md §5.3): asserts that vector `out` is the same on `<name>_s`
+/// and `<name>_u`, with `per_relation := true` and without it, as on the
+/// folded expansion `<name>_each`, and differs from `<name>_once`'s
+/// summed weights.
+pub(crate) fn cost_as_folded(name: &str, statement: &str, out: &str) -> Result<(), Error> {
+    let on = |graph: &str, per: &str| vector_after(&format!("{name}_{graph}"), statement, per, out);
+    let each = on("each", "")?;
+    for graph in ["s", "u"] {
+        for per in ["", ", per_relation := true", ", per_relation := false"] {
+            assert_eq!(on(graph, per)?, each, "{graph}{per}: {statement}");
+        }
+    }
+    assert_ne!(on("once", "")?, each, "{statement}: summing would differ on this graph");
+    Ok(())
 }

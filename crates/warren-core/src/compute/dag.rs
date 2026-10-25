@@ -2,9 +2,10 @@
 //! and `warren.dag_longest_path`.
 //!
 //! Both run Kahn's algorithm over the forward rows of the selected
-//! relations (no reverse CSR is needed), an edge in several relations
-//! being one entry whose weight is their sum, as products read `A[i][j]`
-//! (§6.3). Ready nodes are taken smallest dense id first, so the order is
+//! relations (no reverse CSR is needed). For the order an edge in several
+//! relations is one entry; for longest paths, weighted, it weighs its
+//! heaviest relation's weight, not their sum: two parallel edges are no
+//! longer a path than the heavier (§5.3). Ready nodes are taken smallest dense id first, so the order is
 //! the lexicographically smallest topological order by dense id
 //! (NetworkX's `lexicographical_topological_sort`). A graph with a cycle
 //! (a self-loop included) has none: [`ComputeError::Cycle`]. It runs on
@@ -16,7 +17,7 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::mem::size_of;
 
-use super::product::{Matrix, Reading};
+use super::product::Matrix;
 use super::{ComputeError, ComputeMemory, MemoryCharge, Vector, Workers};
 use crate::graph::{DenseId, GraphCsr, RelationSelection, Tombstones};
 use crate::interrupts::{Cancellation, Interrupts, Work};
@@ -57,10 +58,9 @@ pub struct LongestPaths {
 
 /// The length of the longest path ending at each live node, over the
 /// selected relations' edges in the topological order: the sum of its
-/// edges' weights if `reading` is weighted (if `None`, when the graph has
-/// weights), else its number of edges. Per relation, a pair in several
-/// relations is a parallel edge in each, so the heaviest lengthens a path.
-/// As NetworkX's `dag_longest_path`, a path never starts before a prefix
+/// edges' weights if `weighted` (if `None`, when the graph has weights),
+/// else its number of edges. A pair in several relations weighs its
+/// heaviest relation's weight (DESIGN.md §5.3). As NetworkX's `dag_longest_path`, a path never starts before a prefix
 /// of negative length: lengths are at least 0. A NaN weight never
 /// lengthens a path.
 pub fn dag_longest_path<I: Interrupts>(
@@ -69,16 +69,18 @@ pub fn dag_longest_path<I: Interrupts>(
     interrupts: &mut I,
     graph: &GraphCsr,
     relations: RelationSelection<'_>,
-    reading: Reading,
+    weighted: Option<bool>,
     tombstones: &Tombstones,
 ) -> Result<LongestPaths, ComputeError> {
-    let matrix =
-        Matrix::new(graph, relations, false, reading.weighted, reading.per_relation, memory)?;
+    let matrix = Matrix::costs(graph, relations, weighted, memory)?;
     let id_space = graph.all_relations().forward().id_space();
     let mut lengths = Vector::filled(memory, id_space, 1, 0f64)?;
     let mut longest = Lengths { lengths: lengths.values_mut()? };
-    memory.reclaim_for(Kahn::bytes(id_space));
+    memory.reclaim_for(Kahn::bytes(id_space).saturating_add(matrix.folded_bytes()));
     workers.run(interrupts, |cancellation| {
+        // `max` keeps a pair's heaviest weight, and drops a NaN, which
+        // never lengthens a path.
+        let matrix = matrix.folded(f64::max, cancellation)?;
         Kahn::new(memory, cancellation, &matrix, tombstones)?.run(&mut longest)
     })?;
     let longest = lengths.values().iter().copied().fold(0.0, f64::max);
@@ -244,24 +246,13 @@ mod tests {
         weighted: Option<bool>,
         tombstones: &Tombstones,
     ) -> Result<(Vec<f64>, f64), ComputeError> {
-        longest_reading(graph, relations, weighted, false, tombstones)
-    }
-
-    fn longest_reading(
-        graph: &GraphCsr,
-        relations: RelationSelection<'_>,
-        weighted: Option<bool>,
-        per_relation: bool,
-        tombstones: &Tombstones,
-    ) -> Result<(Vec<f64>, f64), ComputeError> {
-        let reading = Reading { weighted, per_relation };
         let found = dag_longest_path(
             workers(),
             &memory(),
             &mut Uninterrupted,
             graph,
             relations,
-            reading,
+            weighted,
             tombstones,
         )?;
         Ok((found.lengths.values().to_vec(), found.longest))
@@ -432,7 +423,6 @@ mod tests {
         #[test]
         fn orders_and_longest_paths_match_the_naive_ones(
             (id_space, relations, raw, selected, acyclic, (wide, store_merged, weighted)) in scenarios(),
-            per_relation in any::<bool>(),
         ) {
             let edges: Edges = match acyclic {
                 true => raw.into_iter().filter(|&(_, s, t, _)| s < t).collect(),
@@ -454,12 +444,9 @@ mod tests {
             let (memory, tombstones) = (memory(), none(id_space));
             let found = topological_order(workers(), &memory, &mut Uninterrupted, &graph, selection, &tombstones)
                 .map(|found| found.values().to_vec());
-            let lengths = longest_reading(&graph, selection, None, per_relation, &tombstones);
-            // Per relation, a pair's heaviest relation lengthens a path most.
-            let read = match per_relation {
-                true => reference::adjacency_per_relation(id_space, &edges, selected.as_deref(), weighted, f64::max),
-                false => adjacency.clone(),
-            };
+            let lengths = longest(&graph, selection, None, &tombstones);
+            // A pair's heaviest relation lengthens a path most.
+            let read = reference::adjacency_per_relation(id_space, &edges, selected.as_deref(), weighted, f64::max);
             match naive_order(id_space, &adjacency) {
                 Some(expected) => {
                     prop_assert_eq!(found, Ok(expected));

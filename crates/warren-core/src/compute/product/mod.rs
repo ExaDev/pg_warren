@@ -11,12 +11,13 @@
 //! CSR. Either way `⊕` folds a row's entries in ascending dense-id order, so
 //! the two forms agree bit for bit.
 
+mod folded;
 mod kernel;
 mod matrix;
 
+pub(crate) use folded::FoldedRows;
 use kernel::{PushScratch, Write};
 use matrix::Form;
-pub use matrix::Reading;
 pub(crate) use matrix::{Matrix, RowScratch};
 
 use super::{

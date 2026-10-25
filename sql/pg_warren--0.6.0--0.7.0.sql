@@ -709,7 +709,11 @@ DECLARE
   limit_ int;
   falling float8;
   i int := 0;
+  each_relation boolean := coalesce(weighted, (warren.info(graph) ->> 'weighted')::boolean);
 BEGIN
+  IF per_relation IS NULL THEN
+    RAISE EXCEPTION 'per_relation must not be NULL' USING ERRCODE = 'null_value_not_allowed';
+  END IF;
   IF starts_with("out", '_warren_') THEN
     RAISE EXCEPTION 'vector names beginning with _warren_ are reserved for the library''s intermediates'
       USING ERRCODE = 'reserved_name';
@@ -727,7 +731,7 @@ BEGIN
       PERFORM warren.report_progress('sssp_vector', graph, 'iterating', i - 1, limit_);
       PERFORM warren.vector_map(graph, '_warren_sssp_vector_next', '_warren_sssp_vector_x', false, v);
       PERFORM warren.spmv(graph, '_warren_sssp_vector_x', '_warren_sssp_vector_next', 'min_plus',
-                          transpose := true, rels := rels, weighted := weighted, per_relation := per_relation, accumulate := 'min',
+                          transpose := true, rels := rels, weighted := weighted, per_relation := each_relation, accumulate := 'min',
                           persist := false, version := v);
       PERFORM warren.vector_map(graph, '_warren_sssp_vector_fell',
         'CASE WHEN _warren_sssp_vector_next < _warren_sssp_vector_x THEN 1 ELSE 0 END', false, v);

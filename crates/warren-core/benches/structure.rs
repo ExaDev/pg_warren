@@ -8,7 +8,7 @@
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use warren_core::compute::{
     core_number, dag_longest_path, minimum_spanning_forest, strong_components, topological_order,
-    triangles, ComputeMemory, Reading, Workers,
+    triangles, ComputeMemory, Workers,
 };
 use warren_core::graph::Tombstones;
 use warren_core::graph::{EdgeList, GraphCsr, GraphError, RelationDictionary, RelationSelection};
@@ -17,11 +17,6 @@ use warren_core::interrupts::Uninterrupted;
 mod random_graph;
 
 use random_graph::{random_edges, EDGES, ID_SPACE};
-
-/// The edges read with weights or not, a pair in several relations once.
-fn once(weighted: Option<bool>) -> Reading {
-    Reading { weighted, per_relation: false }
-}
 
 /// [`random_edges`]' pairs from the smaller dense id to the larger, without
 /// self-loops, weighted 1 to 100 by their endpoints.
@@ -70,19 +65,12 @@ fn bench_structure(c: &mut Criterion) {
         b.iter(|| topological_order(&workers, &memory, &mut quiet, &dag, all, &none))
     });
     group.bench_function("dag_longest_path", |b| {
-        b.iter(|| dag_longest_path(&workers, &memory, &mut quiet, &dag, all, once(None), &none))
+        b.iter(|| dag_longest_path(&workers, &memory, &mut quiet, &dag, all, None, &none))
     });
     for (name, weighted) in [("unweighted", false), ("weighted", true)] {
         group.bench_function(format!("minimum_spanning_forest/{name}"), |b| {
             b.iter(|| {
-                minimum_spanning_forest(
-                    &workers,
-                    &memory,
-                    &mut quiet,
-                    &dag,
-                    all,
-                    once(Some(weighted)),
-                )
+                minimum_spanning_forest(&workers, &memory, &mut quiet, &dag, all, Some(weighted))
             })
         });
     }

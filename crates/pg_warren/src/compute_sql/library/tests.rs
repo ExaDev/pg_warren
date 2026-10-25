@@ -74,7 +74,8 @@ mod tests {
 
     use super::{compiled, none_left, values};
     use crate::fixture::{
-        failure, refresh, relation_expansions, ring, rows, same_as_expanded, small, warnings,
+        cost_as_folded, failure, refresh, relation_expansions, ring, road_and_rail, rows,
+        same_as_expanded, small, warnings, weighted_relation_expansions,
     };
 
     #[pg_test]
@@ -430,33 +431,35 @@ mod tests {
         Ok(())
     }
 
-    /// With `per_relation`, a pair in several relations is an edge in each,
-    /// so `sssp_vector`'s `min_plus` takes the cheapest; by default it is
-    /// one edge, its weights summed: either way, as `dijkstra` reads it.
+    /// A pair in several relations costs `sssp_vector` its cheapest
+    /// relation's weight, by default and with `per_relation` alike, as
+    /// `dijkstra` reads it (DESIGN.md §5.3): road 5 and rail 3 make town 2
+    /// 3 away, not 8.
     #[pg_test]
-    fn sssp_vector_per_relation_takes_the_cheapest_relation() -> Result<(), Error> {
-        Spi::run(
-            "CREATE TABLE two_nodes (id bigint); INSERT INTO two_nodes VALUES (1), (2), (3);
-             CREATE TABLE two_edges (src bigint, dst bigint, rel text, w float8);
-             INSERT INTO two_edges VALUES (1, 2, 'road', 5), (1, 2, 'rail', 2), (2, 3, 'road', 1);
-             SELECT warren.create_graph('two', 'SELECT id FROM two_nodes',
-                                        'SELECT src, dst, rel, w FROM two_edges',
-                                        weighted := true, has_relations := true);
-             SELECT warren.refresh('two');
-             SELECT warren.sssp_vector('two', 'once', 1::bigint);
-             SELECT warren.sssp_vector('two', 'each', 1::bigint, per_relation := true)",
-        )?;
-        assert_eq!(values("two", "once", 0)?.as_deref(), Some("1:0 2:7 3:8"));
-        assert_eq!(values("two", "each", 0)?.as_deref(), Some("1:0 2:2 3:3"));
+    fn sssp_vector_takes_a_pair_s_cheapest_relation_either_way() -> Result<(), Error> {
+        road_and_rail("rr")?;
         let dijkstra = |per: &str| {
             rows(&format!(
                 "SELECT n || ':' || cost FROM generate_series(1, 3) n,
-                        warren.dijkstra('two', 1::bigint, n::bigint{per}) ORDER BY n"
+                        warren.dijkstra('rr', 1::bigint, n::bigint{per}) ORDER BY n"
             ))
         };
-        assert_eq!(dijkstra("")?.as_deref(), Some("1:0 2:7 3:8"));
-        assert_eq!(dijkstra(", per_relation := true")?.as_deref(), Some("1:0 2:2 3:3"));
+        for per in ["", ", per_relation := true"] {
+            Spi::run(&format!("SELECT warren.sssp_vector('rr', 'd', 1::bigint{per})"))?;
+            assert_eq!(values("rr", "d", 0)?.as_deref(), Some("1:0 2:3 3:4"), "{per}");
+            assert_eq!(dijkstra(per)?.as_deref(), Some("1:0 2:3 3:4"), "{per}");
+        }
+        let null = failure("warren.sssp_vector('rr', 'd', 1::bigint, per_relation := NULL)")?;
+        assert_eq!(null.as_deref(), Some("22004: per_relation must not be NULL"));
         Ok(())
+    }
+
+    /// `sssp_vector` over the min-folded expansion, by default and with
+    /// `per_relation` alike.
+    #[pg_test]
+    fn sssp_vector_is_the_min_folded_expansion_s_either_way() -> Result<(), Error> {
+        weighted_relation_expansions("sv", "min")?;
+        cost_as_folded("sv", "SELECT warren.sssp_vector('{g}', 'out', 1::bigint{per})", "out")
     }
 
     #[pg_test]

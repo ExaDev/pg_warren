@@ -1,24 +1,17 @@
 //! The adjacency matrix a product reads: the CSRs of the selected relations
 //! in the orientation the product needs, an edge in several of them one
 //! entry, its weights summed in relation order (1 when unweighted); or,
-//! per relation, one entry in each.
+//! per relation, one entry in each. A cost reading (shortest and longest
+//! paths, spanning forests) folds a pair's relations' entries into one,
+//! its lightest or heaviest (DESIGN.md §5.3).
 
 use std::mem::size_of;
 
 use super::super::{ComputeError, ComputeMemory, MemoryCharge};
+use super::folded::{Fold, FoldedRows};
 use crate::graph::RelationSelection;
 use crate::graph::{AnyCsr, AnyCsrSlices, CsrSlices, DenseId, GraphCsr, Target};
-
-/// How a kernel reads the selected relations' edges: with their weights or
-/// not, and a pair linked in several relations as one edge or as an edge
-/// in each (DESIGN.md §5.3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Reading {
-    /// Use edge weights (`None`: if the graph has them).
-    pub weighted: Option<bool>,
-    /// Read a pair in several relations as an edge in each.
-    pub per_relation: bool,
-}
+use crate::interrupts::{Cancellation, Work};
 
 /// How a product walks the matrix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +33,10 @@ pub(crate) struct Matrix<'g> {
     form: Form,
     /// The budget row scratches are charged to.
     memory: ComputeMemory,
+    id_space: u64,
+    /// The rows of several CSRs folded into one entry per target, once
+    /// [`Self::folded`] has folded them.
+    folded: Option<FoldedRows>,
 }
 
 /// What a reader of rows reuses across rows: the entries of one row of
@@ -154,7 +151,80 @@ impl<'g> Matrix<'g> {
             per_relation,
             form,
             memory: memory.clone(),
+            id_space: graph.all_relations().forward().id_space(),
+            folded: None,
         })
+    }
+
+    /// The forward CSRs a cost reading reads (shortest and longest paths,
+    /// spanning forests), whose weights are lengths: weighted, every
+    /// selected relation's own, an entry in each, for [`Self::folded`] to
+    /// fold into a pair's lightest or heaviest, since two parallel edges
+    /// are no longer a path than one of them (DESIGN.md §5.3); unweighted,
+    /// the all-relations rows, a pair one entry of 1, one hop however many
+    /// relations link it.
+    pub(crate) fn costs(
+        graph: &'g GraphCsr,
+        relations: RelationSelection<'_>,
+        weighted: Option<bool>,
+        memory: &ComputeMemory,
+    ) -> Result<Self, ComputeError> {
+        let once = Self::new(graph, relations, false, weighted, false, memory)?;
+        match once.weighted {
+            true => Self::new(graph, relations, false, weighted, true, memory),
+            false => Ok(once),
+        }
+    }
+
+    /// The entries its CSRs store, a pair in several of them counted in
+    /// each.
+    pub(crate) fn stored_entries(&self) -> u64 {
+        self.csrs.iter().map(AnyCsrSlices::edge_count).fold(0, u64::saturating_add)
+    }
+
+    /// Calls `edge(row, column, weight)` for each entry its CSRs store,
+    /// CSR by CSR in relation order, rows ascending (weight 1 when
+    /// unweighted), spending a unit of `work` per row and per entry.
+    pub(crate) fn each_stored_entry(
+        &self,
+        work: &mut Work<'_>,
+        edge: &mut dyn FnMut(DenseId, DenseId, f64),
+    ) -> Result<(), ComputeError> {
+        for csr in &self.csrs {
+            match csr {
+                AnyCsrSlices::U32(csr) => stored_entries(csr, self.weighted, work, edge)?,
+                AnyCsrSlices::U64(csr) => stored_entries(csr, self.weighted, work, edge)?,
+            }
+        }
+        Ok(())
+    }
+
+    /// The bytes [`Self::folded`] charges: none for the rows of one CSR.
+    pub(crate) fn folded_bytes(&self) -> u64 {
+        match self.csrs.len() {
+            0 | 1 => 0,
+            _ => FoldedRows::bytes(self.id_space, self.stored_entries()),
+        }
+    }
+
+    /// The same matrix with the rows of several CSRs folded once into one
+    /// entry per target, its weight `fold` of its entries' in relation
+    /// order, so each later read of a row is one slice; the rows of one
+    /// CSR are read as they are.
+    pub(crate) fn folded(
+        mut self,
+        fold: Fold,
+        cancellation: &Cancellation,
+    ) -> Result<Self, ComputeError> {
+        if self.csrs.len() < 2 {
+            return Ok(self);
+        }
+        let each_edge = |edge: &mut dyn FnMut(DenseId, DenseId, f64)| {
+            self.each_stored_entry(&mut Work::new(cancellation), edge)
+        };
+        let folded = FoldedRows::new(&self.memory, cancellation, self.id_space, each_edge, fold)?;
+        self.folded = Some(folded);
+        Ok(self)
     }
 
     /// A row scratch for [`Self::for_each_entry`], charged to the budget.
@@ -165,11 +235,6 @@ impl<'g> Matrix<'g> {
     /// Whether entries carry the edges' weights (else every weight is 1).
     pub(crate) fn is_weighted(&self) -> bool {
         self.weighted
-    }
-
-    /// Whether an edge in several relations is an entry in each.
-    pub(crate) fn is_per_relation(&self) -> bool {
-        self.per_relation
     }
 
     /// How the product walks the CSRs.
@@ -188,6 +253,9 @@ impl<'g> Matrix<'g> {
         scratch: &mut RowScratch,
         mut entry: impl FnMut(DenseId, f64) -> Result<(), ComputeError>,
     ) -> Result<(), ComputeError> {
+        if let Some(folded) = &self.folded {
+            return folded.row(row).iter().try_for_each(|&(column, weight)| entry(column, weight));
+        }
         // A hint per CSR, kept across rows; a scratch read with another
         // matrix starts them again.
         let RowScratch { entries: scratch, hints } = scratch;
@@ -224,6 +292,28 @@ impl<'g> Matrix<'g> {
             }
         }
     }
+}
+
+/// Calls `edge(row, column, weight)` for each entry `csr` stores, rows
+/// ascending (weight 1 unless `weighted`), spending a unit of `work` per
+/// row and per entry.
+fn stored_entries<T: Target>(
+    csr: &CsrSlices<'_, T>,
+    weighted: bool,
+    work: &mut Work<'_>,
+    edge: &mut dyn FnMut(DenseId, DenseId, f64),
+) -> Result<(), ComputeError> {
+    for (row, positions) in csr.stored_rows() {
+        work.spend(1 + positions.len() as u64)?;
+        let columns = csr.targets_at(positions.clone());
+        match csr.weights_at(positions).filter(|_| weighted) {
+            Some(weights) => {
+                columns.iter().zip(weights).for_each(|(c, &w)| edge(row, c.dense(), w));
+            }
+            None => columns.iter().for_each(|c| edge(row, c.dense(), 1.0)),
+        }
+    }
+    Ok(())
 }
 
 /// The CSRs of one relation's row, weighted or with unit weights, sought

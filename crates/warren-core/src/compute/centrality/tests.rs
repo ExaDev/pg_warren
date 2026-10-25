@@ -46,17 +46,6 @@ fn centrality(
     sampling: &Sampling<'_>,
     kind: Kind,
 ) -> Result<Vec<f64>, ComputeError> {
-    centrality_reading(graph, tombstones, directed, sampling, kind, false)
-}
-
-fn centrality_reading(
-    graph: &GraphCsr,
-    tombstones: &Tombstones,
-    directed: bool,
-    sampling: &Sampling<'_>,
-    kind: Kind,
-    per_relation: bool,
-) -> Result<Vec<f64>, ComputeError> {
     let memory = ComputeMemory::new(1 << 24);
     let paths = ShortestPaths {
         graph,
@@ -64,7 +53,6 @@ fn centrality_reading(
         tombstones,
         directed,
         weighted: None,
-        per_relation,
     };
     let found = match kind {
         Kind::Betweenness(scale) => {
@@ -176,22 +164,14 @@ fn a_weight_that_is_not_positive_is_refused() {
 }
 
 #[test]
-fn per_relation_a_nan_weight_in_one_relation_is_refused() {
-    // 0 → 1 weighs NaN in relation 0 and 1 in relation 1: read once the
-    // sum is NaN, and per relation the NaN must not be dropped either.
+fn a_nan_weight_in_one_relation_is_refused() {
+    // 0 → 1 weighs NaN in relation 0 and 1 in relation 1: the lighter
+    // relation's weight must not drop the NaN.
     let graph = reference::graph(2, 2, &vec![(0, 0, 1, f64::NAN), (1, 0, 1, 1.0)], true, false);
     for directed in [true, false] {
-        for per_relation in [false, true] {
-            let found = centrality_reading(
-                &graph,
-                &no_tombstones(2),
-                directed,
-                &every_source(),
-                Kind::Harmonic,
-                per_relation,
-            );
-            assert_eq!(found, Err(ComputeError::NonPositiveWeight), "{directed} {per_relation}");
-        }
+        let found =
+            centrality(&graph, &no_tombstones(2), directed, &every_source(), Kind::Harmonic);
+        assert_eq!(found, Err(ComputeError::NonPositiveWeight), "{directed}");
     }
 }
 
@@ -211,7 +191,6 @@ fn an_interrupt_cancels_the_searches() {
         tombstones: &none,
         directed: true,
         weighted: None,
-        per_relation: false,
     };
     let memory = ComputeMemory::new(1 << 20);
     let found = harmonic_centrality(workers(), &memory, &mut Stop, &paths, &every_source());
@@ -238,7 +217,6 @@ fn a_sample_gives_the_same_bits_on_any_pool() {
             tombstones: &none,
             directed: false,
             weighted: None,
-            per_relation: false,
         };
         let found =
             betweenness_centrality(&workers, &memory, &mut Uninterrupted, &paths, &sampling, scale)
@@ -259,7 +237,6 @@ fn the_scratch_is_charged_and_held_memory_reclaimed_ahead() {
         tombstones: &none,
         directed: false,
         weighted: None,
-        per_relation: false,
     };
     let scale = BetweennessScale { normalized: true, endpoints: false };
     let memory = ComputeMemory::new(200);
@@ -338,7 +315,7 @@ fn naive_betweenness(d: &[Vec<f64>], sigma: &[Vec<f64>], sources: &[usize]) -> V
     bc
 }
 
-type Scenario = (u64, usize, Edges, Vec<DenseId>, bool, bool, Vec<DenseId>, bool);
+type Scenario = (u64, usize, Edges, Vec<DenseId>, bool, bool, Vec<DenseId>);
 
 fn scenarios() -> impl Strategy<Value = Scenario> {
     (1u64..9, 1usize..3).prop_flat_map(|(id_space, relations)| {
@@ -351,16 +328,14 @@ fn scenarios() -> impl Strategy<Value = Scenario> {
             any::<bool>(),
             any::<bool>(),
             prop::collection::vec(0..id_space, 0..4),
-            any::<bool>(),
         )
     })
 }
 
 /// The scenario's graph, without the edges of its tombstoned nodes, and
-/// the dense matrix the centralities read: per relation, a pair's
-/// lightest relation.
+/// the dense matrix the centralities read: a pair's lightest relation.
 fn build(
-    (id_space, relations, edges, tombstoned, weighted, directed, _, per_relation): &Scenario,
+    (id_space, relations, edges, tombstoned, weighted, directed, _): &Scenario,
 ) -> (GraphCsr, Tombstones, Vec<Vec<Option<f64>>>) {
     let edges: Edges = edges
         .iter()
@@ -376,10 +351,7 @@ fn build(
     let graph = GraphCsr::build_as(list, *relations, *id_space, layout).unwrap();
     let mut tombstones = Tombstones::new(*id_space).unwrap();
     tombstoned.iter().for_each(|&t| tombstones.insert(t).unwrap());
-    let mut a = match per_relation {
-        true => reference::adjacency_per_relation(*id_space, &edges, None, *weighted, f64::min),
-        false => reference::adjacency(*id_space, &edges, None, *weighted),
-    };
+    let mut a = reference::adjacency_per_relation(*id_space, &edges, None, *weighted, f64::min);
     if !directed {
         let pairs: Vec<(usize, usize)> =
             (0..a.len()).flat_map(|i| (0..i).map(move |j| (i, j))).collect();
@@ -402,7 +374,7 @@ proptest! {
         let live: Vec<usize> = (0..scenario.0).filter(|&n| !tombstones.contains(n)).map(|n| n as usize).collect();
         let directed = scenario.5;
         let scale = BetweennessScale { normalized: false, endpoints: false };
-        let found = centrality_reading(&graph, &tombstones, directed, &every_source(), Kind::Betweenness(scale), scenario.7).unwrap();
+        let found = centrality(&graph, &tombstones, directed, &every_source(), Kind::Betweenness(scale)).unwrap();
         let halve = if directed { 1.0 } else { 0.5 };
         let expected: Vec<f64> = naive_betweenness(&d, &sigma, &live).iter().map(|b| b * halve).collect();
         assert_close(&found, &expected);
@@ -434,9 +406,9 @@ proptest! {
             }
         }
         let every = sources.len() == live.len();
-        let found = centrality_reading(&graph, &tombstones, directed, &sampling, Kind::Closeness(true), scenario.7).unwrap();
+        let found = centrality(&graph, &tombstones, directed, &sampling, Kind::Closeness(true)).unwrap();
         assert_close(&found, &closeness);
-        let found = centrality_reading(&graph, &tombstones, directed, &sampling, Kind::Harmonic, scenario.7).unwrap();
+        let found = centrality(&graph, &tombstones, directed, &sampling, Kind::Harmonic).unwrap();
         if every {
             // Exact: not rescaled at all.
             let exact: Vec<f64> = (0..n as usize).map(|u| (0..n as usize).filter(|&v| v != u && d[v][u].is_finite() && live.contains(&(v as u64))).map(|v| 1.0 / d[v][u]).sum()).collect();
@@ -450,10 +422,8 @@ proptest! {
 #[test]
 fn every_search_fits_a_budget_that_is_all_held_memory() {
     // Weighted and not, directed and not, one relation and two (pairs in
-    // both relations, read once or per relation), from every source and a
-    // sample. Read per relation, the row scratch merges relations' rows and
-    // may grow on the pool beyond what was reclaimed (DESIGN.md §5.5), so
-    // it is given 1 MiB free beside the held memory.
+    // both relations, folded once into the rows the searches read), from
+    // every source and a sample.
     let edges: Edges = (0..40u64)
         .flat_map(|i| {
             let (j, k) = ((i * 7 + 1) % 40, (i + 3) % 40);
@@ -464,19 +434,17 @@ fn every_search_fits_a_budget_that_is_all_held_memory() {
     for (weighted, relations) in [(false, 1), (true, 1), (true, 2)] {
         let kept: Edges = edges.iter().copied().filter(|&(r, ..)| r < relations).collect();
         let graph = reference::graph(40, relations, &kept, weighted, false);
-        for (directed, per_relation) in [(true, false), (false, false), (true, true), (false, true)]
-        {
+        for directed in [true, false] {
             let paths = ShortestPaths {
                 graph: &graph,
                 relations: RelationSelection::All,
                 tombstones: &none,
                 directed,
                 weighted: None,
-                per_relation,
             };
             for sampling in [every_source(), Sampling { k: Some(5), seed: 1, population: None }] {
                 let scale = BetweennessScale { normalized: true, endpoints: true };
-                let memory = budget(per_relation);
+                let memory = fully_held();
                 betweenness_centrality(
                     workers(),
                     &memory,
@@ -488,7 +456,7 @@ fn every_search_fits_a_budget_that_is_all_held_memory() {
                 .unwrap();
                 closeness_centrality(
                     workers(),
-                    &budget(per_relation),
+                    &fully_held(),
                     &mut Uninterrupted,
                     &paths,
                     &sampling,
@@ -497,7 +465,7 @@ fn every_search_fits_a_budget_that_is_all_held_memory() {
                 .unwrap();
                 harmonic_centrality(
                     workers(),
-                    &budget(per_relation),
+                    &fully_held(),
                     &mut Uninterrupted,
                     &paths,
                     &sampling,
@@ -505,16 +473,6 @@ fn every_search_fits_a_budget_that_is_all_held_memory() {
                 .unwrap();
             }
         }
-    }
-}
-
-/// [`fully_held`], or for a per-relation reading 1 MiB free beside 15 MiB
-/// held, all of it reclaimable.
-fn budget(per_relation: bool) -> ComputeMemory {
-    let (limit, free) = (1 << 24, 1 << 20);
-    match per_relation {
-        true => ComputeMemory::reclaiming(limit, limit - free, limit - free, Box::new(Exact)),
-        false => fully_held(),
     }
 }
 

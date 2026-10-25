@@ -8,7 +8,7 @@
 -- is exact, and a seed gives the same sample on any thread count.
 -- fixture: random --nodes 300 --edges 900 --directed --seed 13
 -- oracle: betweenness --undirected --no-normalized --directed --sources-sql 'SELECT id FROM nodes WHERE id % 7 = 2' --nodes-sql 'SELECT id FROM nodes WHERE id <> 7' --edges-sql 'SELECT src, dst FROM (SELECT src, dst FROM edges UNION ALL SELECT id, id FROM nodes WHERE id % 13 = 0) e WHERE 7 NOT IN (src, dst)'
--- oracle: closeness --weighted --no-wf-improved --directed --sources-sql 'SELECT id FROM nodes WHERE id % 7 = 2' --nodes-sql 'SELECT id FROM nodes WHERE id <> 7' --edges-sql 'SELECT src, dst, w FROM (SELECT src, dst, (1 + (src * 3 + dst) % 4)::float8 AS w FROM edges UNION ALL SELECT src, dst, 2::float8 FROM edges WHERE (src + dst) % 5 = 0 UNION ALL SELECT id, id, 1::float8 FROM nodes WHERE id % 13 = 0) e WHERE 7 NOT IN (src, dst)'
+-- oracle: closeness --weighted --no-wf-improved --directed --sources-sql 'SELECT id FROM nodes WHERE id % 7 = 2' --nodes-sql 'SELECT id FROM nodes WHERE id <> 7' --edges-sql 'SELECT src, dst, min(w) FROM (SELECT src, dst, rel, sum(w) AS w FROM (SELECT src, dst, 0 AS rel, (1 + (src * 3 + dst) % 4)::float8 AS w FROM edges UNION ALL SELECT src, dst, 1, 2::float8 FROM edges WHERE (src + dst) % 5 = 0 UNION ALL SELECT id, id, 0, 1::float8 FROM nodes WHERE id % 13 = 0) e WHERE 7 NOT IN (src, dst) GROUP BY 1, 2, 3) r GROUP BY 1, 2'
 -- oracle: harmonic --undirected --directed --nodes-sql 'SELECT id FROM nodes WHERE id <> 7' --edges-sql 'SELECT src, dst FROM (SELECT src, dst FROM edges UNION ALL SELECT id, id FROM nodes WHERE id % 13 = 0) e WHERE 7 NOT IN (src, dst)'
 \ir include/paths_graph.sql
 
