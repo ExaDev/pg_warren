@@ -36,6 +36,8 @@ def test_a_terminated_backends_fatal_is_expected_but_no_crash():
     assert log_problems(fatal, "terminate") == []
     assert log_problems(crash, "terminate") == [f"server log: {crash}"]
     assert log_problems(crash, "kill") == []
+    named = f"{PREFIX} 00000 LOG:  client backend (PID 9) was terminated by signal 9: Killed"
+    assert log_problems(named, "kill") == [], "as PG 17 and later name it"
 
 
 def test_a_crash_explains_the_backends_it_ends_and_the_connections_it_refuses():

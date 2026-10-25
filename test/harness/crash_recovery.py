@@ -53,7 +53,8 @@ KINDS = ("terminate", "kill", "immediate")
 LOG = {
     "terminate": ({"57P01"}, ()),
     "kill": ({"57P01", "57P02", "57P03"},
-             (r"server process \(PID \d+\) was terminated by signal 9: Killed",
+             # "server process" through PG 16, the backend's type from PG 17.
+             (r"(server process|client backend) \(PID \d+\) was terminated by signal 9: Killed",
               r"terminating any other active server processes")),
     "immediate": ({"57P01", "57P02", "57P03"}, ()),
 }
