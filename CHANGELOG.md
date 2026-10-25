@@ -127,9 +127,12 @@
   no longer crash the server.** Each made a name for every one of the `k`
   vectors before anything else, and with `k` near 2^31 that allocation
   failed and aborted the backend (signal 6), which restarted every
-  backend. `eigen` now refuses the count first, with
-  `invalid_parameter_value` (22023), "cannot compute k eigenpairs of a
-  matrix of dimension n", and `subspace` makes each name as it reads it,
+  backend. With `vectors_prefix`, `eigen` now admits the eigenproblem
+  before it makes or checks a name for each eigenvector: a `k` past the
+  dimension is refused with `invalid_parameter_value` (22023), "cannot
+  compute k eigenpairs of a matrix of dimension n", and a working set
+  that cannot fit with 53400, which now comes before a refusal to replace
+  another role's eigenvectors (42501). `subspace` makes each name as it reads it,
   failing at the first missing vector with `undefined_object` (42704).
   Found by the SQL fuzzer.
 
