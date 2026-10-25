@@ -27,7 +27,23 @@ recursive CTEs / NetworkX on generated fixtures, and the Appendix A use cases
   catalog and the graph's answers as before, the shared cache working
   and a new refresh succeeding (DESIGN.md §13, M11).
 
-  Neither hangs: each of their sessions has a 120 s `statement_timeout`,
+- `sql_fuzz.py` calls every `warren.*` function (read from `pg_proc`)
+  with generated arguments, valid ones from the fixture's graphs,
+  versions, vectors and node ids mixed with hostile ones (NULLs, extremes,
+  NaN, wrong types, huge arrays, injections, SQL that writes or reads a
+  secret), as the superuser, an owner, a reader and a stranger, in
+  transactions and savepoints that roll back at random, under `SET LOCAL`s
+  that bound memory and time or force parallel plans, and with a hostile
+  `search_path`. It fails on a crash, a hang, an internal error or any
+  SQLSTATE outside the documented classes, a call that succeeds beyond
+  its caller's privileges, a hostile operator run elevated, a leak (a pin
+  between statements, an activity row of a backend that has gone), a
+  catalog left inconsistent or not empty once every graph is dropped, and
+  trouble in the server log. Seeded: each failure is shrunk and written,
+  with its seed, as a psql script that reproduces it from a fresh cluster
+  (`harness/sql_fuzz/`; DESIGN.md §13, M11).
+
+  None of them hangs: each of their sessions has a 120 s `statement_timeout`,
   a session still busy when it is closed is killed, and worker threads
   that do not stop in time are reported, not waited for.
 - `harness/` is the Python behind them; `tests/` are its pytest tests.

@@ -330,7 +330,7 @@ test/upgrade.py --no-install --trusted   # the same, installed and updated by a 
 test/dump.py --pg-config "$(command -v pg_config)"   # pg_dump and restore of graphs (plain, custom, trusted)
 ```
 
-Robustness under concurrency and crashes (DESIGN.md §13, M11), each in a
+Robustness under concurrency, crashes and hostile input (DESIGN.md §13, M11), each in a
 scratch cluster per shared-cache mode (default `preload`, then `on`), and
 holding `/tmp/pgrx-test.lock` for the whole run:
 
@@ -342,7 +342,17 @@ test/concurrent_refresh.py --pg-config "$(command -v pg_config)" --seconds 20
 # Refreshes stopped mid-way by pg_terminate_backend, SIGKILL and an
 # immediate shutdown (--kinds, --points to choose; --edges sizes the graph)
 test/crash_recovery.py --no-install --pg-config "$(command -v pg_config)"
+# SQL-surface fuzzing: every warren.* function with generated arguments,
+# as four roles, --seconds per seed and mode (CI: 20 s, seeds 1 and one
+# from the clock); each failure is shrunk and written to --out as a psql
+# script, with its seed. A long run, e.g. before a release:
+test/sql_fuzz.py --no-install --pg-config "$(command -v pg_config)" \
+    --seeds 1 2 3 4 5 time --seconds 300 --shared-cache preload on off
 ```
+
+A long fuzz run need not hold the lock if it uses a Postgres tree of its
+own (as for the benchmarks, above): install the build there and pass
+`--no-lock` (which implies `--no-install`) with that tree's `pg_config`.
 
 ### Packages
 

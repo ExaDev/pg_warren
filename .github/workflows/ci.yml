@@ -352,8 +352,8 @@ jobs:
     # run of the benchmark matrix.
     name: Generators + SQL harness (PG 16)
     runs-on: ubuntu-latest
-    # About 7.5 min with warm caches (the concurrent refresh and crash
-    # recovery runs about 2 of them), up to about 20 min cold: a run that
+    # About 9 min with warm caches (the concurrent refresh, crash recovery
+    # and SQL fuzzing runs about 3.5 of them), up to about 22 min cold: a run that
     # hangs fails instead of holding a runner for the default 6 hours.
     timeout-minutes: 45
     steps:
@@ -416,6 +416,12 @@ jobs:
         # DESIGN.md §13, M11: refreshes stopped by pg_terminate_backend,
         # SIGKILL and an immediate shutdown, preloaded and not.
         run: python test/crash_recovery.py --no-install --pg-config "$PG_CONFIG"
+      - name: SQL-surface fuzzing (test/sql_fuzz.py)
+        # DESIGN.md §13, M11: every warren.* function called with generated
+        # arguments as four roles, 20 s per seed and mode: seed 1 and one
+        # from the clock (printed, with each failure's script), preloaded
+        # and at the default configuration.
+        run: python test/sql_fuzz.py --no-install --seconds 20 --seeds 1 time --shrink-seconds 30 --pg-config "$PG_CONFIG"
       - name: Benchmark matrix smoke run
         run: bench/run.sh smoke --no-install --pg-config "$PG_CONFIG" --results bench/tmp
 
