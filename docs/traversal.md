@@ -92,7 +92,7 @@ applies ([limits.md](limits.md#known-limitations)); bound them with
 | Function | Returns |
 |---|---|
 | `shortest_path(graph, start, target, max_depth := NULL, rels := NULL, direction := 'out')` | the fewest-hop path as an id array, start to target; NULL if none |
-| `dijkstra(graph, start, target, rels := NULL, direction := 'out', per_relation := false)` | one row `(path, cost)`: the cheapest path by summed weight (1 per edge when unweighted); no row if none |
+| `dijkstra(graph, start, target, rels := NULL, direction := 'out', per_relation := false)` | one row `(path, cost)`: the cheapest path, its cost the sum of its edges' weights (1 per edge when unweighted); no row if none |
 
 ```sql
 SELECT warren.shortest_path('roads', 1, 5);                           -- {1,4,5}: 2 hops
@@ -103,12 +103,15 @@ SELECT warren.shortest_path('social', 7::bigint, 1::bigint, direction := 'in'); 
 
 - `shortest_path` is a bidirectional BFS; ties go to the smallest dense id,
   so the result is deterministic.
-- An edge in two selected relations costs `dijkstra` their weights' sum,
-  as `spmv` reads it; with `per_relation := true` it costs the cheaper
-  relation's weight
-  ([semantics.md](semantics.md#a-pair-in-several-relations)). Through
-  0.6.0 it always cost the cheaper one. Read both ways (`direction :=
-  'both'`), a pair costs its lighter direction. A negative or NaN weight is an error
+- **A pair linked in several selected relations costs `dijkstra` its
+  cheapest relation's weight, not their sum**: a road of 5 and a railway
+  of 3 between two towns are a route of 3. `per_relation := true` gives
+  the same result (as parallel edges, the cheaper is taken), and is
+  accepted so that it means one thing on every function
+  ([semantics.md](semantics.md#a-pair-in-several-relations)). Functions
+  that read weights as strengths, such as `spmv` and `pagerank`, sum
+  them instead. Read both ways (`direction := 'both'`), a pair costs its
+  lighter direction. A negative or NaN weight is an error
   when the search reaches it; an infinite cost is never followed.
 
 ## Components
