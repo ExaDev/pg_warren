@@ -101,6 +101,37 @@
   edge in each (one per relation, as parallel edges), for when that
   multiplicity is the signal.
 
+### Fixes
+
+- **A persisted vector written to a version that retention or
+  `drop_version` deleted meanwhile fails with `undefined_object` (42704),
+  "version … no longer exists: vector … was not written to it".** It
+  failed with a raw foreign-key violation on `warren.vectors` (23503).
+  Every persisted write (`spmv`, `pagerank`, `vector_const` and the rest)
+  now locks the graph's and the version's rows before it writes, waiting
+  for a deletion in progress (harness tests `vector_retention_race` and
+  `test/concurrent_refresh.py`). Under REPEATABLE READ or SERIALIZABLE
+  such a write fails with `serialization_failure` (40001) instead: retry
+  it.
+
+- **A read of a shared version that another backend was evicting at that
+  moment could fail with an internal error**, "cannot pin a segment that
+  is already pinned" (XX000): the evicting backend unpinned the version's
+  segment after releasing the shared cache's lock, so a reader could
+  revive the version first. It now unpins under the lock a segment that
+  another backend still maps, which frees nothing; one nobody maps, which
+  unpinning frees, is still unpinned after the lock is released, so no
+  lookup waits for it (found by `test/concurrent_refresh.py`, preloaded).
+
+- **`compact` could fail with `data_corrupted` (XX001), "vector has 0
+  bytes", when a vector bound to the version it compacts was dropped
+  while it ran.** It now locks each vector before moving it and skips one
+  dropped since it listed them (found by `test/concurrent_refresh.py`). A
+  vector that `reassign_owned` gave to another role while `compact` ran
+  is moved under that role (harness test `compact_reassign_race`). Under
+  REPEATABLE READ or SERIALIZABLE either change fails the compaction with
+  `serialization_failure` (40001) instead: retry it.
+
 ### Performance
 
 - A relation whose edges start from at most about a sixth of the nodes

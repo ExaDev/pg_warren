@@ -31,6 +31,43 @@ fn record(row: &SpiHeapTupleData<'_>) -> Result<VectorRecord, VectorError> {
     })
 }
 
+/// Locks the graph's row and then the version's row that `binding` names
+/// `FOR KEY SHARE`, as the foreign keys' checks of the insert would, so
+/// that no retention or `drop_version` deletes the version before this
+/// transaction ends; refuses it if it is gone. A delete in progress is
+/// waited for, and a committed one, which the writer's snapshot may still
+/// have shown, refuses the write as [`VectorError::VersionGone`] rather
+/// than as the key's raw violation (DESIGN.md §7). The graph's row comes
+/// first, as for a promotion, which deletes versions holding it `FOR
+/// UPDATE`: the other order deadlocks with it.
+fn lock_version(binding: &Binding<'_>) -> Result<(), VectorError> {
+    let locked = as_catalog_owner(|| {
+        Spi::connect_mut(|client| {
+            client.update(
+                "SELECT FROM warren.graphs WHERE graph_id = $1 FOR KEY SHARE",
+                None,
+                &[binding.graph_id.into()],
+            )?;
+            Ok::<_, VectorError>(
+                client
+                    .update(
+                        "SELECT FROM warren.versions WHERE version_id = $1 FOR KEY SHARE",
+                        None,
+                        &[binding.version.into()],
+                    )?
+                    .len(),
+            )
+        })
+    })?;
+    match locked {
+        0 => Err(VectorError::VersionGone {
+            name: binding.name.to_owned(),
+            version: binding.version,
+        }),
+        _ => Ok(()),
+    }
+}
+
 impl VectorStore for SpiVectorStore {
     fn bound(&mut self, version: VersionId) -> Result<Vec<VectorRecord>, VectorError> {
         as_catalog_owner(|| {
@@ -56,6 +93,7 @@ impl VectorStore for SpiVectorStore {
         width: usize,
         length: u64,
     ) -> Result<VectorId, VectorError> {
+        lock_version(binding)?;
         // Delete only the row the writer checked, by id: under READ
         // COMMITTED a by-name delete would also see a row another role
         // committed since, and delete it unchecked (DESIGN.md §7). Any other
@@ -145,6 +183,26 @@ impl VectorStore for SpiVectorStore {
                 &[vector.into()],
                 each,
             )
+        })
+    }
+
+    fn lock(&mut self, vector: VectorId) -> Result<Option<pg_sys::Oid>, VectorError> {
+        as_catalog_owner(|| {
+            Spi::connect_mut(|client| {
+                // By id alone, and the creator as locked: a `reassign_owned`
+                // that held the row gave it to another role, and the row it
+                // committed is the one returned (EvalPlanQual).
+                let locked = client.update(
+                    "SELECT created_by::oid FROM warren.vectors WHERE vector_id = $1
+                     FOR UPDATE",
+                    None,
+                    &[vector.into()],
+                )?;
+                Ok(match locked.is_empty() {
+                    true => None,
+                    false => locked.first().get::<pg_sys::Oid>(1)?,
+                })
+            })
         })
     }
 
@@ -238,6 +296,27 @@ mod tests {
         let back = read_vector(&mut store, &memory, &record).map_err(|_| Error::InvalidPosition)?;
         assert_eq!(back, vector);
         assert_eq!(store.bound(version).map_err(|_| Error::InvalidPosition)?, [record]);
+        Ok(())
+    }
+
+    /// DESIGN.md §7: a vector bound to a version that retention or
+    /// `drop_version` deleted after the writer opened it is refused as a
+    /// version that no longer exists, not with a raw foreign-key violation.
+    #[pg_test]
+    fn a_vector_bound_to_a_deleted_version_is_refused() -> Result<(), Error> {
+        ring("vs", 10, 2)?;
+        let old = refresh("vs", true)?;
+        refresh("vs", true)?;
+        Spi::run(&format!("SELECT warren.drop_version('vs', {old})"))?;
+        let memory = ComputeMemory::new(1 << 20);
+        let ones: AnyVector =
+            Vector::filled(&memory, 10, 1, 1i64).map_err(|_| Error::InvalidPosition)?.into();
+        let binding = Binding::new(graph_id("vs")?, old, "x", me());
+        let refused = write_vector(&mut SpiVectorStore, &binding, &ones, CHUNK_SIZE);
+        assert!(
+            matches!(refused, Err(VectorError::VersionGone { version, .. }) if version == old),
+            "refused as a version that no longer exists"
+        );
         Ok(())
     }
 

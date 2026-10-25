@@ -11,6 +11,7 @@ import os
 import pwd
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -40,20 +41,49 @@ class Cluster:
             conf.write(f"listen_addresses = ''\nunix_socket_directories = '{self.directory}'\nport = {PORT}\n"
                        "fsync = off\nsynchronous_commit = off\nfull_page_writes = off\n")
             conf.writelines(f"{line}\n" for line in self.settings)
-        self._run("pg_ctl", "-D", data, "-l", self.directory / "server.log", "-w", "start")
+        self.start()
         return self
+
+    @property
+    def log(self):
+        """The server log."""
+        return self.directory / "server.log"
+
+    def start(self):
+        self._run("pg_ctl", "-D", self.directory / "data", "-l", self.log, "-w", "start")
 
     def restart(self):
         """Restarts the server, for a setting that needs it or a clean shared memory."""
-        data = self.directory / "data"
-        self._run("pg_ctl", "-D", data, "-l", self.directory / "server.log", "-m", "fast", "-w", "restart")
+        self._run("pg_ctl", "-D", self.directory / "data", "-l", self.log, "-m", "fast", "-w", "restart")
 
-    def __exit__(self, *_):
-        self._run("pg_ctl", "-D", self.directory / "data", "-m", "fast", "-w", "stop")
-        if self.keep:
-            print(f"kept cluster directory {self.directory}")
-        else:
-            shutil.rmtree(self.directory, ignore_errors=True)
+    def running(self):
+        """Whether the server is running (`pg_ctl status`)."""
+        command = [str(self.bindir / "pg_ctl"), "-D", str(self.directory / "data"), "status"]
+        if self.runas:
+            command = ["sudo", "-u", self.runas, "--", *command]
+        return subprocess.run(command, cwd=self.directory, capture_output=True).returncode == 0
+
+    def stop_immediately(self):
+        """Stops the server as a crash would (`pg_ctl stop -m immediate`): the
+        next `start` recovers from the WAL."""
+        self._run("pg_ctl", "-D", self.directory / "data", "-m", "immediate", "-w", "stop")
+
+    def __exit__(self, kind, _error, _traceback):
+        """Stops the server if it runs, and removes the cluster directory
+        (unless kept) whatever happens. A failed stop is raised only if
+        nothing else ended the run, so it never hides that error."""
+        try:
+            if self.running():
+                self._run("pg_ctl", "-D", self.directory / "data", "-m", "fast", "-w", "stop")
+        except RuntimeError as stop:
+            if kind is None:
+                raise
+            print(f"while handling the run's error, {stop}", file=sys.stderr)
+        finally:
+            if self.keep:
+                print(f"kept cluster directory {self.directory}")
+            else:
+                shutil.rmtree(self.directory, ignore_errors=True)
 
     def database(self, name="postgres", user=SUPERUSER):
         return Database(str(self.bindir / "psql"), self.connection(name, user))

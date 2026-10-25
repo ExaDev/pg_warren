@@ -86,17 +86,47 @@ pub(crate) enum Lookup {
     Missing,
 }
 
+/// A region evicted from its slot, to unpin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Evicted {
+    /// Still mapped: its slot drains, and a reader may revive it, pinning
+    /// the region again, so it is unpinned under the registry's lock.
+    /// Unpinning a mapped region never frees it.
+    Draining(Handle),
+    /// Mapped by nobody: its slot is empty, so nobody revives it, and
+    /// unpinning frees it, after the lock is released.
+    Emptied(Handle),
+}
+
+impl Evicted {
+    /// The region, if its slot drains.
+    pub(crate) fn draining(self) -> Option<Handle> {
+        match self {
+            Self::Draining(handle) => Some(handle),
+            Self::Emptied(_) => None,
+        }
+    }
+
+    /// The region, if its slot is empty.
+    pub(crate) fn emptied(self) -> Option<Handle> {
+        match self {
+            Self::Emptied(handle) => Some(handle),
+            Self::Draining(_) => None,
+        }
+    }
+}
+
 /// The outcome of a claim.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Claim {
     /// Load the version into a new region, and publish or abandon it.
     /// `evicted` are the regions evicted to make room, to unpin.
-    Load { ticket: Ticket, evicted: Vec<Handle> },
+    Load { ticket: Ticket, evicted: Vec<Evicted> },
     /// Another backend has claimed it since the lookup: look again.
     Taken,
     /// Load it privately. `drained` are the mapped regions drained so that
     /// room appears once their mappers release them, to unpin.
-    Refused { refusal: Refusal, drained: Vec<Handle> },
+    Refused { refusal: Refusal, drained: Vec<Evicted> },
 }
 
 /// The slots in use, each with its pins, and the registry's clock: a
@@ -265,7 +295,7 @@ impl<S: SlotTable, P: PinTable> Registry<S, P> {
 
     /// Evicts the unpinned ready slots whose keys `which` selects; the
     /// regions to unpin.
-    pub(crate) fn evict(&mut self, which: impl Fn(&Key) -> bool) -> Vec<Handle> {
+    pub(crate) fn evict(&mut self, which: impl Fn(&Key) -> bool) -> Vec<Evicted> {
         let pins = self.pins();
         let chosen: Vec<usize> = self
             .slots()
@@ -308,14 +338,15 @@ impl<S: SlotTable, P: PinTable> Registry<S, P> {
 
     /// Evicts the ready slot at `index`: draining until its mappers
     /// release it, or empty if it has none. Its region, to unpin.
-    fn retire(&mut self, index: usize) -> Handle {
+    fn retire(&mut self, index: usize) -> Evicted {
         let slot = &mut self.slots.as_mut()[index];
-        slot.state = if slot.mappers == 0 { State::Empty } else { State::Draining };
-        let handle = slot.handle;
-        if slot.state == State::Draining {
-            self.clocks.drains += 1;
+        if slot.mappers == 0 {
+            slot.state = State::Empty;
+            return Evicted::Emptied(slot.handle);
         }
-        handle
+        slot.state = State::Draining;
+        self.clocks.drains += 1;
+        Evicted::Draining(slot.handle)
     }
 
     /// The slot holding the use `ticket` names, if it does.
@@ -405,7 +436,7 @@ mod tests {
         };
         assert_ne!(ticket.slot, version.slot);
         assert_eq!(registry.lookup(key(1)), Lookup::Ready(version));
-        assert_eq!(registry.evict(|key| key.kind == Kind::Vector), Vec::<Handle>::new());
+        assert_eq!(registry.evict(|key| key.kind == Kind::Vector), vec![]);
         assert_eq!(registry.lookup(vector), Lookup::Loading(ticket), "a loading slot stays");
     }
 
@@ -493,7 +524,11 @@ mod tests {
         let mapped = loaded(&mut registry, 2, 10);
         let unmapped = loaded(&mut registry, 3, 10);
         registry.release(unmapped);
-        assert_eq!(registry.evict(|_| true), vec![Handle(2), Handle(3)]);
+        assert_eq!(
+            registry.evict(|_| true),
+            vec![Evicted::Draining(Handle(2)), Evicted::Emptied(Handle(3))],
+            "the mapped one drains, the other is empty at once"
+        );
         assert_eq!(registry.state(pinned), Some(State::Ready));
         assert_eq!(registry.state(mapped), Some(State::Draining));
         assert_eq!(registry.state(unmapped), None, "nobody maps it: empty at once");
@@ -526,7 +561,7 @@ mod tests {
         let mut registry = registry(2);
         let first = loaded(&mut registry, 1, 10);
         let second = loaded(&mut registry, 2, 10);
-        assert_eq!(registry.evict(|key| key.id == 2), vec![Handle(2)]);
+        assert_eq!(registry.evict(|key| key.id == 2), vec![Evicted::Draining(Handle(2))]);
         assert_eq!(registry.state(first), Some(State::Ready));
         assert_eq!(registry.state(second), Some(State::Draining));
     }
@@ -544,7 +579,7 @@ mod tests {
         else {
             panic!("not admitted");
         };
-        assert_eq!(evicted, vec![Handle(2)]);
+        assert_eq!(evicted, vec![Evicted::Emptied(Handle(2))]);
         assert_eq!(registry.state(second), None, "nobody mapped it");
         assert_eq!(registry.state(first), Some(State::Ready));
         assert_eq!(ticket.slot, 2, "an empty slot is taken first");
@@ -559,7 +594,7 @@ mod tests {
         else {
             panic!("not admitted");
         };
-        assert_eq!((ticket.slot, evicted), (old.slot, vec![Handle(1)]));
+        assert_eq!((ticket.slot, evicted), (old.slot, vec![Evicted::Emptied(Handle(1))]));
         assert_eq!(registry.lookup(key(2)), Lookup::Loading(ticket));
     }
 
@@ -570,7 +605,10 @@ mod tests {
         let newer = loaded(&mut registry, 2, 40);
         assert_eq!(
             registry.claim(key(3), 40, LOADER, limits(100)),
-            Claim::Refused { refusal: Refusal::NoRoom, drained: vec![Handle(1)] }
+            Claim::Refused {
+                refusal: Refusal::NoRoom,
+                drained: vec![Evicted::Draining(Handle(1))]
+            }
         );
         assert_eq!(registry.state(older), Some(State::Draining));
         assert_eq!(registry.state(newer), Some(State::Ready));

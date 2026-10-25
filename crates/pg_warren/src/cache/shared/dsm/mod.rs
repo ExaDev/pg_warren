@@ -25,7 +25,7 @@ use pgrx::{ereport, pg_sys, PgSqlErrorCode};
 use warren_core::compute::AnyVector;
 
 use super::admission::{Limits, Refusal};
-use super::registry::{Claim, Gone, Listing, Lookup, Registry};
+use super::registry::{Claim, Evicted, Gone, Listing, Lookup, Registry};
 use super::session::{Mapped, Session, Unattached, Use};
 use super::slot::{Handle, Key, Process, Slot, State, Ticket};
 use super::unavailable::Unavailable;
@@ -170,8 +170,10 @@ impl Backend {
 
     /// Runs `f` on the registry and this backend's session under the
     /// registry's lock, held exclusively. `f` is pure Rust, or calls only
-    /// Postgres functions that check for no interrupts (`dsm_detach`, and
-    /// `dsm_attach` and `dsm_pin_segment` to revive a draining version).
+    /// Postgres functions that check for no interrupts (`dsm_detach`;
+    /// `dsm_unpin_segment` to evict a version that drains, `unpin_draining`;
+    /// and `dsm_attach` and `dsm_pin_segment` to revive a draining
+    /// version).
     fn locked<R>(
         &mut self,
         f: impl FnOnce(
@@ -285,12 +287,23 @@ impl SharedVersions for Dsm {
     fn claim(&mut self, key: Key, bytes: u64) -> Claimed<Loading> {
         let limits = Limits { cap: setting::cap(), store_room: segment::store_room() };
         let claim = with_backend(|backend| {
-            backend.locked(|registry, session| session.claim(registry, key, bytes, limits))
+            backend.locked(|registry, session| {
+                let claim = session.claim(registry, key, bytes, limits);
+                if let Claim::Load { evicted, .. } | Claim::Refused { drained: evicted, .. } =
+                    &claim
+                {
+                    unpin_draining(evicted);
+                }
+                claim
+            })
         });
+        if let Some(Claim::Load { evicted, .. } | Claim::Refused { drained: evicted, .. }) = &claim
+        {
+            unpin_emptied(evicted);
+        }
         match claim {
             Some(Claim::Load { ticket, evicted }) => {
                 count_shared_evictions(evicted.len() as u64);
-                evicted.into_iter().for_each(segment::unpin);
                 match segment::create(bytes, key) {
                     Some(segment) => {
                         let region = segment.region();
@@ -305,7 +318,6 @@ impl SharedVersions for Dsm {
             Some(Claim::Taken) => Claimed::Taken,
             Some(Claim::Refused { refusal, drained }) => {
                 count_shared_evictions(drained.len() as u64);
-                drained.into_iter().for_each(segment::unpin);
                 Claimed::Refused(refusal)
             }
             None => broken("this backend's state is in use"),
@@ -420,12 +432,17 @@ impl SharedVersions for Dsm {
     }
 
     fn evict(&mut self, which: &dyn Fn(&Key) -> bool) -> usize {
-        let evicted = with_backend(|backend| backend.locked(|registry, _| registry.evict(which)));
-        let evicted = evicted.unwrap_or_default();
-        let count = evicted.len();
-        count_shared_evictions(count as u64);
-        evicted.into_iter().for_each(segment::unpin);
-        count
+        let evicted = with_backend(|backend| {
+            backend.locked(|registry, _| {
+                let evicted = registry.evict(which);
+                unpin_draining(&evicted);
+                evicted
+            })
+        })
+        .unwrap_or_default();
+        unpin_emptied(&evicted);
+        count_shared_evictions(evicted.len() as u64);
+        evicted.len()
     }
 
     /// Postgres detaches the mappings after the exit callbacks
@@ -472,6 +489,22 @@ fn wait_event() -> u32 {
     }
     #[cfg(any(feature = "pg15", feature = "pg16"))]
     pg_sys::PG_WAIT_EXTENSION
+}
+
+/// Unpins the evicted regions whose slots drain: under the registry's
+/// lock, so that no reader revives a slot, pinning its region again,
+/// before its region is unpinned. Some backend maps each, so unpinning
+/// frees none, and the lock is held for no more than the unpin.
+fn unpin_draining(evicted: &[Evicted]) {
+    evicted.iter().filter_map(|evicted| evicted.draining()).for_each(segment::unpin);
+}
+
+/// Unpins the evicted regions whose slots are empty, which frees them
+/// (`shm_unlink` and the pages): after the registry's lock is released, so
+/// that no lookup waits for it. Nobody maps them, and an empty slot is
+/// never revived.
+fn unpin_emptied(evicted: &[Evicted]) {
+    evicted.iter().filter_map(|evicted| evicted.emptied()).for_each(segment::unpin);
 }
 
 /// Whether a release of evicted mappings is due: a slot has started

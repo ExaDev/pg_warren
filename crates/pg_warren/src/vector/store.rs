@@ -123,6 +123,13 @@ pub(crate) trait VectorStore {
         each: &mut EachChunk<'_, VectorError>,
     ) -> Result<(), VectorError>;
 
+    /// Locks vector `vector` until the transaction ends, so that no other
+    /// transaction drops, replaces or reassigns it meanwhile, if it still
+    /// exists (waiting for a transaction that holds it); returns the role
+    /// that wrote it as locked (`reassign_owned` may have changed it since
+    /// it was listed), or `None` if it no longer exists.
+    fn lock(&mut self, vector: VectorId) -> Result<Option<pg_sys::Oid>, VectorError>;
+
     /// Deletes vector `vector` (its chunks with it) if it still exists as
     /// checked, written by the role checked; returns whether it did.
     fn delete(&mut self, vector: Checked) -> Result<bool, VectorError>;
@@ -223,6 +230,10 @@ pub(crate) mod tests {
                 each(*chunk_no, data)?;
             }
             Ok(())
+        }
+
+        fn lock(&mut self, vector: VectorId) -> Result<Option<pg_sys::Oid>, VectorError> {
+            Ok(self.rows.get(&vector).map(|(_, record)| record.created_by))
         }
 
         fn delete(&mut self, checked: Checked) -> Result<bool, VectorError> {
