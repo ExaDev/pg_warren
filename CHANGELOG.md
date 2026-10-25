@@ -99,8 +99,10 @@
   moment could fail with an internal error**, "cannot pin a segment that
   is already pinned" (XX000): the evicting backend unpinned the version's
   segment after releasing the shared cache's lock, so a reader could
-  revive the version first. It now unpins under the lock (found by
-  `test/concurrent_refresh.py`, preloaded).
+  revive the version first. It now unpins under the lock a segment that
+  another backend still maps, which frees nothing; one nobody maps, which
+  unpinning frees, is still unpinned after the lock is released, so no
+  lookup waits for it (found by `test/concurrent_refresh.py`, preloaded).
 
 - **`compact` could fail with `data_corrupted` (XX001), "vector has 0
   bytes", when a vector bound to the version it compacts was dropped

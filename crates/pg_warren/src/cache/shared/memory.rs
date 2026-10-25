@@ -13,7 +13,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
 use super::admission::Limits;
-use super::registry::{Claim, Gone, Listing, Lookup, Registry};
+use super::registry::{Claim, Evicted, Gone, Listing, Lookup, Registry};
 use super::session::{Mapped, Session, Unattached, Use};
 use super::slot::{Handle, Key, Process, Slot, Started, State, Ticket};
 use super::{Claimed, Found, SharedVersions};
@@ -182,6 +182,14 @@ impl Store {
         }
     }
 
+    /// Unpins evicted regions, as the `Dsm` adapter does (under the
+    /// lock or not, the same here: the store's lock is held throughout).
+    fn unpin_evicted(&mut self, evicted: &[Evicted]) {
+        for &(Evicted::Draining(handle) | Evicted::Emptied(handle)) in evicted {
+            self.unpin(handle);
+        }
+    }
+
     /// Pins a draining slot's region again and revives the slot.
     fn revive(&mut self, ticket: Ticket) -> Result<(), Gone> {
         let handle = self.registry.slots()[ticket.slot].handle;
@@ -256,9 +264,7 @@ impl SharedVersions for Backend {
         let limits = store.limits();
         match self.session.claim(&mut store.registry, key, bytes, limits) {
             Claim::Load { ticket, evicted } => {
-                for handle in evicted {
-                    store.unpin(handle);
-                }
+                store.unpin_evicted(&evicted);
                 store.allocated.fetch_add(bytes, Ordering::SeqCst);
                 let allocated = Arc::clone(&store.allocated);
                 let region = Region { bytes: vec![0; bytes as usize], allocated };
@@ -266,9 +272,7 @@ impl SharedVersions for Backend {
             }
             Claim::Taken => Claimed::Taken,
             Claim::Refused { refusal, drained } => {
-                for handle in drained {
-                    store.unpin(handle);
-                }
+                store.unpin_evicted(&drained);
                 Claimed::Refused(refusal)
             }
         }
@@ -321,9 +325,7 @@ impl SharedVersions for Backend {
     fn evict(&mut self, which: &dyn Fn(&Key) -> bool) -> usize {
         let mut store = self.cluster.lock();
         let evicted = store.registry.evict(which);
-        for &handle in &evicted {
-            store.unpin(handle);
-        }
+        store.unpin_evicted(&evicted);
         evicted.len()
     }
 
