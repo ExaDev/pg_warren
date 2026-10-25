@@ -440,8 +440,7 @@ for `core_number`, at most 56 per node for `strong_components_vector`, 16
 for `topological_order` and `dag_longest_path`, and 40 for
 `minimum_spanning_forest` plus up to 48 for its result. When
 `topological_order` reads several relations' CSRs (a selection of several,
-or all of them without the merged CSR; or, weighted, every selected
-relation), it adds a row scratch of 16 bytes per entry of the longest row;
+or all of them without the merged CSR), it adds a row scratch of 16 bytes per entry of the longest row;
 `dag_longest_path` and `minimum_spanning_forest` instead fold the
 relations' rows once, 8 bytes per node and 16 per stored edge of the
 selected relations (DESIGN.md §5.3, §6.7).
