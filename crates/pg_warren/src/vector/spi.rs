@@ -186,6 +186,20 @@ impl VectorStore for SpiVectorStore {
         })
     }
 
+    fn lock(&mut self, checked: Checked) -> Result<bool, VectorError> {
+        as_catalog_owner(|| {
+            Spi::connect_mut(|client| {
+                let locked = client.update(
+                    "SELECT FROM warren.vectors WHERE vector_id = $1 AND created_by::oid = $2
+                     FOR UPDATE",
+                    None,
+                    &[checked.vector.into(), checked.created_by.into()],
+                )?;
+                Ok(!locked.is_empty())
+            })
+        })
+    }
+
     fn delete(&mut self, checked: Checked) -> Result<bool, VectorError> {
         as_catalog_owner(|| {
             Spi::connect_mut(|client| {

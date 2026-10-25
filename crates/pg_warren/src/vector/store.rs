@@ -123,6 +123,12 @@ pub(crate) trait VectorStore {
         each: &mut EachChunk<'_, VectorError>,
     ) -> Result<(), VectorError>;
 
+    /// Locks vector `vector` until the transaction ends, so that no other
+    /// transaction drops or replaces it meanwhile, if it still exists as
+    /// checked (waiting for a transaction that holds it); returns whether
+    /// it does.
+    fn lock(&mut self, vector: Checked) -> Result<bool, VectorError>;
+
     /// Deletes vector `vector` (its chunks with it) if it still exists as
     /// checked, written by the role checked; returns whether it did.
     fn delete(&mut self, vector: Checked) -> Result<bool, VectorError>;
@@ -223,6 +229,11 @@ pub(crate) mod tests {
                 each(*chunk_no, data)?;
             }
             Ok(())
+        }
+
+        fn lock(&mut self, checked: Checked) -> Result<bool, VectorError> {
+            let found = self.rows.get(&checked.vector);
+            Ok(found.is_some_and(|(_, record)| record.created_by == checked.created_by))
         }
 
         fn delete(&mut self, checked: Checked) -> Result<bool, VectorError> {

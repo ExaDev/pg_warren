@@ -43,8 +43,9 @@ pub(crate) fn gather(
 /// `graph_id` to version `to`, under the same name and creator, with its
 /// rows gathered as `rows` (the old dense id of each new one) says, and
 /// deletes it from `from`. One vector is held at a time, in an unlimited
-/// budget: a compaction already holds two versions of the graph. Returns
-/// the names moved, in order.
+/// budget: a compaction already holds two versions of the graph. Each is
+/// locked before it is read, and one dropped since it was listed is not
+/// moved. Returns the names moved, in order.
 pub(crate) fn move_vectors(
     store: &mut impl VectorStore,
     graph_id: i32,
@@ -56,8 +57,15 @@ pub(crate) fn move_vectors(
     let memory = ComputeMemory::new(u64::MAX);
     let records = store.bound(from)?;
     activity::phase("moving vectors", Some(records.len() as u64));
-    for (count, record) in (1..).zip(&records) {
-        let vector = read_vector(store, &memory, record)?;
+    let mut moved_names = Vec::with_capacity(records.len());
+    for (count, record) in (1..).zip(records) {
+        // Locked before it is read: one dropped since it was listed is not
+        // moved, and none is dropped while it is.
+        if !store.lock(record.checked())? {
+            activity::done(count);
+            continue;
+        }
+        let vector = read_vector(store, &memory, &record)?;
         let moved = gather(&memory, &vector, rows)?;
         drop(vector);
         let binding = Binding::new(graph_id, to, &record.name, record.created_by);
@@ -71,9 +79,10 @@ pub(crate) fn move_vectors(
             });
         }
         forget(record.vector);
+        moved_names.push(record.name);
         activity::done(count);
     }
-    Ok(records.into_iter().map(|record| record.name).collect())
+    Ok(moved_names)
 }
 
 /// The NOTICE `compact` raises for the vectors it moved.
@@ -86,7 +95,8 @@ pub(crate) fn moved_notice(names: &[String], from: VersionId, to: VersionId) -> 
 #[allow(clippy::disallowed_methods)] // Test code may assign a transaction id.
 mod tests {
     use super::*;
-    use crate::vector::MemoryVectorStore;
+    use crate::segment::EachChunk;
+    use crate::vector::{Checked, ChunkSource, MemoryVectorStore, VectorId, VectorRecord};
     use pgrx::pg_sys;
     use warren_core::compute::Dtype;
 
@@ -130,6 +140,81 @@ mod tests {
         assert_eq!(frame.phase.as_str(), "moving vectors");
         assert_eq!((frame.done, frame.total), (Some(2), Some(2)));
         drop(running);
+    }
+
+    /// A store whose listing also names a vector dropped since: a
+    /// concurrent `drop_vector` that committed between a compaction's
+    /// listing and its read.
+    struct DroppedSinceListed {
+        store: MemoryVectorStore,
+        dropped: VectorRecord,
+    }
+
+    impl VectorStore for DroppedSinceListed {
+        fn bound(&mut self, version: VersionId) -> Result<Vec<VectorRecord>, VectorError> {
+            let mut listed = self.store.bound(version)?;
+            listed.push(self.dropped.clone());
+            Ok(listed)
+        }
+
+        fn insert(
+            &mut self,
+            binding: &Binding<'_>,
+            dtype: Dtype,
+            width: usize,
+            length: u64,
+        ) -> Result<VectorId, VectorError> {
+            self.store.insert(binding, dtype, width, length)
+        }
+
+        fn write_chunks(
+            &mut self,
+            vector: VectorId,
+            name: &str,
+            source: &mut ChunkSource<'_>,
+        ) -> Result<(), VectorError> {
+            self.store.write_chunks(vector, name, source)
+        }
+
+        fn read_chunks(
+            &mut self,
+            vector: VectorId,
+            each: &mut EachChunk<'_, VectorError>,
+        ) -> Result<(), VectorError> {
+            self.store.read_chunks(vector, each)
+        }
+
+        fn lock(&mut self, vector: Checked) -> Result<bool, VectorError> {
+            self.store.lock(vector)
+        }
+
+        fn delete(&mut self, vector: Checked) -> Result<bool, VectorError> {
+            self.store.delete(vector)
+        }
+
+        fn existing(&mut self, vectors: &[VectorId]) -> Result<Vec<VectorId>, VectorError> {
+            self.store.existing(vectors)
+        }
+    }
+
+    /// DESIGN.md §5.2: a vector dropped after `compact` listed the source's
+    /// vectors is not moved (found by `test/concurrent_refresh.py`: it was
+    /// read as a vector with no chunks, `data_corrupted`).
+    #[test]
+    fn a_vector_dropped_since_it_was_listed_is_not_moved() {
+        let mut store = MemoryVectorStore::default();
+        let ids: AnyVector = Vector::from_values(&memory(), 2, 1, vec![1i64, 2]).unwrap().into();
+        let creator = pg_sys::Oid::from(42);
+        write_vector(&mut store, &Binding::new(1, 7, "kept", creator), &ids, 64).unwrap();
+        let dropped =
+            write_vector(&mut store, &Binding::new(1, 7, "dropped", creator), &ids, 64).unwrap();
+        assert!(store.delete(dropped.checked()).unwrap());
+        let mut listing = DroppedSinceListed { store, dropped };
+        assert_eq!(move_vectors(&mut listing, 1, 7, 9, &[1, 0], 64).unwrap(), ["kept"]);
+        let moved: Vec<String> =
+            listing.store.bound(9).unwrap().into_iter().map(|record| record.name).collect();
+        assert_eq!(moved, ["kept"]);
+        assert!(listing.store.bound(7).unwrap().is_empty());
     }
 
     #[test]

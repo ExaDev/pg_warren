@@ -93,6 +93,11 @@
   for a deletion in progress (harness tests `vector_retention_race` and
   `test/concurrent_refresh.py`).
 
+- **`compact` could fail with `data_corrupted` (XX001), "vector has 0
+  bytes", when a vector bound to the version it compacts was dropped
+  while it ran.** It now locks each vector before moving it and skips one
+  dropped since it listed them (found by `test/concurrent_refresh.py`).
+
 ### Performance
 
 - A relation whose edges start from at most about a sixth of the nodes
