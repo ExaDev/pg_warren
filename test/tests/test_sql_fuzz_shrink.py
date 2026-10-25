@@ -2,7 +2,8 @@
 script a shrunk failure is printed as."""
 
 from harness.sql_fuzz.actions import CONNECT
-from harness.sql_fuzz.run import Executed, replay
+from harness.sql_fuzz.run import Executed, Run, replay
+from harness.sql_fuzz.verdict import Finding
 from harness.sql_fuzz.shrink import Shrinker, _growing, ddmin, fixture_script, script
 
 
@@ -58,3 +59,13 @@ def test_a_replay_stops_at_the_deadline():
 
     actions = [[Executed("fuzz_owner", "SELECT 1")]]
     assert replay(Untouched(), actions, more=lambda: False) is None
+
+
+def test_a_finding_made_after_its_action_ended_ends_its_transcript_with_that_action():
+    run = Run(None, "fuzz_1", quiet=True)
+    drop = Executed("fuzz_reader", "SELECT warren.drop_owned('fuzz_reader')")
+    run.action = [drop]
+    run.end_action()
+    run._found(Finding("access", "fuzz_reader changed graph g8, owned by fuzz_owner"), drop)
+    (failure,) = run.failures.values()
+    assert failure.transcript == [[drop]]

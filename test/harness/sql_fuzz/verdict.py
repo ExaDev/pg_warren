@@ -124,7 +124,8 @@ def _breach(role, call, world):
 def changes(role, before, after):
     """What `role`'s action, between worlds `before` and `after`, changed
     that it may not: a graph it does not own dropped, given away, granted
-    or revoked, or its versions or current version changed (whatever the
+    or revoked (but for removing itself from its readers, as `drop_owned`
+    of itself does), or its versions or current version changed (whatever the
     function: `reassign_owned`, `drop_owned` and `drop_orphans` included);
     or a persisted vector of another role dropped or replaced on a graph it
     does not own (DESIGN.md §7: a vector's creator or a member of the
@@ -137,8 +138,9 @@ def changes(role, before, after):
         if graph.owner == role:
             continue
         now = after.graph(graph.name)
-        shape = (graph.owner, graph.readers, graph.current, _versions(before, graph.name))
-        if now is None or (now.owner, now.readers, now.current, _versions(after, graph.name)) != shape:
+        shape = (graph.owner, graph.current, _versions(before, graph.name))
+        if (now is None or (now.owner, now.current, _versions(after, graph.name)) != shape
+                or set(now.readers) not in (set(graph.readers), set(graph.readers) - {role})):
             what = "dropped" if now is None else "changed"
             found.append(Finding("access", f"{role} {what} graph {graph.name}, owned by {graph.owner}"))
     owners = {graph.name: graph.owner for graph in before.graphs}

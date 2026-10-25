@@ -146,7 +146,10 @@ class Run:
             timer.cancel()
 
     def _found(self, finding, executed):
-        failure = Failure(finding, executed, [*self.transcript, list(self.action)])
+        # A finding made after its action ended (`after_action`) is that
+        # action's: the transcript already ends with it.
+        actions = [*self.transcript, list(self.action)] if self.action else list(self.transcript)
+        failure = Failure(finding, executed, actions)
         known = self.failures.get(failure.signature)
         if known is None:
             self.failures[failure.signature] = failure

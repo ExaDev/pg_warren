@@ -167,3 +167,9 @@ def test_contracting_into_an_existing_graph_is_the_owners_alone():
     assert judge(READER, into_gq, OK, world).kind == "access"
     assert judge(OWNER, into_gq, OK, world) is None
     assert judge(READER, Call(contract, ("'g8'", "'lbl'", "'fz1'"), graphs=("g8",)), OK, world) is None
+
+
+def test_a_reader_may_remove_itself_from_the_readers_but_not_add_itself_or_remove_others():
+    assert changes(READER, BEFORE, after(readers=())) == []
+    assert [f.kind for f in changes(STRANGER, BEFORE, after(readers=(READER, STRANGER)))] == ["access"]
+    assert [f.kind for f in changes(STRANGER, BEFORE, after(readers=()))] == ["access"]
