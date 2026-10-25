@@ -176,7 +176,7 @@ bench/parallel.py --scale 1000 --rows 10000 --repeat 1 \
 # with the pinned keepset CLI (needs Node 22 and network) into
 # /var/tmp/warren-corpus, checked against NetworkX and igraph (--oracle picks
 # one) and timed (release build in --pg-config's tree); results in
-# bench/results/corpus/.
+# bench/results/corpus/. CI checks the tiny tier nightly (corpus.yml).
 bench/corpus/suite.py fetch --tier tiny
 bench/corpus/suite.py check --tier tiny --pg-config $T/usr/lib/postgresql/16/bin/pg_config \
     --extension-revision "$(git rev-parse --short HEAD)" --extension-profile release
