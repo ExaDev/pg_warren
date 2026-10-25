@@ -154,7 +154,9 @@ class Arguments:
     def _expression(self):
         vector, other = self._vector(), self._vector()
         if self.rng.random() < self.hostility:
-            return self.rng.choice(HOSTILE_EXPRESSIONS).replace("{v}", vector)
+            # The hostile expressions are SQL already: the name goes inside
+            # their literals, so its quotes are doubled.
+            return self.rng.choice(HOSTILE_EXPRESSIONS).replace("{v}", vector.replace("'", "''"))
         return literal(self.rng.choice(EXPRESSIONS).replace("{v}", vector).replace("{w}", other))
 
     # The caller's SQL.

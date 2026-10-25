@@ -77,3 +77,13 @@ def test_a_new_graphs_flags_mostly_match_the_columns_its_edge_query_reads():
 def test_the_sql_a_call_runs_is_recorded():
     for call in calls(QUERY, 0.5):
         assert call.queries == (call.positional[2],)
+
+
+def test_a_vector_name_with_a_quote_stays_inside_a_hostile_expressions_literal():
+    world = World((Graph("g8", "bigint", "fuzz_owner"),), versions=(("g8", 2, True),),
+                  vectors=(("g8", "it's", 2),))
+    explain = Function("explain_map", (Argument("graph", "text"), Argument("expr", "text")), 0, False, "jsonb")
+    for seed in range(300):
+        expr = Arguments(random.Random(seed), world, 0.5).call(explain).positional[1]
+        if "it'" in expr:
+            assert "it's" not in expr.replace("''", ""), expr
