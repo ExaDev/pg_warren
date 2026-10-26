@@ -352,8 +352,8 @@ jobs:
     # run of the benchmark matrix.
     name: Generators + SQL harness (PG 16)
     runs-on: ubuntu-latest
-    # About 9.5 min with warm caches (the concurrent refresh, crash recovery,
-    # replica and SQL fuzzing runs about 4 of them), up to about 22 min cold: a run that
+    # About 12 min with warm caches (the concurrent refresh, crash recovery,
+    # replica, SQL fuzzing and pooler soak runs about 6.5 of them), up to about 25 min cold: a run that
     # hangs fails instead of holding a runner for the default 6 hours.
     timeout-minutes: 45
     steps:
@@ -435,6 +435,19 @@ jobs:
           read -ra seeds <<< "$SEEDS"
           python test/sql_fuzz.py --no-install --seconds 20 --seeds "${seeds[@]}" --shrink-seconds 30 \
             --max-shrinks 3 --pg-config "$PG_CONFIG"
+      - name: Install PgBouncer
+        timeout-minutes: 10
+        run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pgbouncer
+      - name: A soak behind a connection pooler (test/pooler_soak.py)
+        # DESIGN.md §13, M11: PgBouncer in transaction and in session mode
+        # in front of one preloaded cluster, 48 clients over 8 server
+        # connections each, for 2 min: growth after the warm-up (a robust
+        # slope of each backend's memory, pg_warren's accounting, the DSM
+        # segments and the catalog), what is left once the clients and the
+        # poolers stop, the session state each pool mode keeps, and the
+        # server log. The multi-day soak is run by hand (CONTRIBUTING.md).
+        timeout-minutes: 10
+        run: python test/pooler_soak.py --no-install --pg-config "$PG_CONFIG"
       - name: Benchmark matrix smoke run
         run: bench/run.sh smoke --no-install --pg-config "$PG_CONFIG" --results bench/tmp
 
