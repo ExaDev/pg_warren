@@ -92,7 +92,17 @@ jobs:
           path: ~/.cache/warren-corpus/datasets
           key: corpus-tiny-${{ hashFiles('bench/corpus/pins.json', 'bench/corpus/manifest.json', 'bench/corpus/fetch.py', 'bench/corpus/graph_v1.py', 'bench/corpus/tables.py') }}
       - name: Fetch the tiny tier (keepset, checked against pins.json)
-        run: python bench/corpus/suite.py fetch --tier tiny
+        # Three tries, a minute apart: a source can fail from a runner when
+        # it does not elsewhere (raw.githubusercontent.com did, and keepset
+        # then read its archive.org snapshot, which arrives gzipped, as
+        # text). A dataset already fetched at its pin is not fetched again.
+        run: |
+          for try in 1 2 3; do
+            python bench/corpus/suite.py fetch --tier tiny && exit 0
+            echo "::warning::fetch try $try failed"
+            sleep 60
+          done
+          exit 1
       - name: Every tiny dataset was pinned before this run
         # A dataset without a pin would be pinned by this fetch, unchecked.
         run: git diff --exit-code bench/corpus/pins.json
