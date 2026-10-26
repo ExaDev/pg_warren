@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The real-graph suite (DESIGN.md §12, §13 M11): datasets from keepset,
 fetched and pinned, loaded into `nodes`/`edges`, checked against NetworkX
-and igraph and timed on the §12 matrix. bench/corpus/README.md has the details.
+and igraph, timed on the §12 matrix and against igraph and Neo4j. bench/corpus/README.md has the details.
 
     bench/corpus/suite.py fetch --tier tiny            # fetch, pin, convert to tables
     bench/corpus/suite.py check --tier tiny --pg-config ...   # correctness against NetworkX and igraph

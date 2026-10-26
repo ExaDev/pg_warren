@@ -9,6 +9,8 @@ ENGINES = ("pg_warren", "igraph", "neo4j-cypher", "neo4j-gds")
 
 
 def seconds(value):
+    if value < 0.001:
+        return f"{value * 1e6:.0f} µs"
     if value < 0.01:
         return f"{value * 1000:.2f} ms"
     if value < 1:

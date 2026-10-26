@@ -310,7 +310,8 @@ def test_the_report_shows_a_time_only_when_its_answer_agreed():
 
 
 def test_seconds_read_at_a_glance():
-    assert [report.seconds(s) for s in (0.00042, 0.25, 3.14159, 125.0)] == ["0.42 ms", "0.250", "3.14", "125"]
+    assert [report.seconds(s) for s in (0.0000042, 0.00042, 0.0042, 0.25, 3.14159, 125.0)] == [
+        "4 µs", "420 µs", "4.20 ms", "0.250", "3.14", "125"]
 
 
 # The engines' downloads are pinned.
