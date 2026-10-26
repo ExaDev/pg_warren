@@ -86,3 +86,11 @@ def test_a_persisted_vector_whose_drop_failed_is_dropped_by_the_clients_next_per
     third = ScriptedSession({"current_version": [Outcome([["9"]], "00000", "")]})
     workload._persist(third, random.Random(1), 0)
     assert not any("', 7" in sql for sql in third.ran)
+
+
+def test_a_timeout_call_that_finishes_in_time_is_rolled_back_so_its_vector_keeps_no_version():
+    workload = Workload(None, "session", "soak_session", 1, 0, 100, 1, Tally(), None, 0, 0)
+    session = ScriptedSession({})
+    workload._timeout(session, random.Random(1), 0)
+    assert session.ran[-1] == "ROLLBACK"
+    assert "COMMIT" not in session.ran

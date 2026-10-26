@@ -180,9 +180,10 @@ class Workload:
         self.tally.count(self.mode, operation, done)
         return done.ok
 
-    def _transaction(self, s, operation, statements):
-        """Runs `statements` in one transaction; their outcomes, or None
-        if one failed (recorded; the transaction rolled back)."""
+    def _transaction(self, s, operation, statements, end="COMMIT"):
+        """Runs `statements` in one transaction, ended by `end`; their
+        outcomes, or None if one failed (recorded; the transaction rolled
+        back)."""
         s.run("BEGIN")
         outcomes = []
         for sql in statements:
@@ -192,7 +193,7 @@ class Workload:
                 s.run("ROLLBACK")
                 return None
             outcomes.append(done)
-        done = s.run("COMMIT")
+        done = s.run(end)
         self._record(operation, done)
         return outcomes if done.ok else None
 
@@ -286,7 +287,8 @@ class Workload:
     def _timeout(self, s, rng, number):
         """A long call cut short by a statement timeout (or finished in time), rolled back."""
         self._transaction(s, "timeout", [f"SET LOCAL statement_timeout = '{rng.randint(5, 60)}ms'",
-                                         f"SELECT warren.pagerank('g', 'to{number}', max_iter := 300, tol := 0)"])
+                                         f"SELECT warren.pagerank('g', 'to{number}', max_iter := 300, tol := 0)"],
+                          end="ROLLBACK")
 
     # Writers.
 
