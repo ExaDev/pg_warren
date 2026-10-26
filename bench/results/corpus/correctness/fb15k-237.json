@@ -5,24 +5,29 @@
    "check",
    "--tier",
    "tiny",
-   "--tier",
-   "medium",
+   "cit-hepth",
+   "email-enron",
+   "fb15k-237",
+   "ss-gleich-usroads-48",
+   "dblp",
+   "yago3-10",
+   "hetionet",
    "--pg-config",
-   "/var/tmp/warren-corpus/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "/var/tmp/m11-corpus-nightly/pgtree/usr/lib/postgresql/16/bin/pg_config",
    "--extension-revision",
-   "1ffdcd9",
+   "a35bbe6",
    "--extension-profile",
    "release"
   ],
   "harness": {
-   "revision": "67b54c38c3ddcd3a9e7bd979586d0a8524321d49",
+   "revision": "eae7c8d7942c13925e5c3fb7b4caa42f3a666aa4",
    "dirty": true
   },
   "extension": {
-   "revision": "1ffdcd9",
+   "revision": "a35bbe6",
    "profile": "release",
-   "library": "/var/tmp/warren-corpus/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
-   "library_sha256": "5499e8bca4b5710e1b28f9addaf05fe9538a6100b34dcf8406c30e2ff4ac2174"
+   "library": "/var/tmp/m11-corpus-nightly/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "19f6b8fb27c2117f98e220dc6e57fce45435a7d8c3912a96acfd77457f886457"
   }
  },
  "hardware": {
@@ -31,9 +36,9 @@
   "memory_bytes": 16872804352,
   "kernel": "6.18.44-fc-v153",
   "load_average": [
-   1.07373046875,
-   1.2001953125,
-   1.8037109375
+   1.57958984375,
+   3.1796875,
+   3.5244140625
   ]
  },
  "dataset": "fb15k-237",
@@ -46,6 +51,10 @@
    "relations": 237,
    "self_loops": 1806
   },
+  "sha256": {
+   "nodes.csv": "388311a4d3eb10b614d702ce55d09e73bc76e9b866e09b9dbdedead28f5796ba",
+   "edges.csv": "bb64c0468d9fbae25dca3b0c15e8f336d7aa8f20a732e1a8e3bd881b7ec09ae4"
+  },
   "provenance": {
    "entryId": "fb15k-237",
    "catalogue": {
@@ -53,7 +62,7 @@
     "version": "1.33.0"
    },
    "category": "graph/v1",
-   "retrievedAt": "2026-10-24T13:48:37.564Z",
+   "retrievedAt": "2026-10-25T23:50:39.375Z",
    "source": {
     "url": "https://web.informatik.uni-mannheim.de/pi1/kge-datasets/fb15k-237.tar.gz",
     "status": "live"
@@ -68,18 +77,22 @@
    ]
   }
  },
+ "oracles": {
+  "igraph": "1.0.0",
+  "networkx": "3.7"
+ },
  "version": {
   "seq": 1,
-  "bytes": 60462713,
+  "bytes": 8011789,
   "label": null,
   "staged": false,
   "current": true,
   "vectors": 0,
   "version": 1,
-  "built_at": "2026-10-24T14:02:35.914865+00:00",
+  "built_at": "2026-10-26T00:00:07.61703+00:00",
   "id_space": 14541,
-  "built_lsn": "0/D546FF8",
-  "staleness": "00:00:00.379645",
+  "built_lsn": "0/7883A78",
+  "staleness": "00:00:00.187979",
   "edge_count": 310116,
   "node_count": 14541,
   "label_vector": null,
@@ -90,7 +103,7 @@
   "parent_version": null,
   "deduplicated_edges": 0
  },
- "seconds": 48.3,
+ "seconds": 96.0,
  "findings": [
   {
    "check": "node_count",
@@ -100,7 +113,8 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "tables"
   },
   {
    "check": "dropped_edges",
@@ -110,7 +124,8 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "tables"
   },
   {
    "check": "degree out",
@@ -120,7 +135,19 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "igraph"
+  },
+  {
+   "check": "degree out",
+   "status": "match",
+   "compared": 14541,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx"
   },
   {
    "check": "degree in",
@@ -130,7 +157,19 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "igraph"
+  },
+  {
+   "check": "degree in",
+   "status": "match",
+   "compared": 14541,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx"
   },
   {
    "check": "degree both",
@@ -140,7 +179,19 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "igraph"
+  },
+  {
+   "check": "degree both",
+   "status": "match",
+   "compared": 14541,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx"
   },
   {
    "check": "bfs depths",
@@ -151,6 +202,7 @@
    "examples": [],
    "only_warren": 0,
    "only_oracle": 0,
+   "against": "igraph",
    "source": "/m/09c7w0"
   },
   {
@@ -162,6 +214,31 @@
    "examples": [],
    "only_warren": 0,
    "only_oracle": 0,
+   "against": "networkx",
+   "source": "/m/09c7w0"
+  },
+  {
+   "check": "bfs depths",
+   "status": "match",
+   "compared": 12830,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "igraph",
+   "source": "/m/01p45_v"
+  },
+  {
+   "check": "bfs depths",
+   "status": "match",
+   "compared": 12830,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx",
    "source": "/m/01p45_v"
   },
   {
@@ -169,7 +246,16 @@
    "status": "match",
    "warren_parts": 6,
    "oracle_parts": 6,
-   "differing_parts": 0
+   "differing_parts": 0,
+   "against": "igraph"
+  },
+  {
+   "check": "components",
+   "status": "match",
+   "warren_parts": 6,
+   "oracle_parts": 6,
+   "differing_parts": 0,
+   "against": "networkx"
   },
   {
    "check": "shortest_path length",
@@ -179,13 +265,44 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "igraph"
   },
   {
    "check": "shortest_path edges",
    "status": "match",
    "compared": 25,
-   "invalid": []
+   "invalid": [],
+   "against": "igraph"
+  },
+  {
+   "check": "shortest_path length",
+   "status": "match",
+   "compared": 25,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx"
+  },
+  {
+   "check": "shortest_path edges",
+   "status": "match",
+   "compared": 25,
+   "invalid": [],
+   "against": "networkx"
+  },
+  {
+   "check": "pagerank",
+   "status": "match",
+   "compared": 14541,
+   "mismatches": 0,
+   "max_error": 2.1522957797948106e-08,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "igraph"
   },
   {
    "check": "pagerank",
@@ -195,7 +312,8 @@
    "max_error": 1.3183898417423734e-16,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "networkx"
   },
   {
    "check": "triangles",
@@ -205,7 +323,19 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "igraph"
+  },
+  {
+   "check": "triangles",
+   "status": "match",
+   "compared": 14541,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx"
   },
   {
    "check": "clustering",
@@ -245,7 +375,49 @@
    "documented": {
     "reason": "clustering counts a node with a self-loop among its own neighbours (vector_degree), NetworkX leaves the self-loop out (docs/compute.md, DESIGN.md \u00a76.7)",
     "nodes": 1301
-   }
+   },
+   "against": "igraph"
+  },
+  {
+   "check": "clustering",
+   "status": "documented difference",
+   "compared": 14541,
+   "mismatches": 1301,
+   "max_error": 0.6666666666666667,
+   "examples": [
+    {
+     "node": "/m/010016",
+     "warren": 0.2857142857142857,
+     "oracle": 0.38095238095238093
+    },
+    {
+     "node": "/m/0100mt",
+     "warren": 0.15151515151515152,
+     "oracle": 0.18181818181818182
+    },
+    {
+     "node": "/m/0102t4",
+     "warren": 0.3,
+     "oracle": 0.5
+    },
+    {
+     "node": "/m/0104lr",
+     "warren": 0.26666666666666666,
+     "oracle": 0.4
+    },
+    {
+     "node": "/m/0105y2",
+     "warren": 0.28888888888888886,
+     "oracle": 0.3611111111111111
+    }
+   ],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "documented": {
+    "reason": "clustering counts a node with a self-loop among its own neighbours (vector_degree), NetworkX leaves the self-loop out (docs/compute.md, DESIGN.md \u00a76.7)",
+    "nodes": 1301
+   },
+   "against": "networkx"
   },
   {
    "check": "core_number",
@@ -255,55 +427,138 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "igraph"
+  },
+  {
+   "check": "core_number",
+   "status": "match",
+   "compared": 14541,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx"
+  },
+  {
+   "check": "betweenness",
+   "status": "match",
+   "compared": 14541,
+   "mismatches": 0,
+   "max_error": 7.771561172376096e-16,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "igraph"
   },
   {
    "check": "modularity definition",
    "status": "match",
-   "warren": 0.5367931635077182,
-   "oracle": 0.5367931635077182,
-   "difference": 0.0,
-   "note": "warren.modularity and NetworkX scoring NetworkX's Louvain partition"
+   "warren": 0.532444246770697,
+   "oracle": 0.5324442467706967,
+   "difference": 3.3306690738754696e-16,
+   "note": "warren.modularity and igraph scoring igraph's Louvain partition",
+   "against": "igraph"
   },
   {
-   "check": "modularity, a pair in several relations",
-   "status": "definition difference",
-   "warren": 0.5367931635077182,
-   "oracle": 0.5234303513039194,
-   "difference": 0.013362812203798868,
-   "note": "NetworkX with A at 1 for an unweighted pair in several relations, as spmv defines A (docs/compute.md); pg_warren's undirected view counts the pair once per relation"
+   "check": "modularity per relation",
+   "status": "match",
+   "warren": 0.5381006276657259,
+   "oracle": 0.5381006276657256,
+   "difference": 2.220446049250313e-16,
+   "note": "per_relation := true against igraph with A at k for an unweighted pair in k relations",
+   "against": "igraph"
   },
   {
    "check": "louvain",
    "status": "match",
-   "warren": 0.5264823303585264,
-   "oracle": 0.5367931635077182,
-   "difference": -0.01031083314919179,
-   "slack": 0.02
+   "warren": 0.5442288358405171,
+   "oracle": 0.532444246770697,
+   "difference": 0.01178458906982005,
+   "slack": 0.02,
+   "against": "igraph"
   },
   {
    "check": "louvain returned modularity",
    "status": "match",
-   "warren": 0.5264823303585264,
-   "oracle": 0.5264823303585263,
-   "difference": 1.1102230246251565e-16,
-   "communities": 19
+   "warren": 0.5442288358405171,
+   "oracle": 0.5442288358405167,
+   "difference": 3.3306690738754696e-16,
+   "communities": 21,
+   "against": "igraph"
   },
   {
    "check": "leiden",
    "status": "match",
-   "warren": 0.5554815105900018,
-   "oracle": 0.5367931635077182,
-   "difference": 0.01868834708228362,
-   "slack": 0.02
+   "warren": 0.5472390300464182,
+   "oracle": 0.532444246770697,
+   "difference": 0.014794783275721146,
+   "slack": 0.02,
+   "against": "igraph"
   },
   {
    "check": "leiden returned modularity",
    "status": "match",
-   "warren": 0.5554815105900018,
-   "oracle": 0.5554815105900017,
+   "warren": 0.5472390300464182,
+   "oracle": 0.5472390300464179,
+   "difference": 2.220446049250313e-16,
+   "communities": 19,
+   "against": "igraph"
+  },
+  {
+   "check": "modularity definition",
+   "status": "match",
+   "warren": 0.5374675722247588,
+   "oracle": 0.5374675722247587,
    "difference": 1.1102230246251565e-16,
-   "communities": 20
+   "note": "warren.modularity and networkx scoring networkx's Louvain partition",
+   "against": "networkx"
+  },
+  {
+   "check": "modularity per relation",
+   "status": "match",
+   "warren": 0.5432198121596638,
+   "oracle": 0.5432198121596638,
+   "difference": 0.0,
+   "note": "per_relation := true against networkx with A at k for an unweighted pair in k relations",
+   "against": "networkx"
+  },
+  {
+   "check": "louvain",
+   "status": "match",
+   "warren": 0.5442288358405171,
+   "oracle": 0.5374675722247588,
+   "difference": 0.0067612636157582395,
+   "slack": 0.02,
+   "against": "networkx"
+  },
+  {
+   "check": "louvain returned modularity",
+   "status": "match",
+   "warren": 0.5442288358405171,
+   "oracle": 0.5442288358405171,
+   "difference": 0.0,
+   "communities": 21,
+   "against": "networkx"
+  },
+  {
+   "check": "leiden",
+   "status": "match",
+   "warren": 0.5472390300464182,
+   "oracle": 0.5374675722247588,
+   "difference": 0.009771457821659335,
+   "slack": 0.02,
+   "against": "networkx"
+  },
+  {
+   "check": "leiden returned modularity",
+   "status": "match",
+   "warren": 0.5472390300464182,
+   "oracle": 0.5472390300464182,
+   "difference": 0.0,
+   "communities": 19,
+   "against": "networkx"
   }
  ]
 }

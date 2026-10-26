@@ -11,19 +11,35 @@ def _row(cells):
     return "| " + " | ".join(str(c) for c in cells) + " |"
 
 
+def _named(finding):
+    against = finding.get("against", "tables")
+    return finding["check"] if against == "tables" else f"{finding['check']} against {against}"
+
+
+def _louvain(findings):
+    """pg_warren's louvain and leiden, NetworkX Louvain's Q, and igraph's
+    in brackets, from the quality bounds (results from before igraph have
+    no `against`: they were NetworkX's)."""
+    bounds = {(f["check"], f.get("against", "networkx")): f for f in findings if f["check"] in ("louvain", "leiden")}
+    oracles = [against for check, against in bounds if check == "louvain"]
+    if not oracles:
+        return ""
+    ours = " / ".join(f"{bounds[(c, oracles[0])]['warren']:.3f}" for c in ("louvain", "leiden"))
+    theirs = [f"{bounds[('louvain', 'networkx')]['oracle']:.3f}"] if "networkx" in oracles else []
+    theirs += [f"(igraph {bounds[('louvain', 'igraph')]['oracle']:.3f})"] if "igraph" in oracles else []
+    return f"{ours} / {' '.join(theirs)}"
+
+
 def correctness(results):
     lines = [_row(["Dataset", "Tier", "Nodes", "Stored edges", "Checks matched", "Not matched",
                    "Q: louvain / leiden / NetworkX Louvain", "Seconds"]), _row(["---"] * 8)]
     for result in results:
         findings = result["findings"]
         matched = sum(f["status"] == "match" for f in findings)
-        others = ", ".join(f"{f['check']} ({f['status']})" for f in findings if f["status"] != "match")
-        by_check = {f["check"]: f for f in findings}
-        q = (" / ".join(f"{by_check[c]['warren']:.3f}" for c in ("louvain", "leiden")) +
-             f" / {by_check['louvain']['oracle']:.3f}") if "louvain" in by_check else ""
+        others = ", ".join(f"{_named(f)} ({f['status']})" for f in findings if f["status"] != "match")
         version = result["version"]
         lines.append(_row([result["dataset"], result["tier"], version["node_count"], version["edge_count"],
-                           f"{matched} of {len(findings)}", others, q, result["seconds"]]))
+                           f"{matched} of {len(findings)}", others, _louvain(findings), result["seconds"]]))
     return "\n".join(lines)
 
 

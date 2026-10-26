@@ -3,26 +3,33 @@
   "argv": [
    "bench/corpus/suite.py",
    "check",
-   "--tier",
-   "tiny",
-   "--tier",
-   "medium",
+   "yago3-10",
+   "hetionet",
+   "karate",
+   "lesmis",
+   "celegans",
+   "polblogs",
+   "london_transport",
+   "transport-airline",
+   "facebook",
+   "kg-codex-s",
+   "wn18rr",
    "--pg-config",
-   "/var/tmp/warren-corpus/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "/var/tmp/m11-corpus-nightly/pgtree/usr/lib/postgresql/16/bin/pg_config",
    "--extension-revision",
-   "1ffdcd9",
+   "a35bbe6",
    "--extension-profile",
    "release"
   ],
   "harness": {
-   "revision": "6bded0a30cd86d7ea3d64cd82be3a002348d0b48",
+   "revision": "eae7c8d7942c13925e5c3fb7b4caa42f3a666aa4",
    "dirty": true
   },
   "extension": {
-   "revision": "1ffdcd9",
+   "revision": "a35bbe6",
    "profile": "release",
-   "library": "/var/tmp/warren-corpus/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
-   "library_sha256": "5499e8bca4b5710e1b28f9addaf05fe9538a6100b34dcf8406c30e2ff4ac2174"
+   "library": "/var/tmp/m11-corpus-nightly/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "19f6b8fb27c2117f98e220dc6e57fce45435a7d8c3912a96acfd77457f886457"
   }
  },
  "hardware": {
@@ -31,9 +38,9 @@
   "memory_bytes": 16872804352,
   "kernel": "6.18.44-fc-v153",
   "load_average": [
-   0.8466796875,
-   1.2216796875,
-   1.89111328125
+   20.826171875,
+   20.1396484375,
+   19.98681640625
   ]
  },
  "dataset": "facebook",
@@ -46,6 +53,10 @@
    "relations": 0,
    "self_loops": 0
   },
+  "sha256": {
+   "nodes.csv": "3eb7cd6f93a4c6a76b39de12ec1723f6816dddecde4b0e18deaaf5ca6a4bf77a",
+   "edges.csv": "e8564ec56a3ab526999cbc6e5642890ccfe76f5ddff3ffa5ff5b8a680303fa61"
+  },
   "provenance": {
    "entryId": "facebook",
    "catalogue": {
@@ -53,7 +64,7 @@
     "version": "1.33.0"
    },
    "category": "graph/v1",
-   "retrievedAt": "2026-10-24T13:47:43.742Z",
+   "retrievedAt": "2026-10-25T23:38:30.603Z",
    "source": {
     "url": "https://snap.stanford.edu/data/facebook_combined.txt.gz",
     "status": "live",
@@ -69,6 +80,10 @@
    "byteLength": 218576
   }
  },
+ "oracles": {
+  "igraph": "1.0.0",
+  "networkx": "3.7"
+ },
  "version": {
   "seq": 1,
   "bytes": 1541636,
@@ -77,10 +92,10 @@
   "current": true,
   "vectors": 0,
   "version": 1,
-  "built_at": "2026-10-24T14:01:23.879229+00:00",
+  "built_at": "2026-10-26T01:49:25.315123+00:00",
   "id_space": 4039,
-  "built_lsn": "0/3C34000",
-  "staleness": "00:00:00.040405",
+  "built_lsn": "0/1BD9A000",
+  "staleness": "00:00:00.094252",
   "edge_count": 176468,
   "node_count": 4039,
   "label_vector": null,
@@ -91,7 +106,7 @@
   "parent_version": null,
   "deduplicated_edges": 0
  },
- "seconds": 5.3,
+ "seconds": 36.0,
  "findings": [
   {
    "check": "node_count",
@@ -101,7 +116,8 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "tables"
   },
   {
    "check": "dropped_edges",
@@ -111,7 +127,8 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "tables"
   },
   {
    "check": "degree out",
@@ -121,7 +138,19 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "igraph"
+  },
+  {
+   "check": "degree out",
+   "status": "match",
+   "compared": 4039,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx"
   },
   {
    "check": "bfs depths",
@@ -132,6 +161,7 @@
    "examples": [],
    "only_warren": 0,
    "only_oracle": 0,
+   "against": "igraph",
    "source": "107"
   },
   {
@@ -143,6 +173,31 @@
    "examples": [],
    "only_warren": 0,
    "only_oracle": 0,
+   "against": "networkx",
+   "source": "107"
+  },
+  {
+   "check": "bfs depths",
+   "status": "match",
+   "compared": 4039,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "igraph",
+   "source": "1493"
+  },
+  {
+   "check": "bfs depths",
+   "status": "match",
+   "compared": 4039,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx",
    "source": "1493"
   },
   {
@@ -150,7 +205,16 @@
    "status": "match",
    "warren_parts": 1,
    "oracle_parts": 1,
-   "differing_parts": 0
+   "differing_parts": 0,
+   "against": "igraph"
+  },
+  {
+   "check": "components",
+   "status": "match",
+   "warren_parts": 1,
+   "oracle_parts": 1,
+   "differing_parts": 0,
+   "against": "networkx"
   },
   {
    "check": "shortest_path length",
@@ -160,13 +224,44 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "igraph"
   },
   {
    "check": "shortest_path edges",
    "status": "match",
    "compared": 25,
-   "invalid": []
+   "invalid": [],
+   "against": "igraph"
+  },
+  {
+   "check": "shortest_path length",
+   "status": "match",
+   "compared": 25,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx"
+  },
+  {
+   "check": "shortest_path edges",
+   "status": "match",
+   "compared": 25,
+   "invalid": [],
+   "against": "networkx"
+  },
+  {
+   "check": "pagerank",
+   "status": "match",
+   "compared": 4039,
+   "mismatches": 0,
+   "max_error": 2.0797946177764093e-10,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "igraph"
   },
   {
    "check": "pagerank",
@@ -176,7 +271,8 @@
    "max_error": 1.3010426069826053e-18,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "networkx"
   },
   {
    "check": "triangles",
@@ -186,7 +282,30 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "igraph"
+  },
+  {
+   "check": "triangles",
+   "status": "match",
+   "compared": 4039,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx"
+  },
+  {
+   "check": "clustering",
+   "status": "match",
+   "compared": 4039,
+   "mismatches": 0,
+   "max_error": 1.1102230246251565e-16,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "igraph"
   },
   {
    "check": "clustering",
@@ -196,7 +315,8 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "networkx"
   },
   {
    "check": "core_number",
@@ -206,7 +326,75 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "igraph"
+  },
+  {
+   "check": "core_number",
+   "status": "match",
+   "compared": 4039,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx"
+  },
+  {
+   "check": "betweenness",
+   "status": "match",
+   "compared": 4039,
+   "mismatches": 0,
+   "max_error": 1.7069679003611782e-15,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "igraph"
+  },
+  {
+   "check": "modularity definition",
+   "status": "match",
+   "warren": 0.8338084762650533,
+   "oracle": 0.8338084762650534,
+   "difference": -1.1102230246251565e-16,
+   "note": "warren.modularity and igraph scoring igraph's Louvain partition",
+   "against": "igraph"
+  },
+  {
+   "check": "louvain",
+   "status": "match",
+   "warren": 0.834800307696562,
+   "oracle": 0.8338084762650533,
+   "difference": 0.0009918314315087162,
+   "slack": 0.02,
+   "against": "igraph"
+  },
+  {
+   "check": "louvain returned modularity",
+   "status": "match",
+   "warren": 0.834800307696562,
+   "oracle": 0.8348003076965619,
+   "difference": 1.1102230246251565e-16,
+   "communities": 15,
+   "against": "igraph"
+  },
+  {
+   "check": "leiden",
+   "status": "match",
+   "warren": 0.8358226582948485,
+   "oracle": 0.8338084762650533,
+   "difference": 0.0020141820297951973,
+   "slack": 0.02,
+   "against": "igraph"
+  },
+  {
+   "check": "leiden returned modularity",
+   "status": "match",
+   "warren": 0.8358226582948485,
+   "oracle": 0.8358226582948485,
+   "difference": 0.0,
+   "communities": 17,
+   "against": "igraph"
   },
   {
    "check": "modularity definition",
@@ -214,7 +402,8 @@
    "warren": 0.8347831888253011,
    "oracle": 0.8347831888253011,
    "difference": 0.0,
-   "note": "warren.modularity and NetworkX scoring NetworkX's Louvain partition"
+   "note": "warren.modularity and networkx scoring networkx's Louvain partition",
+   "against": "networkx"
   },
   {
    "check": "louvain",
@@ -222,7 +411,8 @@
    "warren": 0.834800307696562,
    "oracle": 0.8347831888253011,
    "difference": 1.711887126087941e-05,
-   "slack": 0.02
+   "slack": 0.02,
+   "against": "networkx"
   },
   {
    "check": "louvain returned modularity",
@@ -230,7 +420,8 @@
    "warren": 0.834800307696562,
    "oracle": 0.834800307696562,
    "difference": 0.0,
-   "communities": 15
+   "communities": 15,
+   "against": "networkx"
   },
   {
    "check": "leiden",
@@ -238,7 +429,8 @@
    "warren": 0.8358226582948485,
    "oracle": 0.8347831888253011,
    "difference": 0.0010394694695473605,
-   "slack": 0.02
+   "slack": 0.02,
+   "against": "networkx"
   },
   {
    "check": "leiden returned modularity",
@@ -246,7 +438,8 @@
    "warren": 0.8358226582948485,
    "oracle": 0.8358226582948486,
    "difference": -1.1102230246251565e-16,
-   "communities": 17
+   "communities": 17,
+   "against": "networkx"
   }
  ]
 }

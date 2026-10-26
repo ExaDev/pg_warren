@@ -5,24 +5,29 @@
    "check",
    "--tier",
    "tiny",
-   "--tier",
-   "medium",
+   "cit-hepth",
+   "email-enron",
+   "fb15k-237",
+   "ss-gleich-usroads-48",
+   "dblp",
+   "yago3-10",
+   "hetionet",
    "--pg-config",
-   "/var/tmp/warren-corpus/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "/var/tmp/m11-corpus-nightly/pgtree/usr/lib/postgresql/16/bin/pg_config",
    "--extension-revision",
-   "1ffdcd9",
+   "a35bbe6",
    "--extension-profile",
    "release"
   ],
   "harness": {
-   "revision": "67b54c38c3ddcd3a9e7bd979586d0a8524321d49",
+   "revision": "eae7c8d7942c13925e5c3fb7b4caa42f3a666aa4",
    "dirty": true
   },
   "extension": {
-   "revision": "1ffdcd9",
+   "revision": "a35bbe6",
    "profile": "release",
-   "library": "/var/tmp/warren-corpus/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
-   "library_sha256": "5499e8bca4b5710e1b28f9addaf05fe9538a6100b34dcf8406c30e2ff4ac2174"
+   "library": "/var/tmp/m11-corpus-nightly/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "19f6b8fb27c2117f98e220dc6e57fce45435a7d8c3912a96acfd77457f886457"
   }
  },
  "hardware": {
@@ -31,9 +36,9 @@
   "memory_bytes": 16872804352,
   "kernel": "6.18.44-fc-v153",
   "load_average": [
-   1.1064453125,
-   1.169921875,
-   1.6611328125
+   14.35791015625,
+   7.7666015625,
+   5.11083984375
   ]
  },
  "dataset": "dblp",
@@ -46,6 +51,10 @@
    "relations": 0,
    "self_loops": 0
   },
+  "sha256": {
+   "nodes.csv": "160426c97c17e5561fc6bbbccacc7ba2d6e9259c6dffa63cd5fd98afb9a7264a",
+   "edges.csv": "9b6b174eaff362489b7e4f68e9b68fd82c6a0910406e828759d7511fdc5a5777"
+  },
   "provenance": {
    "entryId": "dblp",
    "catalogue": {
@@ -53,7 +62,7 @@
     "version": "1.33.0"
    },
    "category": "graph/v1",
-   "retrievedAt": "2026-10-24T13:48:48.894Z",
+   "retrievedAt": "2026-10-25T23:55:01.743Z",
    "source": {
     "url": "https://snap.stanford.edu/data/bigdata/communities/com-dblp.ungraph.txt.gz",
     "status": "live"
@@ -63,6 +72,10 @@
    "byteLength": 4138463
   }
  },
+ "oracles": {
+  "igraph": "1.0.0",
+  "networkx": "3.7"
+ },
  "version": {
   "seq": 1,
   "bytes": 26984188,
@@ -71,10 +84,10 @@
   "current": true,
   "vectors": 0,
   "version": 1,
-  "built_at": "2026-10-24T14:03:57.84747+00:00",
+  "built_at": "2026-10-26T00:02:17.815831+00:00",
   "id_space": 317080,
-  "built_lsn": "0/1B407430",
-  "staleness": "00:00:00.48369",
+  "built_lsn": "0/11CAA5F0",
+  "staleness": "00:00:00.508281",
   "edge_count": 2099732,
   "node_count": 317080,
   "label_vector": null,
@@ -85,7 +98,7 @@
   "parent_version": null,
   "deduplicated_edges": 0
  },
- "seconds": 194.9,
+ "seconds": 257.6,
  "findings": [
   {
    "check": "node_count",
@@ -95,7 +108,8 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "tables"
   },
   {
    "check": "dropped_edges",
@@ -105,7 +119,8 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "tables"
   },
   {
    "check": "degree out",
@@ -115,7 +130,19 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "igraph"
+  },
+  {
+   "check": "degree out",
+   "status": "match",
+   "compared": 317080,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx"
   },
   {
    "check": "bfs depths",
@@ -126,6 +153,7 @@
    "examples": [],
    "only_warren": 0,
    "only_oracle": 0,
+   "against": "igraph",
    "source": "38868"
   },
   {
@@ -137,6 +165,31 @@
    "examples": [],
    "only_warren": 0,
    "only_oracle": 0,
+   "against": "networkx",
+   "source": "38868"
+  },
+  {
+   "check": "bfs depths",
+   "status": "match",
+   "compared": 317080,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "igraph",
+   "source": "18476"
+  },
+  {
+   "check": "bfs depths",
+   "status": "match",
+   "compared": 317080,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx",
    "source": "18476"
   },
   {
@@ -144,7 +197,16 @@
    "status": "match",
    "warren_parts": 1,
    "oracle_parts": 1,
-   "differing_parts": 0
+   "differing_parts": 0,
+   "against": "igraph"
+  },
+  {
+   "check": "components",
+   "status": "match",
+   "warren_parts": 1,
+   "oracle_parts": 1,
+   "differing_parts": 0,
+   "against": "networkx"
   },
   {
    "check": "shortest_path length",
@@ -154,13 +216,44 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "igraph"
   },
   {
    "check": "shortest_path edges",
    "status": "match",
    "compared": 25,
-   "invalid": []
+   "invalid": [],
+   "against": "igraph"
+  },
+  {
+   "check": "shortest_path length",
+   "status": "match",
+   "compared": 25,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx"
+  },
+  {
+   "check": "shortest_path edges",
+   "status": "match",
+   "compared": 25,
+   "invalid": [],
+   "against": "networkx"
+  },
+  {
+   "check": "pagerank",
+   "status": "match",
+   "compared": 317080,
+   "mismatches": 0,
+   "max_error": 6.203205952850783e-10,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "igraph"
   },
   {
    "check": "pagerank",
@@ -170,7 +263,8 @@
    "max_error": 2.574980159653073e-19,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "networkx"
   },
   {
    "check": "triangles",
@@ -180,7 +274,30 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "igraph"
+  },
+  {
+   "check": "triangles",
+   "status": "match",
+   "compared": 317080,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx"
+  },
+  {
+   "check": "clustering",
+   "status": "match",
+   "compared": 317080,
+   "mismatches": 0,
+   "max_error": 1.1102230246251565e-16,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "igraph"
   },
   {
    "check": "clustering",
@@ -190,7 +307,8 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "networkx"
   },
   {
    "check": "core_number",
@@ -200,7 +318,64 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "igraph"
+  },
+  {
+   "check": "core_number",
+   "status": "match",
+   "compared": 317080,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx"
+  },
+  {
+   "check": "modularity definition",
+   "status": "match",
+   "warren": 0.8205373962528224,
+   "oracle": 0.8205373962528218,
+   "difference": 5.551115123125783e-16,
+   "note": "warren.modularity and igraph scoring igraph's Louvain partition",
+   "against": "igraph"
+  },
+  {
+   "check": "louvain",
+   "status": "match",
+   "warren": 0.8212267122797173,
+   "oracle": 0.8205373962528224,
+   "difference": 0.0006893160268949261,
+   "slack": 0.02,
+   "against": "igraph"
+  },
+  {
+   "check": "louvain returned modularity",
+   "status": "match",
+   "warren": 0.8212267122797173,
+   "oracle": 0.821226712279717,
+   "difference": 3.3306690738754696e-16,
+   "communities": 222,
+   "against": "igraph"
+  },
+  {
+   "check": "leiden",
+   "status": "match",
+   "warren": 0.829871557275776,
+   "oracle": 0.8205373962528224,
+   "difference": 0.009334161022953591,
+   "slack": 0.02,
+   "against": "igraph"
+  },
+  {
+   "check": "leiden returned modularity",
+   "status": "match",
+   "warren": 0.829871557275776,
+   "oracle": 0.8298715572757773,
+   "difference": -1.3322676295501878e-15,
+   "communities": 281,
+   "against": "igraph"
   },
   {
    "check": "modularity definition",
@@ -208,7 +383,8 @@
    "warren": 0.8209562090119056,
    "oracle": 0.8209562090119059,
    "difference": -3.3306690738754696e-16,
-   "note": "warren.modularity and NetworkX scoring NetworkX's Louvain partition"
+   "note": "warren.modularity and networkx scoring networkx's Louvain partition",
+   "against": "networkx"
   },
   {
    "check": "louvain",
@@ -216,7 +392,8 @@
    "warren": 0.8212267122797173,
    "oracle": 0.8209562090119056,
    "difference": 0.00027050326781175027,
-   "slack": 0.02
+   "slack": 0.02,
+   "against": "networkx"
   },
   {
    "check": "louvain returned modularity",
@@ -224,7 +401,8 @@
    "warren": 0.8212267122797173,
    "oracle": 0.8212267122797177,
    "difference": -3.3306690738754696e-16,
-   "communities": 222
+   "communities": 222,
+   "against": "networkx"
   },
   {
    "check": "leiden",
@@ -232,7 +410,8 @@
    "warren": 0.829871557275776,
    "oracle": 0.8209562090119056,
    "difference": 0.008915348263870415,
-   "slack": 0.02
+   "slack": 0.02,
+   "against": "networkx"
   },
   {
    "check": "leiden returned modularity",
@@ -240,7 +419,8 @@
    "warren": 0.829871557275776,
    "oracle": 0.8298715572757767,
    "difference": -6.661338147750939e-16,
-   "communities": 281
+   "communities": 281,
+   "against": "networkx"
   }
  ]
 }
