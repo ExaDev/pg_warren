@@ -10,7 +10,8 @@ the undirected view.
 
 Each algorithm runs in `mutate` mode, its result kept in the projection as
 a node property (pg_warren's library keeps a vector), and is read back
-untimed. Paths and BFS stream, aggregated in the server. A cold run
+untimed. Paths and BFS reach stream, aggregated in the server; single-source
+depths are mutated as relationships from the start. A cold run
 follows a server restart and new projections (recorded as `cold_phases`),
 so it meets a cold JVM as a first call would."""
 
@@ -22,6 +23,7 @@ UNDIRECTED_ONLY = ("triangles", "louvain", "leiden")
 PROPERTIES = {"degree": "degree", "pagerank": "pagerank", "components": "components", "triangles": "triangles",
               "louvain": "louvain", "leiden": "leiden", "betweenness": "betweenness"}
 LEIDEN_SEED = 1
+DEPTHS = "depths"  # the relationship type the single-source depths are mutated into
 
 
 def graph_for(workload, dataset):
@@ -65,10 +67,12 @@ def stream_call(workload, dataset, threads):
         return (start + f"CALL gds.bfs.stream('g', {{sourceNode: s, maxDepth: {workload.depth}, "
                 f"concurrency: {threads}}}) YIELD nodeIds RETURN size(nodeIds) AS value", None)
     if workload.kind == "depths":
-        each = start + (f"CALL gds.allShortestPaths.delta.stream('g', {{sourceNode: s, concurrency: {threads}}}) "
-                        "YIELD targetNode, totalCost ")
-        return (each + "RETURN count(*) AS reached, max(totalCost) AS depth",
-                each + "RETURN gds.util.asNode(targetNode).id AS id, totalCost AS value")
+        # Mutated as relationships from the start: streaming holds every
+        # target's path (roadNet-TX's 1.35M ran out of a 4 GB heap).
+        return (start + f"CALL gds.allShortestPaths.delta.mutate('g', {{sourceNode: s, concurrency: {threads}, "
+                f"mutateRelationshipType: '{DEPTHS}'}}) YIELD relationshipsWritten RETURN relationshipsWritten",
+                f"CALL gds.graph.relationshipProperty.stream('g', 'totalCost', ['{DEPTHS}']) "
+                "YIELD targetNodeId, propertyValue RETURN gds.util.asNode(targetNodeId).id AS id, propertyValue AS value")
     weight = _weight(dataset) if workload.weighted else ""
     return (f"UNWIND range(0, size($pairs) - 1) AS i MATCH (s:{NODE_LABEL} {{id: $pairs[i][0]}}), "
             f"(t:{NODE_LABEL} {{id: $pairs[i][1]}}) CALL gds.shortestPath.dijkstra.stream('g', "
@@ -119,6 +123,10 @@ class GdsEngine:
 
     def reset(self, workload):
         self.records = None
+        if workload.kind == "depths":
+            self.server.query("CALL gds.graph.list('g') YIELD schemaWithOrientation "
+                              f"WHERE schemaWithOrientation.relationships['{DEPTHS}'] IS NOT NULL "
+                              f"CALL gds.graph.relationships.drop('g', '{DEPTHS}') YIELD graphName RETURN 1")
         if workload.kind in PROPERTIES:
             self.server.query(f"CALL gds.graph.nodeProperties.drop('{graph_for(workload, self.dataset)}', "
                               f"['{PROPERTIES[workload.kind]}'], {{failIfMissing: false}}) YIELD propertiesRemoved "
@@ -145,7 +153,7 @@ class GdsEngine:
             by_pair = {r["i"]: r["value"] for r in records}
             return {f"{a}->{b}": None if by_pair.get(i) is None else (
                 by_pair[i] if workload.weighted else int(by_pair[i])) for i, (a, b) in enumerate(workload.pairs)}
-        return {str(r["id"]): int(r["value"]) for r in records}
+        return {workload.source: 0, **{str(r["id"]): int(r["value"]) for r in records}}
 
     def _named(self, workload, values):
         if workload.kind == "pagerank":

@@ -206,6 +206,10 @@ class Server:
             if error.code in TIMED_OUT:
                 raise Timeout(f"{timeout} s") from error
             raise EngineError(f"{error.code}: {error.message}") from error
+        except neo4j.exceptions.Neo4jError as error:
+            raise EngineError(f"{error.code}: {error.message}") from error
+        except neo4j.exceptions.DriverError as error:  # the connection lost, the server gone
+            raise EngineError(f"{type(error).__name__}: {error}") from error
 
     def store_bytes(self):
         databases = self.state / "data" / "databases" / "neo4j"

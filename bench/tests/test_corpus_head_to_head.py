@@ -414,3 +414,11 @@ def test_the_igraph_engine_answers_every_workload_as_the_reference_does(tmp_path
     statuses = {name: m.get("check", m)["status"] for name, m in result["workloads"].items()}
     assert set(statuses.values()) == {"match"}, statuses
     assert set(result["load"]) == {"ingest", "build"}
+
+
+def test_gds_single_source_depths_mutate_rather_than_stream_every_path():
+    # delta.stream holds a path a target: roadNet-TX's 1.35M ran out of a 4 GB heap.
+    from corpus.head_to_head import gds_engine
+    timed, answer = gds_engine.stream_call(Workload("d", "depths", source="1"), dataset(), 4)
+    assert "gds.allShortestPaths.delta.mutate" in timed and "mutateRelationshipType: 'depths'" in timed
+    assert "gds.graph.relationshipProperty.stream('g', 'totalCost', ['depths'])" in answer
