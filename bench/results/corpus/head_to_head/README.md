@@ -209,6 +209,10 @@ engine reached is `check.modularity` in each file.
   of them. `warren-core/src/compute/triangles.rs` intersects every
   neighbour's row, which is O(Σ d²) on skewed degrees, where igraph and GDS
   orient edges by degree first.
+  *Since fixed* (M11): `triangles` now orients edges by degree and finds
+  each triangle once (DESIGN.md §6.7, §12). Re-timed against igraph alone,
+  not in the tables here: facebook 7.0 ms and hetionet 0.116 s, faster than
+  igraph on every graph but lesmis and polblogs.
 - *Leiden.* igraph was 1.9–180× faster everywhere (fb15k-237 0.14 s
   against 4.42 s, yago3-10 0.79 s against 4.19 s), and GDS was faster on 7 of 11
   datasets (roadnet-tx 2.5 s against 8.1 s). pg_warren's Leiden runs a

@@ -61,6 +61,10 @@ name = "structure"
 harness = false
 
 [[bench]]
+name = "triangles"
+harness = false
+
+[[bench]]
 name = "traversal"
 harness = false
 

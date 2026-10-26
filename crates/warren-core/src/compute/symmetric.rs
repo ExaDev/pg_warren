@@ -1,8 +1,10 @@
 //! The symmetric adjacency of the undirected simple graph underlying the
 //! selected relations (DESIGN.md §6.7): each node's neighbours in either
 //! direction, self-loops dropped, rows sorted, in a CSR charged to the
-//! compute budget. `triangles` and `core_number` read it; no reverse CSR
-//! is needed to build it.
+//! compute budget. `core_number`, the centralities and the similarities
+//! read it; no reverse CSR is needed to build it. `triangles` builds its
+//! own, oriented by degree, from the same passes over the edges
+//! ([`each_edge`]) and row sort ([`sort_rows`]).
 
 use std::cmp::Ordering;
 use std::mem::size_of;
@@ -66,19 +68,8 @@ impl Symmetric {
         forward: &[CsrRows<'_>],
         id_space: u64,
     ) -> Result<Self, ComputeError> {
-        let each_edge = |f: &mut dyn FnMut(DenseId, DenseId)| -> Result<(), Cancelled> {
-            for u in 0..id_space {
-                if u % NODES_PER_CHECK == 0 && cancellation.is_cancelled() {
-                    return Err(Cancelled);
-                }
-                for csr in forward {
-                    csr.neighbours(u).filter(|&v| v != u).for_each(|v| f(u, v));
-                }
-            }
-            Ok(())
-        };
         let (mut offsets, offsets_charge) = memory.filled(id_space as usize + 1, 0u64)?;
-        each_edge(&mut |u, v| {
+        each_edge(cancellation, forward, id_space, &mut |u, v| {
             offsets[u as usize] += 1;
             offsets[v as usize] += 1;
         })?;
@@ -91,48 +82,71 @@ impl Symmetric {
         }
         offsets[id_space as usize] = end;
         let (mut targets, targets_charge) = memory.filled(end as usize, 0 as DenseId)?;
-        each_edge(&mut |u, v| {
+        each_edge(cancellation, forward, id_space, &mut |u, v| {
             for (row, target) in [(u, v), (v, u)] {
                 let offset = &mut offsets[row as usize];
                 *offset -= 1;
                 targets[*offset as usize] = target;
             }
         })?;
-        let mut symmetric = Self { offsets, targets, _charges: [offsets_charge, targets_charge] };
-        symmetric.sort(cancellation)?;
-        Ok(symmetric)
+        sort_rows(&offsets, &mut targets, cancellation)?;
+        Ok(Self { offsets, targets, _charges: [offsets_charge, targets_charge] })
     }
 
     /// The row of `node`.
     pub(super) fn row(&self, node: usize) -> &[DenseId] {
         &self.targets[self.offsets[node] as usize..self.offsets[node + 1] as usize]
     }
+}
 
-    /// Sorts every row, in parallel tasks of whole rows.
-    fn sort(&mut self, cancellation: &Cancellation) -> Result<(), Cancelled> {
-        let offsets = &self.offsets;
-        let nodes = offsets.len() - 1;
-        let mut tasks = Vec::new();
-        let mut rest = self.targets.as_mut_slice();
-        for first in (0..nodes).step_by(NODES_PER_TASK) {
-            let last = nodes.min(first + NODES_PER_TASK);
-            let len = (offsets[last] - offsets[first]) as usize;
-            let (chunk, tail) = std::mem::take(&mut rest).split_at_mut(len);
-            tasks.push((first..last, chunk));
-            rest = tail;
+/// Calls `f` with the source and target of every edge of `forward` that
+/// is not a self-loop, by ascending source, checking the cancellation flag
+/// every [`NODES_PER_CHECK`] sources.
+pub(super) fn each_edge(
+    cancellation: &Cancellation,
+    forward: &[CsrRows<'_>],
+    id_space: u64,
+    f: &mut dyn FnMut(DenseId, DenseId),
+) -> Result<(), Cancelled> {
+    for u in 0..id_space {
+        if u % NODES_PER_CHECK == 0 && cancellation.is_cancelled() {
+            return Err(Cancelled);
         }
-        tasks.into_par_iter().try_for_each(|(nodes, chunk)| {
-            if cancellation.is_cancelled() {
-                return Err(Cancelled);
-            }
-            let base = offsets[nodes.start];
-            for node in nodes {
-                let row = (offsets[node] - base) as usize..(offsets[node + 1] - base) as usize;
-                chunk[row].sort_unstable();
-            }
-            Ok(())
-        })
+        for csr in forward {
+            csr.neighbours(u).filter(|&v| v != u).for_each(|v| f(u, v));
+        }
     }
+    Ok(())
+}
+
+/// Sorts every row of the CSR `offsets` (`nodes + 1` positions) and
+/// `targets`, in parallel tasks of whole rows.
+pub(super) fn sort_rows(
+    offsets: &[u64],
+    targets: &mut [DenseId],
+    cancellation: &Cancellation,
+) -> Result<(), Cancelled> {
+    let nodes = offsets.len() - 1;
+    let mut tasks = Vec::new();
+    let mut rest = targets;
+    for first in (0..nodes).step_by(NODES_PER_TASK) {
+        let last = nodes.min(first + NODES_PER_TASK);
+        let len = (offsets[last] - offsets[first]) as usize;
+        let (chunk, tail) = std::mem::take(&mut rest).split_at_mut(len);
+        tasks.push((first..last, chunk));
+        rest = tail;
+    }
+    tasks.into_par_iter().try_for_each(|(nodes, chunk)| {
+        if cancellation.is_cancelled() {
+            return Err(Cancelled);
+        }
+        let base = offsets[nodes.start];
+        for node in nodes {
+            let row = (offsets[node] - base) as usize..(offsets[node + 1] - base) as usize;
+            chunk[row].sort_unstable();
+        }
+        Ok(())
+    })
 }
 
 /// The distinct values of a sorted row.

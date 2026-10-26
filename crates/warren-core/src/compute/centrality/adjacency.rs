@@ -8,7 +8,7 @@
 //! parallel edges change no path's length or count of shortest paths. The
 //! same holds of `dijkstra`, `dag_longest_path` (the heaviest) and
 //! `minimum_spanning_forest`. Undirected, edge directions and self-loops
-//! are ignored: unweighted, through `triangles`' symmetric adjacency;
+//! are ignored: unweighted, through the symmetric adjacency;
 //! weighted, through symmetric rows in which a pair keeps the lightest of
 //! its relations' weights in either direction, as
 //! `minimum_spanning_forest` reads them.

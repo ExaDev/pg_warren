@@ -605,13 +605,13 @@ return rows of external ids, write nothing and are `PARALLEL RESTRICTED`.
   are never scored: that is N² rows.
 
 Pairs are scored by intersecting two sorted neighbour rows, merged or, for
-a hub, binary-searched, as `triangles` does; rankings expand two hops from
+a hub, binary-searched; rankings expand two hops from
 each node, `Σ_{w ∈ N(u)} |N(w)|` steps, so a node next to a hub pays for
 the hub's row. When every selected relation has a reverse CSR, `similarity`
 and `most_similar` read the rows they need directly, on the calling
 thread, so one node's ranking costs its two-hop neighbourhood; otherwise,
 and always for `similar_pairs`, the symmetric adjacency is built first (16 bytes per stored edge, and 8 per
-node for degrees), costing about a `triangles` call. `similar_pairs` keeps
+node for degrees). `similar_pairs` keeps
 20 bytes per node per compute thread. Adamic–Adar's term for a common
 neighbour `w` is `1 / ln |N(w)|`; only a node paired with itself can share a
 neighbour of degree 1, whose term is +∞ (NetworkX raises

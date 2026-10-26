@@ -681,8 +681,8 @@ mod tests {
         Ok(())
     }
 
-    /// PR #20 review: `triangles` builds its symmetric adjacency on the
-    /// pool, where nothing is reclaimed, so beside an idle pin it failed
+    /// PR #20 review: `triangles` builds its adjacency (symmetric then,
+    /// oriented by degree since M11) on the pool, where nothing is reclaimed, so beside an idle pin it failed
     /// with 53400 at 145–180kB of compute memory where the eviction at
     /// budget time had made room. It reclaims ahead for it now.
     #[pg_test]

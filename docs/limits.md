@@ -535,7 +535,7 @@ Smaller-scale kernel numbers (100K nodes, 1M edges unless stated):
 | `eigen`, k = 20, f32, normalised Laplacian, smallest | 1,342 steps: 13.1 s / 5.1 s; ARPACK 1,406–1,477 matvecs. At 1M nodes and 10M edges: not converged in the then default 4,100 steps (226 s, 4 threads), where ARPACK took 4,343 matvecs (712 s); 4,590 steps to converge under the M7 default (`results/eigen/scaling/`); adjacency 3,174 steps (173 s) vs ARPACK 3,325 (499 s). Steps grow as √N on a uniform random graph and stay flat (300–386) on a 40-community block model (DESIGN §12) | DESIGN §6.5, `bench/results/eigen/` |
 | BFS, 1 / 2 / 3 / 5 of 5 relations (1M weighted edges, 1 thread) | 2.0 / 4.9 / 7.2 / 5.3 ms | DESIGN §5.3, `benches/relation_layout.rs` |
 | Build, forward + reverse, 5 relations | 104 ms, 28.8 MB forward | DESIGN §5.3 |
-| Structural kernels, 1 thread: `core_number` / `strong_components` / `topological_order` / `dag_longest_path` / `minimum_spanning_forest` unweighted, weighted (`triangles`: 610 ms) | 56 / 26 / 9 / 17 / 62, 109 ms | DESIGN §6.7, `benches/structure.rs` |
+| Structural kernels, 1 thread: `core_number` / `strong_components` / `topological_order` / `dag_longest_path` / `minimum_spanning_forest` unweighted, weighted (`triangles`: 67 ms; 610 ms before M11's degree-ordered kernel) | 56 / 26 / 9 / 17 / 62, 109 ms | DESIGN §6.7, `benches/structure.rs` |
 
 **The structural kernels at scale** (DESIGN.md §6.7), through SQL, release
 build, PG 16, `warren.threads = 4`, on the shared 4-vCPU Xeon (another
@@ -550,7 +550,7 @@ peak exceeded the load's.
 | Call | 1M nodes, 10M edges | 10M nodes, 100M edges | Peak past the version (10M) |
 |---|---|---|---|
 | `refresh` of `g` / `dag` | 8.2 / 9.6 | 175 / 192 | |
-| `triangles` (4 threads; for comparison) | 2.6, 2.8 | 45.2, 42.7 | 2.0 GB |
+| `triangles` (4 threads; for comparison; before M11's degree-ordered kernel, not re-measured) | 2.6, 2.8 | 45.2, 42.7 | 2.0 GB |
 | `core_number` (degeneracy 14) | 1.0, 1.0 | 22.8, 23.5 | 2.2 GB |
 | `strong_components_vector` (89 / 867 components) | 0.62, 0.60 | 17.0, 16.8 | 0.7 GB |
 | `components_vector` (PL/pgSQL, weak; for comparison) | 0.33, 0.36 | 7.1, 6.2 | |
@@ -643,8 +643,8 @@ of the version; best of three, `bench/results/library/`):
 | `eigenvector_centrality`, 20 iterations | 1.21 s; converged (defaults) in 0.70 s |
 | `katz_centrality`, 20 iterations (`alpha := 0.01`) | 1.15 s |
 | `hits`, 20 iterations (two SpMVs each) | 1.86 s |
-| `triangles` | 4.19 s |
-| `clustering` (`triangles` plus degrees) | 4.45 s |
+| `triangles` (before M11's degree-ordered kernel; not re-measured) | 4.19 s |
+| `clustering` (`triangles` plus degrees; likewise) | 4.45 s |
 | `label_propagation`, 10 iterations (min-label, tier 1) | 0.97 s |
 | `label_propagation_majority`, 1 iteration (0.4.0) | 21.3 s |
 | `label_propagation_majority`, 5 iterations (0.4.0) | 100.5 s (~20 s an iteration) |
@@ -847,9 +847,10 @@ by itself: see docs/semantics.md, "Dropping a role".)
 
 **Cost shapes to know.**
 
-- `triangles` costs about Σ over edges of min(d_u, d_v) · log max(d_u, d_v):
-  near-linear on sparse graphs, and a hub costs about its degree × log, not
-  its degree squared.
+- `triangles` orients each edge from its endpoint of lower degree and
+  finds each triangle once: about M·√M at worst, near-linear on sparse
+  graphs, hubs or not. It holds 8 bytes per stored edge, 24 per node and 4
+  per node per compute thread.
 - `core_number`, `strong_components_vector`, `topological_order` and
   `dag_longest_path` are linear (the DAG functions × log N for their heap);
   `minimum_spanning_forest` costs a pass over the edges per Borůvka round,
