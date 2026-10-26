@@ -1,0 +1,578 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/appendix_a.py",
+   "a4",
+   "--pg-config",
+   "/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "a5a3822",
+   "--extension-profile",
+   "release"
+  ],
+  "harness": {
+   "revision": "a5a3822da7a08a8ce88c409eb699056a3088a156",
+   "dirty": true
+  },
+  "extension": {
+   "revision": "a5a3822",
+   "profile": "release",
+   "library": "/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "012c4ef9c008ce2c73fb6a983807c28d0fd9634ac6282d613f5efd0045026246"
+  }
+ },
+ "case": "a4",
+ "section": "A.4",
+ "scale": 1,
+ "sizes": {
+  "papers": 8000001,
+  "people": 1900000,
+  "institutions": 100000,
+  "nodes": 10000001,
+  "edges": 32550000.0
+ },
+ "threads": 4,
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872804352,
+  "kernel": "6.18.44-fc-v153",
+  "load_average": [
+   1.32568359375,
+   1.703125,
+   2.3388671875
+  ]
+ },
+ "started_at": "2026-10-26T17:28:11+00:00",
+ "free_disk_before": 9053175808,
+ "pg_warren": "0.7.0",
+ "settings": [
+  "fsync=off",
+  "full_page_writes=off",
+  "jit=on",
+  "maintenance_work_mem=1GB",
+  "max_parallel_workers_per_gather=2",
+  "max_wal_size=1GB",
+  "shared_buffers=1GB",
+  "shared_preload_libraries=",
+  "statement_timeout=0",
+  "synchronous_commit=off",
+  "wal_level=minimal",
+  "warren.max_build_memory=4GB",
+  "warren.max_cache_memory=4GB",
+  "warren.max_compute_memory=4GB",
+  "warren.shared_cache_memory=4GB",
+  "warren.threads=4",
+  "work_mem=64MB"
+ ],
+ "steps": [
+  {
+   "name": "generate",
+   "kind": "stage",
+   "seconds": [
+    18.5459
+   ],
+   "median_seconds": 18.5459,
+   "peak_rss_anon": 508719104,
+   "vm_hwm": 665632768,
+   "rss_anon_before": 5652480,
+   "rss_anon_after": 64544768,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 9052504064
+  },
+  {
+   "name": "graph",
+   "kind": "stage",
+   "seconds": [
+    0.0035
+   ],
+   "median_seconds": 0.0035,
+   "peak_rss_anon": 64544768,
+   "vm_hwm": 506937344,
+   "rss_anon_before": 64544768,
+   "rss_anon_after": 64544768,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 7253618688
+  },
+  {
+   "name": "refresh",
+   "kind": "stage",
+   "seconds": [
+    104.169
+   ],
+   "median_seconds": 104.169,
+   "peak_rss_anon": 1534779392,
+   "vm_hwm": 2307194880,
+   "rss_anon_before": 64544768,
+   "rss_anon_after": 81747968,
+   "notices": [],
+   "warnings": [],
+   "value": "1",
+   "free_disk_before": 7253594112
+  },
+  {
+   "name": "version",
+   "kind": "measure",
+   "seconds": 0.0015,
+   "value": "{\"seq\": 1, \"bytes\": 1534621634, \"label\": null, \"staged\": false, \"current\": true, \"vectors\": 0, \"version\": 1, \"built_at\": \"2026-10-26T17:28:30.509035+00:00\", \"id_space\": 10000001, \"built_lsn\": \"0/1CF6000\", \"staleness\": \"00:01:44.169757\", \"edge_count\": 32548885, \"node_count\": 10000001, \"label_vector\": null, \"parent_graph\": null, \"target_width\": 4, \"dropped_edges\": 0, \"compacted_from\": null, \"parent_version\": null, \"deduplicated_edges\": 2051}",
+   "free_disk_before": 4593893376
+  },
+  {
+   "name": "steps",
+   "kind": "stage",
+   "seconds": [
+    2.3173
+   ],
+   "median_seconds": 2.3173,
+   "peak_rss_anon": 724168704,
+   "vm_hwm": 1900158976,
+   "rss_anon_before": 81747968,
+   "rss_anon_after": 41238528,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 4583645184
+  },
+  {
+   "name": "walk cold",
+   "kind": "stage",
+   "seconds": [
+    2.5783
+   ],
+   "median_seconds": 2.5783,
+   "peak_rss_anon": 1905152000,
+   "vm_hwm": 3081621504,
+   "rss_anon_before": 41238528,
+   "rss_anon_after": 1819324416,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 4592377856
+  },
+  {
+   "name": "visited filtered",
+   "kind": "measure",
+   "seconds": 0.0006,
+   "value": "994",
+   "free_disk_before": 4592345088
+  },
+  {
+   "name": "walk warm",
+   "kind": "stage",
+   "seconds": [
+    0.5746,
+    0.5383,
+    0.5367,
+    0.5347,
+    0.5367
+   ],
+   "median_seconds": 0.5367,
+   "peak_rss_anon": 1905168384,
+   "vm_hwm": 3081752576,
+   "rss_anon_before": 1819324416,
+   "rss_anon_after": 1873231872,
+   "notices": [],
+   "warnings": [],
+   "value": "37",
+   "target_seconds": 2,
+   "met": true,
+   "free_disk_before": 4592345088
+  },
+  {
+   "name": "root neighbourhood",
+   "kind": "measure",
+   "seconds": 0.0012,
+   "value": "290",
+   "free_disk_before": 4592345088
+  },
+  {
+   "name": "oracle",
+   "kind": "stage",
+   "seconds": [
+    0.1358
+   ],
+   "median_seconds": 0.1358,
+   "peak_rss_anon": 1873231872,
+   "vm_hwm": 3050438656,
+   "rss_anon_before": 1873231872,
+   "rss_anon_after": 1873231872,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 4592345088
+  },
+  {
+   "name": "paths",
+   "kind": "stage",
+   "seconds": [
+    0.5351
+   ],
+   "median_seconds": 0.5351,
+   "peak_rss_anon": 1905328128,
+   "vm_hwm": 3081883648,
+   "rss_anon_before": 1873362944,
+   "rss_anon_after": 1873391616,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 4592320512
+  },
+  {
+   "name": "walk unfiltered",
+   "kind": "stage",
+   "seconds": [
+    0.0086
+   ],
+   "median_seconds": 0.0086,
+   "peak_rss_anon": 1873391616,
+   "vm_hwm": 3050934272,
+   "rss_anon_before": 1873391616,
+   "rss_anon_after": 1873391616,
+   "notices": [],
+   "warnings": [],
+   "value": "49",
+   "free_disk_before": 4592295936
+  },
+  {
+   "name": "steps 10 hops",
+   "kind": "stage",
+   "seconds": [
+    2.1329
+   ],
+   "median_seconds": 2.1329,
+   "peak_rss_anon": 2295644160,
+   "vm_hwm": 3472617472,
+   "rss_anon_before": 1873391616,
+   "rss_anon_after": 1812729856,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 4592295936
+  },
+  {
+   "name": "walk 10 hops",
+   "kind": "stage",
+   "seconds": [
+    0.568,
+    0.5804,
+    0.55
+   ],
+   "median_seconds": 0.568,
+   "peak_rss_anon": 1906540544,
+   "vm_hwm": 3083464704,
+   "rss_anon_before": 1812729856,
+   "rss_anon_after": 1874604032,
+   "notices": [],
+   "warnings": [],
+   "value": "503",
+   "target_seconds": 1,
+   "met": true,
+   "free_disk_before": 4586070016
+  },
+  {
+   "name": "cte 10 hops",
+   "kind": "stage",
+   "seconds": [
+    0.1891
+   ],
+   "median_seconds": 0.1891,
+   "peak_rss_anon": 1874604032,
+   "vm_hwm": 3052146688,
+   "rss_anon_before": 1874604032,
+   "rss_anon_after": 1874604032,
+   "notices": [],
+   "warnings": [],
+   "value": "503",
+   "free_disk_before": 4586070016
+  },
+  {
+   "name": "reset timeout",
+   "kind": "stage",
+   "seconds": [
+    0.0002
+   ],
+   "median_seconds": 0.0002,
+   "peak_rss_anon": 1874604032,
+   "vm_hwm": 3052146688,
+   "rss_anon_before": 1874604032,
+   "rss_anon_after": 1874604032,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 4586070016
+  },
+  {
+   "name": "reverse index",
+   "kind": "stage",
+   "seconds": [
+    7.6344
+   ],
+   "median_seconds": 7.6344,
+   "peak_rss_anon": 2354671616,
+   "vm_hwm": 3531759616,
+   "rss_anon_before": 1874636800,
+   "rss_anon_after": 1874636800,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 4586070016
+  },
+  {
+   "name": "walk reversed",
+   "kind": "stage",
+   "seconds": [
+    3.0802
+   ],
+   "median_seconds": 3.0802,
+   "peak_rss_anon": 1906577408,
+   "vm_hwm": 3083624448,
+   "rss_anon_before": 1874636800,
+   "rss_anon_after": 1874640896,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 4673077248
+  },
+  {
+   "name": "reverse oracle",
+   "kind": "stage",
+   "seconds": [
+    15.4334
+   ],
+   "median_seconds": 15.4334,
+   "peak_rss_anon": 2304753664,
+   "vm_hwm": 3481853952,
+   "rss_anon_before": 1874640896,
+   "rss_anon_after": 1871450112,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 4479078400
+  },
+  {
+   "name": "drop iri graph",
+   "kind": "stage",
+   "seconds": [
+    6.4442
+   ],
+   "median_seconds": 6.4442,
+   "peak_rss_anon": 2292772864,
+   "vm_hwm": 3469905920,
+   "rss_anon_before": 1812729856,
+   "rss_anon_after": 1812729856,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 4285079552
+  },
+  {
+   "name": "graph bigint",
+   "kind": "stage",
+   "seconds": [
+    0.0025
+   ],
+   "median_seconds": 0.0025,
+   "peak_rss_anon": 1812729856,
+   "vm_hwm": 2990321664,
+   "rss_anon_before": 1812729856,
+   "rss_anon_after": 1812729856,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 5773025280
+  },
+  {
+   "name": "refresh bigint",
+   "kind": "stage",
+   "seconds": [
+    22.3166
+   ],
+   "median_seconds": 22.3166,
+   "peak_rss_anon": 2875363328,
+   "vm_hwm": 4052414464,
+   "rss_anon_before": 1812729856,
+   "rss_anon_after": 1837764608,
+   "notices": [],
+   "warnings": [],
+   "value": "2",
+   "free_disk_before": 5773025280
+  },
+  {
+   "name": "steps bigint",
+   "kind": "stage",
+   "seconds": [
+    0.5305
+   ],
+   "median_seconds": 0.5305,
+   "peak_rss_anon": 1837768704,
+   "vm_hwm": 3015372800,
+   "rss_anon_before": 1837764608,
+   "rss_anon_after": 1837768704,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 4482965504
+  },
+  {
+   "name": "walk cold bigint",
+   "kind": "stage",
+   "seconds": [
+    2.0668
+   ],
+   "median_seconds": 2.0668,
+   "peak_rss_anon": 1837768704,
+   "vm_hwm": 3015028736,
+   "rss_anon_before": 1837768704,
+   "rss_anon_after": 1626382336,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 4478124032
+  },
+  {
+   "name": "walk warm bigint",
+   "kind": "stage",
+   "seconds": [
+    0.1835,
+    0.1808,
+    0.1808,
+    0.1815,
+    0.1813
+   ],
+   "median_seconds": 0.1813,
+   "peak_rss_anon": 1626382336,
+   "vm_hwm": 2803986432,
+   "rss_anon_before": 1626382336,
+   "rss_anon_after": 1626382336,
+   "notices": [],
+   "warnings": [],
+   "value": "37",
+   "target_seconds": 2,
+   "met": true,
+   "free_disk_before": 4478107648
+  },
+  {
+   "name": "cte 3 hops",
+   "kind": "stage",
+   "seconds": [
+    0.1279,
+    0.1008,
+    0.1002
+   ],
+   "median_seconds": 0.1008,
+   "peak_rss_anon": 1626382336,
+   "vm_hwm": 2803986432,
+   "rss_anon_before": 1626382336,
+   "rss_anon_after": 1626382336,
+   "notices": [],
+   "warnings": [],
+   "value": "37",
+   "free_disk_before": 4478103552
+  }
+ ],
+ "checks": [
+  {
+   "name": "ends found",
+   "claim": "the walk reaches several institutions",
+   "value": "37",
+   "passed": true
+  },
+  {
+   "name": "ends equal the oracle",
+   "claim": "walk ends equal the chain of recursive CTEs over the tables",
+   "value": "0",
+   "passed": true
+  },
+  {
+   "name": "count",
+   "claim": "mode 'count' equals the cardinality of 'ends'",
+   "value": "t",
+   "passed": true
+  },
+  {
+   "name": "paths bounded",
+   "claim": "'paths' with max_results 1000 returns 1 to 1000 rows",
+   "value": "37",
+   "passed": true
+  },
+  {
+   "name": "paths are edges",
+   "claim": "every hop of every path is an edge of its relation",
+   "value": "0",
+   "passed": true
+  },
+  {
+   "name": "paths pass the filters",
+   "claim": "every path's author is active and its end a GB institution",
+   "value": "0",
+   "passed": true
+  },
+  {
+   "name": "filters prune",
+   "claim": "dropping the step-two filter visits more nodes (filters prune)",
+   "value": "t",
+   "passed": true
+  },
+  {
+   "name": "10 hops agree",
+   "claim": "10 hops reach at least the institutions 3 hops reach",
+   "value": "t",
+   "passed": true
+  },
+  {
+   "name": "reversed reaches the root",
+   "claim": "the reversed walk reports the root among its starts",
+   "value": "t",
+   "passed": true
+  },
+  {
+   "name": "reversed equals its oracle",
+   "claim": "reverse := true returns exactly the starts the reversed CTE chain finds",
+   "value": "0/2841158",
+   "passed": true
+  },
+  {
+   "name": "bigint ends equal the oracle",
+   "claim": "with bigint ids the walk ends equal the oracle too",
+   "value": "0",
+   "passed": true
+  }
+ ],
+ "values": {
+  "version": "{\"seq\": 1, \"bytes\": 1534621634, \"label\": null, \"staged\": false, \"current\": true, \"vectors\": 0, \"version\": 1, \"built_at\": \"2026-10-26T17:28:30.509035+00:00\", \"id_space\": 10000001, \"built_lsn\": \"0/1CF6000\", \"staleness\": \"00:01:44.169757\", \"edge_count\": 32548885, \"node_count\": 10000001, \"label_vector\": null, \"parent_graph\": null, \"target_width\": 4, \"dropped_edges\": 0, \"compacted_from\": null, \"parent_version\": null, \"deduplicated_edges\": 2051}",
+  "visited_filtered": "994",
+  "root_neighbourhood": "290"
+ },
+ "verdicts": [
+  {
+   "stage": "walk warm",
+   "target_seconds": 2,
+   "median_seconds": 0.5367,
+   "met": true
+  },
+  {
+   "stage": "walk 10 hops",
+   "target_seconds": 1,
+   "median_seconds": 0.568,
+   "met": true
+  },
+  {
+   "stage": "walk warm bigint",
+   "target_seconds": 2,
+   "median_seconds": 0.1813,
+   "met": true
+  }
+ ],
+ "passed": 11,
+ "failed": 0,
+ "finished_at": "2026-10-26T17:31:33+00:00",
+ "load_average_after": [
+  1.41552734375,
+  1.49072265625,
+  2.123046875
+ ]
+}

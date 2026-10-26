@@ -37,6 +37,19 @@ End-to-end benchmark harness and fixture generators (DESIGN.md §12,
   times the 0.4.0 library and `louvain`/`leiden` (`--skip library`,
   `--skip communities`), and `--node-order locality` builds in locality
   order.
+- `appendix_a.py` and `use_cases/` — DESIGN.md Appendix A's use cases
+  (A.1–A.5) at about 10M nodes (DESIGN.md §12, "Appendix A at 10M"; §13
+  M11). Each use case in `use_cases/` is a plan of steps: it generates its
+  planted structure inside a scratch cluster (deterministic SQL draws,
+  `use_cases/draws.py`), runs Appendix A's program in timed stages, each
+  with the backend's peak memory (`soak.py`'s session), and checks the
+  expected outcomes that can be checked at that scale (planted structure
+  recovered, determinism, invariants, an oracle on a sample). Results,
+  with verdicts against Appendix A's scale targets, go to
+  `results/appendix_a/<case>.json`; its README has the sizes and what
+  each case checks. Same build and machine requirements as `soak.py`
+  (~8 GB of free disk is enough: each use case runs in its own database,
+  dropped before the next); `--scale 1000` is a quick check.
 - `corpus/` — the real-graph suite (DESIGN.md §12, §13 M11): keepset datasets
   in tiers (tiny, medium, large), fetched by keepset's recipes and pinned by
   checksum (`manifest.json`, `pins.json`), loaded into `nodes`/`edges`,

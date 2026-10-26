@@ -1,0 +1,588 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/appendix_a.py",
+   "a3",
+   "--pg-config",
+   "/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "a5a3822",
+   "--extension-profile",
+   "release"
+  ],
+  "harness": {
+   "revision": "a5a3822da7a08a8ce88c409eb699056a3088a156",
+   "dirty": true
+  },
+  "extension": {
+   "revision": "a5a3822",
+   "profile": "release",
+   "library": "/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "012c4ef9c008ce2c73fb6a983807c28d0fd9634ac6282d613f5efd0045026246"
+  }
+ },
+ "case": "a3",
+ "section": "A.3",
+ "scale": 1,
+ "sizes": {
+  "entities": 1450000,
+  "records": 4350000,
+  "nodes": 9918000,
+  "edges": 11536200,
+  "sample_modulus": 1000
+ },
+ "threads": 4,
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872804352,
+  "kernel": "6.18.44-fc-v153",
+  "load_average": [
+   0.72900390625,
+   1.0078125,
+   1.55517578125
+  ]
+ },
+ "started_at": "2026-10-26T17:42:01+00:00",
+ "free_disk_before": 9052676096,
+ "pg_warren": "0.7.0",
+ "settings": [
+  "fsync=off",
+  "full_page_writes=off",
+  "jit=on",
+  "maintenance_work_mem=1GB",
+  "max_parallel_workers_per_gather=2",
+  "max_wal_size=1GB",
+  "shared_buffers=1GB",
+  "shared_preload_libraries=",
+  "statement_timeout=0",
+  "synchronous_commit=off",
+  "wal_level=minimal",
+  "warren.max_build_memory=4GB",
+  "warren.max_cache_memory=4GB",
+  "warren.max_compute_memory=4GB",
+  "warren.shared_cache_memory=4GB",
+  "warren.threads=4",
+  "work_mem=64MB"
+ ],
+ "steps": [
+  {
+   "name": "generate",
+   "kind": "stage",
+   "seconds": [
+    4.3144
+   ],
+   "median_seconds": 4.3144,
+   "peak_rss_anon": 96395264,
+   "vm_hwm": 390991872,
+   "rss_anon_before": 5652480,
+   "rss_anon_after": 43560960,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 9052004352
+  },
+  {
+   "name": "graph",
+   "kind": "stage",
+   "seconds": [
+    0.0246
+   ],
+   "median_seconds": 0.0246,
+   "peak_rss_anon": 93122560,
+   "vm_hwm": 441585664,
+   "rss_anon_before": 43560960,
+   "rss_anon_after": 43560960,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 8259207168
+  },
+  {
+   "name": "refresh",
+   "kind": "stage",
+   "seconds": [
+    12.4022
+   ],
+   "median_seconds": 12.4022,
+   "peak_rss_anon": 647200768,
+   "vm_hwm": 1194987520,
+   "rss_anon_before": 43560960,
+   "rss_anon_after": 47898624,
+   "notices": [],
+   "warnings": [],
+   "value": "1",
+   "free_disk_before": 8259182592
+  },
+  {
+   "name": "version",
+   "kind": "measure",
+   "seconds": 0.0013,
+   "value": "{\"seq\": 1, \"bytes\": 508094724, \"label\": null, \"staged\": false, \"current\": true, \"vectors\": 0, \"version\": 1, \"built_at\": \"2026-10-26T17:42:06.237208+00:00\", \"id_space\": 9643728, \"built_lsn\": \"0/2430000\", \"staleness\": \"00:00:12.402816\", \"edge_count\": 24786228, \"node_count\": 9643728, \"label_vector\": null, \"parent_graph\": null, \"target_width\": 4, \"dropped_edges\": 0, \"compacted_from\": null, \"parent_version\": null, \"deduplicated_edges\": 0}",
+   "free_disk_before": 7211786240
+  },
+  {
+   "name": "prewarm",
+   "kind": "stage",
+   "seconds": [
+    0.6344
+   ],
+   "median_seconds": 0.6344,
+   "peak_rss_anon": 633147392,
+   "vm_hwm": 1525141504,
+   "rss_anon_before": 47898624,
+   "rss_anon_after": 633147392,
+   "notices": [],
+   "warnings": [],
+   "value": "1",
+   "free_disk_before": 7211782144
+  },
+  {
+   "name": "identifier messages",
+   "kind": "stage",
+   "seconds": [
+    4.6968
+   ],
+   "median_seconds": 4.6968,
+   "peak_rss_anon": 827510784,
+   "vm_hwm": 1719382016,
+   "rss_anon_before": 633147392,
+   "rss_anon_after": 622141440,
+   "notices": [],
+   "warnings": [],
+   "value": "5294329",
+   "free_disk_before": 7193944064
+  },
+  {
+   "name": "superstep 1 as bigint",
+   "kind": "stage",
+   "seconds": [
+    11.6873
+   ],
+   "median_seconds": 11.6873,
+   "peak_rss_anon": 1008824320,
+   "vm_hwm": 1903730688,
+   "rss_anon_before": 622141440,
+   "rss_anon_after": 716419072,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 7190732800
+  },
+  {
+   "name": "superstep 1",
+   "kind": "stage",
+   "seconds": [
+    29.3322
+   ],
+   "median_seconds": 29.3322,
+   "peak_rss_anon": 1604689920,
+   "vm_hwm": 2516480000,
+   "rss_anon_before": 716419072,
+   "rss_anon_after": 1041977344,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "target_seconds": 20,
+   "met": false,
+   "free_disk_before": 7189487616
+  },
+  {
+   "name": "sample dense ids",
+   "kind": "stage",
+   "seconds": [
+    2.7958
+   ],
+   "median_seconds": 2.7958,
+   "peak_rss_anon": 1120612352,
+   "vm_hwm": 2033594368,
+   "rss_anon_before": 1041977344,
+   "rss_anon_after": 1060880384,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 6544056320
+  },
+  {
+   "name": "superstep 2",
+   "kind": "stage",
+   "seconds": [
+    7.7462
+   ],
+   "median_seconds": 7.7462,
+   "peak_rss_anon": 1303154688,
+   "vm_hwm": 2221490176,
+   "rss_anon_before": 1060880384,
+   "rss_anon_after": 1111674880,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "target_seconds": 20,
+   "met": true,
+   "free_disk_before": 6542295040
+  },
+  {
+   "name": "superstep 3",
+   "kind": "stage",
+   "seconds": [
+    7.7618
+   ],
+   "median_seconds": 7.7618,
+   "peak_rss_anon": 1590185984,
+   "vm_hwm": 2528489472,
+   "rss_anon_before": 1115291648,
+   "rss_anon_after": 1153921024,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "target_seconds": 20,
+   "met": true,
+   "free_disk_before": 6121795584
+  },
+  {
+   "name": "drop sample dense ids",
+   "kind": "stage",
+   "seconds": [
+    0.0091
+   ],
+   "median_seconds": 0.0091,
+   "peak_rss_anon": 1140289536,
+   "vm_hwm": 2090840064,
+   "rss_anon_before": 1140289536,
+   "rss_anon_after": 1140289536,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 5565505536
+  },
+  {
+   "name": "carried",
+   "kind": "stage",
+   "seconds": [
+    7.7247
+   ],
+   "median_seconds": 7.7247,
+   "peak_rss_anon": 1392365568,
+   "vm_hwm": 2358222848,
+   "rss_anon_before": 1140289536,
+   "rss_anon_after": 1144483840,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 5567070208
+  },
+  {
+   "name": "links",
+   "kind": "stage",
+   "seconds": [
+    6.1152
+   ],
+   "median_seconds": 6.1152,
+   "peak_rss_anon": 1385177088,
+   "vm_hwm": 2351181824,
+   "rss_anon_before": 1144483840,
+   "rss_anon_after": 1142390784,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 5134065664
+  },
+  {
+   "name": "conflicts",
+   "kind": "stage",
+   "seconds": [
+    17.4945
+   ],
+   "median_seconds": 17.4945,
+   "peak_rss_anon": 1228525568,
+   "vm_hwm": 2686652416,
+   "rss_anon_before": 1142390784,
+   "rss_anon_after": 1139240960,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 5437628416
+  },
+  {
+   "name": "held",
+   "kind": "stage",
+   "seconds": [
+    5.3274
+   ],
+   "median_seconds": 5.3274,
+   "peak_rss_anon": 1139249152,
+   "vm_hwm": 2174574592,
+   "rss_anon_before": 1139240960,
+   "rss_anon_after": 1139245056,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 6504505344
+  },
+  {
+   "name": "lower compute memory",
+   "kind": "stage",
+   "seconds": [
+    0.0003
+   ],
+   "median_seconds": 0.0003,
+   "peak_rss_anon": 1139245056,
+   "vm_hwm": 2174574592,
+   "rss_anon_before": 1139245056,
+   "rss_anon_after": 1139245056,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 5955563520
+  },
+  {
+   "name": "reset compute memory",
+   "kind": "stage",
+   "seconds": [
+    0.1581
+   ],
+   "median_seconds": 0.1581,
+   "peak_rss_anon": 1186295808,
+   "vm_hwm": 2222149632,
+   "rss_anon_before": 1186295808,
+   "rss_anon_after": 1186295808,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 5955563520
+  },
+  {
+   "name": "untrusted",
+   "kind": "stage",
+   "seconds": [
+    1.6223
+   ],
+   "median_seconds": 1.6223,
+   "peak_rss_anon": 1186308096,
+   "vm_hwm": 2296868864,
+   "rss_anon_before": 1186295808,
+   "rss_anon_after": 1186295808,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 6376054784
+  },
+  {
+   "name": "trusted links",
+   "kind": "stage",
+   "seconds": [
+    13.7805
+   ],
+   "median_seconds": 13.7805,
+   "peak_rss_anon": 1464541184,
+   "vm_hwm": 2502963200,
+   "rss_anon_before": 1186295808,
+   "rss_anon_after": 1170698240,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 6370803712
+  },
+  {
+   "name": "quality functions",
+   "kind": "stage",
+   "seconds": [
+    0.001
+   ],
+   "median_seconds": 0.001,
+   "peak_rss_anon": 1170698240,
+   "vm_hwm": 2206720000,
+   "rss_anon_before": 1170698240,
+   "rss_anon_after": 1170698240,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 6681186304
+  },
+  {
+   "name": "trusted graph",
+   "kind": "stage",
+   "seconds": [
+    4.1834
+   ],
+   "median_seconds": 4.1834,
+   "peak_rss_anon": 1438990336,
+   "vm_hwm": 2610450432,
+   "rss_anon_before": 1170698240,
+   "rss_anon_after": 1172664320,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 6681186304
+  },
+  {
+   "name": "trusted components",
+   "kind": "stage",
+   "seconds": [
+    1.2552
+   ],
+   "median_seconds": 1.2552,
+   "peak_rss_anon": 1571319808,
+   "vm_hwm": 2749808640,
+   "rss_anon_before": 1172664320,
+   "rss_anon_after": 1451528192,
+   "notices": [],
+   "warnings": [],
+   "value": "6",
+   "target_seconds": 30,
+   "met": true,
+   "free_disk_before": 6212014080
+  },
+  {
+   "name": "trusted quality",
+   "kind": "measure",
+   "seconds": 9.9823,
+   "value": "0.99391473480257430137/0.96387056588409506468",
+   "free_disk_before": 6142267392
+  },
+  {
+   "name": "drop trusted graph",
+   "kind": "stage",
+   "seconds": [
+    0.26
+   ],
+   "median_seconds": 0.26,
+   "peak_rss_anon": 1443295232,
+   "vm_hwm": 2621886464,
+   "rss_anon_before": 1442615296,
+   "rss_anon_after": 1442615296,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 6125490176
+  },
+  {
+   "name": "untrusted graph",
+   "kind": "stage",
+   "seconds": [
+    2.978
+   ],
+   "median_seconds": 2.978,
+   "peak_rss_anon": 1733394432,
+   "vm_hwm": 2912264192,
+   "rss_anon_before": 1442615296,
+   "rss_anon_after": 1468174336,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 6614683648
+  },
+  {
+   "name": "untrusted components",
+   "kind": "stage",
+   "seconds": [
+    1.8972
+   ],
+   "median_seconds": 1.8972,
+   "peak_rss_anon": 1611284480,
+   "vm_hwm": 2790248448,
+   "rss_anon_before": 1468174336,
+   "rss_anon_after": 1456697344,
+   "notices": [],
+   "warnings": [],
+   "value": "9",
+   "free_disk_before": 6173716480
+  },
+  {
+   "name": "untrusted quality",
+   "kind": "measure",
+   "seconds": 10.4679,
+   "value": "0.83542872434648043935/0.97873086718746901338",
+   "free_disk_before": 6137597952
+  }
+ ],
+ "checks": [
+  {
+   "name": "superstep 1 oracle",
+   "claim": "superstep 1: gather collect equals the SQL join and array_agg (sampled records)",
+   "value": "0/4274",
+   "passed": true
+  },
+  {
+   "name": "superstep 2 oracle",
+   "claim": "superstep 2: gather collect equals the SQL join and array_agg (sampled identifiers)",
+   "value": "0/4955",
+   "passed": true
+  },
+  {
+   "name": "superstep 3 oracle",
+   "claim": "superstep 3: gather collect equals the SQL join and array_agg (sampled records)",
+   "value": "0/4274",
+   "passed": true
+  },
+  {
+   "name": "compute memory cap",
+   "claim": "with warren.max_compute_memory at 64MB a superstep fails with 53400 rather than OOMing",
+   "value": "53400",
+   "passed": true
+  },
+  {
+   "name": "untrusted identifiers",
+   "claim": "the trust rule finds untrusted identifiers",
+   "value": "136529",
+   "passed": true
+  },
+  {
+   "name": "trusted precision",
+   "claim": "pairwise precision \u2265 0.98 after the trust rules",
+   "value": "0.99391473480257430137",
+   "passed": true
+  },
+  {
+   "name": "trusted recall",
+   "claim": "pairwise recall \u2265 0.95 after the trust rules",
+   "value": "0.96387056588409506468",
+   "passed": true
+  },
+  {
+   "name": "untrusted precision",
+   "claim": "without the trust rules precision drops below 0.9",
+   "value": "0.83542872434648043935",
+   "passed": true
+  }
+ ],
+ "values": {
+  "version": "{\"seq\": 1, \"bytes\": 508094724, \"label\": null, \"staged\": false, \"current\": true, \"vectors\": 0, \"version\": 1, \"built_at\": \"2026-10-26T17:42:06.237208+00:00\", \"id_space\": 9643728, \"built_lsn\": \"0/2430000\", \"staleness\": \"00:00:12.402816\", \"edge_count\": 24786228, \"node_count\": 9643728, \"label_vector\": null, \"parent_graph\": null, \"target_width\": 4, \"dropped_edges\": 0, \"compacted_from\": null, \"parent_version\": null, \"deduplicated_edges\": 0}",
+  "trusted": "0.99391473480257430137/0.96387056588409506468",
+  "untrusted": "0.83542872434648043935/0.97873086718746901338"
+ },
+ "verdicts": [
+  {
+   "stage": "superstep 1",
+   "target_seconds": 20,
+   "median_seconds": 29.3322,
+   "met": false
+  },
+  {
+   "stage": "superstep 2",
+   "target_seconds": 20,
+   "median_seconds": 7.7462,
+   "met": true
+  },
+  {
+   "stage": "superstep 3",
+   "target_seconds": 20,
+   "median_seconds": 7.7618,
+   "met": true
+  },
+  {
+   "stage": "trusted components",
+   "target_seconds": 30,
+   "median_seconds": 1.2552,
+   "met": true
+  }
+ ],
+ "passed": 8,
+ "failed": 0,
+ "finished_at": "2026-10-26T17:44:51+00:00",
+ "load_average_after": [
+  1.77099609375,
+  1.24853515625,
+  1.546875
+ ]
+}

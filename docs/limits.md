@@ -910,3 +910,16 @@ by itself: see docs/semantics.md, "Dropping a role".)
   on every call; keep iterative scratch transient (`persist := false`).
 - `walk` in `paths` mode can be exponential in the number of hops; it is
   always bounded by `max_results`.
+- `distance('edit')` across two graphs (`graph2`) rebuilds the second
+  graph's CSRs in the first's ids and charges that rebuild to
+  `warren.max_compute_memory` by an over-estimate: 96 bytes an edge
+  (stored direction) plus 16 a node, which counts 8-byte weights and a
+  merged CSR whatever the graphs hold. At 10M nodes and 110M directed
+  edges it asks for 10.9 GB and is refused with 53400 at the 4GB default,
+  on a machine whose RAM could not grant that much (Appendix A.2 at 10M,
+  `bench/results/appendix_a/`). Within one graph, `edit` aligns by dense
+  id and rebuilds nothing.
+- `gather` with `text` (or any non-numeric) messages sends each through
+  its type's binary send and receive functions (DESIGN.md §6.4): at 10M
+  nodes and 11.5M messages a `collect` superstep took 29 s, against 12 s
+  for the same messages as `bigint` (Appendix A.3 at 10M).

@@ -25,7 +25,7 @@ CREATE TABLE expressions (expr text);
 CREATE FUNCTION mapped(graph text, y text, expr text) RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
   INSERT INTO expressions VALUES (expr);
-  PERFORM warren.vector_map(graph, y, expr);
+  PERFORM warren.vector_map(graph, y, expr, persist := false);
 END $$;
 
 -- The A.1 program, as written there, except that its vector_map calls go
@@ -35,17 +35,18 @@ CREATE FUNCTION fraud_suspicion(graph text, hub_degree float8 DEFAULT 50, dampin
 RETURNS int LANGUAGE plpgsql AS $$
 DECLARE ran int := 0; delta float8; mass float8;
 BEGIN
-  PERFORM warren.vector_from_query(graph, 'seed',       'SELECT id, 1.0 FROM accounts WHERE confirmed_fraud OR chargebacks >= 2');
+  PERFORM warren.vector_from_query(graph, 'seed',       'SELECT id, 1.0 FROM accounts WHERE confirmed_fraud OR chargebacks >= 2',
+                                   persist := false);
   mass := warren.vector_reduce(graph, 'seed', 'sum');
-  PERFORM warren.vector_from_query(graph, 'is_account', 'SELECT id, 1.0 FROM accounts');
-  PERFORM warren.vector_degree(graph, 'deg');
+  PERFORM warren.vector_from_query(graph, 'is_account', 'SELECT id, 1.0 FROM accounts', persist := false);
+  PERFORM warren.vector_degree(graph, 'deg', persist := false);
   PERFORM mapped(graph, 'live',    format('CASE WHEN is_account = 1 OR deg <= %s THEN 1 ELSE 0 END', hub_degree));
   PERFORM mapped(graph, 'inv_deg', 'CASE WHEN deg > 0 THEN 1.0 / deg ELSE 0 END');
   PERFORM mapped(graph, 'score',   'seed');
   FOR i IN 1..50 LOOP
     ran := i;   -- the FOR variable is not visible after the loop
     PERFORM mapped(graph, 'msg',      'score * inv_deg * live');
-    PERFORM warren.spmv(graph, 'msg', 'gathered', semiring := 'plus_times', mask := 'live');
+    PERFORM warren.spmv(graph, 'msg', 'gathered', semiring := 'plus_times', mask := 'live', persist := false);
     PERFORM mapped(graph, 'next',     format('%s * seed + %s * gathered', 1 - damping, damping));
     delta := warren.vector_norm_diff(graph, 'next', 'score', 'l1');
     PERFORM mapped(graph, 'score',    'next');

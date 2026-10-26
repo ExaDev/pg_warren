@@ -26,6 +26,7 @@ use super::versions::CACHE;
 use super::CacheError;
 use crate::access::{as_catalog_owner, entry, is_reader};
 use crate::catalog::VersionId;
+use crate::read_only::select;
 use crate::vector::{cached_vector_listing, role_transients};
 
 /// What an entry is.
@@ -246,24 +247,30 @@ fn catalog(entries: &[Entry]) -> Result<Catalog, CacheError> {
         Spi::connect(|client| {
             let query = "SELECT graph_id, name, owner::oid, readers::oid[] FROM warren.graphs
                          WHERE graph_id = ANY ($1)";
-            for row in client.select(query, None, &[graph_ids.into()])? {
-                let id: i32 = row.get(1)?.unwrap_or_default();
-                let name: String = row.get(2)?.unwrap_or_default();
-                let owner: Oid = row.get(3)?.unwrap_or(Oid::INVALID);
-                let readers: Vec<Oid> = row.get(4)?.unwrap_or_default();
-                graphs.push((id, name, owner, readers));
+            select(client, query, None, &[graph_ids.into()], |rows| {
+                for row in rows {
+                    let id: i32 = row.get(1)?.unwrap_or_default();
+                    let name: String = row.get(2)?.unwrap_or_default();
+                    let owner: Oid = row.get(3)?.unwrap_or(Oid::INVALID);
+                    let readers: Vec<Oid> = row.get(4)?.unwrap_or_default();
+                    graphs.push((id, name, owner, readers));
+                }
+                Ok::<_, CacheError>(())
+            })?;
+            if vector_ids.is_empty() {
+                return Ok(());
             }
-            if !vector_ids.is_empty() {
-                let vectors = "SELECT vector_id, version_id, name FROM warren.vectors
-                               WHERE vector_id = ANY ($1)";
-                for row in client.select(vectors, None, &[vector_ids.into()])? {
+            let vectors = "SELECT vector_id, version_id, name FROM warren.vectors
+                           WHERE vector_id = ANY ($1)";
+            select(client, vectors, None, &[vector_ids.into()], |rows| {
+                for row in rows {
                     let id: i64 = row.get(1)?.unwrap_or_default();
                     let version: VersionId = row.get(2)?.unwrap_or_default();
                     let name: String = row.get(3)?.unwrap_or_default();
                     catalog.vectors.insert(id, (version, name));
                 }
-            }
-            Ok::<_, CacheError>(())
+                Ok::<_, CacheError>(())
+            })
         })
     })?;
     // As the caller, not the catalog owner.

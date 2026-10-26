@@ -24,6 +24,7 @@ use crate::access::{as_catalog_owner, entry, is_reader};
 use crate::cache::installation::installation;
 use crate::cache::CacheError;
 use crate::catalog::VersionId;
+use crate::read_only::select;
 
 /// What the catalog says a key names, as the statement's snapshot sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -259,18 +260,19 @@ struct CatalogRow {
 fn catalog_rows(query: &str, ids: Vec<i64>) -> Result<Vec<CatalogRow>, CacheError> {
     as_catalog_owner(|| {
         Spi::connect(|client| {
-            let mut rows = Vec::new();
-            for row in client.select(query, None, &[ids.into()])? {
-                rows.push(CatalogRow {
-                    id: row.get(1)?.unwrap_or_default(),
-                    version: row.get(2)?.unwrap_or_default(),
-                    vector: row.get(3)?,
-                    graph: row.get(4)?.unwrap_or_default(),
-                    owner: row.get(5)?.unwrap_or(Oid::INVALID),
-                    readers: row.get(6)?.unwrap_or_default(),
-                });
-            }
-            Ok::<_, CacheError>(rows)
+            select(client, query, None, &[ids.into()], |rows| {
+                rows.map(|row| {
+                    Ok(CatalogRow {
+                        id: row.get(1)?.unwrap_or_default(),
+                        version: row.get(2)?.unwrap_or_default(),
+                        vector: row.get(3)?,
+                        graph: row.get(4)?.unwrap_or_default(),
+                        owner: row.get(5)?.unwrap_or(Oid::INVALID),
+                        readers: row.get(6)?.unwrap_or_default(),
+                    })
+                })
+                .collect::<Result<Vec<_>, CacheError>>()
+            })
         })
     })
 }

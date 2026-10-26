@@ -10,7 +10,7 @@ use warren_core::compute::Dtype;
 use super::{Binding, Checked, ChunkSource, VectorError, VectorId, VectorRecord, VectorStore};
 use crate::access::as_catalog_owner;
 use crate::catalog::VersionId;
-use crate::read_only::{read_one, writing};
+use crate::read_only::{read_one, select, writing};
 use crate::segment::{each_chunk, EachChunk};
 
 /// `warren.vectors` and `warren.vector_chunks`.
@@ -72,16 +72,15 @@ impl VectorStore for SpiVectorStore {
     fn bound(&mut self, version: VersionId) -> Result<Vec<VectorRecord>, VectorError> {
         as_catalog_owner(|| {
             Spi::connect(|client| {
-                client
-                    .select(
-                        "SELECT vector_id, name, dtype, width, length, created_by::oid
-                         FROM warren.vectors
-                         WHERE version_id = $1 ORDER BY name",
-                        None,
-                        &[version.into()],
-                    )?
-                    .map(|row| record(&row))
-                    .collect()
+                select(
+                    client,
+                    "SELECT vector_id, name, dtype, width, length, created_by::oid
+                     FROM warren.vectors
+                     WHERE version_id = $1 ORDER BY name",
+                    None,
+                    &[version.into()],
+                    |rows| rows.map(|row| record(&row)).collect(),
+                )
             })
         })
     }
