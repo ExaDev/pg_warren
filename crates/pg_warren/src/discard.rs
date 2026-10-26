@@ -46,22 +46,27 @@ unsafe extern "C-unwind" fn process_utility(
 ) {
     // SAFETY: Postgres passes a valid planned utility statement, read
     // before it runs; the previous hook is read by value, and the
-    // arguments are passed on unchanged, as the hook's contract requires.
+    // arguments are passed on unchanged, as the hook's contract requires;
+    // nothing with a destructor is live while the previous hook runs.
     unsafe {
         let utility = (*statement).utilityStmt;
         let discards_all = pgrx::is_a(utility, pg_sys::NodeTag::T_DiscardStmt)
             && (*utility.cast::<pg_sys::DiscardStmt>()).target == pg_sys::DiscardMode::DISCARD_ALL;
         match PREVIOUS {
-            Some(previous) => previous(
-                statement,
-                query,
-                read_only_tree,
-                context,
-                params,
-                environment,
-                destination,
-                completion,
-            ),
+            // A hook's ERROR (pg_stat_statements re-throws the statement's)
+            // must unwind through pgrx's guard, as a `pg_sys` call's does.
+            Some(previous) => pg_sys::ffi::pg_guard_ffi_boundary(|| {
+                previous(
+                    statement,
+                    query,
+                    read_only_tree,
+                    context,
+                    params,
+                    environment,
+                    destination,
+                    completion,
+                )
+            }),
             None => pg_sys::standard_ProcessUtility(
                 statement,
                 query,

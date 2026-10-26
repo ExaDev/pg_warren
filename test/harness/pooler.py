@@ -15,6 +15,7 @@ A `harness.session.Session` connects to a pooler as to a cluster: it has
 
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -78,19 +79,27 @@ class Pooler:
         deadline = time.monotonic() + START_SECONDS
         while not (self.directory / f".s.PGSQL.{self.port}").exists():
             if time.monotonic() > deadline:
-                raise RuntimeError(f"pgbouncer did not start: {self.log.read_text()[-2000:]}")
+                log = self.log.read_text()[-2000:] if self.log.exists() else ""
+                self.__exit__()  # it daemonized: stop it before giving up on it
+                raise RuntimeError(f"pgbouncer did not start: {log}")
             time.sleep(0.1)
         return self
 
     def __exit__(self, *_):
-        """Stops pgbouncer (SIGTERM: it closes its server connections) and waits until it has."""
+        """Stops pgbouncer and waits until it has: SIGTERM first, then, as
+        from PgBouncer 1.23 SIGTERM waits for its clients to leave, SIGQUIT
+        (an immediate shutdown)."""
         pid_file = self.directory / "pgbouncer.pid"
-        if not pid_file.exists():
-            return
-        subprocess.run(self._as_runas(["kill", pid_file.read_text().strip()]), capture_output=True)
-        deadline = time.monotonic() + START_SECONDS
-        while pid_file.exists() and time.monotonic() < deadline:
-            time.sleep(0.1)
+        for signal in ("TERM", "QUIT"):
+            if not pid_file.exists():
+                return
+            subprocess.run(self._as_runas(["kill", f"-{signal}", pid_file.read_text().strip()]),
+                           capture_output=True)
+            deadline = time.monotonic() + START_SECONDS
+            while pid_file.exists() and time.monotonic() < deadline:
+                time.sleep(0.1)
+        if pid_file.exists():
+            print(f"warning: pgbouncer in {self.directory} did not stop", file=sys.stderr, flush=True)
 
     @property
     def log(self):

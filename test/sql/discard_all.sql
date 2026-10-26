@@ -22,6 +22,9 @@ DISCARD TEMP;
 SELECT assert.equal(warren.vector_reduce('d', 'mine', 'sum'), 10::float8, 'other DISCARDs keep transient vectors');
 SELECT assert.equal(warren.last_stats() ->> 'function', 'bfs', 'other DISCARDs keep last_stats()');
 SELECT assert.raises($$DISCARD ALL$$, 'DISCARD ALL cannot run in a function', '25001');
+-- A utility statement's ERROR passes through pg_warren's hook (and,
+-- preloaded, pg_stat_statements' before it) as it would without them.
+SELECT assert.raises($$CREATE TABLE discard_nodes ()$$, 'a failing utility statement', '42P07');
 SELECT assert.equal(warren.vector_reduce('d', 'mine', 'sum'), 10::float8, 'a refused DISCARD ALL keeps them');
 
 DISCARD ALL;
