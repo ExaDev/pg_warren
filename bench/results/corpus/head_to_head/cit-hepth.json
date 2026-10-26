@@ -1,0 +1,1242 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "head-to-head",
+   "lesmis",
+   "polblogs",
+   "facebook",
+   "wn18rr",
+   "cit-hepth",
+   "email-enron",
+   "fb15k-237",
+   "ss-gleich-usroads-48",
+   "dblp",
+   "yago3-10",
+   "hetionet",
+   "roadnet-tx",
+   "--pg-config",
+   "/var/tmp/warren-h2h/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "ae51d77",
+   "--extension-profile",
+   "release",
+   "--timeout",
+   "300"
+  ],
+  "harness": {
+   "revision": "09c0a6e40acaa4eb2264047295b7ba27ca7e90a0",
+   "dirty": true
+  },
+  "extension": {
+   "revision": "ae51d77",
+   "profile": "release",
+   "library": "/var/tmp/warren-h2h/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "18124b35bc64aea8d1deba8e1040ac5cb2b9e733fcabd84ce4bf93f01874274a"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872804352,
+  "kernel": "6.18.44-fc-v153",
+  "load_average": [
+   1.3671875,
+   1.39013671875,
+   1.29296875
+  ]
+ },
+ "dataset": "cit-hepth",
+ "tier": "medium",
+ "fetched": {
+  "tables": {
+   "nodes": 27770,
+   "edges": 352807,
+   "ids": "integer",
+   "relations": 0,
+   "self_loops": 39
+  },
+  "sha256": {
+   "nodes.csv": "7c9deb299348bbc22945e04d55d8f035991908fca954acd14bd6f913573f9d6e",
+   "edges.csv": "2152386f21edc37938eaad6ee910faa46a2f088bc077b5ccd423a94b44a2798d"
+  },
+  "provenance": {
+   "entryId": "cit-hepth",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-26T05:48:15.241Z",
+   "source": {
+    "url": "https://snap.stanford.edu/data/cit-HepTh.txt.gz",
+    "status": "live"
+   },
+   "fetchedUrl": "https://snap.stanford.edu/data/cit-HepTh.txt.gz",
+   "sha256": "7df944b502bd7b687b0e7e94ba9b0a87f202693254558ae5f8ea45657697eb32",
+   "byteLength": 1317497
+  }
+ },
+ "repeat": 5,
+ "budget_seconds": 120,
+ "timeout_seconds": 300,
+ "workloads": [
+  {
+   "name": "degree",
+   "kind": "degree",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": null
+  },
+  {
+   "name": "bfs depth 6",
+   "kind": "reach",
+   "source": "9905111",
+   "depth": 6,
+   "pairs": [],
+   "weighted": false,
+   "iterations": null
+  },
+  {
+   "name": "bfs depths",
+   "kind": "depths",
+   "source": "9905111",
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": null
+  },
+  {
+   "name": "shortest paths",
+   "kind": "paths",
+   "source": null,
+   "depth": null,
+   "pairs": [
+    [
+     "202012",
+     "9607177"
+    ],
+    [
+     "9912292",
+     "9906188"
+    ],
+    [
+     "9812230",
+     "107188"
+    ],
+    [
+     "304040",
+     "12041"
+    ],
+    [
+     "9506214",
+     "9812136"
+    ],
+    [
+     "9410174",
+     "9502143"
+    ],
+    [
+     "9708017",
+     "9308096"
+    ],
+    [
+     "9904181",
+     "211072"
+    ],
+    [
+     "111057",
+     "9505132"
+    ],
+    [
+     "103189",
+     "9911150"
+    ],
+    [
+     "9310163",
+     "9407109"
+    ],
+    [
+     "9701083",
+     "9812180"
+    ],
+    [
+     "9901091",
+     "10067"
+    ],
+    [
+     "9803006",
+     "9410018"
+    ],
+    [
+     "3188",
+     "9806186"
+    ],
+    [
+     "9906174",
+     "2190"
+    ],
+    [
+     "9611020",
+     "11154"
+    ],
+    [
+     "9203034",
+     "103264"
+    ],
+    [
+     "10286",
+     "103093"
+    ],
+    [
+     "9707208",
+     "9603047"
+    ],
+    [
+     "101184",
+     "9308157"
+    ],
+    [
+     "9801090",
+     "2119"
+    ],
+    [
+     "9405118",
+     "9807086"
+    ],
+    [
+     "103212",
+     "9512145"
+    ],
+    [
+     "212174",
+     "9812227"
+    ]
+   ],
+   "weighted": false,
+   "iterations": null
+  },
+  {
+   "name": "pagerank 20 iterations",
+   "kind": "pagerank",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": 20
+  },
+  {
+   "name": "components",
+   "kind": "components",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": null
+  },
+  {
+   "name": "triangles",
+   "kind": "triangles",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": null
+  },
+  {
+   "name": "louvain",
+   "kind": "louvain",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": null
+  },
+  {
+   "name": "leiden",
+   "kind": "leiden",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": null
+  }
+ ],
+ "engines": {
+  "pg_warren": {
+   "describe": {
+    "version": "0.7.0",
+    "threads": 4,
+    "settings": [
+     "fsync=off",
+     "full_page_writes=off",
+     "jit=on",
+     "maintenance_work_mem=1GB",
+     "max_parallel_workers_per_gather=2",
+     "max_wal_size=1GB",
+     "shared_buffers=1GB",
+     "shared_preload_libraries=",
+     "statement_timeout=5min",
+     "synchronous_commit=off",
+     "wal_level=minimal",
+     "warren.max_build_memory=4GB",
+     "warren.max_cache_memory=4GB",
+     "warren.max_compute_memory=4GB",
+     "warren.shared_cache_memory=4GB",
+     "warren.threads=4",
+     "work_mem=64MB"
+    ],
+    "graph": {
+     "node_count": 27770,
+     "edge_count": 352807,
+     "dropped_edges": 0,
+     "bytes": 3714700
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.14547782199952053
+     ],
+     "median_seconds": 0.14547782199952053
+    },
+    "build": {
+     "seconds": [
+      0.087913788998776,
+      0.08466207400124404,
+      0.0856194800016965
+     ],
+     "median_seconds": 0.0856194800016965
+    }
+   },
+   "workloads": {
+    "degree": {
+     "cold_seconds": 0.009304152999902726,
+     "warm_seconds": [
+      0.004700165998656303,
+      0.00436386000001221,
+      0.004195687999526854,
+      0.004568633999951999,
+      0.004004653001175029
+     ],
+     "warm_median_seconds": 0.00436386000001221,
+     "cold_phases": {
+      "evict": 0.0007625079997524153
+     },
+     "check": {
+      "check": "degree",
+      "status": "match",
+      "compared": 27770,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "bfs depth 6": {
+     "cold_seconds": 0.007600221999382484,
+     "warm_seconds": [
+      0.0028023300001223106,
+      0.002740481000728323,
+      0.002602189999379334,
+      0.002708405001612846,
+      0.002820664998580469
+     ],
+     "warm_median_seconds": 0.002740481000728323,
+     "cold_phases": {
+      "evict": 0.0014673730001959484
+     },
+     "check": {
+      "check": "bfs depth 6",
+      "status": "match",
+      "compared": 1,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "bfs depths": {
+     "cold_seconds": 0.008370622001166339,
+     "warm_seconds": [
+      0.00473283400060609,
+      0.0046908849999454105,
+      0.004753156999868224,
+      0.0049671379983919905,
+      0.004745840000396129
+     ],
+     "warm_median_seconds": 0.004745840000396129,
+     "cold_phases": {
+      "evict": 0.0006485630001407117
+     },
+     "check": {
+      "check": "bfs depths",
+      "status": "match",
+      "compared": 16498,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "shortest paths": {
+     "cold_seconds": 0.008549129001039546,
+     "warm_seconds": [
+      0.005057294998550788,
+      0.005055280998931266,
+      0.005355064000468701,
+      0.005390439999246155,
+      0.005222734000199125
+     ],
+     "warm_median_seconds": 0.005222734000199125,
+     "cold_phases": {
+      "evict": 0.0006769539995730156
+     },
+     "check": {
+      "check": "shortest paths",
+      "status": "match",
+      "compared": 25,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "pagerank 20 iterations": {
+     "cold_seconds": 0.08279583899820864,
+     "warm_seconds": [
+      0.07530321000012918,
+      0.07708479299981263,
+      0.07372598799884145,
+      0.0768470309994882,
+      0.07915168900035496
+     ],
+     "warm_median_seconds": 0.0768470309994882,
+     "cold_phases": {
+      "evict": 0.001171231000625994
+     },
+     "check": {
+      "check": "pagerank 20 iterations",
+      "status": "match",
+      "compared": 27770,
+      "mismatches": 0,
+      "max_error": 9.107298248878237e-18,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0,
+      "convention": "normalised"
+     },
+     "counted": true
+    },
+    "components": {
+     "cold_seconds": 0.01150736300041899,
+     "warm_seconds": [
+      0.0071640099995420314,
+      0.006474866000644397,
+      0.006533120998938102,
+      0.006387595998603501,
+      0.006348712999169948
+     ],
+     "warm_median_seconds": 0.006474866000644397,
+     "cold_phases": {
+      "evict": 0.0010088130002259277
+     },
+     "check": {
+      "check": "components",
+      "status": "match",
+      "warren_parts": 143,
+      "oracle_parts": 143,
+      "differing_parts": 0
+     },
+     "counted": true
+    },
+    "triangles": {
+     "cold_seconds": 0.14523889200063422,
+     "warm_seconds": [
+      0.12094210500072222,
+      0.11358528500022658,
+      0.12785266699938802,
+      0.12206942600096227,
+      0.12366588199984108
+     ],
+     "warm_median_seconds": 0.12206942600096227,
+     "cold_phases": {
+      "evict": 0.0007073090000631055
+     },
+     "check": {
+      "check": "triangles",
+      "status": "match",
+      "compared": 27770,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "louvain": {
+     "cold_seconds": 0.23690455100040708,
+     "warm_seconds": [
+      0.1983650199999829,
+      0.2053673650007113,
+      0.20190665799964336,
+      0.20184313999925507,
+      0.1967224449999776
+     ],
+     "warm_median_seconds": 0.20184313999925507,
+     "cold_phases": {
+      "evict": 0.0013695809993805597
+     },
+     "check": {
+      "check": "louvain",
+      "status": "match",
+      "warren": 0.6555176814584972,
+      "oracle": 0.6513560210205656,
+      "difference": 0.004161660437931647,
+      "slack": 0.02,
+      "modularity": 0.6555176814584972,
+      "communities": 169
+     },
+     "counted": true
+    },
+    "leiden": {
+     "cold_seconds": 0.4454370610001206,
+     "warm_seconds": [
+      0.45093855099912616,
+      0.43719705900002737,
+      0.4406264600002032,
+      0.4367431110003963,
+      0.4447437210001226
+     ],
+     "warm_median_seconds": 0.4406264600002032,
+     "cold_phases": {
+      "evict": 0.0012262469990673708
+     },
+     "check": {
+      "check": "leiden",
+      "status": "match",
+      "warren": 0.6652361730298963,
+      "oracle": 0.6513560210205656,
+      "difference": 0.013880152009330793,
+      "slack": 0.02,
+      "modularity": 0.6652361730298963,
+      "communities": 174
+     },
+     "counted": true
+    }
+   }
+  },
+  "igraph": {
+   "describe": {
+    "version": "1.0.0",
+    "threads": 1,
+    "settings": {
+     "pagerank": "PRPACK (solved)",
+     "louvain": "community_multilevel",
+     "leiden": "community_leiden, modularity, 2 iterations",
+     "seed": 1
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.13982537499941827
+     ],
+     "median_seconds": 0.13982537499941827
+    },
+    "build": {
+     "seconds": [
+      0.17435093499989307
+     ],
+     "median_seconds": 0.17435093499989307
+    }
+   },
+   "workloads": {
+    "degree": {
+     "cold_seconds": 0.00035148599999956787,
+     "warm_seconds": [
+      0.00010225600090052467,
+      9.954699999070726e-05,
+      9.965199933503754e-05,
+      9.787099952518474e-05,
+      9.921300079440698e-05
+     ],
+     "warm_median_seconds": 9.954699999070726e-05,
+     "cold_phases": {},
+     "check": {
+      "check": "degree",
+      "status": "match",
+      "compared": 27770,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "bfs depth 6": {
+     "cold_seconds": 0.0013828020000801189,
+     "warm_seconds": [
+      0.0006822400009696139,
+      0.0005787419995613163,
+      0.0006389539994415827,
+      0.0006118580004113028,
+      0.0005629829993267776
+     ],
+     "warm_median_seconds": 0.0006118580004113028,
+     "cold_phases": {},
+     "check": {
+      "check": "bfs depth 6",
+      "status": "match",
+      "compared": 1,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "bfs depths": {
+     "cold_seconds": 0.004003272000772995,
+     "warm_seconds": [
+      0.003953252999053802,
+      0.0038608349987043766,
+      0.0039315100002568215,
+      0.003920085000572726,
+      0.00395189700066112
+     ],
+     "warm_median_seconds": 0.0039315100002568215,
+     "cold_phases": {},
+     "check": {
+      "check": "bfs depths",
+      "status": "match",
+      "compared": 16498,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "shortest paths": {
+     "cold_seconds": 0.07570486500117113,
+     "warm_seconds": [
+      0.07447407899962855,
+      0.07392579599945748,
+      0.07514314000036393,
+      0.08829745799994271,
+      0.07403645399972447
+     ],
+     "warm_median_seconds": 0.07447407899962855,
+     "cold_phases": {},
+     "check": {
+      "check": "shortest paths",
+      "status": "match",
+      "compared": 25,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "pagerank 20 iterations": {
+     "cold_seconds": 0.012666791000810917,
+     "warm_seconds": [
+      0.011615653000262682,
+      0.011103558999820962,
+      0.01125445999969088,
+      0.010930533000646392,
+      0.010789961001137272
+     ],
+     "warm_median_seconds": 0.011103558999820962,
+     "cold_phases": {},
+     "check": {
+      "check": "pagerank 20 iterations",
+      "status": "match",
+      "compared": 27770,
+      "mismatches": 0,
+      "max_error": 5.852089646207759e-15,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0,
+      "convention": "fixed point"
+     },
+     "counted": true
+    },
+    "components": {
+     "cold_seconds": 0.009923052999511128,
+     "warm_seconds": [
+      0.00711430199953611,
+      0.006917378001162433,
+      0.006914689000041108,
+      0.006781191999834846,
+      0.00689809999857971
+     ],
+     "warm_median_seconds": 0.006914689000041108,
+     "cold_phases": {},
+     "check": {
+      "check": "components",
+      "status": "match",
+      "warren_parts": 143,
+      "oracle_parts": 143,
+      "differing_parts": 0
+     },
+     "counted": true
+    },
+    "triangles": {
+     "cold_seconds": 0.04197915400072816,
+     "warm_seconds": [
+      0.040205074999903445,
+      0.040010754999457276,
+      0.03999800699966727,
+      0.04024648400081787,
+      0.03956863600069482
+     ],
+     "warm_median_seconds": 0.040010754999457276,
+     "cold_phases": {},
+     "check": {
+      "check": "triangles",
+      "status": "match",
+      "compared": 27770,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "louvain": {
+     "cold_seconds": 0.4540642020001542,
+     "warm_seconds": [
+      0.4516734789995098,
+      0.4508791080006631,
+      0.4530475940009637,
+      0.4612738060004631,
+      0.5079360359995917
+     ],
+     "warm_median_seconds": 0.4530475940009637,
+     "cold_phases": {},
+     "check": {
+      "check": "louvain",
+      "status": "match",
+      "warren": 0.6513560210205656,
+      "oracle": 0.6513560210205656,
+      "difference": 0.0,
+      "slack": 0.02,
+      "modularity": 0.6513560210205656,
+      "communities": 171
+     },
+     "counted": true
+    },
+    "leiden": {
+     "cold_seconds": 0.20274483800130838,
+     "warm_seconds": [
+      0.197965444998772,
+      0.1983077389995742,
+      0.19817916700048954,
+      0.1987341780004499,
+      0.19799015100034012
+     ],
+     "warm_median_seconds": 0.19817916700048954,
+     "cold_phases": {},
+     "check": {
+      "check": "leiden",
+      "status": "match",
+      "warren": 0.6619961302757035,
+      "oracle": 0.6513560210205656,
+      "difference": 0.01064010925513792,
+      "slack": 0.02,
+      "modularity": 0.6619961302757035,
+      "communities": 175
+     },
+     "counted": true
+    }
+   }
+  },
+  "neo4j-cypher": {
+   "describe": {
+    "neo4j": "2026.10.1",
+    "edition": "community",
+    "gds": "2026.10.1",
+    "python_driver": "6.4.1",
+    "java": "openjdk version \"21.0.12.1\" 2026-08-18",
+    "threads": 1,
+    "runtime": "Community (slotted, one thread a query)",
+    "heap": "4g",
+    "pagecache": "2g",
+    "store_bytes": 15441920
+   },
+   "load": {
+    "import": {
+     "seconds": [
+      4.653007663000608
+     ],
+     "median_seconds": 4.653007663000608
+    },
+    "start": {
+     "seconds": [
+      7.16156394599966
+     ],
+     "median_seconds": 7.16156394599966
+    },
+    "index": {
+     "seconds": [
+      1.3129208350001136
+     ],
+     "median_seconds": 1.3129208350001136
+    }
+   },
+   "workloads": {
+    "degree": {
+     "cold_seconds": 1.9580363320001197,
+     "warm_seconds": [
+      0.12063704399952258,
+      0.08231830000113405,
+      0.07063715499862155,
+      0.07015494099869102,
+      0.06833977099995536
+     ],
+     "warm_median_seconds": 0.07063715499862155,
+     "cold_phases": {
+      "restart": 6.645854508999037
+     },
+     "check": {
+      "check": "degree",
+      "status": "match",
+      "compared": 27770,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "bfs depth 6": {
+     "cold_seconds": 1.69568562799941,
+     "warm_seconds": [
+      0.037080874000821495,
+      0.0403997020002862,
+      0.039800274000299396,
+      0.031159243000729475,
+      0.018503752999095013
+     ],
+     "warm_median_seconds": 0.037080874000821495,
+     "cold_phases": {
+      "restart": 6.774171846000172
+     },
+     "check": {
+      "check": "bfs depth 6",
+      "status": "match",
+      "compared": 1,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "bfs depths": {
+     "cold_seconds": 16.83035050199942,
+     "warm_seconds": [
+      15.135284193000189,
+      15.398080180999386,
+      15.04650053200021,
+      15.0910049719987,
+      15.22035800499907
+     ],
+     "warm_median_seconds": 15.135284193000189,
+     "cold_phases": {
+      "restart": 6.847646345999237
+     },
+     "check": {
+      "check": "bfs depths",
+      "status": "match",
+      "compared": 16498,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "shortest paths": {
+     "cold_seconds": 1.8660381110003073,
+     "warm_seconds": [
+      0.08179112499965413,
+      0.05482294800094678,
+      0.052444278000621125,
+      0.04464520700093999,
+      0.045789953001076356
+     ],
+     "warm_median_seconds": 0.052444278000621125,
+     "cold_phases": {
+      "restart": 6.749327673000153
+     },
+     "check": {
+      "check": "shortest paths",
+      "status": "match",
+      "compared": 25,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "pagerank 20 iterations": {
+     "status": "unsupported",
+     "reason": "iterative over the whole graph's state: no Cypher query expresses it (GDS or APOC do)",
+     "counted": false
+    },
+    "components": {
+     "status": "unsupported",
+     "reason": "a fixed point of label propagation, or a traversal per component: not one Cypher query",
+     "counted": false
+    },
+    "triangles": {
+     "cold_seconds": 38.76520374699976,
+     "warm_seconds": [
+      37.863907130998996,
+      37.88469138599976,
+      37.12004541500028
+     ],
+     "warm_median_seconds": 37.863907130998996,
+     "cold_phases": {
+      "restart": 6.773580390001371
+     },
+     "check": {
+      "check": "triangles",
+      "status": "match",
+      "compared": 1,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "louvain": {
+     "status": "unsupported",
+     "reason": "a heuristic optimisation over the whole graph: not expressible in Cypher",
+     "counted": false
+    },
+    "leiden": {
+     "status": "unsupported",
+     "reason": "a heuristic optimisation over the whole graph: not expressible in Cypher",
+     "counted": false
+    }
+   }
+  },
+  "neo4j-gds": {
+   "describe": {
+    "neo4j": "2026.10.1",
+    "edition": "community, no licence key",
+    "gds": "2026.10.1",
+    "python_driver": "6.4.1",
+    "java": "openjdk version \"21.0.12.1\" 2026-08-18",
+    "threads": 4,
+    "mode": "mutate",
+    "heap": "4g",
+    "pagecache": "2g"
+   },
+   "load": {
+    "import": {
+     "seconds": [
+      4.653007663000608
+     ],
+     "median_seconds": 4.653007663000608
+    },
+    "start": {
+     "seconds": [
+      7.16156394599966
+     ],
+     "median_seconds": 7.16156394599966
+    },
+    "index": {
+     "seconds": [
+      1.3129208350001136
+     ],
+     "median_seconds": 1.3129208350001136
+    },
+    "project": {
+     "seconds": [
+      1.0499622669995006
+     ],
+     "median_seconds": 1.0499622669995006
+    },
+    "project undirected": {
+     "seconds": [
+      0.11376570299944433
+     ],
+     "median_seconds": 0.11376570299944433
+    }
+   },
+   "workloads": {
+    "degree": {
+     "cold_seconds": 0.09678503500072111,
+     "warm_seconds": [
+      0.008413274001213722,
+      0.006582685000466881,
+      0.007964721999087487,
+      0.007505290999688441,
+      0.006775190999178449
+     ],
+     "warm_median_seconds": 0.007505290999688441,
+     "cold_phases": {
+      "restart": 7.174842495000121,
+      "project": 2.4609654790001514,
+      "project undirected": 0.20305591400028788
+     },
+     "check": {
+      "check": "degree",
+      "status": "match",
+      "compared": 27770,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "bfs depth 6": {
+     "cold_seconds": 0.49512716100070975,
+     "warm_seconds": [
+      0.030109672999969916,
+      0.022027485001672176,
+      0.027935379999689758,
+      0.021931448000032105,
+      0.02022559299985005
+     ],
+     "warm_median_seconds": 0.022027485001672176,
+     "cold_phases": {
+      "restart": 7.603544233999855,
+      "project": 2.6991937769998913,
+      "project undirected": 0.15410424699985015
+     },
+     "check": {
+      "check": "bfs depth 6",
+      "status": "match",
+      "compared": 1,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "bfs depths": {
+     "cold_seconds": 0.4595880729993951,
+     "warm_seconds": [
+      0.053552707000562805,
+      0.045174764998591854,
+      0.03473982099967543,
+      0.029683381999348057,
+      0.04218618599952606
+     ],
+     "warm_median_seconds": 0.04218618599952606,
+     "cold_phases": {
+      "restart": 7.604259581999941,
+      "project": 2.710395748999872,
+      "project undirected": 0.16345881000052032
+     },
+     "check": {
+      "check": "bfs depths",
+      "status": "match",
+      "compared": 16498,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "shortest paths": {
+     "cold_seconds": 0.8537766650006233,
+     "warm_seconds": [
+      0.16721211500043864,
+      0.15692021399991063,
+      0.16333198100073787,
+      0.15207285600081377,
+      0.13854678300049272
+     ],
+     "warm_median_seconds": 0.15692021399991063,
+     "cold_phases": {
+      "restart": 7.500403358999392,
+      "project": 2.7104890210011945,
+      "project undirected": 0.1832833139997092
+     },
+     "check": {
+      "check": "shortest paths",
+      "status": "match",
+      "compared": 25,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "pagerank 20 iterations": {
+     "cold_seconds": 0.4263189819994295,
+     "warm_seconds": [
+      0.15614923000066483,
+      0.16311798000060662,
+      0.17117397900074138,
+      0.1342762229996879,
+      0.12380806300097902
+     ],
+     "warm_median_seconds": 0.15614923000066483,
+     "cold_phases": {
+      "restart": 7.383477759000016,
+      "project": 2.7641415300004155,
+      "project undirected": 0.18437714699939534
+     },
+     "check": {
+      "check": "pagerank 20 iterations",
+      "status": "match",
+      "compared": 27770,
+      "mismatches": 0,
+      "max_error": 1.5631940186722204e-13,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0,
+      "convention": "unnormalised"
+     },
+     "counted": true
+    },
+    "components": {
+     "cold_seconds": 0.15777465000064694,
+     "warm_seconds": [
+      0.02933188600036374,
+      0.02450801200029673,
+      0.02084202999867557,
+      0.01692283999909705,
+      0.01654345499991905
+     ],
+     "warm_median_seconds": 0.02084202999867557,
+     "cold_phases": {
+      "restart": 7.39381497300019,
+      "project": 2.8174017239998648,
+      "project undirected": 0.18842782100000477
+     },
+     "check": {
+      "check": "components",
+      "status": "match",
+      "warren_parts": 143,
+      "oracle_parts": 143,
+      "differing_parts": 0
+     },
+     "counted": true
+    },
+    "triangles": {
+     "cold_seconds": 0.35232382499998494,
+     "warm_seconds": [
+      0.13206062899917015,
+      0.1361389550002059,
+      0.12700281599973096,
+      0.14191984299941396,
+      0.14353393300007156
+     ],
+     "warm_median_seconds": 0.1361389550002059,
+     "cold_phases": {
+      "restart": 7.198059263000687,
+      "project": 2.7089107789997797,
+      "project undirected": 0.1804290910004056
+     },
+     "check": {
+      "check": "triangles",
+      "status": "match",
+      "compared": 27770,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "louvain": {
+     "cold_seconds": 8.001568895000673,
+     "warm_seconds": [
+      9.099961224999788,
+      5.615150044999609,
+      7.200795927999934,
+      8.992193277999831,
+      7.967696768000678
+     ],
+     "warm_median_seconds": 7.967696768000678,
+     "cold_phases": {
+      "restart": 7.49350160999893,
+      "project": 2.709385227999519,
+      "project undirected": 0.16051725299985264
+     },
+     "check": {
+      "check": "louvain",
+      "status": "match",
+      "warren": 0.6567713417201342,
+      "oracle": 0.6513560210205656,
+      "difference": 0.0054153206995686265,
+      "slack": 0.02,
+      "modularity": 0.6567713417201342,
+      "communities": 168
+     },
+     "counted": true
+    },
+    "leiden": {
+     "cold_seconds": 1.2931664970001293,
+     "warm_seconds": [
+      0.47113933200125757,
+      0.31397259600089455,
+      0.35000751599909563,
+      0.37218788799873437,
+      0.34982110500095587
+     ],
+     "warm_median_seconds": 0.35000751599909563,
+     "cold_phases": {
+      "restart": 7.513820890000716,
+      "project": 2.8329060659998504,
+      "project undirected": 0.13565000900052837
+     },
+     "check": {
+      "check": "leiden",
+      "status": "match",
+      "warren": 0.6534974340155045,
+      "oracle": 0.6513560210205656,
+      "difference": 0.0021414129949389737,
+      "slack": 0.02,
+      "modularity": 0.6534974340155045,
+      "communities": 168
+     },
+     "counted": true
+    }
+   }
+  }
+ },
+ "neo4j_store_bytes": 15441920
+}

@@ -14,6 +14,10 @@ extension's revision and profile as given to the script, the sha256 of the
 - `<dataset>.json`: `suite.py time --tier medium`, the §12 matrix.
 - `ids/<dataset>.json`: `suite.py ids`, the text id lengths and front coding
   (DESIGN.md §5.7, §14 item 41).
+- `head_to_head/<dataset>.json`: `suite.py head-to-head`, pg_warren timed
+  against igraph, Neo4j Cypher and Neo4j GDS on the medium tier and four
+  tiny graphs. `head_to_head/README.md` has its provenance, caveats,
+  findings and tables.
 
 ## Provenance
 
