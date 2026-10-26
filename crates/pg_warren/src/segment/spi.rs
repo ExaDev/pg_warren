@@ -11,6 +11,7 @@ use super::{SegmentError, SegmentStore};
 use crate::access::as_catalog_owner;
 use crate::catalog::VersionId;
 use crate::read_only::{read_one, writing};
+use crate::source::Cursor;
 
 /// `warren.segments`.
 pub(crate) struct SpiSegmentStore;
@@ -78,14 +79,15 @@ impl SegmentStore for SpiSegmentStore {
 /// read-only cursor and passes each chunk to `each`, one row at a time.
 /// A chunk stored out of line is detoasted into a memory context reset
 /// after each row, and the row's tuple table is freed, so reading holds
-/// about one chunk rather than every chunk until SPI finishes.
+/// about one chunk rather than every chunk until SPI finishes. An ERROR
+/// leaves the cursor to the abort ([`Cursor`]).
 pub(crate) fn each_chunk<E: From<pgrx::spi::Error>>(
     query: &str,
     args: &[DatumWithOid<'_>],
     each: &mut EachChunk<'_, E>,
 ) -> Result<(), E> {
     Spi::connect(|client| {
-        let mut cursor = client.try_open_cursor(query, args)?;
+        let mut cursor = Cursor::from(client.try_open_cursor(query, args)?);
         let mut chunk = PgMemoryContexts::new("warren chunk");
         loop {
             let rows = cursor.fetch(1)?;
