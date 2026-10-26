@@ -175,6 +175,15 @@
   REPEATABLE READ or SERIALIZABLE either change fails the compaction with
   `serialization_failure` (40001) instead: retry it.
 
+- **A persisted vector dropped by another backend no longer stays in the
+  cache of the backend that wrote it.** That backend pruned dead vectors
+  only when it next loaded one privately; with the shared cache serving
+  its reads it never did, so behind a transaction pooler, where a vector
+  is often written on one server backend and dropped on another, each
+  backend kept the vectors it wrote until `warren.max_cache_memory` (4 GB
+  by default) evicted them: 8 MB a minute per backend in the pooler
+  soak. A write now prunes as a load does (found by `test/pooler_soak.py`).
+
 ### Performance
 
 - A relation whose edges start from at most about a sixth of the nodes

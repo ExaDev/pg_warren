@@ -317,7 +317,7 @@ impl<E: CachedIds> Vectors<E> {
         }
         drop_transient(graph_id, self.version, name);
         let id = record.vector;
-        keep_vector(graph_id, id, Arc::new(vector));
+        keep_vector(graph_id, id, Arc::new(vector))?;
         self.records.retain(|bound| bound.name != name);
         self.records.push(record);
         Ok(Some(id))
