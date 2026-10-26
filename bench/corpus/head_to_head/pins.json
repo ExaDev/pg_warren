@@ -1,0 +1,18 @@
+{
+ "neo4j": {
+  "version": "2026.10.1",
+  "edition": "community",
+  "url": "https://dist.neo4j.org/neo4j-community-2026.10.1-unix.tar.gz",
+  "sha256": "afcf4986d47d13dd908427d301d5a9278b2ec7d615a12bb40e22087c7e133e78",
+  "bytes": 246054933,
+  "checksum": "as dist.neo4j.org publishes it (the .sha256 beside the tarball)"
+ },
+ "gds": {
+  "version": "2026.10.1",
+  "edition": "community (no licence key)",
+  "url": "https://graphdatascience.ninja/neo4j-graph-data-science-2026.10.1.jar",
+  "sha256": "1cdc037231a383f86e283e5652b22c55a1f0a67e6f918bba5538d6008228c133",
+  "bytes": 69791957,
+  "checksum": "of the first fetch, 2026-10-26: graphdatascience.ninja publishes none; versions.json pairs GDS 2026.10.1 with Neo4j 2026.10.1"
+ }
+}

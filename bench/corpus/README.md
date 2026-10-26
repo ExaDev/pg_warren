@@ -14,6 +14,7 @@ bench/corpus/suite.py check --tier tiny --pg-config $T/usr/lib/postgresql/16/bin
 bench/corpus/suite.py check --tier medium --oracle igraph --pg-config ... # one oracle only
 bench/corpus/suite.py time --tier medium --pg-config ... --extension-revision ... --extension-profile release
 bench/corpus/suite.py ids --tier tiny --tier medium     # text id lengths and front coding
+bench/corpus/suite.py head-to-head facebook dblp --pg-config ... --extension-revision ... --extension-profile release
 ```
 
 `check` and `time` start their own scratch cluster from `--pg-config`'s
@@ -86,6 +87,48 @@ oracle's Louvain partition (and per relation where there are relations); and
 Louvain's modularity less 0.02) with the modularity they return checked
 against the oracle's of their partition. `check` fails if any finding is
 neither a match nor a documented difference (clustering at self-loops).
+
+## The head-to-head (`head-to-head`)
+
+pg_warren timed against python-igraph and Neo4j, with plain Cypher and with
+the Graph Data Science library, on the same machine and the same tables
+(`head_to_head/`; results and caveats in
+`bench/results/corpus/head_to_head/README.md`). Each engine is an adapter
+behind one port (`head_to_head/engine.py`): it loads the dataset (its
+phases timed: pg_warren's COPY and `refresh`, igraph's CSV read and graph
+build, `neo4j-admin import`, the server start, the id index and GDS's
+projections), then `timing.py` runs each workload of `workloads.py` cold
+once and warm up to `--repeat` times (5; fewer once `--budget`, 120 s, is
+spent), each run bounded by `--timeout`. A time counts only when the
+engine's answer agrees with the reference (`answers.py`: the igraph oracle
+under pg_warren's definitions; PageRank under the convention each engine
+computes, `pagerank.py`); otherwise the report shows why not.
+
+| Engine | Cold run | Threads |
+|---|---|---|
+| `pg_warren` | after `warren.evict`: the version loaded from its segments | `warren.threads` (`--threads`, 4) |
+| `igraph` | the first call (igraph keeps nothing between calls) | 1 (igraph's algorithms are sequential) |
+| `neo4j-cypher` | after a server restart (empty page cache, plan cache and JIT) | 1 (Community runs a query on one thread) |
+| `neo4j-gds` | after a server restart and new projections | GDS `concurrency` (`--threads`, 4; Community's maximum) |
+
+The workloads: distinct out-degree; BFS reach within 6 hops and BFS depths
+from the start node (the most out-edges, or the hub when undirected);
+hops (or Dijkstra cost when weighted) between the correctness suite's 25
+seeded pairs; 20 PageRank propagation steps; weak components; triangles;
+Louvain and Leiden (held to the correctness suite's quality bound);
+exact betweenness where N·M ≤ 5·10⁸. Cypher runs what one query can
+express and records why it cannot run the rest.
+
+Neo4j Community 2026.10.1 and GDS 2026.10.1 (the pair GDS's
+`versions.json` names) are downloaded into `<cache>/head-to-head` and
+checked against `head_to_head/pins.json` (Neo4j's published sha256; GDS
+publishes none, so its pin is the first fetch's). Java 21 must be on
+`PATH`. The server runs in the foreground with its state under the cache,
+heap and page cache from `--neo4j-heap` (4g) and `--neo4j-pagecache` (2g),
+auth off and Bolt on 127.0.0.1:7687; each dataset's database is deleted
+once measured. The runner's logic is tested against a fake engine, and
+the igraph engine end to end, in `bench/tests/test_corpus_head_to_head.py`;
+Neo4j itself never runs in CI.
 
 ## The nightly job (`.github/workflows/corpus.yml`)
 

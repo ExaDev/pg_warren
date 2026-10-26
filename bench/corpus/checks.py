@@ -169,13 +169,13 @@ def _against(references, check, warren, answer, **options):
             for reference in references]
 
 
-def _path_pairs(nodes, count, seed):
+def path_pairs(nodes, count, seed):
     chooser = random.Random(seed)
     return [tuple(chooser.sample(nodes, 2)) for _ in range(count)]
 
 
 def _path_findings(warren, references, nodes, weighted):
-    pairs = {f"{source}->{target}": (source, target) for source, target in _path_pairs(nodes, PATH_PAIRS, PATH_SEED)}
+    pairs = {f"{source}->{target}": (source, target) for source, target in path_pairs(nodes, PATH_PAIRS, PATH_SEED)}
     paths = {key: warren.shortest_path(*pair) for key, pair in pairs.items()}
     lengths = {key: None if path is None else len(path) - 1 for key, path in paths.items()}
     costs = {key: warren.path_cost(*pair) for key, pair in pairs.items()} if weighted else {}
