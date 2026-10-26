@@ -9,6 +9,9 @@ use crate::graph::{
 use crate::interrupts::{Cancellation, Interrupts, Work};
 
 use super::CommunityError;
+use first_entries::FirstEntries;
+
+mod first_entries;
 
 /// How a contraction aggregates edges.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,17 +76,29 @@ fn aggregate(
     let members = Members::group(membership, memory, &mut work)?;
     let mut row = QuotientRow::new(membership.quotient_id_space(), memory)?;
     let mut edges = EdgeList::within(membership.quotient_id_space(), true, memory);
+    // Counted once, an edge counts in the first relation it is in (with
+    // one relation, every edge is in its first).
+    let counted = |csr: &AnyCsr| !(contraction.weighted && csr.is_weighted());
+    let once = !contraction.per_relation
+        && relations.len() > 1
+        && relations.iter().any(|(_, csr)| counted(csr));
+    let first = match once {
+        true => Some(FirstEntries::mark(relations, membership.id_space(), memory, &mut work)?),
+        false => None,
+    };
     for (position, &(relation, csr)) in relations.iter().enumerate() {
-        let earlier = &relations[..position];
+        let first = first.as_ref().filter(|_| counted(csr));
+        let slices = csr.slices();
         for community in 0..membership.quotient_id_space() {
+            let mut hint = 0;
             for &member in members.of(community) {
-                work.spend(csr.degree(member) + 1).map_err(ComputeError::from)?;
-                let weights = csr.neighbour_weights(member).filter(|_| contraction.weighted);
-                // Counted once, an edge counts in the first relation it is in.
-                let once = weights.is_none() && !contraction.per_relation;
-                for (at, target) in csr.neighbours(member).enumerate() {
+                let entries = slices.seek(member, &mut hint);
+                work.spend(entries.len() as u64 + 1).map_err(ComputeError::from)?;
+                let weights = slices.weights_at(entries.clone()).filter(|_| contraction.weighted);
+                let targets = slices.neighbours_at(entries.clone());
+                for (at, target) in entries.clone().zip(targets) {
                     let Some(other) = membership.community(target) else { continue };
-                    if once && earlier.iter().any(|(_, csr)| csr.has_edge(member, target)) {
+                    if first.is_some_and(|first| !first.counts(position, at)) {
                         continue;
                     }
                     // The upper triangle of an undirected quotient, mirrored
@@ -92,7 +107,7 @@ fn aggregate(
                     if !counted || (contraction.drop_self_loops && other == community) {
                         continue;
                     }
-                    let weight = weights.map_or(1.0, |weights| weights[at]);
+                    let weight = weights.map_or(1.0, |weights| weights[at - entries.start]);
                     row.add(other, weight)?;
                 }
             }
@@ -373,6 +388,36 @@ mod tests {
         assert_eq!(quotient(&graph, &p, DIRECTED).unwrap(), summed);
         let weighted = Contraction { per_relation: true, ..DIRECTED };
         assert_eq!(quotient(&graph, &p, weighted).unwrap(), summed);
+    }
+
+    #[test]
+    fn a_counted_edge_in_several_sparse_relations_counts_once_in_the_first() {
+        // The graph above in an id space of 100, so its relations' offsets
+        // are sparse.
+        let edges: Edges =
+            vec![(0, 0, 1, 1.0), (1, 0, 1, 2.0), (1, 1, 0, 4.0), (1, 2, 3, 8.0), (2, 2, 3, 16.0)];
+        let graph = parent(100, 3, &edges, false);
+        let sparse = |csr: &AnyCsr| match csr {
+            AnyCsr::U32(csr) => csr.is_sparse(),
+            AnyCsr::U64(csr) => csr.is_sparse(),
+        };
+        assert!(graph.relations().iter().all(|csr| sparse(csr.forward())));
+        let mut communities = vec![None; 100];
+        communities[..4].copy_from_slice(&[Some(0), Some(1), Some(2), Some(2)]);
+        let p = membership(&communities, 3);
+        let counted = Contraction { weighted: false, ..DIRECTED };
+        let once = Quotient::from([((0, 0, 1), 1.0), ((1, 1, 0), 1.0), ((1, 2, 2), 1.0)]);
+        assert_eq!(quotient(&graph, &p, counted).unwrap(), once);
+    }
+
+    #[test]
+    fn a_target_past_the_membership_is_in_no_community() {
+        // 0 → 2 in relations 0 and 1; the membership covers nodes 0 and 1.
+        let edges: Edges = vec![(0, 0, 2, 1.0), (1, 0, 2, 1.0), (0, 0, 1, 1.0)];
+        let graph = parent(3, 2, &edges, false);
+        let p = membership(&[Some(0), Some(0)], 1);
+        let counted = Contraction { weighted: false, ..DIRECTED };
+        assert_eq!(quotient(&graph, &p, counted).unwrap(), Quotient::from([((0, 0, 0), 1.0)]));
     }
 
     /// The quotient by dense matrices, from the edge list: `PᵀA_rP` of

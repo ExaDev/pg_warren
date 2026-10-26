@@ -1,9 +1,12 @@
 //! Source queries over SPI: read-only cursors under the snapshot that
 //! [`with_pinned_snapshot`] pins (DESIGN.md §5.4 step 1). Opening a query as
 //! a read-only cursor also checks that it is a single SELECT that writes
-//! nothing.
+//! nothing. A [`Cursor`] an ERROR unwinds through is left open, for the
+//! abort to close (DESIGN.md §6.9).
 
 use std::ffi::{CStr, CString};
+use std::mem::ManuallyDrop;
+use std::ops::{Deref, DerefMut};
 use std::ptr;
 
 use pgrx::prelude::*;
@@ -44,10 +47,48 @@ where
     Spi::connect(|client| open_read_only(client, name, query).map(|opened| opened.columns))
 }
 
+/// An SPI cursor, closed when dropped unless an ERROR (or a panic, which
+/// becomes one) is unwinding: the (sub)transaction's abort then closes it,
+/// after it has ended any parallel query that the cursor's query was
+/// running in a function it calls. Closing the cursor while unwinding
+/// would release its portal's resources, that parallel query's shared
+/// memory among them, before the abort ends the parallel query, which then
+/// reads that memory unmapped: the backend crashes (DESIGN.md §6.9).
+pub(crate) struct Cursor<'c>(ManuallyDrop<SpiCursor<'c>>);
+
+impl<'c> From<SpiCursor<'c>> for Cursor<'c> {
+    fn from(cursor: SpiCursor<'c>) -> Self {
+        Self(ManuallyDrop::new(cursor))
+    }
+}
+
+impl<'c> Deref for Cursor<'c> {
+    type Target = SpiCursor<'c>;
+
+    fn deref(&self) -> &SpiCursor<'c> {
+        &self.0
+    }
+}
+
+impl<'c> DerefMut for Cursor<'c> {
+    fn deref_mut(&mut self) -> &mut SpiCursor<'c> {
+        &mut self.0
+    }
+}
+
+impl Drop for Cursor<'_> {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            // SAFETY: the cursor is dropped once, here, and never used after.
+            unsafe { ManuallyDrop::drop(&mut self.0) };
+        }
+    }
+}
+
 /// An open read-only cursor over a source query.
 pub(crate) struct ReadOnlyCursor<'c> {
     /// The cursor.
-    pub(crate) cursor: SpiCursor<'c>,
+    pub(crate) cursor: Cursor<'c>,
     /// Its result column types.
     pub(crate) columns: Vec<ColumnType>,
     /// The planner's estimate of its rows; a hint, often wrong.
@@ -92,7 +133,8 @@ where
             estimated_rows((*portal).stmts),
         )
     };
-    Ok(ReadOnlyCursor { cursor: client.find_cursor(&cursor_name)?, columns, estimated_rows })
+    let cursor = client.find_cursor(&cursor_name)?.into();
+    Ok(ReadOnlyCursor { cursor, columns, estimated_rows })
 }
 
 /// The result column types of `query`, from parse analysis alone: it is
@@ -202,7 +244,7 @@ pub(crate) fn type_name(oid: pg_sys::Oid) -> String {
 /// context of their own, which holds whatever reading them detoasts: it is
 /// reset after each batch, and within one once it holds [`RESET_BYTES`].
 pub(crate) fn for_each_tuple<E: From<pgrx::spi::Error>>(
-    cursor: &mut SpiCursor<'_>,
+    cursor: &mut Cursor<'_>,
     mut each: impl FnMut(&Row<'_>) -> Result<(), E>,
 ) -> Result<(), E> {
     let mut rows = PgMemoryContexts::new("warren rows");
@@ -291,6 +333,7 @@ mod tests {
     use pgrx::prelude::*;
 
     use super::*;
+    use crate::fixture::{failure, refresh, ring};
 
     /// Reading a cursor in a test failed.
     #[derive(Debug)]
@@ -339,6 +382,40 @@ mod tests {
         let (rows, most) = read.unwrap_or_default();
         assert_eq!(rows, 100);
         assert!(most < (RESET_BYTES + (2 << 20)) as usize, "{most} bytes held");
+        Ok(())
+    }
+
+    /// The setting that forces parallel mode; PG 16 renamed it.
+    #[cfg(feature = "pg15")]
+    const FORCE_PARALLEL: &str = "force_parallel_mode";
+    #[cfg(not(feature = "pg15"))]
+    const FORCE_PARALLEL: &str = "debug_parallel_query";
+
+    /// An ERROR raised while a cursor's query runs a parallel query of its
+    /// own (in a function it calls) is left to the abort, which ends that
+    /// parallel query before it drops the cursor. Closing the cursor while
+    /// the ERROR unwound released the parallel query's shared memory
+    /// first, and the abort then read it unmapped: the backend crashed (as
+    /// `label_propagation_majority` did, cancelled while `gather` read its
+    /// vectors under `debug_parallel_query`).
+    #[pg_test]
+    fn an_error_in_a_parallel_query_a_cursor_runs_is_left_to_the_abort(
+    ) -> Result<(), pgrx::spi::Error> {
+        ring("cursor_abort", 3, 1)?;
+        refresh("cursor_abort", true)?;
+        Spi::run(&format!(
+            "SET LOCAL {FORCE_PARALLEL} = on;
+             CREATE FUNCTION fails() RETURNS float8 PARALLEL SAFE LANGUAGE plpgsql
+                 AS $$ BEGIN RAISE EXCEPTION 'failed in a parallel query'; END $$;
+             CREATE FUNCTION runs_a_failing_parallel_query() RETURNS float8 LANGUAGE plpgsql
+                 AS $$ BEGIN PERFORM fails(); RETURN 1; END $$"
+        ))?;
+        let failed = failure(
+            "warren.vector_from_query('cursor_abort', 'v', \
+             'SELECT id, runs_a_failing_parallel_query() FROM cursor_abort_nodes', \
+             persist := false)",
+        )?;
+        assert_eq!(failed.as_deref(), Some("P0001: failed in a parallel query"));
         Ok(())
     }
 }

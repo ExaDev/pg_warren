@@ -226,8 +226,10 @@ engine reached is `check.modularity` in each file.
   or faster (dblp, email-enron, roadnet-tx). Two changes landed between
   those commits: sparse per-relation offsets, and a modularity that weighs
   a pair 1 across relations (0.7.0). The quotients keep per-relation CSRs.
-  The slowdown has not been isolated yet. The two runs also differ in
-  harness, so treat it as a lead rather than a measurement.
+  Re-timed with one harness, the slowdown was real: 0.7.0's counted-once
+  `contract` looked each stored edge up in every earlier relation's row.
+  It is fixed after this run (DESIGN.md §12, "A community regression in
+  0.7.0"); these tables are ae51d77's.
 - *Traversal and components against igraph.* igraph was 1.2–60× faster
   for BFS reach, depths and components on most datasets. The exceptions
   are the two BFS wins above, and components on cit-hepth and fb15k-237.
