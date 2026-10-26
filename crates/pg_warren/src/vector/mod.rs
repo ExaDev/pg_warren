@@ -26,7 +26,7 @@ mod transient;
 
 pub(crate) use cache::{
     cached_vector_bytes, cached_vector_count, cached_vector_listing, cached_vectors, evict_vectors,
-    forget, in_use as vector_in_use, load, lookup as lookup_vector, remember,
+    forget, in_use as vector_in_use, load, lookup as lookup_vector, remember_written,
 };
 pub(crate) use carry::{move_vectors, moved_notice};
 pub(crate) use error::VectorError;

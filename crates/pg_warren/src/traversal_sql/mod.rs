@@ -9,7 +9,7 @@
 //! version re-read), maps external ids to dense ids, delegates to
 //! `warren_core::traversal` with a main-thread interrupt poll, and maps the
 //! result back. Depends on `cache`, `catalog`, `external_ids`,
-//! `interrupts`, `selection` and `source`; nothing depends on it.
+//! `interrupts`, `selection` and `source`; `discard` forgets its last stats.
 
 mod args;
 mod bfs;
@@ -33,4 +33,5 @@ mod walk;
 mod walk_rows;
 
 pub(crate) use error::{entry, TraversalSqlError};
+pub(crate) use stats::forget_last_stats;
 pub(crate) use walk_rows::define_max_walk_paths;

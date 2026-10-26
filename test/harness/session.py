@@ -2,7 +2,8 @@
 statements runs in one session (its transactions, settings and cache) and
 each statement's outcome, rows or SQLSTATE, is returned rather than
 raised. The concurrent refresh and crash recovery checks run many at once,
-one per thread.
+one per thread. It connects to a cluster, or to anything else with the
+cluster's `client` and `connection`: a pooler (harness.pooler).
 
 After each statement psql echoes the error message of the last failed one
 and the statement's SQLSTATE (`00000` when it succeeded), between markers
@@ -51,8 +52,12 @@ class Outcome:
 
 
 def script(sql):
-    """The text that runs `sql` and then prints its outcome's markers."""
-    return f"{sql.rstrip().rstrip(';')};\n\\echo {MESSAGE} :LAST_ERROR_MESSAGE\n\\echo {END} :SQLSTATE\n"
+    """The text that runs `sql` and then prints its outcome's markers. A
+    statement that a meta-command sends (`... \\bind 1 \\g`, by the
+    extended protocol) takes no semicolon."""
+    sql = sql.rstrip()
+    ended = sql if sql.endswith("\\g") else f"{sql.rstrip(';')};"
+    return f"{ended}\n\\echo {MESSAGE} :LAST_ERROR_MESSAGE\n\\echo {END} :SQLSTATE\n"
 
 
 def outcome(lines):

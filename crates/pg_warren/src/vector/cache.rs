@@ -2,8 +2,9 @@
 //! (DESIGN.md §5.5). A vector id names one immutable vector, so an entry
 //! never goes stale; it only becomes unreachable when its row is deleted
 //! (the name written again, or its version or graph dropped), and is then
-//! pruned, or when `warren.max_cache_memory` evicts it; it is reloaded when
-//! next used. A lookup marks it used.
+//! pruned by the next vector this backend loads or writes, or evicted by
+//! `warren.max_cache_memory`; it is reloaded when next used. A lookup
+//! marks it used.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -131,14 +132,24 @@ pub(crate) fn load(
     if let Some(vector) = CACHE.with_borrow_mut(|cache| cache.get(record.vector)) {
         return Ok(vector);
     }
-    // Store calls run SPI, and may raise an ERROR or reach user code that
-    // calls back into this cache, so they run outside any borrow of it.
-    let cached = CACHE.with_borrow(VectorCache::vectors);
-    let existing = store.existing(&cached)?;
-    CACHE.with_borrow_mut(|cache| cache.retain(&existing));
+    prune(store)?;
     let vector = Arc::new(read_vector(store, memory, record)?);
     remember(graph_id, record.vector, Arc::clone(&vector));
     Ok(vector)
+}
+
+/// Drops the cached vectors whose rows were deleted, by this backend or
+/// another, which cannot tell this one's cache.
+fn prune(store: &mut impl VectorStore) -> Result<(), VectorError> {
+    let cached = CACHE.with_borrow(VectorCache::vectors);
+    if cached.is_empty() {
+        return Ok(());
+    }
+    // Store calls run SPI, and may raise an ERROR or reach user code that
+    // calls back into this cache, so they run outside any borrow of it.
+    let existing = store.existing(&cached)?;
+    CACHE.with_borrow_mut(|cache| cache.retain(&existing));
+    Ok(())
 }
 
 /// Vector `id`, if cached; the lookup marks it used.
@@ -152,9 +163,26 @@ pub(crate) fn in_use(id: VectorId) -> bool {
     CACHE.with_borrow(|cache| cache.in_use(id))
 }
 
-/// Caches `vector` as `id`, of graph `graph_id`: a vector just written.
-pub(crate) fn remember(graph_id: i32, id: VectorId, vector: Arc<AnyVector>) {
+/// Caches `vector` as `id`, of graph `graph_id`.
+fn remember(graph_id: i32, id: VectorId, vector: Arc<AnyVector>) {
     CACHE.with_borrow_mut(|cache| cache.insert(graph_id, id, vector));
+}
+
+/// Caches `vector`, just written as `id` of graph `graph_id`, first
+/// pruning cached vectors whose rows were deleted, as a load does: behind
+/// a transaction pooler, a vector written here is often dropped by
+/// another backend, and reads that the shared cache serves never load
+/// here, so without this the dead vectors would stay until
+/// `warren.max_cache_memory` evicted them.
+pub(crate) fn remember_written(
+    store: &mut impl VectorStore,
+    graph_id: i32,
+    id: VectorId,
+    vector: Arc<AnyVector>,
+) -> Result<(), VectorError> {
+    prune(store)?;
+    remember(graph_id, id, vector);
+    Ok(())
 }
 
 /// Drops vector `id` from this backend's cache: its row was just deleted.
@@ -265,5 +293,26 @@ mod tests {
         let cached = CACHE.with_borrow(VectorCache::vectors);
         assert_eq!(cached, [second.vector], "the replaced vector was pruned");
         assert_eq!(evict_vectors(5), 1);
+    }
+
+    /// Behind a transaction pooler, a vector written on one backend is
+    /// often dropped on another, which cannot tell this one's cache: a
+    /// write prunes as a load does, or the dead vectors would stay until
+    /// `warren.max_cache_memory` evicted them.
+    #[test]
+    fn a_write_prunes_cached_vectors_whose_rows_were_deleted_elsewhere() {
+        let mut store = MemoryVectorStore::default();
+        let ones = || -> AnyVector { Vector::filled(&memory(), 3, 1, 1i64).unwrap().into() };
+        let a =
+            write_vector(&mut store, &Binding::new(6, 7, "a", pg_sys::Oid::INVALID), &ones(), 64)
+                .unwrap();
+        remember_written(&mut store, 6, a.vector, Arc::new(ones())).unwrap();
+        store.rows.remove(&a.vector);
+        let b =
+            write_vector(&mut store, &Binding::new(6, 7, "b", pg_sys::Oid::INVALID), &ones(), 64)
+                .unwrap();
+        remember_written(&mut store, 6, b.vector, Arc::new(ones())).unwrap();
+        assert_eq!(CACHE.with_borrow(VectorCache::vectors), [b.vector]);
+        assert_eq!(evict_vectors(6), 1);
     }
 }

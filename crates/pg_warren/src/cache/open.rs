@@ -23,8 +23,8 @@ use crate::parallel_worker::cache_notice_raised;
 use crate::read_only::{read_one, read_two};
 use crate::segment::SpiSegmentStore;
 use crate::vector::{
-    self, cached_vectors, forget, lookup_vector, remember, retain_transients, transient_versions,
-    SpiVectorStore, VectorError, VectorId, VectorRecord,
+    self, cached_vectors, forget, lookup_vector, remember_written, retain_transients,
+    transient_versions, SpiVectorStore, VectorError, VectorId, VectorRecord,
 };
 
 /// A graph and the version of it a call reads.
@@ -227,10 +227,15 @@ pub(crate) fn forget_vector(id: VectorId) {
 
 /// Caches persisted vector `vector`, just written as `id` of graph
 /// `graph_id`, pinned until the statement ends; the cache is then trimmed.
-pub(crate) fn keep_vector(graph_id: i32, id: VectorId, vector: Arc<AnyVector>) {
-    remember(graph_id, id, vector);
+pub(crate) fn keep_vector(
+    graph_id: i32,
+    id: VectorId,
+    vector: Arc<AnyVector>,
+) -> Result<(), VectorError> {
+    remember_written(&mut SpiVectorStore, graph_id, id, vector)?;
     pin_vector(id);
     trim();
+    Ok(())
 }
 
 /// Drops this backend's cached versions (and those evicted that a call
@@ -362,6 +367,23 @@ mod tests {
                 Some(stray_current_failure("stray_a", stray))
             );
         }
+        Ok(())
+    }
+
+    /// Behind a transaction pooler, a persisted vector written on one
+    /// backend is dropped on another, which cannot tell this backend's
+    /// cache; with the shared cache serving reads, this backend loads no
+    /// vector, so its next write must prune the dead one (found by the
+    /// pooler soak, `test/pooler_soak.py`).
+    #[pg_test]
+    fn a_written_vector_prunes_the_cached_vectors_dropped_elsewhere() -> Result<(), Error> {
+        ring("dropped_elsewhere", 10, 1)?;
+        refresh("dropped_elsewhere", true)?;
+        Spi::run("SELECT warren.vector_const('dropped_elsewhere', 'a', 1)")?;
+        assert_eq!(crate::vector::cached_vector_count(), 1);
+        Spi::run("DELETE FROM warren.vectors WHERE name = 'a'")?;
+        Spi::run("SELECT warren.vector_const('dropped_elsewhere', 'b', 1)")?;
+        assert_eq!(crate::vector::cached_vector_count(), 1, "only b is cached");
         Ok(())
     }
 }

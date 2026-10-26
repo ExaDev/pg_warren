@@ -13,6 +13,10 @@ def test_the_script_runs_the_statement_and_then_echoes_both_markers():
                                      f"\\echo {END} :SQLSTATE\n")
 
 
+def test_a_statement_a_meta_command_sends_takes_no_semicolon():
+    assert script("SELECT $1::int \\bind 5 \\g").startswith("SELECT $1::int \\bind 5 \\g\n\\echo")
+
+
 def test_a_success_has_its_rows_split_on_tabs_and_no_message():
     done = outcome(["1\ta", "2\tb", f"{MESSAGE} an earlier statement's error", f"{END} 00000"])
     assert done == Outcome([["1", "a"], ["2", "b"]], "00000", "")

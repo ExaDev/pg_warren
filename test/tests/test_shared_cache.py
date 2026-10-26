@@ -11,7 +11,7 @@ def test_off_sets_the_cap_to_zero():
 
 
 def test_preload_loads_pg_warren_at_startup_and_sets_the_cap():
-    assert settings("preload") == ("shared_preload_libraries = 'pg_warren'",
+    assert settings("preload") == ("shared_preload_libraries = 'pg_stat_statements, pg_warren'",
                                    f"warren.shared_cache_memory = '{CAP}'")
 
 

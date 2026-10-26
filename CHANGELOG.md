@@ -101,6 +101,13 @@
   edge in each (one per relation, as parallel edges), for when that
   multiplicity is the signal.
 
+- **`docs/limits.md`, "Behind a connection pooler"**: what transaction
+  pooling loses and leaks between clients (settings, transient vectors,
+  `last_stats()`, SQL `PREPARE`) and what to use instead, checked by
+  `test/pooler_soak.py`, a soak behind PgBouncer in transaction and
+  session pooling that watches pooled backends, the shared cache and the
+  catalog for growth (CI runs it for 2 minutes on PG 16).
+
 ### Fixes
 
 - **On a physical standby, every function that writes fails with
@@ -174,6 +181,22 @@
   is moved under that role (harness test `compact_reassign_race`). Under
   REPEATABLE READ or SERIALIZABLE either change fails the compaction with
   `serialization_failure` (40001) instead: retry it.
+
+- **`DISCARD ALL` frees the backend's transient vectors, of every role,
+  and forgets `last_stats()`.** It left both, so behind a session pooler
+  (PgBouncer's `server_reset_query`), the next client on a server backend
+  could read the transient vectors and the stats the last client left,
+  and the vectors stayed until the backend exited (found by
+  `test/pooler_soak.py`; regression test `test/sql/discard_all.sql`).
+
+- **A persisted vector dropped by another backend no longer stays in the
+  cache of the backend that wrote it.** That backend pruned dead vectors
+  only when it next loaded one privately; with the shared cache serving
+  its reads it never did, so behind a transaction pooler, where a vector
+  is often written on one server backend and dropped on another, each
+  backend kept the vectors it wrote until `warren.max_cache_memory` (4 GB
+  by default) evicted them: 8 MB a minute per backend in the pooler
+  soak. A write now prunes as a load does (found by `test/pooler_soak.py`).
 
 ### Performance
 

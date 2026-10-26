@@ -66,8 +66,9 @@ Rules:
 - A **transient** vector (`persist := false`) lives only in this backend,
   for this role. It costs no WAL, is not transactional, does not pin its
   version, and counts against `warren.max_cache_memory` (it is never
-  evicted). It is freed at session end, or by `evict` or `drop_vector`
-  (`if_exists := true` makes a missing name a no-op). Keep loop scratch
+  evicted). It is freed at session end, by `DISCARD ALL` (every role's;
+  a session pooler runs it between clients), or by `evict` or
+  `drop_vector` (`if_exists := true` makes a missing name a no-op). Keep loop scratch
   transient and persist results.
 - A name resolves to this role's transient vector first, then the persisted
   one. Writing a name replaces the vector of that name; a persisted vector

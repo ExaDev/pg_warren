@@ -815,6 +815,30 @@ that calls a `PARALLEL SAFE` graph read loads its own copy, so the plan
 can hold one per worker plus the leader's ("Parallel query", above;
 docs/semantics.md, "Parallel query labels").
 
+**Behind a connection pooler.** In session pooling a client keeps its
+server backend, and PgBouncer's `server_reset_query = DISCARD ALL` runs
+when it leaves; `DISCARD ALL` also drops pg_warren's transient vectors
+(every role's on that backend) and `last_stats()`, so the next client
+starts clean. In transaction pooling (PgBouncer's `pool_mode =
+transaction`) each transaction may run on another backend, and nothing
+is reset between clients, so what lives in a session does not follow
+the client and is left for whoever gets that backend next
+(`test/pooler_soak.py` checks both modes):
+- a `SET` of `warren.*` (or any setting): use `SET LOCAL` in the
+  transaction, or `ALTER ROLE … SET` / `ALTER DATABASE … SET`;
+- a transient vector (`persist := false`): create it, read it and drop it
+  (`warren.drop_vector`) in one transaction; otherwise a later
+  transaction may not find it (42704), and it stays in the backend's
+  memory, counted against `warren.max_cache_memory`, where another
+  client of the same role can read it;
+- `warren.last_stats()`: read it in the traversal's transaction;
+- SQL `PREPARE`: use the protocol's prepared statements, which PgBouncer
+  1.21 and later tracks across backends when `max_prepared_statements`
+  is set.
+
+Persisted vectors, graphs and versions are in the catalog and read the
+same through any backend.
+
 **Not yet supported:** `text` node ids; incremental maintenance (every
 `refresh` is a full rebuild); `refresh` or `compact` of a graph derived by
 contraction (contract again); edge properties beyond one weight;

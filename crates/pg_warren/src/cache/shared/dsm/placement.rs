@@ -211,7 +211,7 @@ mod preloaded {
         // shared memory may be requested; the previous hook is read by value.
         unsafe {
             if let Some(previous) = PREVIOUS_REQUEST {
-                previous();
+                pg_sys::ffi::pg_guard_ffi_boundary(|| previous());
             }
             pg_sys::RequestAddinShmemSpace(size_of::<Shared>());
             pg_sys::RequestNamedLWLockTranche(TRANCHE.as_ptr(), 1);
@@ -227,7 +227,7 @@ mod preloaded {
         // initialization of what it returns, as the C macro's users do.
         unsafe {
             if let Some(previous) = PREVIOUS_STARTUP {
-                previous();
+                pg_sys::ffi::pg_guard_ffi_boundary(|| previous());
             }
             let init_lock =
                 addr_of_mut!((*pg_sys::MainLWLockArray.add(ADDIN_SHMEM_INIT_LOCK)).lock);

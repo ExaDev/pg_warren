@@ -63,6 +63,18 @@ recursive CTEs / NetworkX on generated fixtures, and the Appendix A use cases
   `statement_timeout` (the fuzzer's, 3 s, and a watchdog), a session still busy when it is closed is killed,
   and worker threads that do not stop in time are reported, not waited
   for.
+- `pooler_soak.py` puts PgBouncer in front of a scratch cluster in
+  transaction and session pooling, many clients over a few server
+  connections, and runs a mix of reads, compute, vectors, prepared
+  statements, timeouts, cancels, abandoned transactions and writes that
+  retire versions for `--minutes` (CI: 2) or `--hours`. It samples each
+  pooled backend's memory (`smaps_rollup`, memory contexts,
+  `warren.backends()`), the shared cache, the DSM segments and the catalog,
+  and fails on growth in the steady state (a robust slope over the window
+  and over each half), on anything left behind once clients and poolers
+  stop, on an undocumented SQLSTATE and on session state that session
+  pooling loses or leaks; what transaction pooling loses and leaks is
+  reported (`harness/pooler_soak/`; DESIGN.md §13, M11).
 - `harness/` is the Python behind them; `tests/` are its pytest tests.
 
 ## Writing a SQL test
