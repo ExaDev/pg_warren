@@ -91,24 +91,24 @@ jobs:
         with:
           path: ~/.cache/warren-corpus/datasets
           key: corpus-tiny-${{ hashFiles('bench/corpus/pins.json', 'bench/corpus/manifest.json', 'bench/corpus/fetch.py', 'bench/corpus/graph_v1.py', 'bench/corpus/tables.py') }}
-      - name: Fetch the tiny tier (keepset, checked against pins.json)
-        # Three tries, a minute apart: a source can fail from a runner when
-        # it does not elsewhere (raw.githubusercontent.com did, and keepset
-        # then read its archive.org snapshot, which arrives gzipped, as
-        # text). A dataset already fetched at its pin is not fetched again.
+      - name: The tiny tier's datasets, but transport-airline
+        # raw.githubusercontent.com sends transport-airline's routes.dat
+        # gzip-encoded to a GitHub runner even though keepset asks for no
+        # encoding, and keepset keeps a response's bytes as sent, so it
+        # reads gzip as text. It is checked where the fetch works (§12).
         run: |
-          for try in 1 2 3; do
-            python bench/corpus/suite.py fetch --tier tiny && exit 0
-            echo "::warning::fetch try $try failed"
-            sleep 60
-          done
-          exit 1
+          {
+            printf 'DATASETS='
+            python -c "import json; d = json.load(open('bench/corpus/manifest.json'))['datasets']; print(' '.join(n for n, s in d.items() if s['tier'] == 'tiny' and n != 'transport-airline'))"
+          } >>"$GITHUB_ENV"
+      - name: Fetch them (keepset, checked against pins.json)
+        run: python bench/corpus/suite.py fetch $DATASETS  # word-split on purpose
       - name: Every tiny dataset was pinned before this run
         # A dataset without a pin would be pinned by this fetch, unchecked.
         run: git diff --exit-code bench/corpus/pins.json
       - name: Check against NetworkX and igraph
         run: |
-          python bench/corpus/suite.py check --tier tiny --pg-config "$PG_CONFIG" --results "$RESULTS" \
+          python bench/corpus/suite.py check $DATASETS --pg-config "$PG_CONFIG" --results "$RESULTS" \
             --extension-revision "$(git rev-parse --short HEAD)" --extension-profile release
       - name: Summary
         if: ${{ !cancelled() }}
@@ -117,7 +117,7 @@ jobs:
             echo "## bench/corpus check --tier tiny ($(git rev-parse --short HEAD))"
             echo
             if [ -d "$RESULTS/correctness" ]; then
-              python bench/corpus/suite.py summary --tier tiny --results "$RESULTS"
+              python bench/corpus/suite.py summary $DATASETS --results "$RESULTS"
             else
               echo "No results: the run stopped before checking (see the fetch step)."
             fi
