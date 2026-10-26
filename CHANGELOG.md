@@ -2,8 +2,45 @@
 
 ## 0.7.0 — in development
 
+Milestone M11 of DESIGN.md §13: proven on real graphs and in real
+deployments. pg_warren now runs a suite of 19 real graphs pinned through
+keepset (`bench/corpus`), checked against NetworkX and igraph and timed
+head to head with igraph and Neo4j, with and without GDS (README, "How it
+compares"), and Appendix A's use cases at 10M nodes. A pair of nodes
+linked in several relations is now read one way everywhere: strengths
+are summed and an unweighted pair counts once, costs take the pair's
+best edge, and `per_relation := true` reads an edge in each relation; on
+graphs with such pairs some results differ from 0.6.0's (under Behaviour
+changes). A relation with few edges stores sparse offsets, so every graph
+needs a `refresh` after the upgrade (under Upgrading). Concurrent
+refreshes, crash recovery, streaming replicas, a connection pooler and a
+SQL fuzzer found the bugs under Fixes, two of them server crashes.
+Packages are published from this release on: a signed apt repository for
+Debian and Ubuntu, Docker images, a Homebrew tap and tarballs, for amd64
+and arm64 (under New).
+
 ### Upgrading
 
+- **If `pg_warren` is in `shared_preload_libraries`, restart the server**
+  after installing the new build: the postmaster keeps the library it
+  loaded at start, and every backend inherits it.
+- **Restart the server if the shared cache is in use.** The shared cache's
+  registry is now `pg_warren.cache.4`, so backends of the old and the new
+  build never share a version; the old registry's segments are freed by a
+  restart.
+- **Run `ALTER EXTENSION pg_warren UPDATE;` in every database that has
+  the extension**, after installing the new build and before using the
+  new version. The update drops and creates again the 27 functions that
+  gain `per_relation` (under New), keeping their privileges; it changes
+  no table. Until the update, 0.6.0's definitions still work with the new
+  library, reading a pair as the new default does, except 0.6.0's
+  `sssp_vector` (PL/pgSQL), which still sums a pair's weights until the
+  update.
+- The update drops those functions without `CASCADE`, so it fails if a
+  view, or a function with a `BEGIN ATOMIC` body, calls one of them
+  ("cannot drop function ... because other objects depend on it"). Drop
+  the dependent objects, run `ALTER EXTENSION pg_warren UPDATE`, then
+  create them again.
 - **Refresh every graph after installing the new build.** A relation's
   CSR can now store sparse offsets, so CSR segments have a new format
   (2). Reading a version built by an earlier release fails with
@@ -11,20 +48,6 @@
   `warren.refresh`; a `refresh` builds on it as usual, and the version it
   builds reads. Old versions are not converted. Vectors are bound to a
   version, so recreate them on the new one.
-- **Restart the server if the shared cache is in use.** The shared cache's
-  registry is now `pg_warren.cache.4`, so backends of the old and the new
-  build never share a version; the old registry's segments are freed by a
-  restart.
-- `ALTER EXTENSION pg_warren UPDATE` drops and recreates the functions
-  that gain `per_relation`, keeping their privileges. Until the update,
-  0.6.0's definitions still work with the new library, reading a pair as
-  the new default does, except 0.6.0's `sssp_vector` (PL/pgSQL), which
-  still sums a pair's weights until the update.
-- The update drops those functions without `CASCADE`, so it fails if a
-  view, or a function with a `BEGIN ATOMIC` body, calls one of them
-  ("cannot drop function ... because other objects depend on it"). Drop
-  the dependent objects, run `ALTER EXTENSION pg_warren UPDATE`, then
-  create them again.
 
 ### Behaviour changes
 
@@ -87,8 +110,14 @@
   different order than in 0.6.0, and a node reachable from several nodes
   of the previous depth reports as `via` the one of smallest dense id.
   Nodes and depths are unchanged.
+- `walk` and `neighbours` make each row's external ids as the row is
+  returned, rather than all rows before the first, as `components` and
+  the others have since 0.6.0. Their rows and order are unchanged; `walk`
+  still runs the whole walk in its first call. Such a call keeps the
+  version it reads, private or mapped from the shared cache, until its
+  last row is read or it ends (under Performance).
 
-### Added
+### New
 
 - **`per_relation boolean DEFAULT false`** on `modularity`, `contract`,
   `local_moving`, `leiden_refine`, `louvain`, `leiden`, `spmv`, `spmm`,
@@ -107,6 +136,19 @@
   `test/pooler_soak.py`, a soak behind PgBouncer in transaction and
   session pooling that watches pooled backends, the shared cache and the
   catalog for growth (CI runs it for 2 minutes on PG 16).
+
+- **Packages**, published with each release from this one on (README.md,
+  "Install"): a signed apt repository of `postgresql-NN-pg-warren`
+  packages for PostgreSQL 15–18 on Debian 12 and 13 and Ubuntu 22.04 and
+  24.04, amd64 and arm64, built against PGDG's PostgreSQL; Docker images
+  on GHCR (`ghcr.io/exadev/pg_warren:pgNN` and `X.Y.Z-pgNN`, PGDG's
+  `postgres` image with the package's files and pg_warren preloaded);
+  a Homebrew formula (`brew install exadev/tap/pg_warren`, for
+  `postgresql@17` and `@18`, bottled on Apple silicon); and tarballs for
+  other glibc Linux. Each GitHub Release has a signed `SHA256SUMS`. The
+  packages do not edit `postgresql.conf`: add the preload yourself. macOS
+  is not yet a supported platform (its tests run in CI without gating),
+  and RPM packages and PGXN are not built yet.
 
 ### Fixes
 
@@ -210,6 +252,18 @@
   by default) evicted them: 8 MB a minute per backend in the pooler
   soak. A write now prunes as a load does (found by `test/pooler_soak.py`).
 
+- **An ERROR raised while pg_warren read a query through a cursor that
+  had a parallel plan running no longer crashes the server** (SIGSEGV,
+  which restarts every backend). Closing the cursor as the ERROR unwound
+  detached the parallel query's shared memory before the
+  (sub)transaction's abort ended the parallel query, which then read the
+  unmapped segment. The cursors pg_warren reads (the node and edge
+  queries, `gather`'s messages, the other queries a function is given,
+  and segment chunks) are now left open on an ERROR, for the abort to
+  close in Postgres's own order (DESIGN.md §6.9;
+  found by the SQL fuzzer: a `statement_timeout` during
+  `label_propagation_majority` under `debug_parallel_query`).
+
 ### Performance
 
 - A relation whose edges start from at most about a sixth of the nodes
@@ -226,6 +280,24 @@
   read the relations' rows in ascending order; on FB15k-237 they are
   1.5–2.2× faster than in 0.6.0, and the version ten times smaller, but
   an all-relations `spmv` takes 1.6–2× as long (docs/limits.md).
+- `triangles` (and `clustering`, which counts them) orients each edge
+  from its endpoint of lower degree and finds each triangle once, about
+  M·√M at worst, where it intersected every neighbour row of every node:
+  on SNAP's facebook graph 156 → 7.0 ms and on Hetionet
+  4.09 → 0.116 s, and on a skewed (R-MAT) graph of 2M edges 14.6 →
+  0.53 s on one thread. It holds 8 bytes per stored edge, half the
+  symmetric adjacency it built before. Counts are unchanged.
+- `contract` finds which of a pair's entries count in one sweep of the
+  rows, so `louvain` and `leiden` on graphs with many relations are not
+  slowed by counting a pair once: on FB15k-237 (237 relations) they take
+  0.42 s and 1.49 s, against 0.70 s and 1.84 s in 0.6.0 (YAGO3-10 0.80 /
+  2.49 s against 1.26 / 3.30 s; Hetionet 1.61 / 3.05 s against 1.77 /
+  2.78 s; medians of 5). The partitions differ from 0.6.0's where pairs
+  are linked in several relations (under Behaviour changes).
+- `walk` and `neighbours` hold only the current row's external ids: over
+  50,000 IRIs, a cursor on one held 3.7 MB (`neighbours`, `walk` ends) or
+  17.9 MB (`walk` paths) after its first row, and now holds 0.09 MB,
+  against 0.05 MB over 1,000.
 
 ## 0.6.0 — identity, lifecycle and visibility (2026-10-24)
 
