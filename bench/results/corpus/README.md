@@ -8,7 +8,9 @@ extension's revision and profile as given to the script, the sha256 of the
 (`fetched.provenance`: URL, sha256, size, catalogue 1.33.0).
 
 - `correctness/<dataset>.json`: `suite.py check`, every tiny and medium
-  dataset against NetworkX 3.x.
+  dataset against NetworkX 3.7 and igraph 1.0.0 (`oracles` in each file;
+  roadnet-tx's is an earlier run, against NetworkX alone: it was not
+  refetched, since keepset needs about 9 GB to fetch it).
 - `<dataset>.json`: `suite.py time --tier medium`, the §12 matrix.
 - `ids/<dataset>.json`: `suite.py ids`, the text id lengths and front coding
   (DESIGN.md §5.7, §14 item 41).
@@ -17,10 +19,11 @@ extension's revision and profile as given to the script, the sha256 of the
 
 | | |
 |---|---|
-| pg_warren | release build of 1ffdcd9 (origin/main when the branch started), `cargo pgrx package` into a private tree; `pg_warren.so` sha256 `5499e8bca4b5710e1b28f9addaf05fe9538a6100b34dcf8406c30e2ff4ac2174` |
+| pg_warren, `check` | release build of a35bbe6, packaged the same way; `pg_warren.so` sha256 in each file (roadnet-tx: the earlier run's build) |
+| pg_warren, `time` | release build of 1ffdcd9 (origin/main when the branch started), `cargo pgrx package` into a private tree; `pg_warren.so` sha256 `5499e8bca4b5710e1b28f9addaf05fe9538a6100b34dcf8406c30e2ff4ac2174` |
 | PostgreSQL | 16.15 (the machine's packages), a scratch cluster per run with the soak's settings (`settings` in each file): `shared_buffers = 1GB`, `warren.threads = 4`, every `warren.max_*_memory = 4GB`, `statement_timeout = 10min`, `fsync = off` |
 | Machine | 4-vCPU Intel Xeon VM (no SMT), 15 GiB RAM, no swap, kernel 6.18.44, shared with other agents' builds: load averages are in each file (`hardware.load_average`), 2.6–6.1 at the start of the timed datasets |
-| Harness | `check`: 67b54c3; `time`: 1ccaf30 (the code that wrote the files is the branch's). Every file says `dirty: true` because this directory was untracked while they were written, which the harness counts; `bench/corpus/` itself matched the recorded revision |
+| Harness | `check`: eae7c8d, NetworkX and igraph (roadnet-tx: 67b54c3), at a load average of 2.5–22 (another agent's soak ran meanwhile), so its seconds are noisy;  `time`: 1ccaf30 (the code that wrote the files is the branch's). Every file says `dirty: true` because this directory was untracked while they were written, which the harness counts; `bench/corpus/` itself matched the recorded revision |
 
 The timed tier was run twice. The files here are the second run, made after
 2b8e27a, which starts a directed graph's traversals from its node with most
@@ -39,46 +42,49 @@ that run's; the other datasets' are the second run's.
 
 | Dataset | Tier | Nodes | Stored edges | Checks matched | Not matched | Q: louvain / leiden / NetworkX Louvain | Seconds |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| karate | tiny | 34 | 156 | 17 of 17 |  | 0.416 / 0.420 / 0.419 | 0.8 |
-| lesmis | tiny | 77 | 508 | 18 of 18 |  | 0.565 / 0.567 / 0.566 | 0.9 |
-| celegans | tiny | 131 | 764 | 19 of 19 |  | 0.415 / 0.413 / 0.405 | 0.8 |
-| polblogs | tiny | 1490 | 19025 | 18 of 19 | clustering (documented difference) | 0.432 / 0.432 / 0.432 | 1.7 |
-| london_transport | tiny | 369 | 860 | 17 of 17 |  | 0.825 / 0.832 / 0.829 | 0.8 |
-| transport-airline | tiny | 3425 | 38513 | 16 of 17 | clustering (documented difference) | 0.666 / 0.667 / 0.658 | 1.8 |
-| facebook | tiny | 4039 | 176468 | 17 of 17 |  | 0.835 / 0.836 / 0.835 | 5.3 |
-| kg-codex-s | tiny | 2034 | 32888 | 19 of 20 | modularity, a pair in several relations (definition difference) | 0.547 / 0.547 / 0.547 | 3.1 |
-| wn18rr | tiny | 40943 | 93003 | 18 of 20 | clustering (documented difference), modularity, a pair in several relations (definition difference) | 0.837 / 0.845 / 0.837 | 13.7 |
-| cit-hepth | medium | 27770 | 352807 | 18 of 19 | clustering (documented difference) | 0.656 / 0.665 / 0.658 | 30.1 |
-| email-enron | medium | 36692 | 367662 | 17 of 17 |  | 0.619 / 0.626 / 0.606 | 18.8 |
-| fb15k-237 | medium | 14541 | 310116 | 18 of 20 | clustering (documented difference), modularity, a pair in several relations (definition difference) | 0.526 / 0.555 / 0.537 | 48.3 |
-| ss-gleich-usroads-48 | medium | 126146 | 323900 | 17 of 17 |  | 0.979 / 0.980 / 0.979 | 30.0 |
-| dblp | medium | 317080 | 2099732 | 17 of 17 |  | 0.821 / 0.830 / 0.821 | 194.9 |
-| yago3-10 | medium | 123182 | 1089040 | 19 of 20 | modularity, a pair in several relations (definition difference) | 0.736 / 0.741 / 0.737 | 577.9 |
-| hetionet | medium | 45158 | 2250197 | 19 of 20 | modularity, a pair in several relations (definition difference) | 0.340 / 0.345 / 0.341 | 776.6 |
+| karate | tiny | 34 | 156 | 34 of 34 |  | 0.416 / 0.420 / 0.419 (igraph 0.419) | 5.8 |
+| lesmis | tiny | 77 | 508 | 36 of 36 |  | 0.565 / 0.567 / 0.566 (igraph 0.565) | 3.1 |
+| celegans | tiny | 131 | 764 | 38 of 38 |  | 0.415 / 0.413 / 0.405 (igraph 0.402) | 2.3 |
+| polblogs | tiny | 1490 | 19025 | 36 of 38 | clustering against igraph (documented difference), clustering against networkx (documented difference) | 0.432 / 0.432 / 0.432 (igraph 0.432) | 13.0 |
+| london_transport | tiny | 369 | 860 | 34 of 34 |  | 0.825 / 0.832 / 0.829 (igraph 0.829) | 3.5 |
+| transport-airline | tiny | 3425 | 38513 | 32 of 34 | clustering against igraph (documented difference), clustering against networkx (documented difference) | 0.666 / 0.667 / 0.658 (igraph 0.662) | 104.2 |
+| facebook | tiny | 4039 | 176468 | 33 of 33 |  | 0.835 / 0.836 / 0.835 (igraph 0.834) | 36.0 |
+| kg-codex-s | tiny | 2034 | 32888 | 40 of 40 |  | 0.547 / 0.548 / 0.547 (igraph 0.547) | 21.0 |
+| wn18rr | tiny | 40943 | 93003 | 37 of 39 | clustering against igraph (documented difference), clustering against networkx (documented difference) | 0.837 / 0.844 / 0.837 (igraph 0.837) | 370.8 |
+| cit-hepth | medium | 27770 | 352807 | 34 of 36 | clustering against igraph (documented difference), clustering against networkx (documented difference) | 0.656 / 0.665 / 0.658 (igraph 0.651) | 33.5 |
+| email-enron | medium | 36692 | 367662 | 32 of 32 |  | 0.619 / 0.626 / 0.606 (igraph 0.615) | 18.6 |
+| fb15k-237 | medium | 14541 | 310116 | 37 of 39 | clustering against igraph (documented difference), clustering against networkx (documented difference) | 0.544 / 0.547 / 0.537 (igraph 0.532) | 96.0 |
+| ss-gleich-usroads-48 | medium | 126146 | 323900 | 32 of 32 |  | 0.979 / 0.980 / 0.979 (igraph 0.979) | 29.6 |
+| dblp | medium | 317080 | 2099732 | 32 of 32 |  | 0.821 / 0.830 / 0.821 (igraph 0.821) | 257.6 |
+| yago3-10 | medium | 123182 | 1089040 | 38 of 38 |  | 0.723 / 0.727 / 0.723 (igraph 0.721) | 2186.4 |
+| hetionet | medium | 45158 | 2250197 | 38 of 38 |  | 0.348 / 0.352 / 0.351 (igraph 0.347) | 2426.3 |
 | roadnet-tx | medium | 1379917 | 3843320 | 17 of 17 |  | 0.991 / 0.992 / 0.991 | 457.0 |
 
-Node counts, dropped edges, degrees, BFS depths, components, shortest path
-lengths and Dijkstra costs, triangles and core numbers match exactly
-everywhere; PageRank within 3·10⁻¹⁵ (checked at 10⁻⁹). Stored edges count
-both directions of an undirected graph. The two kinds of difference:
+Each check is made against both oracles (`against` in each finding). Node
+counts, dropped edges, degrees, BFS depths, components, shortest path lengths
+and Dijkstra costs, triangles and core numbers match both exactly everywhere.
+PageRank matches NetworkX within 3.1·10⁻¹⁵ (checked at 10⁻⁹). It matches
+igraph within 3.4·10⁻⁸ (cit-hepth), inside the allowance for where NetworkX's
+iteration stops: igraph solves for the fixed point (`checks.pagerank_tolerance`).
+Exact betweenness matches within 1.7·10⁻¹⁵: igraph's on every tiny graph and
+fb15k-237, NetworkX's on the tiny graphs up to kg-codex-s. Every modularity
+(`warren.modularity` of each oracle's Louvain partition, per relation too,
+and `louvain`'s and `leiden`'s returned modularity) matches within 10⁻¹⁵.
+Stored edges count both directions of an undirected graph. One difference
+remains, and it is documented:
 
-- **clustering at a self-loop's node (documented):** pg_warren's
-  `clustering` counts the node's self-loop in its degree; the oracle's simple
-  graph drops it. Only nodes with a self-loop differ (polblogs 2,
-  transport-airline 1, wn18rr 2, cit-hepth 35, fb15k-237 1,301); every other
-  node matches to 10⁻¹².
-- **modularity of a graph with relations:** `warren.modularity` weighs an
-  unweighted pair linked in *k* relations *k* in its undirected view, where
-  `spmv`'s A (and PageRank, which matches NetworkX with A = 1) weighs it 1
-  (DESIGN.md §6.3, docs/compute.md). On NetworkX's Louvain partition the two
-  definitions differ by −0.0096 to +0.0206 (yago3-10). Reported as a finding
-  (a likely inconsistency in pg_warren), not changed here. Against the
-  per-relation definition, `warren.modularity` matches NetworkX exactly, and
-  `louvain`'s and `leiden`'s returned modularity matches NetworkX's of their
-  partitions.
+- **clustering at a self-loop's node:** pg_warren's `clustering` counts the
+  node's self-loop in its degree; the oracles' simple graph drops it. Only
+  nodes with a self-loop differ (polblogs 2, transport-airline 1, wn18rr 2,
+  cit-hepth 35, fb15k-237 1,301); every other node matches to 10⁻¹².
 
-`louvain` and `leiden` are held to NetworkX Louvain's modularity less 0.02;
-every dataset passes (closest: fb15k-237's `louvain`, 0.526 against 0.537).
+The earlier run's other difference, `warren.modularity` weighing a pair in
+*k* relations *k* where `spmv`'s A weighs it 1, was resolved in 0.7.0
+(DESIGN.md §5.3: 1 by default, *k* with `per_relation`).
+
+`louvain` and `leiden` are held to each oracle's Louvain modularity less 0.02;
+every dataset passes (closest: london_transport's `louvain`, 0.0047 below
+igraph's and 0.0042 below NetworkX's).
 
 ## The §12 matrix on the medium tier (seconds; ms where marked)
 
