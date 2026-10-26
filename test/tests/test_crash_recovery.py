@@ -7,7 +7,7 @@ import pytest
 
 from harness import crash_recovery
 from harness.crash_recovery import (EDGE_QUERY, GATE, KINDS, POINTS, SNAPSHOT, Interrupted, Scenario, differences,
-                                    log_problems, setup_sql)
+                                    log_problems, refresh_builds_the_source, setup_sql)
 from harness.session import BackendLost, Outcome
 
 PREFIX = "2026-10-25 10:00:00.001 UTC [7]"
@@ -106,3 +106,43 @@ def test_an_interruption_that_fails_closes_its_sessions_and_ends_its_worker(monk
         run.interrupt()
     assert [session.closed.is_set() for session in sessions] == [True, True]
     assert threading.active_count() == before
+
+
+class SourceSession:
+    """A session after recovery whose refresh builds version 5 with the
+    source's 200000 nodes and edges, and that records its statements.
+    Counting the source's distinct edges fails as `distinct` says."""
+
+    def __init__(self, distinct=Outcome([["200000", "200000"]], "00000", "")):
+        self.statements, self.distinct = [], distinct
+
+    def run(self, sql):
+        self.statements.append(sql)
+        if "warren.refresh" in sql:
+            return Outcome([["5"]], "00000", "")
+        if "FROM warren.versions" in sql:
+            return Outcome([["200000", "200000"]], "00000", "")
+        if "DISTINCT" in sql:
+            return self.distinct
+        return Outcome([], "00000", "")
+
+
+def test_a_refresh_that_builds_the_source_is_no_failure():
+    assert refresh_builds_the_source(SourceSession()) == []
+
+
+def test_the_source_is_counted_by_sorting_not_hashing():
+    """A parallel HashAggregate of the 2M unanalysed edge rows sometimes
+    spills into ~10^5 batches and runs for minutes (seen on PG 16 and 18,
+    with or without pg_warren): the count is made with hash aggregation off."""
+    s = SourceSession()
+    refresh_builds_the_source(s)
+    counted = next(i for i, sql in enumerate(s.statements) if "DISTINCT" in sql)
+    assert "SET enable_hashagg = off" in s.statements[:counted]
+    assert s.statements[counted + 1:] == ["RESET enable_hashagg"]
+
+
+def test_a_source_count_that_fails_says_how():
+    timeout = Outcome([], "57014", "canceling statement due to statement timeout")
+    assert refresh_builds_the_source(SourceSession(timeout)) == [
+        "counting the source after recovery failed: 57014 canceling statement due to statement timeout"]
