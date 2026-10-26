@@ -11,12 +11,15 @@ their slopes over the whole window, so a leak shows even when the pool
 replaces its backends. A backend that a pool started later has a
 warm-up of its own, as long as the run's from its first sample. Per
 cluster (`CLUSTER_TOLERANCES`): the shared
-cache's bytes and entries, the DSM segments mapped, the activity and
-progress rows, the versions (promoted and staged), segments, vectors
-and chunks, and the catalog tables' sizes. The tolerances leave room for
-what varies without leaking: version sizes as the source changes,
-staged versions in flight, the dead tuples autovacuum has not yet
-reclaimed. Other series (RSS, PSS, the pools' counters) are reported."""
+cache's bytes and entries, the DSM segments mapped, the activity rows,
+the progress rows that outlived their call (none allowed), the versions
+(promoted and staged), segments, vectors and chunks, and the catalog
+tables' sizes. The tolerances leave room for what varies without
+leaking: version sizes as the source changes, staged versions in
+flight, the dead tuples autovacuum has not yet reclaimed. Other series
+(RSS, PSS, the pools' counters, and all progress rows, which count the
+calls in flight as a sample is taken, a gauge of the load) are
+reported."""
 
 import statistics
 from collections import defaultdict
@@ -37,7 +40,7 @@ CLUSTER_TOLERANCES = {
     "dsm_segments": Tolerance(4, 0.25),
     "dsm_bytes": Tolerance(16 * MIB, 0.25),
     "activity_rows": Tolerance(4, 0),
-    "progress_rows": Tolerance(2, 0),
+    "outlived_progress_rows": Tolerance(0, 0),
     "promoted_versions": Tolerance(2, 0),
     "staged_versions": Tolerance(2, 0),
     "segments": Tolerance(8, 0.25),
