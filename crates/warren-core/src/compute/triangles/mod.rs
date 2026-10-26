@@ -2,25 +2,41 @@
 //! triangles of the undirected simple graph underlying the selected
 //! relations each node is in, as NetworkX's `triangles` counts them.
 //!
-//! The kernel builds the symmetric adjacency once (each node's neighbours
-//! in either direction, self-loops dropped, in a CSR charged to the
-//! budget; no reverse CSR is needed), then counts in parallel: a node `u`
-//! is in `Σ_{v ∈ N(u)} |N(u) ∩ N(v)| / 2` triangles, each intersection a
-//! merge of two sorted rows, or, when one row is much longer (a hub's),
-//! a binary search of the shorter's values in it. The cost is about
-//! `Σ_u Σ_{v ∈ N(u)} min(d_u, d_v) · log max(d_u, d_v)`, and a task checks
-//! its cancellation flag every 65,536 row entries it visits.
+//! The kernel orients the graph by degree once ([`oriented`]: nodes
+//! ranked by (degree, dense id) and named by rank, each edge kept once,
+//! from its lower-ranked endpoint to the other, charged to the budget; no
+//! reverse CSR is needed), then finds each triangle once, from its
+//! lowest-ranked node, in parallel tasks of nodes. A search from `u` marks
+//! `u`'s row in its thread's [`marks`], then reads the row of each `v` in
+//! it: each marked `w` there closes a triangle `u`, `v`, `w`. `u` and
+//! `v`'s counts take what a search found at once, and so does each `w`'s
+//! at its end, so the shared counts are touched at most three times per
+//! oriented edge, not once per triangle. A search costs its row's length
+//! plus its row's rows' lengths, and no row is longer than about `√(2M)`:
+//! about `M · √M` at worst, near-linear on sparse graphs, hubs or not. A
+//! task checks its cancellation flag every 65,536 row entries it reads.
+
+mod marks;
+mod oriented;
+
+use std::mem::size_of;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use rayon::prelude::*;
 
-use super::symmetric::{distinct, selected_rows, shared, Symmetric};
+use self::marks::Marks;
+use self::oriented::Oriented;
+use super::symmetric::selected_rows;
 use super::{ComputeError, ComputeMemory, Vector, Workers};
 use crate::graph::{GraphCsr, RelationSelection};
 use crate::interrupts::{Cancellation, Cancelled, Interrupts, Work};
 
-/// The nodes one task handles; a task checks the cancellation flag first.
-/// Small under test, so tests cross task boundaries.
-const NODES_PER_TASK: usize = if cfg!(test) { 3 } else { 4096 };
+/// The nodes (consecutive ranks) one task handles; a task checks the
+/// cancellation flag first. Few, since a search's cost grows with rank up
+/// to the hubs' and the tasks must balance (4,096 left four threads
+/// waiting on a few tasks). Small under test, so tests cross task
+/// boundaries.
+const NODES_PER_TASK: usize = if cfg!(test) { 3 } else { 256 };
 
 /// Each node's triangle count over the selected relations, as an `i64`
 /// vector.
@@ -35,41 +51,89 @@ pub fn triangles<I: Interrupts>(
     let id_space = graph.all_relations().forward().id_space();
     let mut counts = Vector::filled(memory, id_space, 1, 0i64)?;
     let values = counts.values_mut()?;
-    // The adjacency is charged on the pool, which reclaims no held memory
-    // (`memory`), so room for it is reclaimed here, on the caller's thread.
-    memory.reclaim_for(Symmetric::bytes(&forward, id_space));
+    let threads = workers.threads();
+    // The adjacency, the triangles found (a count per node) and the marks
+    // are charged on the pool, which reclaims no held memory (`memory`), so room for them is
+    // reclaimed here, on the caller's thread.
+    let adjacency = Oriented::bytes(&forward, id_space);
+    let found = id_space.saturating_mul(size_of::<u64>() as u64);
+    let marks = Marks::bytes(id_space, threads);
+    memory.reclaim_for(adjacency.saturating_add(found).saturating_add(marks));
     workers.run(interrupts, |cancellation| {
-        let adjacency = Symmetric::new(memory, cancellation, &forward, id_space)?;
-        count(&adjacency, cancellation, values)
+        let adjacency = Oriented::new(memory, cancellation, &forward, id_space)?;
+        count(memory, &adjacency, cancellation, threads, values)
     })?;
     Ok(counts)
 }
 
-/// Writes each node's triangle count to `counts`.
+/// Writes each node's triangle count to `counts` (by dense id).
 fn count(
-    adjacency: &Symmetric,
+    memory: &ComputeMemory,
+    adjacency: &Oriented,
     cancellation: &Cancellation,
+    threads: usize,
     counts: &mut [i64],
 ) -> Result<(), ComputeError> {
-    counts.par_chunks_mut(NODES_PER_TASK).enumerate().try_for_each(|(task, counts)| {
+    let nodes = adjacency.nodes();
+    let (found, _found_charge) = memory.filled_with(nodes, || AtomicU64::new(0))?;
+    let marks = Marks::new(memory, nodes, threads)?;
+    (0..nodes.div_ceil(NODES_PER_TASK)).into_par_iter().try_for_each(|task| {
         let mut work = Work::new(cancellation);
         work.check()?;
-        for (offset, count) in counts.iter_mut().enumerate() {
-            *count = triangles_of(adjacency, task * NODES_PER_TASK + offset, &mut work)?;
-        }
-        Ok(())
-    })
+        let first = task * NODES_PER_TASK;
+        marks.with(|marks| {
+            (first..nodes.min(first + NODES_PER_TASK))
+                .try_for_each(|node| search(adjacency, &found, marks, node, &mut work))
+        })
+    })?;
+    counts.par_iter_mut().zip(adjacency.ranks()).for_each(|(count, &rank)| {
+        *count = i64::try_from(found[rank as usize].load(Ordering::Relaxed)).unwrap_or(i64::MAX);
+    });
+    Ok(())
 }
 
-/// The triangles `node` is in: half the neighbours its neighbours share
-/// with it.
-fn triangles_of(adjacency: &Symmetric, node: usize, work: &mut Work<'_>) -> Result<i64, Cancelled> {
-    let row = adjacency.row(node);
-    let mut pairs = 0;
-    for v in distinct(row) {
-        pairs += shared(row, adjacency.row(v as usize), work, |_| ())?;
+/// Finds the triangles whose lowest-ranked node is `u` (a rank, as all
+/// nodes here are), each once, and adds them to `found`: for each `v` in
+/// `u`'s row, the nodes `w` in both `u`'s row (marked in `marks`, which
+/// it leaves all zero unless it fails) and `v`'s.
+fn search(
+    adjacency: &Oriented,
+    found: &[AtomicU64],
+    marks: &mut [u32],
+    u: usize,
+    work: &mut Work<'_>,
+) -> Result<(), Cancelled> {
+    let row = adjacency.row(u);
+    for &v in row {
+        marks[v as usize] = 1;
     }
-    Ok(i64::try_from(pairs / 2).unwrap_or(i64::MAX))
+    let mut at_u = 0;
+    for &v in row {
+        let next = adjacency.row(v as usize);
+        let mut at_v = 0;
+        for &w in next {
+            let mark = &mut marks[w as usize];
+            if *mark != 0 {
+                *mark += 1;
+                at_v += 1;
+            }
+        }
+        work.spend(next.len() as u64 + 1)?;
+        if at_v > 0 {
+            found[v as usize].fetch_add(at_v, Ordering::Relaxed);
+            at_u += at_v;
+        }
+    }
+    for &w in row {
+        let through = std::mem::take(&mut marks[w as usize]) - 1;
+        if through > 0 {
+            found[w as usize].fetch_add(u64::from(through), Ordering::Relaxed);
+        }
+    }
+    if at_u > 0 {
+        found[u].fetch_add(at_u, Ordering::Relaxed);
+    }
+    Ok(())
 }
 
 // Not under Miri: the compute pool's work stealing runs through
@@ -157,7 +221,7 @@ mod tests {
     }
 
     #[test]
-    fn the_symmetric_adjacency_is_charged() {
+    fn the_oriented_adjacency_is_charged() {
         let graph = reference::graph(3, 1, &vec![(0, 0, 1, 1.0), (0, 1, 2, 1.0)], false, false);
         // Room for the counts (24 bytes) and offsets (32), not the 4 entries.
         let memory = ComputeMemory::new(60);
@@ -168,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn held_memory_is_reclaimed_before_the_symmetric_adjacency_is_built() {
+    fn held_memory_is_reclaimed_before_the_oriented_adjacency_is_built() {
         // 0 → 1 → 2 → 0, 2 → 3: the adjacency is charged on the pool.
         let edges = vec![(0, 0, 1, 1.0), (0, 1, 2, 1.0), (0, 2, 0, 1.0), (0, 2, 3, 1.0)];
         let graph = reference::graph(4, 1, &edges, false, false);
@@ -194,22 +258,55 @@ mod tests {
         })
     }
 
+    /// The kernel's counts over a scenario's graph, and the naive ones.
+    fn counted_and_naive(scenario: Scenario) -> (Result<Vec<i64>, ComputeError>, Vec<i64>) {
+        let (id_space, relations, edges, selected, (wide, store_merged)) = scenario;
+        let indexes = reference::relations(relations);
+        let mut list = EdgeList::new(false);
+        for &(r, s, t, w) in &edges {
+            list.push(indexes[r], s, t, w).unwrap();
+        }
+        let layout = CsrLayout { build_reverse: false, store_merged };
+        let graph = match wide {
+            true => GraphCsr::build_with::<u64>(list, relations, id_space, layout),
+            false => GraphCsr::build_as(list, relations, id_space, layout),
+        }
+        .unwrap();
+        let chosen: Option<Vec<_>> =
+            selected.as_ref().map(|s| s.iter().map(|&r| indexes[r]).collect());
+        let selection = chosen.as_deref().map_or(RelationSelection::All, RelationSelection::Only);
+        (count(&graph, selection), naive(id_space, &edges, selected.as_deref()))
+    }
+
+    /// Few edges per relation among many dense ids, so the relations'
+    /// offsets are sparse and most ids have no edges, as tombstoned ones.
+    fn sparse_scenarios() -> impl Strategy<Value = Scenario> {
+        (40u64..64, 4usize..8).prop_flat_map(|(id_space, relations)| {
+            let edge = (0..relations, 0..12u64, 0..12u64, Just(1.0));
+            let spread = move |(r, s, t, w): (usize, u64, u64, f64)| {
+                (r, s * 5 % id_space, t * 5 % id_space, w)
+            };
+            (
+                Just(id_space),
+                Just(relations),
+                prop::collection::vec(edge.prop_map(spread), 0..40),
+                prop::option::of(prop::collection::vec(0..relations, 0..4)),
+                any::<(bool, bool)>(),
+            )
+        })
+    }
+
     proptest! {
         #[test]
-        fn counts_match_the_naive_triples((id_space, relations, edges, selected, (wide, store_merged)) in scenarios()) {
-            let indexes = reference::relations(relations);
-            let mut list = EdgeList::new(false);
-            for &(r, s, t, w) in &edges {
-                list.push(indexes[r], s, t, w).unwrap();
-            }
-            let layout = CsrLayout { build_reverse: false, store_merged };
-            let graph = match wide {
-                true => GraphCsr::build_with::<u64>(list, relations, id_space, layout),
-                false => GraphCsr::build_as(list, relations, id_space, layout),
-            }.unwrap();
-            let chosen: Option<Vec<_>> = selected.as_ref().map(|s| s.iter().map(|&r| indexes[r]).collect());
-            let selection = chosen.as_deref().map_or(RelationSelection::All, RelationSelection::Only);
-            prop_assert_eq!(count(&graph, selection), Ok(naive(id_space, &edges, selected.as_deref())));
+        fn counts_match_the_naive_triples_over_sparse_relations(scenario in sparse_scenarios()) {
+            let (counted, naive) = counted_and_naive(scenario);
+            prop_assert_eq!(counted, Ok(naive));
+        }
+
+        #[test]
+        fn counts_match_the_naive_triples(scenario in scenarios()) {
+            let (counted, naive) = counted_and_naive(scenario);
+            prop_assert_eq!(counted, Ok(naive));
         }
     }
 
@@ -260,6 +357,24 @@ mod tests {
         assert_eq!(least_budget(&unmerged), least_budget(&stored));
     }
 
+    /// A clique of `n` nodes, each pair joined in both directions.
+    fn clique(n: u64) -> GraphCsr {
+        let edges: Edges = (0..n)
+            .flat_map(|a| (0..n).filter(move |&b| b != a).map(move |b| (0, a, b, 1.0)))
+            .collect();
+        reference::graph(n, 1, &edges, false, false)
+    }
+
+    #[test]
+    fn the_oriented_adjacency_holds_each_stored_edge_once() {
+        // 10 nodes, 90 stored edges: the counts (80 bytes), the ranks (80),
+        // the offsets (88), one entry per stored edge (720), the triangles
+        // found (80) and the marks of the pool's 3 threads (3 × 40).
+        let graph = clique(10);
+        assert_eq!(count(&graph, RelationSelection::All).unwrap(), vec![36; 10]);
+        assert_eq!(least_budget(&graph), 80 + 80 + 88 + 720 + 80 + 3 * 40);
+    }
+
     #[test]
     fn a_hub_costs_its_degree_not_its_square() {
         // Merging the hub's row with every leaf's would take n² steps.
@@ -270,17 +385,24 @@ mod tests {
     }
 
     #[test]
-    fn a_cancellation_stops_a_hub_row_partway() {
-        let graph = star(100_000);
-        let forward = [graph.relations()[0].forward().into()];
+    fn a_cancellation_stops_a_long_row_partway() {
+        // All degrees equal, so ranks follow dense ids: node 0's row holds
+        // the other 399 nodes, node 398's only node 399.
+        let graph = clique(400);
+        let forward = [graph.all_relations().forward()];
         let memory = ComputeMemory::new(1 << 26);
         let cancellation = Cancellation::new();
-        let symmetric = Symmetric::new(&memory, &cancellation, &forward, 100_001).unwrap();
+        let oriented = Oriented::new(&memory, &cancellation, &forward, 400).unwrap();
+        let found: Vec<_> = (0..400).map(|_| AtomicU64::new(0)).collect();
+        let mut marks = vec![0; 400];
         cancellation.cancel();
-        // The hub's row alone is more work than a check is apart.
-        assert_eq!(triangles_of(&symmetric, 0, &mut Work::new(&cancellation)), Err(Cancelled));
-        // A leaf's row is less, and finishes.
-        assert_eq!(triangles_of(&symmetric, 2, &mut Work::new(&cancellation)), Ok(2));
+        // Node 0's rows are more work than a check is apart.
+        let mut work = Work::new(&cancellation);
+        assert_eq!(search(&oriented, &found, &mut marks, 0, &mut work), Err(Cancelled));
+        // Node 398's are less, and finish.
+        let (mut marks, mut work) = (vec![0; 400], Work::new(&cancellation));
+        assert_eq!(search(&oriented, &found, &mut marks, 398, &mut work), Ok(()));
+        assert_eq!(marks, vec![0; 400]);
     }
 
     #[test]

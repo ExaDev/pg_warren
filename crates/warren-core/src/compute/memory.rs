@@ -202,12 +202,22 @@ impl ComputeMemory {
         len: usize,
         value: E,
     ) -> Result<(Vec<E>, MemoryCharge), ComputeError> {
+        self.filled_with(len, || value.clone())
+    }
+
+    /// `len` elements made by `make`, in a buffer reserved and charged as
+    /// [`Self::filled`]'s: for elements that cannot be cloned, as atomics.
+    pub(crate) fn filled_with<E>(
+        &self,
+        len: usize,
+        make: impl FnMut() -> E,
+    ) -> Result<(Vec<E>, MemoryCharge), ComputeError> {
         let charge = self.charge_elements::<E>(len)?;
         let mut buffer = Vec::new();
         buffer
             .try_reserve_exact(len)
             .map_err(|_| ComputeError::OutOfMemory { bytes: charge.bytes() })?;
-        buffer.resize(len, value);
+        buffer.resize_with(len, make);
         Ok((buffer, charge))
     }
 }
