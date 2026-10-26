@@ -428,18 +428,52 @@ Every SQL example in the README and `docs/` runs in CI, in
   in `warren.backends()` and `warren.progress()` need
   `shared_preload_libraries` ([docs/limits.md](docs/limits.md)).
 
-- **0.7.0** (in development, M11): proof at scale and in deployment: a
-  benchmark and test suite on a range of real graph datasets sourced
-  through [keepset](https://mearman.github.io/keepset/) (`bench/corpus`),
-  robustness behind connection poolers, on replicas and through crashes,
-  and packages (DESIGN.md §13).
+- **0.7.0**: proven on real graphs and real deployments, milestone M11.
+  A suite of 19 real graphs pinned through
+  [keepset](https://mearman.github.io/keepset/) (`bench/corpus`) checks
+  results against NetworkX and igraph, and times pg_warren against igraph
+  and Neo4j (How it compares, above); Appendix A's use cases ran at 10M
+  nodes. A pair of nodes linked in several relations is read one way
+  everywhere: strengths are summed and an unweighted pair counts once,
+  costs take the pair's best edge, and `per_relation := true` reads it as
+  an edge in each relation (docs/semantics.md, "A pair in several
+  relations"). A relation with few edges stores sparse offsets
+  (FB15k-237's version is 7.5× smaller), and `eigen` takes each connected
+  component's eigenpairs exactly. Concurrent refreshes, crash recovery,
+  streaming replicas (where writes are refused with 25006), SQL fuzzing
+  and a connection pooler were tested, and what they found is fixed.
+  Packages are published: a signed apt repository, Docker images, a
+  Homebrew tap and tarballs (Install, above). Upgrading needs `ALTER
+  EXTENSION pg_warren UPDATE` and a `refresh` of every graph, and changes
+  some results on graphs whose pairs are linked in several relations (see
+  the changelog).
+
+  Appendix A at 10M nodes, on generated data, passes 65 of 70 checks.
+  Among the misses, A.3's first `gather` superstep takes 29 s with `text` messages
+  against its 20 s target, cross-graph `distance('edit')` is refused
+  (53400) by an over-estimate of its memory, and `eigen` on A.2's dense
+  bridge takes 1,332 s against 10 minutes; A.1 and A.3 ran at 7M and
+  11.5M edges rather than 100M and 50M, for the disk. Head to head,
+  pg_warren loses on PageRank, Leiden and a fixed cost of 0.2–2 ms a call.
+  The caveats: the corpus's large tier and a multi-day soak behind a
+  pooler have not run (M12); macOS is not a supported platform; and RPM
+  packages and PGXN are not built yet
+  ([docs/limits.md](docs/limits.md)).
+
+- **0.8.0** (in development, M12): toward 1.0.0: the review of the whole
+  SQL surface before it is frozen; the runs moved from M11 (the corpus's
+  large tier, a multi-day pooler soak, Appendix A.1 and A.3 at their full
+  edge counts); and the performance leads M11 found, among them Leiden
+  over the previous level's graph and PageRank as a kernel (DESIGN.md
+  §13).
 
 See [CHANGELOG.md](CHANGELOG.md). This is pre-1.0 software: the SQL surface
 may still change between minor versions, with an upgrade script each time.
 
 Not there yet: the rest of the road to 1.0 (DESIGN.md §13) is a
-benchmark and test suite on real graph datasets, robustness in real
-deployments, and packages (M11); and a reviewed, frozen SQL surface (M12, 1.0.0). Incremental
+reviewed, frozen SQL surface, with the corpus's large tier, a multi-day
+soak behind a pooler and Appendix A.1 and A.3 at their full edge counts
+run before its release candidates (M12, 1.0.0). Incremental
 maintenance, general sparse matrix algebra (contraction's `PᵀAP` is the
 one sparse product) and a GPU backend are left to 1.x
 ([docs/limits.md](docs/limits.md)).
