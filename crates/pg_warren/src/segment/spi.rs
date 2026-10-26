@@ -10,7 +10,7 @@ use super::chunk::EachChunk;
 use super::{SegmentError, SegmentStore};
 use crate::access::as_catalog_owner;
 use crate::catalog::VersionId;
-use crate::read_only::{read_one, writing};
+use crate::read_only::{open_cursor, read_one, writing};
 use crate::source::Cursor;
 
 /// `warren.segments`.
@@ -87,7 +87,7 @@ pub(crate) fn each_chunk<E: From<pgrx::spi::Error>>(
     each: &mut EachChunk<'_, E>,
 ) -> Result<(), E> {
     Spi::connect(|client| {
-        let mut cursor = Cursor::from(client.try_open_cursor(query, args)?);
+        let mut cursor = Cursor::from(open_cursor(client, query, args)?);
         let mut chunk = PgMemoryContexts::new("warren chunk");
         loop {
             let rows = cursor.fetch(1)?;

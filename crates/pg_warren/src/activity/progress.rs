@@ -23,6 +23,7 @@ use super::frame::{Frame, Operation};
 use super::slot::{Holder, Values};
 use super::visibility::shown_to_caller;
 use crate::access::{as_catalog_owner, entry, is_reader, AccessError};
+use crate::read_only::select;
 
 /// One row of `warren.progress()`.
 #[derive(Debug, Clone, PartialEq)]
@@ -93,14 +94,17 @@ fn graph_names(rows: &[Row]) -> Result<HashMap<i32, String>, AccessError> {
         Spi::connect(|client| {
             let query = "SELECT graph_id, name, owner::oid, readers::oid[] FROM warren.graphs
                          WHERE graph_id = ANY ($1)";
-            for row in client.select(query, None, &[ids.into()])? {
-                if let (Some(id), Some(name), Some(owner)) =
-                    (row.get::<i32>(1)?, row.get::<String>(2)?, row.get::<Oid>(3)?)
-                {
-                    graphs.push((id, name, owner, row.get::<Vec<Oid>>(4)?.unwrap_or_default()));
+            select(client, query, None, &[ids.into()], |rows| {
+                for row in rows {
+                    if let (Some(id), Some(name), Some(owner)) =
+                        (row.get::<i32>(1)?, row.get::<String>(2)?, row.get::<Oid>(3)?)
+                    {
+                        let readers = row.get::<Vec<Oid>>(4)?.unwrap_or_default();
+                        graphs.push((id, name, owner, readers));
+                    }
                 }
-            }
-            Ok::<_, AccessError>(())
+                Ok::<_, AccessError>(())
+            })
         })
     })?;
     // As the caller, not the catalog owner.

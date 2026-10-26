@@ -1,5 +1,5 @@
-//! Read-only statements: single-row SPI reads that never assign a
-//! transaction id (DESIGN.md §6.9, §9.3).
+//! Read-only statements: SPI reads that never assign a transaction id
+//! and run in parallel mode (DESIGN.md §6.9, §9.3).
 //!
 //! pgrx's `Spi::get_one*` and `get_two*` run their query through
 //! `SpiClient::update`, which marks the transaction as writing by calling
@@ -11,6 +11,13 @@
 //! parallel plan runs. It promises nothing about snapshots: as for any SPI
 //! read, once the transaction has written, pgrx runs the select
 //! non-read-only (a command counter increment and a fresh snapshot).
+//! That increment is refused in parallel mode once the current command
+//! has used its command id ("cannot start commands during a parallel
+//! operation"), as in the leader (or a worker) of a parallel `CREATE
+//! TABLE AS`, whose transaction has a transaction id: so in parallel mode
+//! [`select`] runs the query read-only, under the active snapshot, as a
+//! cursor. Every read on a query function's path goes through
+//! [`select`] (or [`read_one`], [`read_two`]).
 //! [`read_one_latest`] reads the latest committed state (and the
 //! transaction's own earlier writes) instead of the statement's snapshot,
 //! for what must not depend on how old the caller's snapshot is.
@@ -23,13 +30,14 @@
 //! the read-only SQLSTATE (DESIGN.md §5.1, §7). Depends on no other
 //! feature.
 
-use std::ffi::{c_char, CString};
+use std::ffi::{c_char, c_long, CStr, CString};
+use std::mem::ManuallyDrop;
 use std::ptr;
 
 use pgrx::datum::DatumWithOid;
 use pgrx::pg_sys::panic::ErrorReport;
 use pgrx::prelude::*;
-use pgrx::spi::{SpiClient, SpiError, SpiErrorCodes, SpiResult};
+use pgrx::spi::{SpiClient, SpiCursor, SpiError, SpiErrorCodes, SpiResult, SpiTupleTable};
 use pgrx::{FromDatum, IntoDatum, PgLogLevel, PgSqlErrorCode};
 
 /// The first column of the first row `query` returns, read-only.
@@ -37,7 +45,7 @@ pub(crate) fn read_one<A: FromDatum + IntoDatum>(
     query: &str,
     args: &[DatumWithOid<'_>],
 ) -> SpiResult<Option<A>> {
-    Spi::connect(|client| client.select(query, Some(1), args)?.first().get_one())
+    Spi::connect(|client| select(client, query, Some(1), args, |rows| rows.first().get_one()))
 }
 
 /// The first two columns of the first row `query` returns, read-only.
@@ -45,7 +53,93 @@ pub(crate) fn read_two<A: FromDatum + IntoDatum, B: FromDatum + IntoDatum>(
     query: &str,
     args: &[DatumWithOid<'_>],
 ) -> SpiResult<(Option<A>, Option<B>)> {
-    Spi::connect(|client| client.select(query, Some(1), args)?.first().get_two())
+    Spi::connect(|client| select(client, query, Some(1), args, |rows| rows.first().get_two()))
+}
+
+/// Whether the backend is in parallel mode: in a parallel worker, or in
+/// the leader while a parallel plan runs.
+pub(crate) fn in_parallel_mode() -> bool {
+    // SAFETY: reads the backend's parallel-mode flag, on the main thread.
+    unsafe { pg_sys::IsInParallelMode() }
+}
+
+/// Runs `query` without assigning a transaction id and passes its rows
+/// (at most `limit`, or all) to `f`. Outside parallel mode it is
+/// `SpiClient::select`; in parallel mode, a read-only [`open_cursor`].
+/// If `f` raises an ERROR, the cursor is left for the abort to close, as
+/// `source::cursor::Cursor` leaves its own (DESIGN.md §6.9).
+pub(crate) fn select<R, E: From<SpiError>>(
+    client: &SpiClient<'_>,
+    query: &str,
+    limit: Option<c_long>,
+    args: &[DatumWithOid<'_>],
+    f: impl FnOnce(SpiTupleTable<'_>) -> Result<R, E>,
+) -> Result<R, E> {
+    if !in_parallel_mode() {
+        return f(client.select(query, limit, args)?);
+    }
+    let mut cursor = ManuallyDrop::new(open_cursor(client, query, args)?);
+    let result = f(cursor.fetch(limit.unwrap_or(c_long::MAX))?);
+    // Reached only without an ERROR: closes the cursor.
+    drop(ManuallyDrop::into_inner(cursor));
+    result
+}
+
+/// Opens `query` as a cursor without assigning a transaction id. Outside
+/// parallel mode it is `SpiClient::try_open_cursor`; in parallel mode the
+/// cursor is read-only, under the active snapshot, with no command
+/// counter increment.
+pub(crate) fn open_cursor<'c>(
+    client: &SpiClient<'c>,
+    query: &str,
+    args: &[DatumWithOid<'_>],
+) -> SpiResult<SpiCursor<'c>> {
+    if !in_parallel_mode() {
+        return client.try_open_cursor(query, args);
+    }
+    let text = CString::new(query).map_err(|_| SpiError::SpiError(SpiErrorCodes::Argument))?;
+    let Arguments { mut types, mut values, nulls } = Arguments::from(args);
+    let count =
+        i32::try_from(types.len()).map_err(|_| SpiError::SpiError(SpiErrorCodes::Argument))?;
+    // SAFETY: SPI is connected (`client`); `text` is NUL-terminated and the
+    // argument arrays hold `count` entries, all outliving the call. Postgres
+    // raises an ERROR rather than return NULL; the portal's name is a
+    // NUL-terminated string that lives as long as the portal.
+    let name = unsafe {
+        let portal = pg_sys::SPI_cursor_open_with_args(
+            ptr::null(),
+            text.as_ptr(),
+            count,
+            types.as_mut_ptr(),
+            values.as_mut_ptr(),
+            nulls.as_ptr(),
+            true,
+            0,
+        );
+        CStr::from_ptr((*portal).name).to_string_lossy().into_owned()
+    };
+    client.find_cursor(&name)
+}
+
+/// SPI's argument arrays: types, values and nulls (`'n'` for NULL).
+struct Arguments {
+    types: Vec<pg_sys::Oid>,
+    values: Vec<pg_sys::Datum>,
+    nulls: Vec<c_char>,
+}
+
+impl From<&[DatumWithOid<'_>]> for Arguments {
+    fn from(args: &[DatumWithOid<'_>]) -> Self {
+        let types = args.iter().map(DatumWithOid::oid).collect();
+        let (values, nulls) = args
+            .iter()
+            .map(|arg| match arg.datum() {
+                Some(datum) => (datum.sans_lifetime(), b' ' as c_char),
+                None => (pg_sys::Datum::from(0usize), b'n' as c_char),
+            })
+            .unzip();
+        Self { types, values, nulls }
+    }
 }
 
 /// Runs `f` on a writable SPI connection (`Spi::connect_mut`), after
@@ -79,8 +173,7 @@ pub(crate) fn writing<R>(f: impl FnOnce(&mut SpiClient<'_>) -> R) -> R {
 /// Whether [`read_one_latest`] can read: not in parallel mode, where
 /// Postgres refuses to take the latest snapshot.
 pub(crate) fn latest_readable() -> bool {
-    // SAFETY: reads the backend's parallel-mode flag, on the main thread.
-    !unsafe { pg_sys::IsInParallelMode() }
+    !in_parallel_mode()
 }
 
 /// The first column of the first row `query` returns, read-only, under the
@@ -94,14 +187,7 @@ pub(crate) fn read_one_latest<A: FromDatum + IntoDatum>(
     args: &[DatumWithOid<'_>],
 ) -> SpiResult<Option<A>> {
     let query = CString::new(query).map_err(|_| SpiError::SpiError(SpiErrorCodes::Argument))?;
-    let mut types: Vec<pg_sys::Oid> = args.iter().map(DatumWithOid::oid).collect();
-    let (mut values, nulls): (Vec<pg_sys::Datum>, Vec<c_char>) = args
-        .iter()
-        .map(|arg| match arg.datum() {
-            Some(datum) => (datum.sans_lifetime(), b' ' as c_char),
-            None => (pg_sys::Datum::from(0usize), b'n' as c_char),
-        })
-        .unzip();
+    let Arguments { mut types, mut values, nulls } = Arguments::from(args);
     let count =
         i32::try_from(types.len()).map_err(|_| SpiError::SpiError(SpiErrorCodes::Argument))?;
     Spi::connect(|_| {

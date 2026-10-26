@@ -9,7 +9,7 @@ use crate::access::{
 };
 use crate::catalog::quota::vector_bytes;
 use crate::catalog::GraphDefinition;
-use crate::read_only::writing;
+use crate::read_only::{select, writing};
 
 /// What `set_vector_quota` does, for its errors.
 const ACTION: &str = "set a vector quota on";
@@ -122,9 +122,8 @@ fn usage(name: &str) -> Result<Vec<UsageRow>, QuotaError> {
     let only = (!is_owner(graph.owner)).then(|| unsafe { pg_sys::GetUserId() });
     as_catalog_owner(|| {
         Ok::<_, QuotaError>(Spi::connect(|client| {
-            client
-                .select(USAGE, None, &[graph.graph_id.into(), only.into()])?
-                .map(|row| {
+            select(client, USAGE, None, &[graph.graph_id.into(), only.into()], |rows| {
+                rows.map(|row| {
                     Ok((
                         row.get::<pg_sys::Oid>(1)?.unwrap_or(pg_sys::Oid::INVALID),
                         row.get::<i64>(2)?.unwrap_or_default(),
@@ -133,6 +132,7 @@ fn usage(name: &str) -> Result<Vec<UsageRow>, QuotaError> {
                     ))
                 })
                 .collect::<Result<Vec<_>, pgrx::spi::Error>>()
+            })
         })?)
     })
 }

@@ -403,4 +403,50 @@ mod tests {
         )?;
         Spi::run("RESET parallel_setup_cost; RESET parallel_tuple_cost; RESET min_parallel_table_scan_size")
     }
+
+    /// `CREATE TABLE AS` inserts its rows under the statement's command id,
+    /// so while its query runs in parallel mode Postgres refuses to
+    /// increment the command counter ("cannot start commands during a
+    /// parallel operation"), which a non-read-only SPI read does first.
+    #[pg_test]
+    fn every_read_runs_in_a_parallel_create_table_as() -> Result<(), Error> {
+        let version = graph_with_a_vector()?;
+        let other = eigenvectors_and_another_graph()?;
+        Spi::run(&format!("SET {FORCE_PARALLEL} = on"))?;
+        for read in READS {
+            let read = read.replace("{v}", &version.to_string()).replace("{w}", &other.to_string());
+            // As text: a function returning records makes a record column,
+            // which a table cannot have.
+            Spi::run(&format!(
+                "CREATE TABLE created AS SELECT ({read})::text; DROP TABLE created"
+            ))?;
+        }
+        Spi::run(&format!("RESET {FORCE_PARALLEL}"))
+    }
+
+    #[pg_test]
+    fn a_parallel_create_table_as_runs_a_safe_read_in_its_leader_too() -> Result<(), Error> {
+        graph_with_a_vector()?;
+        Spi::run(
+            "CREATE TABLE pairs AS SELECT g FROM generate_series(1, 100000) g; ANALYZE pairs;
+             SET parallel_setup_cost = 0; SET parallel_tuple_cost = 0;
+             SET min_parallel_table_scan_size = 0; SET max_parallel_workers_per_gather = 2",
+        )?;
+        // The id map joined to a parallel scan: the leader takes part in
+        // the scan, so it runs id_map in parallel mode, loading the
+        // version it no longer holds.
+        let query = "SELECT p.g, m.dense_id FROM pairs p
+                     JOIN warren.id_map('pp', NULL::bigint) m ON m.node_id = p.g % 5 + 1";
+        assert!(workers_launched(query)? >= 1, "{:?}", analyzed(query)?);
+        Spi::run("SELECT warren.evict('pp')")?;
+        Spi::run(&format!("CREATE TABLE created AS {query}"))?;
+        Spi::run(
+            "RESET parallel_setup_cost; RESET parallel_tuple_cost;
+             RESET min_parallel_table_scan_size; RESET max_parallel_workers_per_gather",
+        )?;
+        let created =
+            Spi::get_one::<i64>("SELECT count(*) FROM created WHERE dense_id IS NOT NULL")?;
+        assert_eq!(created, Some(100_000));
+        Ok(())
+    }
 }

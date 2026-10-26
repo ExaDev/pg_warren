@@ -3,13 +3,13 @@
 use std::cell::OnceCell;
 
 use pgrx::prelude::*;
-use pgrx::spi::OwnedPreparedStatement;
+use pgrx::spi::{OwnedPreparedStatement, SpiTupleTable};
 use pgrx::PgOid;
 
 use super::version::VersionId;
 use super::CatalogError;
 use crate::access::{as_catalog_owner, require_owner};
-use crate::read_only::{read_one, writing};
+use crate::read_only::{in_parallel_mode, read_one, select, writing};
 use crate::source::IdType;
 use warren_core::graph::NodeOrder;
 
@@ -166,9 +166,16 @@ impl GraphDefinition {
     /// The definition of graph `name`, as of the statement's snapshot. Its
     /// `current_version` is read afresh on every call, through a saved
     /// plan, so a promotion is seen by the next statement (DESIGN.md §5.5).
+    /// In parallel mode the query runs unprepared: a saved plan would run
+    /// non-read-only once the transaction has an id ([`select`]).
     pub(crate) fn find(name: &str) -> Result<Self, CatalogError> {
         as_catalog_owner(|| {
             Spi::connect(|client| {
+                if in_parallel_mode() {
+                    return select(client, FIND, Some(1), &[name.into()], |rows| {
+                        Self::from_row(name, &rows.first())
+                    });
+                }
                 let row = FIND_PLAN.with(|plan| {
                     if plan.get().is_none() {
                         let prepared = client.prepare(FIND, &[PgOid::from(pg_sys::TEXTOID)])?;
@@ -178,39 +185,44 @@ impl GraphDefinition {
                     let plan = plan.get().ok_or(pgrx::spi::Error::InvalidPosition)?;
                     Ok::<_, pgrx::spi::Error>(client.select(plan, Some(1), &[name.into()])?.first())
                 })?;
-                if row.is_empty() {
-                    return Err(CatalogError::GraphNotFound(name.to_owned()));
-                }
-                let id_type = row
-                    .get::<pg_sys::Oid>(13)?
-                    .and_then(IdType::from_oid)
-                    .ok_or_else(|| CatalogError::UnknownIdType(name.to_owned()))?;
-                let source = match row.get::<String>(17)?.as_deref() {
-                    Some("query") => GraphSource::Query,
-                    Some("contraction") => GraphSource::Contraction,
-                    _ => return Err(CatalogError::UnknownSource(name.to_owned())),
-                };
-                Ok(Self {
-                    id_type,
-                    source,
-                    graph_id: row.get(1)?.unwrap_or_default(),
-                    name: name.to_owned(),
-                    owner: row.get(2)?.unwrap_or(pg_sys::Oid::INVALID),
-                    readers: row.get(3)?.unwrap_or_default(),
-                    node_query: row.get(4)?.unwrap_or_default(),
-                    edge_query: row.get(5)?.unwrap_or_default(),
-                    search_path: row.get(6)?.unwrap_or_default(),
-                    directed: row.get(7)?.unwrap_or_default(),
-                    weighted: row.get(8)?.unwrap_or_default(),
-                    has_relations: row.get(9)?.unwrap_or_default(),
-                    build_reverse: row.get(10)?.unwrap_or_default(),
-                    retain_versions: row.get(11)?.unwrap_or(1),
-                    current_version: row.get(14)?,
-                    stray_current_version: stray(row.get(12)?, row.get(14)?),
-                    store_merged: row.get(15)?.unwrap_or(true),
-                    node_order: parse_node_order(&row.get::<String>(16)?.unwrap_or_default())?,
-                })
+                Self::from_row(name, &row)
             })
+        })
+    }
+
+    /// The definition of graph `name` that `row`, [`FIND`]'s, holds.
+    fn from_row(name: &str, row: &SpiTupleTable<'_>) -> Result<Self, CatalogError> {
+        if row.is_empty() {
+            return Err(CatalogError::GraphNotFound(name.to_owned()));
+        }
+        let id_type = row
+            .get::<pg_sys::Oid>(13)?
+            .and_then(IdType::from_oid)
+            .ok_or_else(|| CatalogError::UnknownIdType(name.to_owned()))?;
+        let source = match row.get::<String>(17)?.as_deref() {
+            Some("query") => GraphSource::Query,
+            Some("contraction") => GraphSource::Contraction,
+            _ => return Err(CatalogError::UnknownSource(name.to_owned())),
+        };
+        Ok(Self {
+            id_type,
+            source,
+            graph_id: row.get(1)?.unwrap_or_default(),
+            name: name.to_owned(),
+            owner: row.get(2)?.unwrap_or(pg_sys::Oid::INVALID),
+            readers: row.get(3)?.unwrap_or_default(),
+            node_query: row.get(4)?.unwrap_or_default(),
+            edge_query: row.get(5)?.unwrap_or_default(),
+            search_path: row.get(6)?.unwrap_or_default(),
+            directed: row.get(7)?.unwrap_or_default(),
+            weighted: row.get(8)?.unwrap_or_default(),
+            has_relations: row.get(9)?.unwrap_or_default(),
+            build_reverse: row.get(10)?.unwrap_or_default(),
+            retain_versions: row.get(11)?.unwrap_or(1),
+            current_version: row.get(14)?,
+            stray_current_version: stray(row.get(12)?, row.get(14)?),
+            store_merged: row.get(15)?.unwrap_or(true),
+            node_order: parse_node_order(&row.get::<String>(16)?.unwrap_or_default())?,
         })
     }
 

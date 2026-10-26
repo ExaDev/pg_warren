@@ -110,6 +110,18 @@
 
 ### Fixes
 
+- **A read of a graph inside a parallel `CREATE TABLE AS` (or `CREATE
+  MATERIALIZED VIEW`, `REFRESH MATERIALIZED VIEW`) no longer fails with
+  "cannot start commands during a parallel operation".** Such a statement
+  has a transaction id before its plan runs, so pgrx ran every catalog
+  read non-read-only, with a command counter increment, which Postgres
+  refuses in parallel mode once the command has used its command id: in
+  the leader as soon as it ran the function, and in a worker. In parallel
+  mode the catalog reads now run read-only, as cursors under the active
+  snapshot (DESIGN.md §6.9; found running Appendix A.3 at 10M nodes, whose
+  sampled oracle builds a table from `warren.id_map`; tests
+  `every_read_runs_in_a_parallel_create_table_as`,
+  `a_parallel_create_table_as_runs_a_safe_read_in_its_leader_too`).
 - **On a physical standby, every function that writes fails with
   `read_only_sql_transaction` (25006), "cannot change pg_warren's catalog
   in a read-only transaction", with a hint that the server is a

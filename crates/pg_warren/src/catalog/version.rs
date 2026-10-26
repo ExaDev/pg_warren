@@ -8,7 +8,7 @@ use warren_core::graph::{GraphCsr, IdKeys, IdMap, TargetWidth};
 use super::retention::{retention, Kept, VersionSummary};
 use super::{CatalogError, GraphDefinition};
 use crate::access::as_catalog_owner;
-use crate::read_only::{read_one, writing};
+use crate::read_only::{read_one, select, writing};
 
 /// A version id: `warren.versions.version_id`.
 pub(crate) type VersionId = i64;
@@ -262,30 +262,32 @@ fn kept_notice(kept: &Kept, graph: &str) -> String {
 pub(crate) fn version_record(version: VersionId) -> Result<(VersionStats, String), CatalogError> {
     as_catalog_owner(|| {
         Spi::connect(|client| {
-            let row = client
-                .select(
-                    "SELECT node_count, id_space, edge_count, dropped_edges,
+            select(
+                client,
+                "SELECT node_count, id_space, edge_count, dropped_edges,
                             deduplicated_edges, target_width, built_lsn::text
                      FROM warren.versions WHERE version_id = $1",
-                    Some(1),
-                    &[version.into()],
-                )?
-                .first();
-            let count = |column| -> Result<u64, CatalogError> {
-                let value: Option<i64> = row.get(column)?;
-                Ok(u64::try_from(value.unwrap_or_default()).unwrap_or_default())
-            };
-            Ok((
-                VersionStats {
-                    node_count: count(1)?,
-                    id_space: count(2)?,
-                    edge_count: count(3)?,
-                    dropped_edges: count(4)?,
-                    deduplicated_edges: count(5)?,
-                    target_width: row.get(6)?.unwrap_or_default(),
+                Some(1),
+                &[version.into()],
+                |rows| {
+                    let row = rows.first();
+                    let count = |column| -> Result<u64, CatalogError> {
+                        let value: Option<i64> = row.get(column)?;
+                        Ok(u64::try_from(value.unwrap_or_default()).unwrap_or_default())
+                    };
+                    Ok((
+                        VersionStats {
+                            node_count: count(1)?,
+                            id_space: count(2)?,
+                            edge_count: count(3)?,
+                            dropped_edges: count(4)?,
+                            deduplicated_edges: count(5)?,
+                            target_width: row.get(6)?.unwrap_or_default(),
+                        },
+                        row.get(7)?.unwrap_or_default(),
+                    ))
                 },
-                row.get(7)?.unwrap_or_default(),
-            ))
+            )
         })
     })
 }
@@ -301,23 +303,25 @@ pub(crate) fn compaction_between(
 ) -> Result<Option<(VersionId, VersionId)>, CatalogError> {
     as_catalog_owner(|| {
         Spi::connect(|client| {
-            let row = client
-                .select(
-                    "SELECT c.version_id, c.compacted_from FROM warren.versions c,
+            select(
+                client,
+                "SELECT c.version_id, c.compacted_from FROM warren.versions c,
                             (SELECT least(x.seq, y.seq) AS low, greatest(x.seq, y.seq) AS high
                              FROM warren.versions x, warren.versions y
                              WHERE x.version_id = $2 AND y.version_id = $3) r
                      WHERE c.graph_id = $1 AND c.seq > r.low AND c.seq <= r.high
                        AND c.compacted_from IS NOT NULL
                      ORDER BY c.seq LIMIT 1",
-                    Some(1),
-                    &[graph.graph_id.into(), a.into(), b.into()],
-                )?
-                .first();
-            if row.is_empty() {
-                return Ok(None);
-            }
-            Ok(row.get::<i64>(1)?.zip(row.get::<i64>(2)?))
+                Some(1),
+                &[graph.graph_id.into(), a.into(), b.into()],
+                |rows| {
+                    let row = rows.first();
+                    if row.is_empty() {
+                        return Ok(None);
+                    }
+                    Ok(row.get::<i64>(1)?.zip(row.get::<i64>(2)?))
+                },
+            )
         })
     })
 }
@@ -339,25 +343,27 @@ pub(crate) struct Parent {
 pub(crate) fn parent_of(version: VersionId) -> Result<Option<Parent>, CatalogError> {
     as_catalog_owner(|| {
         Spi::connect(|client| {
-            let row = client
-                .select(
-                    "SELECT p.version_id, g.graph_id, g.name
+            select(
+                client,
+                "SELECT p.version_id, g.graph_id, g.name
                      FROM warren.versions v
                      JOIN warren.versions p ON p.version_id = v.parent_version
                      JOIN warren.graphs g ON g.graph_id = p.graph_id
                      WHERE v.version_id = $1",
-                    Some(1),
-                    &[version.into()],
-                )?
-                .first();
-            if row.is_empty() {
-                return Ok(None);
-            }
-            Ok(Some(Parent {
-                version: row.get(1)?.unwrap_or_default(),
-                graph_id: row.get(2)?.unwrap_or_default(),
-                graph: row.get(3)?.unwrap_or_default(),
-            }))
+                Some(1),
+                &[version.into()],
+                |rows| {
+                    let row = rows.first();
+                    if row.is_empty() {
+                        return Ok(None);
+                    }
+                    Ok(Some(Parent {
+                        version: row.get(1)?.unwrap_or_default(),
+                        graph_id: row.get(2)?.unwrap_or_default(),
+                        graph: row.get(3)?.unwrap_or_default(),
+                    }))
+                },
+            )
         })
     })
 }
@@ -371,20 +377,22 @@ pub(crate) fn require_current_id_space(
 ) -> Result<(), CatalogError> {
     let compacted = as_catalog_owner(|| {
         Spi::connect(|client| {
-            let row = client
-                .select(
-                    "SELECT c.version_id FROM warren.versions c, warren.versions v
+            select(
+                client,
+                "SELECT c.version_id FROM warren.versions c, warren.versions v
                      WHERE v.version_id = $2 AND c.graph_id = $1
                        AND c.compacted_from IS NOT NULL AND c.seq > v.seq
                      ORDER BY c.seq DESC LIMIT 1",
-                    Some(1),
-                    &[graph.graph_id.into(), version.into()],
-                )?
-                .first();
-            match row.is_empty() {
-                true => Ok::<_, CatalogError>(None),
-                false => Ok(row.get::<i64>(1)?),
-            }
+                Some(1),
+                &[graph.graph_id.into(), version.into()],
+                |rows| {
+                    let row = rows.first();
+                    match row.is_empty() {
+                        true => Ok::<_, CatalogError>(None),
+                        false => Ok(row.get::<i64>(1)?),
+                    }
+                },
+            )
         })
     })?;
     match compacted {

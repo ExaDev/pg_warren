@@ -6,7 +6,7 @@ use pgrx::prelude::*;
 
 use super::super::CatalogError;
 use crate::access::{as_catalog_owner, entry, is_owner, may_drop_orphans, require_orphan_dropper};
-use crate::read_only::writing;
+use crate::read_only::{select, writing};
 
 /// Every reference to a dropped role, as `(kind, graph, role, owner)`:
 /// graphs whose owner was dropped, quotas on readers' vectors, reader
@@ -43,9 +43,8 @@ fn visible_orphans() -> Result<Vec<(String, String, pg_sys::Oid)>, CatalogError>
     let everything = may_drop_orphans()?;
     let found = as_catalog_owner(|| {
         Ok::<_, CatalogError>(Spi::connect(|client| {
-            client
-                .select(ORPHANS, None, &[])?
-                .map(|row| {
+            select(client, ORPHANS, None, &[], |rows| {
+                rows.map(|row| {
                     Ok((
                         row.get::<String>(1)?.unwrap_or_default(),
                         row.get::<String>(2)?.unwrap_or_default(),
@@ -54,6 +53,7 @@ fn visible_orphans() -> Result<Vec<(String, String, pg_sys::Oid)>, CatalogError>
                     ))
                 })
                 .collect::<Result<Vec<_>, pgrx::spi::Error>>()
+            })
         })?)
     })?;
     Ok(found
