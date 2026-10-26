@@ -74,18 +74,16 @@ class ScriptedSession:
         return Outcome([["7"]], "00000", "")
 
 
-def test_a_persisted_vector_whose_drop_failed_is_dropped_by_the_clients_next_persist():
-    cancel = Outcome([], "57014", "canceling statement due to user request")
-    workload = Workload(None, "transaction", "soak_transaction", 1, 0, 100, 1, Tally(), None, 0, 0)
-    first = ScriptedSession({"drop_vector": [cancel]})
-    workload._persist(first, random.Random(1), 0)
-    assert "drop_vector('g', 'p0', 7" in first.ran[-1]
-    second = ScriptedSession({"current_version": [Outcome([["9"]], "00000", "")]})
-    workload._persist(second, random.Random(1), 0)
-    assert any("drop_vector('g', 'p0', 7" in sql for sql in second.ran)
-    third = ScriptedSession({"current_version": [Outcome([["9"]], "00000", "")]})
-    workload._persist(third, random.Random(1), 0)
-    assert not any("', 7" in sql for sql in third.ran)
+def test_a_client_first_drops_its_vector_wherever_one_was_left_or_moved():
+    """A cancel can keep a persist from its drop, and a compaction moves a
+    vector to the compacted version: either keeps a version from retention."""
+    workload = Workload(None, "transaction", "soak_transaction", 35, 0, 100, 1, Tally(), None, 0, 0)
+    session = ScriptedSession({"(v ->> 'vectors')": [Outcome([["620"], ["623"]], "00000", "")],
+                               "current_version": [Outcome([["625"]], "00000", "")]})
+    workload._persist(session, random.Random(1), 34)
+    assert session.ran[1:3] == ["SELECT warren.drop_vector('g', 'pt34', 620, if_exists := true)",
+                                "SELECT warren.drop_vector('g', 'pt34', 623, if_exists := true)"]
+    assert session.ran[-1] == "SELECT warren.drop_vector('g', 'pt34', 625, if_exists := true)"
 
 
 def test_a_timeout_call_that_finishes_in_time_is_rolled_back_so_its_vector_keeps_no_version():

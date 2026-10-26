@@ -46,7 +46,7 @@ ALLOWED = {
 READS = ("reachable_set", "bfs", "neighbours", "dijkstra", "walk", "degree")
 JOIN_SECONDS = 180
 CARELESS = 0.3
-PERSISTED_NAMES_PER_CLIENT = 2  # p<n> and to<n>; a client reuses them
+PERSISTED_NAMES_PER_CLIENT = 2  # p<mode><n> and to<n>; a client reuses them
 STAGED_DROP_ATTEMPTS = 10
 
 
@@ -128,7 +128,6 @@ class Workload:
         self.think_seconds, self.write_seconds = think_seconds, write_seconds
         self.abandon = Abandon()
         self.threads = []
-        self.left = {number: set() for number in range(clients)}  # (name, version) a client's persist left
 
     def start(self):
         self.threads = [threading.Thread(target=self._client, args=(n,), name=f"{self.mode}-{n}", daemon=True)
@@ -238,26 +237,27 @@ class Workload:
 
     def _persist(self, s, rng, number):
         """A persisted vector written, read and dropped, a statement each.
-        One that a cancel or a lost connection kept from its drop is
-        dropped by the client's next persist, as an application would
-        clean up: a persisted vector keeps its version from retention
-        (DESIGN.md §7), so one left for good would grow the catalog."""
-        left = self.left[number]
-        for name, version in sorted(left):
-            if self._record("persist", s.run(self._drop(name, version))):
-                left.discard((name, version))
+        First the client drops its vector from every version that holds
+        vectors, as an application would clean up: a cancel or a lost
+        connection can keep a persist from its drop, and a compaction
+        moves a vector to the compacted version, and either would keep
+        its version from retention for good (DESIGN.md §7)."""
+        name = f"p{self.mode[0]}{number}"  # per pool: the pools share the graph
+        holding = s.run("SELECT v ->> 'version' FROM jsonb_array_elements(warren.info('g') -> 'versions') v "
+                        "WHERE (v ->> 'vectors')::int > 0")
+        if not self._record("persist", holding):
+            return
+        for (version,) in holding.rows:
+            self._record("persist", s.run(self._drop(name, version)))
         version = self._current(s, "persist")
         if version is None:
             return
-        name = f"p{number}"
-        left.add((name, version))
         call = rng.choice([f"SELECT warren.pagerank('g', '{name}', max_iter := 10, version := {version})",
                            f"SELECT warren.vector_degree('g', '{name}', version := {version})"])
         for sql in (call, f"SELECT warren.vector_reduce('g', '{name}', 'sum', {version})",
                     self._drop(name, version)):
             if not self._record("persist", s.run(sql)):
                 return
-        left.discard((name, version))
 
     @staticmethod
     def _drop(name, version):
