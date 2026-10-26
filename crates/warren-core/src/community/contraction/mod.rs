@@ -390,6 +390,36 @@ mod tests {
         assert_eq!(quotient(&graph, &p, weighted).unwrap(), summed);
     }
 
+    #[test]
+    fn a_counted_edge_in_several_sparse_relations_counts_once_in_the_first() {
+        // The graph above in an id space of 100, so its relations' offsets
+        // are sparse.
+        let edges: Edges =
+            vec![(0, 0, 1, 1.0), (1, 0, 1, 2.0), (1, 1, 0, 4.0), (1, 2, 3, 8.0), (2, 2, 3, 16.0)];
+        let graph = parent(100, 3, &edges, false);
+        let sparse = |csr: &AnyCsr| match csr {
+            AnyCsr::U32(csr) => csr.is_sparse(),
+            AnyCsr::U64(csr) => csr.is_sparse(),
+        };
+        assert!(graph.relations().iter().all(|csr| sparse(csr.forward())));
+        let mut communities = vec![None; 100];
+        communities[..4].copy_from_slice(&[Some(0), Some(1), Some(2), Some(2)]);
+        let p = membership(&communities, 3);
+        let counted = Contraction { weighted: false, ..DIRECTED };
+        let once = Quotient::from([((0, 0, 1), 1.0), ((1, 1, 0), 1.0), ((1, 2, 2), 1.0)]);
+        assert_eq!(quotient(&graph, &p, counted).unwrap(), once);
+    }
+
+    #[test]
+    fn a_target_past_the_membership_is_in_no_community() {
+        // 0 → 2 in relations 0 and 1; the membership covers nodes 0 and 1.
+        let edges: Edges = vec![(0, 0, 2, 1.0), (1, 0, 2, 1.0), (0, 0, 1, 1.0)];
+        let graph = parent(3, 2, &edges, false);
+        let p = membership(&[Some(0), Some(0)], 1);
+        let counted = Contraction { weighted: false, ..DIRECTED };
+        assert_eq!(quotient(&graph, &p, counted).unwrap(), Quotient::from([((0, 0, 0), 1.0)]));
+    }
+
     /// The quotient by dense matrices, from the edge list: `PᵀA_rP` of
     /// each relation's `A_r` (an undirected parent's edges both ways, a
     /// self-loop once), counting an edge in an earlier relation only there
