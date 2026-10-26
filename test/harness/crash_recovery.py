@@ -32,6 +32,8 @@ GRAPH = "big"
 GATE = 7  # the advisory lock the edge query takes, shared: held exclusively, it stops a refresh reading edges
 NODE_QUERY = "SELECT id FROM public.nodes"
 EDGE_QUERY = f"SELECT src, dst FROM public.edges, (SELECT pg_advisory_xact_lock_shared({GATE})) AS gate"
+SOURCE = ("SELECT (SELECT count(*) FROM public.nodes), "
+          "(SELECT count(*) FROM (SELECT DISTINCT src, dst FROM public.edges) e)")
 WRITTEN = 1 << 20  # segment bytes a refresh has written when it is stopped writing them
 RECOVERY_SECONDS = 120
 JOIN_SECONDS = 60  # for a stopped refresh's worker to see its backend gone
@@ -267,11 +269,25 @@ def refresh_builds_the_source(s):
     if not done.ok:
         return [f"a refresh after recovery failed: {done.sqlstate} {done.message}"]
     stats = s.run(f"SELECT node_count, edge_count FROM warren.versions WHERE version_id = {done.value()}").rows
-    source = s.run("SELECT (SELECT count(*) FROM public.nodes), "
-                   "(SELECT count(*) FROM (SELECT DISTINCT src, dst FROM public.edges) e)").rows
-    if stats != source:
-        return [f"the refresh after recovery built (nodes, edges) {stats}, the source has {source}"]
+    source = count_source(s)
+    if not source.ok:
+        return [f"counting the source after recovery failed: {source.sqlstate} {source.message}"]
+    if stats != source.rows:
+        return [f"the refresh after recovery built (nodes, edges) {stats}, the source has {source.rows}"]
     return []
+
+
+def count_source(s):
+    """The source's nodes and distinct edges, counted by sorting: a
+    parallel HashAggregate of the unanalysed edge rows now and then spills
+    into some 10^5 batches and runs for minutes, past the session's
+    statement_timeout (Postgres 16 and 18 alike, pg_warren loaded or not)."""
+    sorting = s.run("SET enable_hashagg = off")
+    if not sorting.ok:
+        return sorting
+    counted = s.run(SOURCE)
+    s.run("RESET enable_hashagg")
+    return counted
 
 
 def end(sessions, workers):
