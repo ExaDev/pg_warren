@@ -25,6 +25,10 @@ name = "compute"
 harness = false
 
 [[bench]]
+name = "contraction"
+harness = false
+
+[[bench]]
 name = "csr_build"
 harness = false
 
