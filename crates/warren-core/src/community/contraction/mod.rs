@@ -76,9 +76,12 @@ fn aggregate(
     let members = Members::group(membership, memory, &mut work)?;
     let mut row = QuotientRow::new(membership.quotient_id_space(), memory)?;
     let mut edges = EdgeList::within(membership.quotient_id_space(), true, memory);
-    // Counted once, an edge counts in the first relation it is in.
+    // Counted once, an edge counts in the first relation it is in (with
+    // one relation, every edge is in its first).
     let counted = |csr: &AnyCsr| !(contraction.weighted && csr.is_weighted());
-    let once = !contraction.per_relation && relations.iter().any(|(_, csr)| counted(csr));
+    let once = !contraction.per_relation
+        && relations.len() > 1
+        && relations.iter().any(|(_, csr)| counted(csr));
     let first = match once {
         true => Some(FirstEntries::mark(relations, membership.id_space(), memory, &mut work)?),
         false => None,
@@ -91,8 +94,7 @@ fn aggregate(
             for &member in members.of(community) {
                 let entries = slices.seek(member, &mut hint);
                 work.spend(entries.len() as u64 + 1).map_err(ComputeError::from)?;
-                let weights =
-                    slices.weights_at(entries.clone()).filter(|_| contraction.weighted);
+                let weights = slices.weights_at(entries.clone()).filter(|_| contraction.weighted);
                 let targets = slices.neighbours_at(entries.clone());
                 for (at, target) in entries.clone().zip(targets) {
                     let Some(other) = membership.community(target) else { continue };
