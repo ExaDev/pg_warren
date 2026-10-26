@@ -1,0 +1,1667 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/appendix_a.py",
+   "a2",
+   "--pg-config",
+   "/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "a5a3822",
+   "--extension-profile",
+   "release"
+  ],
+  "harness": {
+   "revision": "a5a3822da7a08a8ce88c409eb699056a3088a156",
+   "dirty": true
+  },
+  "extension": {
+   "revision": "a5a3822",
+   "profile": "release",
+   "library": "/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "012c4ef9c008ce2c73fb6a983807c28d0fd9634ac6282d613f5efd0045026246"
+  }
+ },
+ "case": "a2",
+ "section": "A.2",
+ "scale": 1,
+ "sizes": {
+  "nodes": 10000000,
+  "edges": 50000000,
+  "communities": 20,
+  "community_size": 500000,
+  "ingest_nodes": 1000000,
+  "ingest_edges": {
+   "volume": 5000000,
+   "bridge": 5000000,
+   "novel": 5000000,
+   "dense_bridge": 20000000
+  },
+  "k": 20,
+  "embedding_dim": 16
+ },
+ "threads": 4,
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872804352,
+  "kernel": "6.18.44-fc-v153",
+  "load_average": [
+   0.90087890625,
+   1.48095703125,
+   1.31396484375
+  ]
+ },
+ "started_at": "2026-10-26T16:33:46+00:00",
+ "free_disk_before": 9041858560,
+ "pg_warren": "0.7.0",
+ "settings": [
+  "fsync=off",
+  "full_page_writes=off",
+  "jit=on",
+  "maintenance_work_mem=1GB",
+  "max_parallel_workers_per_gather=2",
+  "max_wal_size=1GB",
+  "shared_buffers=1GB",
+  "shared_preload_libraries=",
+  "statement_timeout=0",
+  "synchronous_commit=off",
+  "wal_level=minimal",
+  "warren.max_build_memory=4GB",
+  "warren.max_cache_memory=8GB",
+  "warren.max_compute_memory=4GB",
+  "warren.shared_cache_memory=4GB",
+  "warren.threads=4",
+  "work_mem=64MB"
+ ],
+ "steps": [
+  {
+   "name": "generate",
+   "kind": "stage",
+   "seconds": [
+    0.0042
+   ],
+   "median_seconds": 0.0042,
+   "peak_rss_anon": 5672960,
+   "vm_hwm": 37220352,
+   "rss_anon_before": 5648384,
+   "rss_anon_after": 5672960,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 9041186816
+  },
+  {
+   "name": "graph",
+   "kind": "stage",
+   "seconds": [
+    0.017
+   ],
+   "median_seconds": 0.017,
+   "peak_rss_anon": 11190272,
+   "vm_hwm": 78352384,
+   "rss_anon_before": 5672960,
+   "rss_anon_after": 11190272,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 9041145856
+  },
+  {
+   "name": "base refresh",
+   "kind": "stage",
+   "seconds": [
+    32.9532
+   ],
+   "median_seconds": 32.9532,
+   "peak_rss_anon": 1574719488,
+   "vm_hwm": 1888739328,
+   "rss_anon_before": 11190272,
+   "rss_anon_after": 42401792,
+   "notices": [],
+   "warnings": [],
+   "value": "1",
+   "target_seconds": 480,
+   "met": true,
+   "free_disk_before": 9041121280
+  },
+  {
+   "name": "base version",
+   "kind": "measure",
+   "seconds": 0.0021,
+   "value": "{\"seq\": 1, \"bytes\": 1121245788, \"label\": null, \"staged\": false, \"current\": true, \"vectors\": 0, \"version\": 1, \"built_at\": \"2026-10-26T16:33:46.5883+00:00\", \"id_space\": 10000000, \"built_lsn\": \"0/1CBC000\", \"staleness\": \"00:00:32.953774\", \"edge_count\": 99999457, \"node_count\": 10000000, \"label_vector\": null, \"parent_graph\": null, \"target_width\": 4, \"dropped_edges\": 0, \"compacted_from\": null, \"parent_version\": null, \"deduplicated_edges\": 464}",
+   "free_disk_before": 6814842880
+  },
+  {
+   "name": "base eigen",
+   "kind": "stage",
+   "seconds": [
+    117.6281
+   ],
+   "median_seconds": 117.6281,
+   "peak_rss_anon": 4307263488,
+   "vm_hwm": 5485060096,
+   "rss_anon_before": 42418176,
+   "rss_anon_after": 2037321728,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "target_seconds": 600,
+   "met": true,
+   "free_disk_before": 6814842880
+  },
+  {
+   "name": "base residual",
+   "kind": "measure",
+   "seconds": 0.0084,
+   "value": "7.189489947388891e-08",
+   "free_disk_before": 6814773248
+  },
+  {
+   "name": "base eigenvalues",
+   "kind": "measure",
+   "seconds": 0.0004,
+   "value": "0.000000,0.163298,0.163430,0.163483,0.163608,0.163683,0.163767,0.163778,0.163827,0.163830,0.163935,0.163977,0.164035,0.164088,0.164116,0.164220,0.164251,0.164412,0.164456,0.164583",
+   "free_disk_before": 6814773248
+  },
+  {
+   "name": "base embeddings",
+   "kind": "stage",
+   "seconds": [
+    26.813
+   ],
+   "median_seconds": 26.813,
+   "peak_rss_anon": 2773581824,
+   "vm_hwm": 3951788032,
+   "rss_anon_before": 2037329920,
+   "rss_anon_after": 2716323840,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 6814773248
+  },
+  {
+   "name": "aggregate base",
+   "kind": "stage",
+   "seconds": [
+    10.0025
+   ],
+   "median_seconds": 10.0025,
+   "peak_rss_anon": 4673785856,
+   "vm_hwm": 5852639232,
+   "rss_anon_before": 2716323840,
+   "rss_anon_after": 3364761600,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 6814769152
+  },
+  {
+   "name": "drop base embeddings",
+   "kind": "stage",
+   "seconds": [
+    0.0265
+   ],
+   "median_seconds": 0.0265,
+   "peak_rss_anon": 3364761600,
+   "vm_hwm": 4543619072,
+   "rss_anon_before": 3364761600,
+   "rss_anon_after": 2724757504,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 6150594560
+  },
+  {
+   "name": "begin volume",
+   "kind": "stage",
+   "seconds": [
+    0.0002
+   ],
+   "median_seconds": 0.0002,
+   "peak_rss_anon": 2724757504,
+   "vm_hwm": 3903868928,
+   "rss_anon_before": 2724757504,
+   "rss_anon_after": 2724757504,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 6150594560
+  },
+  {
+   "name": "ingest volume",
+   "kind": "stage",
+   "seconds": [
+    2.479
+   ],
+   "median_seconds": 2.479,
+   "peak_rss_anon": 2743554048,
+   "vm_hwm": 3922501632,
+   "rss_anon_before": 2724757504,
+   "rss_anon_after": 2720796672,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 6150594560
+  },
+  {
+   "name": "ingested edges volume",
+   "kind": "measure",
+   "seconds": 0.0885,
+   "value": "5000000",
+   "free_disk_before": 5884788736
+  },
+  {
+   "name": "staged refresh volume",
+   "kind": "stage",
+   "seconds": [
+    39.004
+   ],
+   "median_seconds": 39.004,
+   "peak_rss_anon": 4388610048,
+   "vm_hwm": 5567639552,
+   "rss_anon_before": 2720796672,
+   "rss_anon_after": 2708213760,
+   "notices": [],
+   "warnings": [],
+   "value": "2",
+   "target_seconds": 480,
+   "met": true,
+   "free_disk_before": 5884788736
+  },
+  {
+   "name": "diff volume",
+   "kind": "stage",
+   "seconds": [
+    8.559
+   ],
+   "median_seconds": 8.559,
+   "peak_rss_anon": 4117594112,
+   "vm_hwm": 5296611328,
+   "rss_anon_before": 2708213760,
+   "rss_anon_after": 4029591552,
+   "notices": [],
+   "warnings": [],
+   "value": "{\"to\": 2, \"from\": 1, \"nodes\": {\"added\": 1000000, \"after\": 11000000, \"before\": 10000000, \"removed\": 0}, \"in_degree\": {\"histogram\": [{\"after\": 9, \"before\": 0, \"degree\": 4}, {\"after\": 1040779, \"before\": 67152, \"degree\": 5}, {\"after\": 225046, \"before\": 338310, \"degree\": 6}, {\"after\": 618956, \"before\": 843582, \"degree\": 7}, {\"after\": 1135853, \"before\": 1404745, \"degree\": 8}, {\"after\": 1557452, \"before\": 1753443, \"degree\": 9}, {\"after\": 1712270, \"before\": 1752377, \"degree\": 10}, {\"after\": 1569144, \"before\": 1461221, \"degree\": 11}, {\"after\": 1234372, \"before\": 1042827, \"degree\": 12}, {\"after\": 847175, \"before\": 652577, \"degree\": 13}, {\"after\": 519128, \"before\": 364401, \"degree\": 14}, {\"after\": 286295, \"before\": 181644, \"degree\": 15}, {\"after\": 143079, \"before\": 82952, \"degree\": 16}, {\"after\": 65766, \"before\": 34420, \"degree\": 17}, {\"after\": 27709, \"before\": 13329, \"degree\": 18}, {\"after\": 10954, \"before\": 4732, \"degree\": 19}, {\"after\": 3930, \"before\": 1613, \"degree\": 20}, {\"after\": 1457, \"before\": 468, \"degree\": 21}, {\"after\": 426, \"before\": 144, \"degree\": 22}, {\"after\": 148, \"before\": 55, \"degree\": 23}, {\"after\": 43, \"before\": 7, \"degree\": 24}, {\"after\": 6, \"before\": 1, \"degree\": 25}, {\"after\": 2, \"before\": 0, \"degree\": 26}, {\"after\": 1, \"before\": 0, \"degree\": 27}], \"mean_after\": 9.999949, \"mean_before\": 9.9999457, \"ks_statistic\": 0.08790189090909091}, \"relations\": [{\"added\": 9999982, \"after\": 109999439, \"before\": 99999457, \"removed\": 0, \"relation\": \"\"}], \"out_degree\": {\"histogram\": [{\"after\": 9, \"before\": 0, \"degree\": 4}, {\"after\": 1040779, \"before\": 67152, \"degree\": 5}, {\"after\": 225046, \"before\": 338310, \"degree\": 6}, {\"after\": 618956, \"before\": 843582, \"degree\": 7}, {\"after\": 1135853, \"before\": 1404745, \"degree\": 8}, {\"after\": 1557452, \"before\": 1753443, \"degree\": 9}, {\"after\": 1712270, \"before\": 1752377, \"degree\": 10}, {\"after\": 1569144, \"before\": 1461221, \"degree\": 11}, {\"after\": 1234372, \"before\": 1042827, \"degree\": 12}, {\"after\": 847175, \"before\": 652577, \"degree\": 13}, {\"after\": 519128, \"before\": 364401, \"degree\": 14}, {\"after\": 286295, \"before\": 181644, \"degree\": 15}, {\"after\": 143079, \"before\": 82952, \"degree\": 16}, {\"after\": 65766, \"before\": 34420, \"degree\": 17}, {\"after\": 27709, \"before\": 13329, \"degree\": 18}, {\"after\": 10954, \"before\": 4732, \"degree\": 19}, {\"after\": 3930, \"before\": 1613, \"degree\": 20}, {\"after\": 1457, \"before\": 468, \"degree\": 21}, {\"after\": 426, \"before\": 144, \"degree\": 22}, {\"after\": 148, \"before\": 55, \"degree\": 23}, {\"after\": 43, \"before\": 7, \"degree\": 24}, {\"after\": 6, \"before\": 1, \"degree\": 25}, {\"after\": 2, \"before\": 0, \"degree\": 26}, {\"after\": 1, \"before\": 0, \"degree\": 27}], \"mean_after\": 9.999949, \"mean_before\": 9.9999457, \"ks_statistic\": 0.08790189090909091}, \"all_relations\": {\"added\": 9999982, \"after\": 109999439, \"before\": 99999457, \"removed\": 0}}",
+   "target_seconds": 30,
+   "met": true,
+   "free_disk_before": 4604944384
+  },
+  {
+   "name": "staged eigen volume",
+   "kind": "stage",
+   "seconds": [
+    128.0736
+   ],
+   "median_seconds": 128.0736,
+   "peak_rss_anon": 7406649344,
+   "vm_hwm": 8586027008,
+   "rss_anon_before": 4029612032,
+   "rss_anon_after": 4942790656,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "target_seconds": 600,
+   "met": true,
+   "free_disk_before": 4604940288
+  },
+  {
+   "name": "staged residual volume",
+   "kind": "measure",
+   "seconds": 0.0007,
+   "value": "7.60488797046082e-08",
+   "free_disk_before": 4604903424
+  },
+  {
+   "name": "subspace volume",
+   "kind": "stage",
+   "seconds": [
+    1.0504
+   ],
+   "median_seconds": 1.0504,
+   "peak_rss_anon": 4944035840,
+   "vm_hwm": 6123438080,
+   "rss_anon_before": 4942790656,
+   "rss_anon_after": 4944035840,
+   "notices": [],
+   "warnings": [],
+   "value": "0.43957738028446364",
+   "target_seconds": 30,
+   "met": true,
+   "free_disk_before": 4604903424
+  },
+  {
+   "name": "staged embeddings volume",
+   "kind": "stage",
+   "seconds": [
+    30.0362
+   ],
+   "median_seconds": 30.0362,
+   "peak_rss_anon": 5698269184,
+   "vm_hwm": 6877286400,
+   "rss_anon_before": 4944142336,
+   "rss_anon_after": 5640957952,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 4604903424
+  },
+  {
+   "name": "aggregate staged volume",
+   "kind": "stage",
+   "seconds": [
+    14.8587
+   ],
+   "median_seconds": 14.8587,
+   "peak_rss_anon": 7787294720,
+   "vm_hwm": 8966393856,
+   "rss_anon_before": 5640957952,
+   "rss_anon_after": 6319280128,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 4604903424
+  },
+  {
+   "name": "embedding distance volume",
+   "kind": "stage",
+   "seconds": [
+    0.33
+   ],
+   "median_seconds": 0.33,
+   "peak_rss_anon": 6319280128,
+   "vm_hwm": 7498690560,
+   "rss_anon_before": 6319280128,
+   "rss_anon_after": 6319280128,
+   "notices": [],
+   "warnings": [],
+   "value": "{\"to\": 2, \"from\": 1, \"rows\": 10000000, \"max_l2\": 0.49286358606961167, \"method\": \"embedding\", \"mean_l2\": 0.029599929672971727, \"max_cosine\": 0.18317768946274826, \"mean_cosine\": 0.0016586306795888588}",
+   "free_disk_before": 3874365440
+  },
+  {
+   "name": "embedding drift volume",
+   "kind": "measure",
+   "seconds": 0.0003,
+   "value": "0.029599929672971727",
+   "free_disk_before": 3874365440
+  },
+  {
+   "name": "drop staged transients volume",
+   "kind": "stage",
+   "seconds": [
+    0.0467
+   ],
+   "median_seconds": 0.0467,
+   "peak_rss_anon": 6319280128,
+   "vm_hwm": 7498383360,
+   "rss_anon_before": 6319280128,
+   "rss_anon_after": 4735209472,
+   "notices": [],
+   "warnings": [],
+   "value": "20",
+   "free_disk_before": 3874365440
+  },
+  {
+   "name": "rollback volume",
+   "kind": "stage",
+   "seconds": [
+    0.0018
+   ],
+   "median_seconds": 0.0018,
+   "peak_rss_anon": 4735209472,
+   "vm_hwm": 5914619904,
+   "rss_anon_before": 4735209472,
+   "rss_anon_after": 4735209472,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 3874365440
+  },
+  {
+   "name": "vacuum volume",
+   "kind": "stage",
+   "seconds": [
+    4.1483
+   ],
+   "median_seconds": 4.1483,
+   "peak_rss_anon": 4738924544,
+   "vm_hwm": 5918003200,
+   "rss_anon_before": 4735209472,
+   "rss_anon_after": 4735213568,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 3874373632
+  },
+  {
+   "name": "begin bridge",
+   "kind": "stage",
+   "seconds": [
+    0.0002
+   ],
+   "median_seconds": 0.0002,
+   "peak_rss_anon": 4735213568,
+   "vm_hwm": 5914628096,
+   "rss_anon_before": 4735213568,
+   "rss_anon_after": 4735213568,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 6128496640
+  },
+  {
+   "name": "ingest bridge",
+   "kind": "stage",
+   "seconds": [
+    2.6917
+   ],
+   "median_seconds": 2.6917,
+   "peak_rss_anon": 4785201152,
+   "vm_hwm": 5964242944,
+   "rss_anon_before": 4735213568,
+   "rss_anon_after": 4735213568,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 6128496640
+  },
+  {
+   "name": "ingested edges bridge",
+   "kind": "measure",
+   "seconds": 0.073,
+   "value": "5000000",
+   "free_disk_before": 5862723584
+  },
+  {
+   "name": "staged refresh bridge",
+   "kind": "stage",
+   "seconds": [
+    33.3226
+   ],
+   "median_seconds": 33.3226,
+   "peak_rss_anon": 6421901312,
+   "vm_hwm": 7601147904,
+   "rss_anon_before": 4735213568,
+   "rss_anon_after": 4768636928,
+   "notices": [],
+   "warnings": [],
+   "value": "3",
+   "target_seconds": 480,
+   "met": true,
+   "free_disk_before": 5862723584
+  },
+  {
+   "name": "diff bridge",
+   "kind": "stage",
+   "seconds": [
+    8.2772
+   ],
+   "median_seconds": 8.2772,
+   "peak_rss_anon": 4856639488,
+   "vm_hwm": 6035763200,
+   "rss_anon_before": 4768636928,
+   "rss_anon_after": 4768636928,
+   "notices": [],
+   "warnings": [],
+   "value": "{\"to\": 3, \"from\": 1, \"nodes\": {\"added\": 1000000, \"after\": 11000000, \"before\": 10000000, \"removed\": 0}, \"in_degree\": {\"histogram\": [{\"after\": 4, \"before\": 0, \"degree\": 4}, {\"after\": 1060482, \"before\": 67152, \"degree\": 5}, {\"after\": 305292, \"before\": 338310, \"degree\": 6}, {\"after\": 761568, \"before\": 843582, \"degree\": 7}, {\"after\": 1271836, \"before\": 1404745, \"degree\": 8}, {\"after\": 1597110, \"before\": 1753443, \"degree\": 9}, {\"after\": 1614122, \"before\": 1752377, \"degree\": 10}, {\"after\": 1377189, \"before\": 1461221, \"degree\": 11}, {\"after\": 1028643, \"before\": 1042827, \"degree\": 12}, {\"after\": 700789, \"before\": 652577, \"degree\": 13}, {\"after\": 452866, \"before\": 364401, \"degree\": 14}, {\"after\": 289742, \"before\": 181644, \"degree\": 15}, {\"after\": 188051, \"before\": 82952, \"degree\": 16}, {\"after\": 125834, \"before\": 34420, \"degree\": 17}, {\"after\": 84802, \"before\": 13329, \"degree\": 18}, {\"after\": 56250, \"before\": 4732, \"degree\": 19}, {\"after\": 36173, \"before\": 1613, \"degree\": 20}, {\"after\": 22205, \"before\": 468, \"degree\": 21}, {\"after\": 12965, \"before\": 144, \"degree\": 22}, {\"after\": 7052, \"before\": 55, \"degree\": 23}, {\"after\": 3592, \"before\": 7, \"degree\": 24}, {\"after\": 1876, \"before\": 1, \"degree\": 25}, {\"after\": 883, \"before\": 0, \"degree\": 26}, {\"after\": 384, \"before\": 0, \"degree\": 27}, {\"after\": 182, \"before\": 0, \"degree\": 28}, {\"after\": 68, \"before\": 0, \"degree\": 29}, {\"after\": 25, \"before\": 0, \"degree\": 30}, {\"after\": 12, \"before\": 0, \"degree\": 31}, {\"after\": 3, \"before\": 0, \"degree\": 32}], \"mean_after\": 9.999949909090908, \"mean_before\": 9.9999457, \"ks_statistic\": 0.08969261818181819}, \"relations\": [{\"added\": 9999992, \"after\": 109999449, \"before\": 99999457, \"removed\": 0, \"relation\": \"\"}], \"out_degree\": {\"histogram\": [{\"after\": 4, \"before\": 0, \"degree\": 4}, {\"after\": 1060482, \"before\": 67152, \"degree\": 5}, {\"after\": 305292, \"before\": 338310, \"degree\": 6}, {\"after\": 761568, \"before\": 843582, \"degree\": 7}, {\"after\": 1271836, \"before\": 1404745, \"degree\": 8}, {\"after\": 1597110, \"before\": 1753443, \"degree\": 9}, {\"after\": 1614122, \"before\": 1752377, \"degree\": 10}, {\"after\": 1377189, \"before\": 1461221, \"degree\": 11}, {\"after\": 1028643, \"before\": 1042827, \"degree\": 12}, {\"after\": 700789, \"before\": 652577, \"degree\": 13}, {\"after\": 452866, \"before\": 364401, \"degree\": 14}, {\"after\": 289742, \"before\": 181644, \"degree\": 15}, {\"after\": 188051, \"before\": 82952, \"degree\": 16}, {\"after\": 125834, \"before\": 34420, \"degree\": 17}, {\"after\": 84802, \"before\": 13329, \"degree\": 18}, {\"after\": 56250, \"before\": 4732, \"degree\": 19}, {\"after\": 36173, \"before\": 1613, \"degree\": 20}, {\"after\": 22205, \"before\": 468, \"degree\": 21}, {\"after\": 12965, \"before\": 144, \"degree\": 22}, {\"after\": 7052, \"before\": 55, \"degree\": 23}, {\"after\": 3592, \"before\": 7, \"degree\": 24}, {\"after\": 1876, \"before\": 1, \"degree\": 25}, {\"after\": 883, \"before\": 0, \"degree\": 26}, {\"after\": 384, \"before\": 0, \"degree\": 27}, {\"after\": 182, \"before\": 0, \"degree\": 28}, {\"after\": 68, \"before\": 0, \"degree\": 29}, {\"after\": 25, \"before\": 0, \"degree\": 30}, {\"after\": 12, \"before\": 0, \"degree\": 31}, {\"after\": 3, \"before\": 0, \"degree\": 32}], \"mean_after\": 9.999949909090908, \"mean_before\": 9.9999457, \"ks_statistic\": 0.08969261818181819}, \"all_relations\": {\"added\": 9999992, \"after\": 109999449, \"before\": 99999457, \"removed\": 0}}",
+   "target_seconds": 30,
+   "met": true,
+   "free_disk_before": 4582920192
+  },
+  {
+   "name": "staged eigen bridge",
+   "kind": "stage",
+   "seconds": [
+    118.7586
+   ],
+   "median_seconds": 118.7586,
+   "peak_rss_anon": 8110845952,
+   "vm_hwm": 9291714560,
+   "rss_anon_before": 4756185088,
+   "rss_anon_after": 5648150528,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "target_seconds": 600,
+   "met": true,
+   "free_disk_before": 4582920192
+  },
+  {
+   "name": "staged residual bridge",
+   "kind": "measure",
+   "seconds": 0.0006,
+   "value": "7.18862718873737e-08",
+   "free_disk_before": 4582912000
+  },
+  {
+   "name": "subspace bridge",
+   "kind": "stage",
+   "seconds": [
+    0.9732
+   ],
+   "median_seconds": 0.9732,
+   "peak_rss_anon": 5648314368,
+   "vm_hwm": 6827728896,
+   "rss_anon_before": 5648150528,
+   "rss_anon_after": 5648314368,
+   "notices": [],
+   "warnings": [],
+   "value": "0.40431638654280094",
+   "target_seconds": 30,
+   "met": true,
+   "free_disk_before": 4582912000
+  },
+  {
+   "name": "staged embeddings bridge",
+   "kind": "stage",
+   "seconds": [
+    30.8522
+   ],
+   "median_seconds": 30.8522,
+   "peak_rss_anon": 6404415488,
+   "vm_hwm": 7583662080,
+   "rss_anon_before": 5648314368,
+   "rss_anon_after": 6347104256,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 4582912000
+  },
+  {
+   "name": "aggregate staged bridge",
+   "kind": "stage",
+   "seconds": [
+    9.7663
+   ],
+   "median_seconds": 9.7663,
+   "peak_rss_anon": 8496058368,
+   "vm_hwm": 9675292672,
+   "rss_anon_before": 6347104256,
+   "rss_anon_after": 6332428288,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 4582903808
+  },
+  {
+   "name": "embedding distance bridge",
+   "kind": "stage",
+   "seconds": [
+    0.3895
+   ],
+   "median_seconds": 0.3895,
+   "peak_rss_anon": 6332428288,
+   "vm_hwm": 7511846912,
+   "rss_anon_before": 6332428288,
+   "rss_anon_after": 6332428288,
+   "notices": [],
+   "warnings": [],
+   "value": "{\"to\": 3, \"from\": 1, \"rows\": 10000000, \"max_l2\": 0.6688875725512432, \"method\": \"embedding\", \"mean_l2\": 0.01787153370667655, \"max_cosine\": 0.33522988918883856, \"mean_cosine\": 0.002595361336141918}",
+   "free_disk_before": 3852402688
+  },
+  {
+   "name": "embedding drift bridge",
+   "kind": "measure",
+   "seconds": 0.001,
+   "value": "0.01787153370667655",
+   "free_disk_before": 3852402688
+  },
+  {
+   "name": "drop staged transients bridge",
+   "kind": "stage",
+   "seconds": [
+    0.0477
+   ],
+   "median_seconds": 0.0477,
+   "peak_rss_anon": 6332428288,
+   "vm_hwm": 7511732224,
+   "rss_anon_before": 6332428288,
+   "rss_anon_after": 4748357632,
+   "notices": [],
+   "warnings": [],
+   "value": "20",
+   "free_disk_before": 3852402688
+  },
+  {
+   "name": "rollback bridge",
+   "kind": "stage",
+   "seconds": [
+    0.0031
+   ],
+   "median_seconds": 0.0031,
+   "peak_rss_anon": 4748357632,
+   "vm_hwm": 5927776256,
+   "rss_anon_before": 4748357632,
+   "rss_anon_after": 4748357632,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 3852402688
+  },
+  {
+   "name": "vacuum bridge",
+   "kind": "stage",
+   "seconds": [
+    2.8825
+   ],
+   "median_seconds": 2.8825,
+   "peak_rss_anon": 4752068608,
+   "vm_hwm": 5931331584,
+   "rss_anon_before": 4748357632,
+   "rss_anon_after": 4748357632,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 3852410880
+  },
+  {
+   "name": "begin novel",
+   "kind": "stage",
+   "seconds": [
+    0.0002
+   ],
+   "median_seconds": 0.0002,
+   "peak_rss_anon": 4748357632,
+   "vm_hwm": 5927776256,
+   "rss_anon_before": 4748357632,
+   "rss_anon_after": 4748357632,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 6106628096
+  },
+  {
+   "name": "ingest novel",
+   "kind": "stage",
+   "seconds": [
+    3.1502
+   ],
+   "median_seconds": 3.1502,
+   "peak_rss_anon": 4779880448,
+   "vm_hwm": 5959286784,
+   "rss_anon_before": 4748357632,
+   "rss_anon_after": 4779868160,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 6106628096
+  },
+  {
+   "name": "ingested edges novel",
+   "kind": "measure",
+   "seconds": 0.0955,
+   "value": "5000000",
+   "free_disk_before": 5840855040
+  },
+  {
+   "name": "staged refresh novel",
+   "kind": "stage",
+   "seconds": [
+    31.7869
+   ],
+   "median_seconds": 31.7869,
+   "peak_rss_anon": 6425214976,
+   "vm_hwm": 7604305920,
+   "rss_anon_before": 4779868160,
+   "rss_anon_after": 4768804864,
+   "notices": [],
+   "warnings": [],
+   "value": "4",
+   "target_seconds": 480,
+   "met": true,
+   "free_disk_before": 5840855040
+  },
+  {
+   "name": "diff novel",
+   "kind": "stage",
+   "seconds": [
+    8.9464
+   ],
+   "median_seconds": 8.9464,
+   "peak_rss_anon": 4856807424,
+   "vm_hwm": 6035873792,
+   "rss_anon_before": 4768804864,
+   "rss_anon_after": 4768804864,
+   "notices": [],
+   "warnings": [],
+   "value": "{\"to\": 4, \"from\": 1, \"nodes\": {\"added\": 1000000, \"after\": 11000000, \"before\": 10000000, \"removed\": 0}, \"in_degree\": {\"histogram\": [{\"after\": 73901, \"before\": 67152, \"degree\": 5}, {\"after\": 372395, \"before\": 338310, \"degree\": 6}, {\"after\": 928122, \"before\": 843582, \"degree\": 7}, {\"after\": 1544908, \"before\": 1404745, \"degree\": 8}, {\"after\": 1929161, \"before\": 1753443, \"degree\": 9}, {\"after\": 1926826, \"before\": 1752377, \"degree\": 10}, {\"after\": 1607083, \"before\": 1461221, \"degree\": 11}, {\"after\": 1147183, \"before\": 1042827, \"degree\": 12}, {\"after\": 718281, \"before\": 652577, \"degree\": 13}, {\"after\": 400793, \"before\": 364401, \"degree\": 14}, {\"after\": 199801, \"before\": 181644, \"degree\": 15}, {\"after\": 91245, \"before\": 82952, \"degree\": 16}, {\"after\": 37825, \"before\": 34420, \"degree\": 17}, {\"after\": 14723, \"before\": 13329, \"degree\": 18}, {\"after\": 5241, \"before\": 4732, \"degree\": 19}, {\"after\": 1766, \"before\": 1613, \"degree\": 20}, {\"after\": 515, \"before\": 468, \"degree\": 21}, {\"after\": 164, \"before\": 144, \"degree\": 22}, {\"after\": 58, \"before\": 55, \"degree\": 23}, {\"after\": 8, \"before\": 7, \"degree\": 24}, {\"after\": 1, \"before\": 1, \"degree\": 25}], \"mean_after\": 9.999946636363637, \"mean_before\": 9.9999457, \"ks_statistic\": 0.000048345454545454545}, \"relations\": [{\"added\": 9999956, \"after\": 109999413, \"before\": 99999457, \"removed\": 0, \"relation\": \"\"}], \"out_degree\": {\"histogram\": [{\"after\": 73901, \"before\": 67152, \"degree\": 5}, {\"after\": 372395, \"before\": 338310, \"degree\": 6}, {\"after\": 928122, \"before\": 843582, \"degree\": 7}, {\"after\": 1544908, \"before\": 1404745, \"degree\": 8}, {\"after\": 1929161, \"before\": 1753443, \"degree\": 9}, {\"after\": 1926826, \"before\": 1752377, \"degree\": 10}, {\"after\": 1607083, \"before\": 1461221, \"degree\": 11}, {\"after\": 1147183, \"before\": 1042827, \"degree\": 12}, {\"after\": 718281, \"before\": 652577, \"degree\": 13}, {\"after\": 400793, \"before\": 364401, \"degree\": 14}, {\"after\": 199801, \"before\": 181644, \"degree\": 15}, {\"after\": 91245, \"before\": 82952, \"degree\": 16}, {\"after\": 37825, \"before\": 34420, \"degree\": 17}, {\"after\": 14723, \"before\": 13329, \"degree\": 18}, {\"after\": 5241, \"before\": 4732, \"degree\": 19}, {\"after\": 1766, \"before\": 1613, \"degree\": 20}, {\"after\": 515, \"before\": 468, \"degree\": 21}, {\"after\": 164, \"before\": 144, \"degree\": 22}, {\"after\": 58, \"before\": 55, \"degree\": 23}, {\"after\": 8, \"before\": 7, \"degree\": 24}, {\"after\": 1, \"before\": 1, \"degree\": 25}], \"mean_after\": 9.999946636363637, \"mean_before\": 9.9999457, \"ks_statistic\": 0.000048345454545454545}, \"all_relations\": {\"added\": 9999956, \"after\": 109999413, \"before\": 99999457, \"removed\": 0}}",
+   "target_seconds": 30,
+   "met": true,
+   "free_disk_before": 4574916608
+  },
+  {
+   "name": "staged eigen novel",
+   "kind": "stage",
+   "seconds": [
+    126.5065
+   ],
+   "median_seconds": 126.5065,
+   "peak_rss_anon": 8112644096,
+   "vm_hwm": 9291816960,
+   "rss_anon_before": 4758450176,
+   "rss_anon_after": 5648318464,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "target_seconds": 600,
+   "met": true,
+   "free_disk_before": 4574912512
+  },
+  {
+   "name": "staged residual novel",
+   "kind": "measure",
+   "seconds": 0.0005,
+   "value": "1.1952868034765706e-07",
+   "free_disk_before": 4587266048
+  },
+  {
+   "name": "subspace novel",
+   "kind": "stage",
+   "seconds": [
+    1.0241
+   ],
+   "median_seconds": 1.0241,
+   "peak_rss_anon": 5648457728,
+   "vm_hwm": 6827880448,
+   "rss_anon_before": 5648318464,
+   "rss_anon_after": 5648457728,
+   "notices": [],
+   "warnings": [],
+   "value": "1.4147443537716793",
+   "target_seconds": 30,
+   "met": true,
+   "free_disk_before": 4587266048
+  },
+  {
+   "name": "staged embeddings novel",
+   "kind": "stage",
+   "seconds": [
+    30.3734
+   ],
+   "median_seconds": 30.3734,
+   "peak_rss_anon": 6406189056,
+   "vm_hwm": 7585349632,
+   "rss_anon_before": 5648564224,
+   "rss_anon_after": 6348873728,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 4587266048
+  },
+  {
+   "name": "aggregate staged novel",
+   "kind": "stage",
+   "seconds": [
+    11.9147
+   ],
+   "median_seconds": 11.9147,
+   "peak_rss_anon": 8497823744,
+   "vm_hwm": 9676951552,
+   "rss_anon_before": 6348873728,
+   "rss_anon_after": 6334193664,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 4587266048
+  },
+  {
+   "name": "embedding distance novel",
+   "kind": "stage",
+   "seconds": [
+    0.3026
+   ],
+   "median_seconds": 0.3026,
+   "peak_rss_anon": 6334193664,
+   "vm_hwm": 7513616384,
+   "rss_anon_before": 6334193664,
+   "rss_anon_after": 6334193664,
+   "notices": [],
+   "warnings": [],
+   "value": "{\"to\": 4, \"from\": 1, \"rows\": 10000000, \"max_l2\": 0.523146457134996, \"method\": \"embedding\", \"mean_l2\": 0.0013184970593420637, \"max_cosine\": 0.151478807886885, \"mean_cosine\": 0.00010016307261135639}",
+   "free_disk_before": 3864662016
+  },
+  {
+   "name": "embedding drift novel",
+   "kind": "measure",
+   "seconds": 0.0003,
+   "value": "0.0013184970593420637",
+   "free_disk_before": 3864662016
+  },
+  {
+   "name": "drop staged transients novel",
+   "kind": "stage",
+   "seconds": [
+    0.0616
+   ],
+   "median_seconds": 0.0616,
+   "peak_rss_anon": 6334193664,
+   "vm_hwm": 7513374720,
+   "rss_anon_before": 6334193664,
+   "rss_anon_after": 4750123008,
+   "notices": [],
+   "warnings": [],
+   "value": "20",
+   "free_disk_before": 3864662016
+  },
+  {
+   "name": "rollback novel",
+   "kind": "stage",
+   "seconds": [
+    0.0035
+   ],
+   "median_seconds": 0.0035,
+   "peak_rss_anon": 4750123008,
+   "vm_hwm": 5929545728,
+   "rss_anon_before": 4750123008,
+   "rss_anon_after": 4750123008,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 3864662016
+  },
+  {
+   "name": "vacuum novel",
+   "kind": "stage",
+   "seconds": [
+    2.8911
+   ],
+   "median_seconds": 2.8911,
+   "peak_rss_anon": 4753833984,
+   "vm_hwm": 5933105152,
+   "rss_anon_before": 4750123008,
+   "rss_anon_after": 4750123008,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 3864670208
+  },
+  {
+   "name": "begin dense_bridge",
+   "kind": "stage",
+   "seconds": [
+    0.0002
+   ],
+   "median_seconds": 0.0002,
+   "peak_rss_anon": 4750123008,
+   "vm_hwm": 5929549824,
+   "rss_anon_before": 4750123008,
+   "rss_anon_after": 4750123008,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 6113185792
+  },
+  {
+   "name": "ingest dense_bridge",
+   "kind": "stage",
+   "seconds": [
+    8.9779
+   ],
+   "median_seconds": 8.9779,
+   "peak_rss_anon": 4790018048,
+   "vm_hwm": 5969436672,
+   "rss_anon_before": 4750123008,
+   "rss_anon_after": 4790009856,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 6113185792
+  },
+  {
+   "name": "ingested edges dense_bridge",
+   "kind": "measure",
+   "seconds": 0.5967,
+   "value": "20000000",
+   "free_disk_before": 5188751360
+  },
+  {
+   "name": "staged refresh dense_bridge",
+   "kind": "stage",
+   "seconds": [
+    40.4537
+   ],
+   "median_seconds": 40.4537,
+   "peak_rss_anon": 6789935104,
+   "vm_hwm": 7969267712,
+   "rss_anon_before": 4790009856,
+   "rss_anon_after": 4772474880,
+   "notices": [],
+   "warnings": [],
+   "value": "5",
+   "target_seconds": 480,
+   "met": true,
+   "free_disk_before": 5188751360
+  },
+  {
+   "name": "diff dense_bridge",
+   "kind": "stage",
+   "seconds": [
+    9.0783
+   ],
+   "median_seconds": 9.0783,
+   "peak_rss_anon": 5100474368,
+   "vm_hwm": 6279856128,
+   "rss_anon_before": 4772474880,
+   "rss_anon_after": 5012471808,
+   "notices": [],
+   "warnings": [],
+   "value": "{\"to\": 5, \"from\": 1, \"nodes\": {\"added\": 1000000, \"after\": 11000000, \"before\": 10000000, \"removed\": 0}, \"in_degree\": {\"histogram\": [{\"after\": 60448, \"before\": 67152, \"degree\": 5}, {\"after\": 304835, \"before\": 338310, \"degree\": 6}, {\"after\": 759326, \"before\": 843582, \"degree\": 7}, {\"after\": 1264455, \"before\": 1404745, \"degree\": 8}, {\"after\": 1578184, \"before\": 1753443, \"degree\": 9}, {\"after\": 1576506, \"before\": 1752377, \"degree\": 10}, {\"after\": 1314386, \"before\": 1461221, \"degree\": 11}, {\"after\": 938382, \"before\": 1042827, \"degree\": 12}, {\"after\": 587869, \"before\": 652577, \"degree\": 13}, {\"after\": 328181, \"before\": 364401, \"degree\": 14}, {\"after\": 163931, \"before\": 181644, \"degree\": 15}, {\"after\": 75427, \"before\": 82952, \"degree\": 16}, {\"after\": 32747, \"before\": 34420, \"degree\": 17}, {\"after\": 15305, \"before\": 13329, \"degree\": 18}, {\"after\": 10405, \"before\": 4732, \"degree\": 19}, {\"after\": 1011192, \"before\": 1613, \"degree\": 20}, {\"after\": 15923, \"before\": 468, \"degree\": 21}, {\"after\": 22776, \"before\": 144, \"degree\": 22}, {\"after\": 31682, \"before\": 55, \"degree\": 23}, {\"after\": 41352, \"before\": 7, \"degree\": 24}, {\"after\": 51981, \"before\": 1, \"degree\": 25}, {\"after\": 61850, \"before\": 0, \"degree\": 26}, {\"after\": 70614, \"before\": 0, \"degree\": 27}, {\"after\": 76189, \"before\": 0, \"degree\": 28}, {\"after\": 79647, \"before\": 0, \"degree\": 29}, {\"after\": 79894, \"before\": 0, \"degree\": 30}, {\"after\": 76129, \"before\": 0, \"degree\": 31}, {\"after\": 70462, \"before\": 0, \"degree\": 32}, {\"after\": 63284, \"before\": 0, \"degree\": 33}, {\"after\": 54173, \"before\": 0, \"degree\": 34}, {\"after\": 45732, \"before\": 0, \"degree\": 35}, {\"after\": 36640, \"before\": 0, \"degree\": 36}, {\"after\": 28457, \"before\": 0, \"degree\": 37}, {\"after\": 21946, \"before\": 0, \"degree\": 38}, {\"after\": 16013, \"before\": 0, \"degree\": 39}, {\"after\": 11343, \"before\": 0, \"degree\": 40}, {\"after\": 7939, \"before\": 0, \"degree\": 41}, {\"after\": 5342, \"before\": 0, \"degree\": 42}, {\"after\": 3440, \"before\": 0, \"degree\": 43}, {\"after\": 2215, \"before\": 0, \"degree\": 44}, {\"after\": 1374, \"before\": 0, \"degree\": 45}, {\"after\": 882, \"before\": 0, \"degree\": 46}, {\"after\": 498, \"before\": 0, \"degree\": 47}, {\"after\": 295, \"before\": 0, \"degree\": 48}, {\"after\": 162, \"before\": 0, \"degree\": 49}, {\"after\": 88, \"before\": 0, \"degree\": 50}, {\"after\": 52, \"before\": 0, \"degree\": 51}, {\"after\": 25, \"before\": 0, \"degree\": 52}, {\"after\": 15, \"before\": 0, \"degree\": 53}, {\"after\": 4, \"before\": 0, \"degree\": 54}, {\"after\": 1, \"before\": 0, \"degree\": 55}, {\"after\": 2, \"before\": 0, \"degree\": 58}], \"mean_after\": 12.727200090909092, \"mean_before\": 9.9999457, \"ks_statistic\": 0.18117628181818182}, \"relations\": [{\"added\": 39999744, \"after\": 139999201, \"before\": 99999457, \"removed\": 0, \"relation\": \"\"}], \"out_degree\": {\"histogram\": [{\"after\": 60448, \"before\": 67152, \"degree\": 5}, {\"after\": 304835, \"before\": 338310, \"degree\": 6}, {\"after\": 759326, \"before\": 843582, \"degree\": 7}, {\"after\": 1264455, \"before\": 1404745, \"degree\": 8}, {\"after\": 1578184, \"before\": 1753443, \"degree\": 9}, {\"after\": 1576506, \"before\": 1752377, \"degree\": 10}, {\"after\": 1314386, \"before\": 1461221, \"degree\": 11}, {\"after\": 938382, \"before\": 1042827, \"degree\": 12}, {\"after\": 587869, \"before\": 652577, \"degree\": 13}, {\"after\": 328181, \"before\": 364401, \"degree\": 14}, {\"after\": 163931, \"before\": 181644, \"degree\": 15}, {\"after\": 75427, \"before\": 82952, \"degree\": 16}, {\"after\": 32747, \"before\": 34420, \"degree\": 17}, {\"after\": 15305, \"before\": 13329, \"degree\": 18}, {\"after\": 10405, \"before\": 4732, \"degree\": 19}, {\"after\": 1011192, \"before\": 1613, \"degree\": 20}, {\"after\": 15923, \"before\": 468, \"degree\": 21}, {\"after\": 22776, \"before\": 144, \"degree\": 22}, {\"after\": 31682, \"before\": 55, \"degree\": 23}, {\"after\": 41352, \"before\": 7, \"degree\": 24}, {\"after\": 51981, \"before\": 1, \"degree\": 25}, {\"after\": 61850, \"before\": 0, \"degree\": 26}, {\"after\": 70614, \"before\": 0, \"degree\": 27}, {\"after\": 76189, \"before\": 0, \"degree\": 28}, {\"after\": 79647, \"before\": 0, \"degree\": 29}, {\"after\": 79894, \"before\": 0, \"degree\": 30}, {\"after\": 76129, \"before\": 0, \"degree\": 31}, {\"after\": 70462, \"before\": 0, \"degree\": 32}, {\"after\": 63284, \"before\": 0, \"degree\": 33}, {\"after\": 54173, \"before\": 0, \"degree\": 34}, {\"after\": 45732, \"before\": 0, \"degree\": 35}, {\"after\": 36640, \"before\": 0, \"degree\": 36}, {\"after\": 28457, \"before\": 0, \"degree\": 37}, {\"after\": 21946, \"before\": 0, \"degree\": 38}, {\"after\": 16013, \"before\": 0, \"degree\": 39}, {\"after\": 11343, \"before\": 0, \"degree\": 40}, {\"after\": 7939, \"before\": 0, \"degree\": 41}, {\"after\": 5342, \"before\": 0, \"degree\": 42}, {\"after\": 3440, \"before\": 0, \"degree\": 43}, {\"after\": 2215, \"before\": 0, \"degree\": 44}, {\"after\": 1374, \"before\": 0, \"degree\": 45}, {\"after\": 882, \"before\": 0, \"degree\": 46}, {\"after\": 498, \"before\": 0, \"degree\": 47}, {\"after\": 295, \"before\": 0, \"degree\": 48}, {\"after\": 162, \"before\": 0, \"degree\": 49}, {\"after\": 88, \"before\": 0, \"degree\": 50}, {\"after\": 52, \"before\": 0, \"degree\": 51}, {\"after\": 25, \"before\": 0, \"degree\": 52}, {\"after\": 15, \"before\": 0, \"degree\": 53}, {\"after\": 4, \"before\": 0, \"degree\": 54}, {\"after\": 1, \"before\": 0, \"degree\": 55}, {\"after\": 2, \"before\": 0, \"degree\": 58}], \"mean_after\": 12.727200090909092, \"mean_before\": 9.9999457, \"ks_statistic\": 0.18117628181818182}, \"all_relations\": {\"added\": 39999744, \"after\": 139999201, \"before\": 99999457, \"removed\": 0}}",
+   "target_seconds": 30,
+   "met": true,
+   "free_disk_before": 3673808896
+  },
+  {
+   "name": "staged eigen dense_bridge",
+   "kind": "stage",
+   "seconds": [
+    1331.7968
+   ],
+   "median_seconds": 1331.7968,
+   "peak_rss_anon": 8353705984,
+   "vm_hwm": 9533071360,
+   "rss_anon_before": 4995825664,
+   "rss_anon_after": 5889380352,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "target_seconds": 600,
+   "met": false,
+   "free_disk_before": 3673804800
+  },
+  {
+   "name": "staged residual dense_bridge",
+   "kind": "measure",
+   "seconds": 0.0005,
+   "value": "1.6520627194806001e-06",
+   "free_disk_before": 3673731072
+  },
+  {
+   "name": "subspace dense_bridge",
+   "kind": "stage",
+   "seconds": [
+    1.0229
+   ],
+   "median_seconds": 1.0229,
+   "peak_rss_anon": 5889392640,
+   "vm_hwm": 7068831744,
+   "rss_anon_before": 5889380352,
+   "rss_anon_after": 5889392640,
+   "notices": [],
+   "warnings": [],
+   "value": "1.453174874718715",
+   "target_seconds": 30,
+   "met": true,
+   "free_disk_before": 3673731072
+  },
+  {
+   "name": "staged embeddings dense_bridge",
+   "kind": "stage",
+   "seconds": [
+    29.8768
+   ],
+   "median_seconds": 29.8768,
+   "peak_rss_anon": 6649888768,
+   "vm_hwm": 7829311488,
+   "rss_anon_before": 5889425408,
+   "rss_anon_after": 6592577536,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 3673731072
+  },
+  {
+   "name": "aggregate staged dense_bridge",
+   "kind": "stage",
+   "seconds": [
+    11.4488
+   ],
+   "median_seconds": 11.4488,
+   "peak_rss_anon": 8739430400,
+   "vm_hwm": 9918865408,
+   "rss_anon_before": 6592577536,
+   "rss_anon_after": 6575800320,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 3673731072
+  },
+  {
+   "name": "embedding distance dense_bridge",
+   "kind": "stage",
+   "seconds": [
+    0.3287
+   ],
+   "median_seconds": 0.3287,
+   "peak_rss_anon": 6575800320,
+   "vm_hwm": 7755280384,
+   "rss_anon_before": 6575800320,
+   "rss_anon_after": 6575800320,
+   "notices": [],
+   "warnings": [],
+   "value": "{\"to\": 5, \"from\": 1, \"rows\": 10000000, \"max_l2\": 0.8104311572285944, \"method\": \"embedding\", \"mean_l2\": 0.03251305375501232, \"max_cosine\": 0.43804605556619836, \"mean_cosine\": 0.0076095542453069615}",
+   "free_disk_before": 2951143424
+  },
+  {
+   "name": "embedding drift dense_bridge",
+   "kind": "measure",
+   "seconds": 0.0005,
+   "value": "0.03251305375501232",
+   "free_disk_before": 2951143424
+  },
+  {
+   "name": "drop staged transients dense_bridge",
+   "kind": "stage",
+   "seconds": [
+    0.0558
+   ],
+   "median_seconds": 0.0558,
+   "peak_rss_anon": 6575800320,
+   "vm_hwm": 7755280384,
+   "rss_anon_before": 6575800320,
+   "rss_anon_after": 4991729664,
+   "notices": [],
+   "warnings": [],
+   "value": "20",
+   "free_disk_before": 2951143424
+  },
+  {
+   "name": "rollback dense_bridge",
+   "kind": "stage",
+   "seconds": [
+    0.0027
+   ],
+   "median_seconds": 0.0027,
+   "peak_rss_anon": 4991729664,
+   "vm_hwm": 6171246592,
+   "rss_anon_before": 4991729664,
+   "rss_anon_after": 4991729664,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 2951143424
+  },
+  {
+   "name": "vacuum dense_bridge",
+   "kind": "stage",
+   "seconds": [
+    5.8748
+   ],
+   "median_seconds": 5.8748,
+   "peak_rss_anon": 4996161536,
+   "vm_hwm": 6175440896,
+   "rss_anon_before": 4991729664,
+   "rss_anon_after": 4991729664,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 2951147520
+  },
+  {
+   "name": "cache after the variants",
+   "kind": "measure",
+   "seconds": 0.0013,
+   "value": "9109229504",
+   "free_disk_before": 6116151296
+  },
+  {
+   "name": "begin commit",
+   "kind": "stage",
+   "seconds": [
+    0.0002
+   ],
+   "median_seconds": 0.0002,
+   "peak_rss_anon": 4991733760,
+   "vm_hwm": 6171435008,
+   "rss_anon_before": 4991733760,
+   "rss_anon_after": 4991733760,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 6116151296
+  },
+  {
+   "name": "ingest commit",
+   "kind": "stage",
+   "seconds": [
+    2.6708
+   ],
+   "median_seconds": 2.6708,
+   "peak_rss_anon": 5030920192,
+   "vm_hwm": 6210613248,
+   "rss_anon_before": 4991733760,
+   "rss_anon_after": 5030907904,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 6116151296
+  },
+  {
+   "name": "staged refresh commit",
+   "kind": "stage",
+   "seconds": [
+    33.2329
+   ],
+   "median_seconds": 33.2329,
+   "peak_rss_anon": 6675980288,
+   "vm_hwm": 7855640576,
+   "rss_anon_before": 5030907904,
+   "rss_anon_after": 5016424448,
+   "notices": [],
+   "warnings": [],
+   "value": "6",
+   "free_disk_before": 5850374144
+  },
+  {
+   "name": "commit",
+   "kind": "stage",
+   "seconds": [
+    0.0003
+   ],
+   "median_seconds": 0.0003,
+   "peak_rss_anon": 5016424448,
+   "vm_hwm": 6196129792,
+   "rss_anon_before": 5016424448,
+   "rss_anon_after": 5016424448,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 4584460288
+  },
+  {
+   "name": "drop committed staged",
+   "kind": "stage",
+   "seconds": [
+    1.7191
+   ],
+   "median_seconds": 1.7191,
+   "peak_rss_anon": 4763496448,
+   "vm_hwm": 5943226368,
+   "rss_anon_before": 4759781376,
+   "rss_anon_after": 4759785472,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 4584460288
+  },
+  {
+   "name": "base eigen again",
+   "kind": "stage",
+   "seconds": [
+    113.0025
+   ],
+   "median_seconds": 113.0025,
+   "peak_rss_anon": 7811723264,
+   "vm_hwm": 8991256576,
+   "rss_anon_before": 4759785472,
+   "rss_anon_after": 5571297280,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "target_seconds": 600,
+   "met": true,
+   "free_disk_before": 6116179968
+  },
+  {
+   "name": "drop second solve",
+   "kind": "stage",
+   "seconds": [
+    0.0361
+   ],
+   "median_seconds": 0.0361,
+   "peak_rss_anon": 5573152768,
+   "vm_hwm": 6752780288,
+   "rss_anon_before": 5573152768,
+   "rss_anon_after": 4773122048,
+   "notices": [],
+   "warnings": [],
+   "value": "20",
+   "free_disk_before": 6116143104
+  },
+  {
+   "name": "shadow graph",
+   "kind": "stage",
+   "seconds": [
+    0.005
+   ],
+   "median_seconds": 0.005,
+   "peak_rss_anon": 4773122048,
+   "vm_hwm": 5953007616,
+   "rss_anon_before": 4773122048,
+   "rss_anon_after": 4773122048,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 6116143104
+  },
+  {
+   "name": "shadow refresh",
+   "kind": "stage",
+   "seconds": [
+    32.452
+   ],
+   "median_seconds": 32.452,
+   "peak_rss_anon": 6446231552,
+   "vm_hwm": 7625859072,
+   "rss_anon_before": 4773122048,
+   "rss_anon_after": 4778287104,
+   "notices": [],
+   "warnings": [],
+   "value": "7",
+   "free_disk_before": 6116143104
+  },
+  {
+   "name": "shadow eigen",
+   "kind": "stage",
+   "seconds": [
+    119.361
+   ],
+   "median_seconds": 119.361,
+   "peak_rss_anon": 8098209792,
+   "vm_hwm": 9302380544,
+   "rss_anon_before": 4778287104,
+   "rss_anon_after": 5658357760,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "target_seconds": 600,
+   "met": true,
+   "free_disk_before": 4850233344
+  },
+  {
+   "name": "shadow subspace",
+   "kind": "stage",
+   "seconds": [
+    2.3361
+   ],
+   "median_seconds": 2.3361,
+   "peak_rss_anon": 6626426880,
+   "vm_hwm": 7806152704,
+   "rss_anon_before": 5658357760,
+   "rss_anon_after": 5658357760,
+   "notices": [],
+   "warnings": [],
+   "value": "0.40431638654280094",
+   "free_disk_before": 4850221056
+  }
+ ],
+ "checks": [
+  {
+   "name": "diff nodes volume",
+   "claim": "volume: diff reports the ingested entities",
+   "value": "1000000",
+   "passed": true
+  },
+  {
+   "name": "diff edges volume",
+   "claim": "volume: diff reports the ingested edges (each undirected edge both ways) within 5%",
+   "value": "1.8e-06",
+   "passed": true
+  },
+  {
+   "name": "dense ids volume",
+   "claim": "volume: every pre-existing entity keeps its dense id in the staged version",
+   "value": "0/10000000",
+   "passed": true
+  },
+  {
+   "name": "subspace again volume",
+   "claim": "volume: the same comparison twice gives the same result",
+   "value": "t",
+   "passed": true
+  },
+  {
+   "name": "rolled back volume",
+   "claim": "volume: after ROLLBACK no version, segment, vector or ingested row of the staged version remains",
+   "value": "0",
+   "passed": true
+  },
+  {
+   "name": "diff nodes bridge",
+   "claim": "bridge: diff reports the ingested entities",
+   "value": "1000000",
+   "passed": true
+  },
+  {
+   "name": "diff edges bridge",
+   "claim": "bridge: diff reports the ingested edges (each undirected edge both ways) within 5%",
+   "value": "8e-07",
+   "passed": true
+  },
+  {
+   "name": "dense ids bridge",
+   "claim": "bridge: every pre-existing entity keeps its dense id in the staged version",
+   "value": "0/10000000",
+   "passed": true
+  },
+  {
+   "name": "subspace again bridge",
+   "claim": "bridge: the same comparison twice gives the same result",
+   "value": "t",
+   "passed": true
+  },
+  {
+   "name": "rolled back bridge",
+   "claim": "bridge: after ROLLBACK no version, segment, vector or ingested row of the staged version remains",
+   "value": "0",
+   "passed": true
+  },
+  {
+   "name": "diff nodes novel",
+   "claim": "novel: diff reports the ingested entities",
+   "value": "1000000",
+   "passed": true
+  },
+  {
+   "name": "diff edges novel",
+   "claim": "novel: diff reports the ingested edges (each undirected edge both ways) within 5%",
+   "value": "4.4e-06",
+   "passed": true
+  },
+  {
+   "name": "dense ids novel",
+   "claim": "novel: every pre-existing entity keeps its dense id in the staged version",
+   "value": "0/10000000",
+   "passed": true
+  },
+  {
+   "name": "subspace again novel",
+   "claim": "novel: the same comparison twice gives the same result",
+   "value": "t",
+   "passed": true
+  },
+  {
+   "name": "rolled back novel",
+   "claim": "novel: after ROLLBACK no version, segment, vector or ingested row of the staged version remains",
+   "value": "0",
+   "passed": true
+  },
+  {
+   "name": "diff nodes dense_bridge",
+   "claim": "dense_bridge: diff reports the ingested entities",
+   "value": "1000000",
+   "passed": true
+  },
+  {
+   "name": "diff edges dense_bridge",
+   "claim": "dense_bridge: diff reports the ingested edges (each undirected edge both ways) within 5%",
+   "value": "6.4e-06",
+   "passed": true
+  },
+  {
+   "name": "dense ids dense_bridge",
+   "claim": "dense_bridge: every pre-existing entity keeps its dense id in the staged version",
+   "value": "0/10000000",
+   "passed": true
+  },
+  {
+   "name": "subspace again dense_bridge",
+   "claim": "dense_bridge: the same comparison twice gives the same result",
+   "value": "t",
+   "passed": true
+  },
+  {
+   "name": "rolled back dense_bridge",
+   "claim": "dense_bridge: after ROLLBACK no version, segment, vector or ingested row of the staged version remains",
+   "value": "0",
+   "passed": true
+  },
+  {
+   "name": "volume barely turns the subspace",
+   "claim": "distance('subspace'): volume below the documented threshold 0.5",
+   "value": "0.43957738028446364",
+   "passed": true
+  },
+  {
+   "name": "novel turns it further",
+   "claim": "a novel community turns the subspace more than twice as far as volume",
+   "value": "3.21841936647458068",
+   "passed": true
+  },
+  {
+   "name": "bridge turns it further",
+   "claim": "a bridge turns the subspace more than twice as far as volume",
+   "value": "0.91978433076141393185",
+   "passed": false
+  },
+  {
+   "name": "bridge turns it furthest",
+   "claim": "A.2's order volume < novel < bridge (DESIGN.md \u00a78: novel against bridge depends on sizes)",
+   "value": "f",
+   "passed": false
+  },
+  {
+   "name": "bridge moves embeddings most",
+   "claim": "distance('embedding') after aggregate_neighbours ranks bridge highest",
+   "value": "f",
+   "passed": false
+  },
+  {
+   "name": "dense bridge turns it further",
+   "claim": "a dense bridge (20 edges an entity) turns the subspace more than twice as far as volume",
+   "value": "3.30584543221564807",
+   "passed": true
+  },
+  {
+   "name": "dense bridge turns it furthest",
+   "claim": "\u2026 and further than a novel community",
+   "value": "t",
+   "passed": true
+  },
+  {
+   "name": "committed staged is not current",
+   "claim": "after COMMIT without promote the base stays current",
+   "value": "t",
+   "passed": true
+  },
+  {
+   "name": "committed staged by version",
+   "claim": "the staged version is queryable by explicit version",
+   "value": "5",
+   "passed": true
+  },
+  {
+   "name": "committed staged invisible by default",
+   "claim": "the staged version is invisible by default (its new entities are not there)",
+   "value": "0",
+   "passed": true
+  },
+  {
+   "name": "committed dense ids",
+   "claim": "dense ids of all pre-existing entities are identical in both versions",
+   "value": "0/10000000",
+   "passed": true
+  },
+  {
+   "name": "eigenvalues identical",
+   "claim": "a second solve gives bitwise the same eigenvalues",
+   "value": "0",
+   "passed": true
+  },
+  {
+   "name": "eigenvectors identical",
+   "claim": "\u2026 and bitwise the same eigenvectors",
+   "value": "0",
+   "passed": true
+  },
+  {
+   "name": "shadow agrees",
+   "claim": "the shadow-schema comparison gives the same subspace distance within 1e-9",
+   "value": "0.00000000000000000",
+   "passed": true
+  },
+  {
+   "name": "shadow only adds",
+   "claim": "by external id, the shadow graph only adds edges",
+   "value": null,
+   "passed": false,
+   "error": "ERROR:  compute memory limit exceeded: 10911947136 bytes requested, 88000000 of 4294967296 in use"
+  }
+ ],
+ "values": {
+  "base": "1",
+  "base_version": "{\"seq\": 1, \"bytes\": 1121245788, \"label\": null, \"staged\": false, \"current\": true, \"vectors\": 0, \"version\": 1, \"built_at\": \"2026-10-26T16:33:46.5883+00:00\", \"id_space\": 10000000, \"built_lsn\": \"0/1CBC000\", \"staleness\": \"00:00:32.953774\", \"edge_count\": 99999457, \"node_count\": 10000000, \"label_vector\": null, \"parent_graph\": null, \"target_width\": 4, \"dropped_edges\": 0, \"compacted_from\": null, \"parent_version\": null, \"deduplicated_edges\": 464}",
+  "residual_base": "7.189489947388891e-08",
+  "eigenvalues_base": "0.000000,0.163298,0.163430,0.163483,0.163608,0.163683,0.163767,0.163778,0.163827,0.163830,0.163935,0.163977,0.164035,0.164088,0.164116,0.164220,0.164251,0.164412,0.164456,0.164583",
+  "edges_volume": "5000000",
+  "staged_volume": "2",
+  "diff_volume": "{\"to\": 2, \"from\": 1, \"nodes\": {\"added\": 1000000, \"after\": 11000000, \"before\": 10000000, \"removed\": 0}, \"in_degree\": {\"histogram\": [{\"after\": 9, \"before\": 0, \"degree\": 4}, {\"after\": 1040779, \"before\": 67152, \"degree\": 5}, {\"after\": 225046, \"before\": 338310, \"degree\": 6}, {\"after\": 618956, \"before\": 843582, \"degree\": 7}, {\"after\": 1135853, \"before\": 1404745, \"degree\": 8}, {\"after\": 1557452, \"before\": 1753443, \"degree\": 9}, {\"after\": 1712270, \"before\": 1752377, \"degree\": 10}, {\"after\": 1569144, \"before\": 1461221, \"degree\": 11}, {\"after\": 1234372, \"before\": 1042827, \"degree\": 12}, {\"after\": 847175, \"before\": 652577, \"degree\": 13}, {\"after\": 519128, \"before\": 364401, \"degree\": 14}, {\"after\": 286295, \"before\": 181644, \"degree\": 15}, {\"after\": 143079, \"before\": 82952, \"degree\": 16}, {\"after\": 65766, \"before\": 34420, \"degree\": 17}, {\"after\": 27709, \"before\": 13329, \"degree\": 18}, {\"after\": 10954, \"before\": 4732, \"degree\": 19}, {\"after\": 3930, \"before\": 1613, \"degree\": 20}, {\"after\": 1457, \"before\": 468, \"degree\": 21}, {\"after\": 426, \"before\": 144, \"degree\": 22}, {\"after\": 148, \"before\": 55, \"degree\": 23}, {\"after\": 43, \"before\": 7, \"degree\": 24}, {\"after\": 6, \"before\": 1, \"degree\": 25}, {\"after\": 2, \"before\": 0, \"degree\": 26}, {\"after\": 1, \"before\": 0, \"degree\": 27}], \"mean_after\": 9.999949, \"mean_before\": 9.9999457, \"ks_statistic\": 0.08790189090909091}, \"relations\": [{\"added\": 9999982, \"after\": 109999439, \"before\": 99999457, \"removed\": 0, \"relation\": \"\"}], \"out_degree\": {\"histogram\": [{\"after\": 9, \"before\": 0, \"degree\": 4}, {\"after\": 1040779, \"before\": 67152, \"degree\": 5}, {\"after\": 225046, \"before\": 338310, \"degree\": 6}, {\"after\": 618956, \"before\": 843582, \"degree\": 7}, {\"after\": 1135853, \"before\": 1404745, \"degree\": 8}, {\"after\": 1557452, \"before\": 1753443, \"degree\": 9}, {\"after\": 1712270, \"before\": 1752377, \"degree\": 10}, {\"after\": 1569144, \"before\": 1461221, \"degree\": 11}, {\"after\": 1234372, \"before\": 1042827, \"degree\": 12}, {\"after\": 847175, \"before\": 652577, \"degree\": 13}, {\"after\": 519128, \"before\": 364401, \"degree\": 14}, {\"after\": 286295, \"before\": 181644, \"degree\": 15}, {\"after\": 143079, \"before\": 82952, \"degree\": 16}, {\"after\": 65766, \"before\": 34420, \"degree\": 17}, {\"after\": 27709, \"before\": 13329, \"degree\": 18}, {\"after\": 10954, \"before\": 4732, \"degree\": 19}, {\"after\": 3930, \"before\": 1613, \"degree\": 20}, {\"after\": 1457, \"before\": 468, \"degree\": 21}, {\"after\": 426, \"before\": 144, \"degree\": 22}, {\"after\": 148, \"before\": 55, \"degree\": 23}, {\"after\": 43, \"before\": 7, \"degree\": 24}, {\"after\": 6, \"before\": 1, \"degree\": 25}, {\"after\": 2, \"before\": 0, \"degree\": 26}, {\"after\": 1, \"before\": 0, \"degree\": 27}], \"mean_after\": 9.999949, \"mean_before\": 9.9999457, \"ks_statistic\": 0.08790189090909091}, \"all_relations\": {\"added\": 9999982, \"after\": 109999439, \"before\": 99999457, \"removed\": 0}}",
+  "residual_volume": "7.60488797046082e-08",
+  "d_volume": "0.43957738028446364",
+  "embedding_volume": "{\"to\": 2, \"from\": 1, \"rows\": 10000000, \"max_l2\": 0.49286358606961167, \"method\": \"embedding\", \"mean_l2\": 0.029599929672971727, \"max_cosine\": 0.18317768946274826, \"mean_cosine\": 0.0016586306795888588}",
+  "e_volume": "0.029599929672971727",
+  "edges_bridge": "5000000",
+  "staged_bridge": "3",
+  "diff_bridge": "{\"to\": 3, \"from\": 1, \"nodes\": {\"added\": 1000000, \"after\": 11000000, \"before\": 10000000, \"removed\": 0}, \"in_degree\": {\"histogram\": [{\"after\": 4, \"before\": 0, \"degree\": 4}, {\"after\": 1060482, \"before\": 67152, \"degree\": 5}, {\"after\": 305292, \"before\": 338310, \"degree\": 6}, {\"after\": 761568, \"before\": 843582, \"degree\": 7}, {\"after\": 1271836, \"before\": 1404745, \"degree\": 8}, {\"after\": 1597110, \"before\": 1753443, \"degree\": 9}, {\"after\": 1614122, \"before\": 1752377, \"degree\": 10}, {\"after\": 1377189, \"before\": 1461221, \"degree\": 11}, {\"after\": 1028643, \"before\": 1042827, \"degree\": 12}, {\"after\": 700789, \"before\": 652577, \"degree\": 13}, {\"after\": 452866, \"before\": 364401, \"degree\": 14}, {\"after\": 289742, \"before\": 181644, \"degree\": 15}, {\"after\": 188051, \"before\": 82952, \"degree\": 16}, {\"after\": 125834, \"before\": 34420, \"degree\": 17}, {\"after\": 84802, \"before\": 13329, \"degree\": 18}, {\"after\": 56250, \"before\": 4732, \"degree\": 19}, {\"after\": 36173, \"before\": 1613, \"degree\": 20}, {\"after\": 22205, \"before\": 468, \"degree\": 21}, {\"after\": 12965, \"before\": 144, \"degree\": 22}, {\"after\": 7052, \"before\": 55, \"degree\": 23}, {\"after\": 3592, \"before\": 7, \"degree\": 24}, {\"after\": 1876, \"before\": 1, \"degree\": 25}, {\"after\": 883, \"before\": 0, \"degree\": 26}, {\"after\": 384, \"before\": 0, \"degree\": 27}, {\"after\": 182, \"before\": 0, \"degree\": 28}, {\"after\": 68, \"before\": 0, \"degree\": 29}, {\"after\": 25, \"before\": 0, \"degree\": 30}, {\"after\": 12, \"before\": 0, \"degree\": 31}, {\"after\": 3, \"before\": 0, \"degree\": 32}], \"mean_after\": 9.999949909090908, \"mean_before\": 9.9999457, \"ks_statistic\": 0.08969261818181819}, \"relations\": [{\"added\": 9999992, \"after\": 109999449, \"before\": 99999457, \"removed\": 0, \"relation\": \"\"}], \"out_degree\": {\"histogram\": [{\"after\": 4, \"before\": 0, \"degree\": 4}, {\"after\": 1060482, \"before\": 67152, \"degree\": 5}, {\"after\": 305292, \"before\": 338310, \"degree\": 6}, {\"after\": 761568, \"before\": 843582, \"degree\": 7}, {\"after\": 1271836, \"before\": 1404745, \"degree\": 8}, {\"after\": 1597110, \"before\": 1753443, \"degree\": 9}, {\"after\": 1614122, \"before\": 1752377, \"degree\": 10}, {\"after\": 1377189, \"before\": 1461221, \"degree\": 11}, {\"after\": 1028643, \"before\": 1042827, \"degree\": 12}, {\"after\": 700789, \"before\": 652577, \"degree\": 13}, {\"after\": 452866, \"before\": 364401, \"degree\": 14}, {\"after\": 289742, \"before\": 181644, \"degree\": 15}, {\"after\": 188051, \"before\": 82952, \"degree\": 16}, {\"after\": 125834, \"before\": 34420, \"degree\": 17}, {\"after\": 84802, \"before\": 13329, \"degree\": 18}, {\"after\": 56250, \"before\": 4732, \"degree\": 19}, {\"after\": 36173, \"before\": 1613, \"degree\": 20}, {\"after\": 22205, \"before\": 468, \"degree\": 21}, {\"after\": 12965, \"before\": 144, \"degree\": 22}, {\"after\": 7052, \"before\": 55, \"degree\": 23}, {\"after\": 3592, \"before\": 7, \"degree\": 24}, {\"after\": 1876, \"before\": 1, \"degree\": 25}, {\"after\": 883, \"before\": 0, \"degree\": 26}, {\"after\": 384, \"before\": 0, \"degree\": 27}, {\"after\": 182, \"before\": 0, \"degree\": 28}, {\"after\": 68, \"before\": 0, \"degree\": 29}, {\"after\": 25, \"before\": 0, \"degree\": 30}, {\"after\": 12, \"before\": 0, \"degree\": 31}, {\"after\": 3, \"before\": 0, \"degree\": 32}], \"mean_after\": 9.999949909090908, \"mean_before\": 9.9999457, \"ks_statistic\": 0.08969261818181819}, \"all_relations\": {\"added\": 9999992, \"after\": 109999449, \"before\": 99999457, \"removed\": 0}}",
+  "residual_bridge": "7.18862718873737e-08",
+  "d_bridge": "0.40431638654280094",
+  "embedding_bridge": "{\"to\": 3, \"from\": 1, \"rows\": 10000000, \"max_l2\": 0.6688875725512432, \"method\": \"embedding\", \"mean_l2\": 0.01787153370667655, \"max_cosine\": 0.33522988918883856, \"mean_cosine\": 0.002595361336141918}",
+  "e_bridge": "0.01787153370667655",
+  "edges_novel": "5000000",
+  "staged_novel": "4",
+  "diff_novel": "{\"to\": 4, \"from\": 1, \"nodes\": {\"added\": 1000000, \"after\": 11000000, \"before\": 10000000, \"removed\": 0}, \"in_degree\": {\"histogram\": [{\"after\": 73901, \"before\": 67152, \"degree\": 5}, {\"after\": 372395, \"before\": 338310, \"degree\": 6}, {\"after\": 928122, \"before\": 843582, \"degree\": 7}, {\"after\": 1544908, \"before\": 1404745, \"degree\": 8}, {\"after\": 1929161, \"before\": 1753443, \"degree\": 9}, {\"after\": 1926826, \"before\": 1752377, \"degree\": 10}, {\"after\": 1607083, \"before\": 1461221, \"degree\": 11}, {\"after\": 1147183, \"before\": 1042827, \"degree\": 12}, {\"after\": 718281, \"before\": 652577, \"degree\": 13}, {\"after\": 400793, \"before\": 364401, \"degree\": 14}, {\"after\": 199801, \"before\": 181644, \"degree\": 15}, {\"after\": 91245, \"before\": 82952, \"degree\": 16}, {\"after\": 37825, \"before\": 34420, \"degree\": 17}, {\"after\": 14723, \"before\": 13329, \"degree\": 18}, {\"after\": 5241, \"before\": 4732, \"degree\": 19}, {\"after\": 1766, \"before\": 1613, \"degree\": 20}, {\"after\": 515, \"before\": 468, \"degree\": 21}, {\"after\": 164, \"before\": 144, \"degree\": 22}, {\"after\": 58, \"before\": 55, \"degree\": 23}, {\"after\": 8, \"before\": 7, \"degree\": 24}, {\"after\": 1, \"before\": 1, \"degree\": 25}], \"mean_after\": 9.999946636363637, \"mean_before\": 9.9999457, \"ks_statistic\": 0.000048345454545454545}, \"relations\": [{\"added\": 9999956, \"after\": 109999413, \"before\": 99999457, \"removed\": 0, \"relation\": \"\"}], \"out_degree\": {\"histogram\": [{\"after\": 73901, \"before\": 67152, \"degree\": 5}, {\"after\": 372395, \"before\": 338310, \"degree\": 6}, {\"after\": 928122, \"before\": 843582, \"degree\": 7}, {\"after\": 1544908, \"before\": 1404745, \"degree\": 8}, {\"after\": 1929161, \"before\": 1753443, \"degree\": 9}, {\"after\": 1926826, \"before\": 1752377, \"degree\": 10}, {\"after\": 1607083, \"before\": 1461221, \"degree\": 11}, {\"after\": 1147183, \"before\": 1042827, \"degree\": 12}, {\"after\": 718281, \"before\": 652577, \"degree\": 13}, {\"after\": 400793, \"before\": 364401, \"degree\": 14}, {\"after\": 199801, \"before\": 181644, \"degree\": 15}, {\"after\": 91245, \"before\": 82952, \"degree\": 16}, {\"after\": 37825, \"before\": 34420, \"degree\": 17}, {\"after\": 14723, \"before\": 13329, \"degree\": 18}, {\"after\": 5241, \"before\": 4732, \"degree\": 19}, {\"after\": 1766, \"before\": 1613, \"degree\": 20}, {\"after\": 515, \"before\": 468, \"degree\": 21}, {\"after\": 164, \"before\": 144, \"degree\": 22}, {\"after\": 58, \"before\": 55, \"degree\": 23}, {\"after\": 8, \"before\": 7, \"degree\": 24}, {\"after\": 1, \"before\": 1, \"degree\": 25}], \"mean_after\": 9.999946636363637, \"mean_before\": 9.9999457, \"ks_statistic\": 0.000048345454545454545}, \"all_relations\": {\"added\": 9999956, \"after\": 109999413, \"before\": 99999457, \"removed\": 0}}",
+  "residual_novel": "1.1952868034765706e-07",
+  "d_novel": "1.4147443537716793",
+  "embedding_novel": "{\"to\": 4, \"from\": 1, \"rows\": 10000000, \"max_l2\": 0.523146457134996, \"method\": \"embedding\", \"mean_l2\": 0.0013184970593420637, \"max_cosine\": 0.151478807886885, \"mean_cosine\": 0.00010016307261135639}",
+  "e_novel": "0.0013184970593420637",
+  "edges_dense_bridge": "20000000",
+  "staged_dense_bridge": "5",
+  "diff_dense_bridge": "{\"to\": 5, \"from\": 1, \"nodes\": {\"added\": 1000000, \"after\": 11000000, \"before\": 10000000, \"removed\": 0}, \"in_degree\": {\"histogram\": [{\"after\": 60448, \"before\": 67152, \"degree\": 5}, {\"after\": 304835, \"before\": 338310, \"degree\": 6}, {\"after\": 759326, \"before\": 843582, \"degree\": 7}, {\"after\": 1264455, \"before\": 1404745, \"degree\": 8}, {\"after\": 1578184, \"before\": 1753443, \"degree\": 9}, {\"after\": 1576506, \"before\": 1752377, \"degree\": 10}, {\"after\": 1314386, \"before\": 1461221, \"degree\": 11}, {\"after\": 938382, \"before\": 1042827, \"degree\": 12}, {\"after\": 587869, \"before\": 652577, \"degree\": 13}, {\"after\": 328181, \"before\": 364401, \"degree\": 14}, {\"after\": 163931, \"before\": 181644, \"degree\": 15}, {\"after\": 75427, \"before\": 82952, \"degree\": 16}, {\"after\": 32747, \"before\": 34420, \"degree\": 17}, {\"after\": 15305, \"before\": 13329, \"degree\": 18}, {\"after\": 10405, \"before\": 4732, \"degree\": 19}, {\"after\": 1011192, \"before\": 1613, \"degree\": 20}, {\"after\": 15923, \"before\": 468, \"degree\": 21}, {\"after\": 22776, \"before\": 144, \"degree\": 22}, {\"after\": 31682, \"before\": 55, \"degree\": 23}, {\"after\": 41352, \"before\": 7, \"degree\": 24}, {\"after\": 51981, \"before\": 1, \"degree\": 25}, {\"after\": 61850, \"before\": 0, \"degree\": 26}, {\"after\": 70614, \"before\": 0, \"degree\": 27}, {\"after\": 76189, \"before\": 0, \"degree\": 28}, {\"after\": 79647, \"before\": 0, \"degree\": 29}, {\"after\": 79894, \"before\": 0, \"degree\": 30}, {\"after\": 76129, \"before\": 0, \"degree\": 31}, {\"after\": 70462, \"before\": 0, \"degree\": 32}, {\"after\": 63284, \"before\": 0, \"degree\": 33}, {\"after\": 54173, \"before\": 0, \"degree\": 34}, {\"after\": 45732, \"before\": 0, \"degree\": 35}, {\"after\": 36640, \"before\": 0, \"degree\": 36}, {\"after\": 28457, \"before\": 0, \"degree\": 37}, {\"after\": 21946, \"before\": 0, \"degree\": 38}, {\"after\": 16013, \"before\": 0, \"degree\": 39}, {\"after\": 11343, \"before\": 0, \"degree\": 40}, {\"after\": 7939, \"before\": 0, \"degree\": 41}, {\"after\": 5342, \"before\": 0, \"degree\": 42}, {\"after\": 3440, \"before\": 0, \"degree\": 43}, {\"after\": 2215, \"before\": 0, \"degree\": 44}, {\"after\": 1374, \"before\": 0, \"degree\": 45}, {\"after\": 882, \"before\": 0, \"degree\": 46}, {\"after\": 498, \"before\": 0, \"degree\": 47}, {\"after\": 295, \"before\": 0, \"degree\": 48}, {\"after\": 162, \"before\": 0, \"degree\": 49}, {\"after\": 88, \"before\": 0, \"degree\": 50}, {\"after\": 52, \"before\": 0, \"degree\": 51}, {\"after\": 25, \"before\": 0, \"degree\": 52}, {\"after\": 15, \"before\": 0, \"degree\": 53}, {\"after\": 4, \"before\": 0, \"degree\": 54}, {\"after\": 1, \"before\": 0, \"degree\": 55}, {\"after\": 2, \"before\": 0, \"degree\": 58}], \"mean_after\": 12.727200090909092, \"mean_before\": 9.9999457, \"ks_statistic\": 0.18117628181818182}, \"relations\": [{\"added\": 39999744, \"after\": 139999201, \"before\": 99999457, \"removed\": 0, \"relation\": \"\"}], \"out_degree\": {\"histogram\": [{\"after\": 60448, \"before\": 67152, \"degree\": 5}, {\"after\": 304835, \"before\": 338310, \"degree\": 6}, {\"after\": 759326, \"before\": 843582, \"degree\": 7}, {\"after\": 1264455, \"before\": 1404745, \"degree\": 8}, {\"after\": 1578184, \"before\": 1753443, \"degree\": 9}, {\"after\": 1576506, \"before\": 1752377, \"degree\": 10}, {\"after\": 1314386, \"before\": 1461221, \"degree\": 11}, {\"after\": 938382, \"before\": 1042827, \"degree\": 12}, {\"after\": 587869, \"before\": 652577, \"degree\": 13}, {\"after\": 328181, \"before\": 364401, \"degree\": 14}, {\"after\": 163931, \"before\": 181644, \"degree\": 15}, {\"after\": 75427, \"before\": 82952, \"degree\": 16}, {\"after\": 32747, \"before\": 34420, \"degree\": 17}, {\"after\": 15305, \"before\": 13329, \"degree\": 18}, {\"after\": 10405, \"before\": 4732, \"degree\": 19}, {\"after\": 1011192, \"before\": 1613, \"degree\": 20}, {\"after\": 15923, \"before\": 468, \"degree\": 21}, {\"after\": 22776, \"before\": 144, \"degree\": 22}, {\"after\": 31682, \"before\": 55, \"degree\": 23}, {\"after\": 41352, \"before\": 7, \"degree\": 24}, {\"after\": 51981, \"before\": 1, \"degree\": 25}, {\"after\": 61850, \"before\": 0, \"degree\": 26}, {\"after\": 70614, \"before\": 0, \"degree\": 27}, {\"after\": 76189, \"before\": 0, \"degree\": 28}, {\"after\": 79647, \"before\": 0, \"degree\": 29}, {\"after\": 79894, \"before\": 0, \"degree\": 30}, {\"after\": 76129, \"before\": 0, \"degree\": 31}, {\"after\": 70462, \"before\": 0, \"degree\": 32}, {\"after\": 63284, \"before\": 0, \"degree\": 33}, {\"after\": 54173, \"before\": 0, \"degree\": 34}, {\"after\": 45732, \"before\": 0, \"degree\": 35}, {\"after\": 36640, \"before\": 0, \"degree\": 36}, {\"after\": 28457, \"before\": 0, \"degree\": 37}, {\"after\": 21946, \"before\": 0, \"degree\": 38}, {\"after\": 16013, \"before\": 0, \"degree\": 39}, {\"after\": 11343, \"before\": 0, \"degree\": 40}, {\"after\": 7939, \"before\": 0, \"degree\": 41}, {\"after\": 5342, \"before\": 0, \"degree\": 42}, {\"after\": 3440, \"before\": 0, \"degree\": 43}, {\"after\": 2215, \"before\": 0, \"degree\": 44}, {\"after\": 1374, \"before\": 0, \"degree\": 45}, {\"after\": 882, \"before\": 0, \"degree\": 46}, {\"after\": 498, \"before\": 0, \"degree\": 47}, {\"after\": 295, \"before\": 0, \"degree\": 48}, {\"after\": 162, \"before\": 0, \"degree\": 49}, {\"after\": 88, \"before\": 0, \"degree\": 50}, {\"after\": 52, \"before\": 0, \"degree\": 51}, {\"after\": 25, \"before\": 0, \"degree\": 52}, {\"after\": 15, \"before\": 0, \"degree\": 53}, {\"after\": 4, \"before\": 0, \"degree\": 54}, {\"after\": 1, \"before\": 0, \"degree\": 55}, {\"after\": 2, \"before\": 0, \"degree\": 58}], \"mean_after\": 12.727200090909092, \"mean_before\": 9.9999457, \"ks_statistic\": 0.18117628181818182}, \"all_relations\": {\"added\": 39999744, \"after\": 139999201, \"before\": 99999457, \"removed\": 0}}",
+  "residual_dense_bridge": "1.6520627194806001e-06",
+  "d_dense_bridge": "1.453174874718715",
+  "embedding_dense_bridge": "{\"to\": 5, \"from\": 1, \"rows\": 10000000, \"max_l2\": 0.8104311572285944, \"method\": \"embedding\", \"mean_l2\": 0.03251305375501232, \"max_cosine\": 0.43804605556619836, \"mean_cosine\": 0.0076095542453069615}",
+  "e_dense_bridge": "0.03251305375501232",
+  "cache_bytes": "9109229504",
+  "staged_commit": "6",
+  "shadow": "7",
+  "d_shadow": "0.40431638654280094"
+ },
+ "verdicts": [
+  {
+   "stage": "base refresh",
+   "target_seconds": 480,
+   "median_seconds": 32.9532,
+   "met": true
+  },
+  {
+   "stage": "base eigen",
+   "target_seconds": 600,
+   "median_seconds": 117.6281,
+   "met": true
+  },
+  {
+   "stage": "staged refresh volume",
+   "target_seconds": 480,
+   "median_seconds": 39.004,
+   "met": true
+  },
+  {
+   "stage": "diff volume",
+   "target_seconds": 30,
+   "median_seconds": 8.559,
+   "met": true
+  },
+  {
+   "stage": "staged eigen volume",
+   "target_seconds": 600,
+   "median_seconds": 128.0736,
+   "met": true
+  },
+  {
+   "stage": "subspace volume",
+   "target_seconds": 30,
+   "median_seconds": 1.0504,
+   "met": true
+  },
+  {
+   "stage": "staged refresh bridge",
+   "target_seconds": 480,
+   "median_seconds": 33.3226,
+   "met": true
+  },
+  {
+   "stage": "diff bridge",
+   "target_seconds": 30,
+   "median_seconds": 8.2772,
+   "met": true
+  },
+  {
+   "stage": "staged eigen bridge",
+   "target_seconds": 600,
+   "median_seconds": 118.7586,
+   "met": true
+  },
+  {
+   "stage": "subspace bridge",
+   "target_seconds": 30,
+   "median_seconds": 0.9732,
+   "met": true
+  },
+  {
+   "stage": "staged refresh novel",
+   "target_seconds": 480,
+   "median_seconds": 31.7869,
+   "met": true
+  },
+  {
+   "stage": "diff novel",
+   "target_seconds": 30,
+   "median_seconds": 8.9464,
+   "met": true
+  },
+  {
+   "stage": "staged eigen novel",
+   "target_seconds": 600,
+   "median_seconds": 126.5065,
+   "met": true
+  },
+  {
+   "stage": "subspace novel",
+   "target_seconds": 30,
+   "median_seconds": 1.0241,
+   "met": true
+  },
+  {
+   "stage": "staged refresh dense_bridge",
+   "target_seconds": 480,
+   "median_seconds": 40.4537,
+   "met": true
+  },
+  {
+   "stage": "diff dense_bridge",
+   "target_seconds": 30,
+   "median_seconds": 9.0783,
+   "met": true
+  },
+  {
+   "stage": "staged eigen dense_bridge",
+   "target_seconds": 600,
+   "median_seconds": 1331.7968,
+   "met": false
+  },
+  {
+   "stage": "subspace dense_bridge",
+   "target_seconds": 30,
+   "median_seconds": 1.0229,
+   "met": true
+  },
+  {
+   "stage": "base eigen again",
+   "target_seconds": 600,
+   "median_seconds": 113.0025,
+   "met": true
+  },
+  {
+   "stage": "shadow eigen",
+   "target_seconds": 600,
+   "median_seconds": 119.361,
+   "met": true
+  }
+ ],
+ "passed": 31,
+ "failed": 4,
+ "finished_at": "2026-10-26T17:17:44+00:00",
+ "load_average_after": [
+  3.37939453125,
+  3.14794921875,
+  3.130859375
+ ]
+}

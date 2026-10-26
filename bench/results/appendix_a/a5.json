@@ -1,0 +1,433 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/appendix_a.py",
+   "a5",
+   "--pg-config",
+   "/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "a5a3822",
+   "--extension-profile",
+   "release"
+  ],
+  "harness": {
+   "revision": "a5a3822da7a08a8ce88c409eb699056a3088a156",
+   "dirty": true
+  },
+  "extension": {
+   "revision": "a5a3822",
+   "profile": "release",
+   "library": "/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "012c4ef9c008ce2c73fb6a983807c28d0fd9634ac6282d613f5efd0045026246"
+  }
+ },
+ "case": "a5",
+ "section": "A.5",
+ "scale": 1,
+ "sizes": {
+  "nodes": 10000000,
+  "edges": 50000000,
+  "communities": 20,
+  "community_size": 500000,
+  "embedding_dim": 8,
+  "wide_dim": 32,
+  "sample_modulus": 1000,
+  "pairs": 100000
+ },
+ "threads": 4,
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872804352,
+  "kernel": "6.18.44-fc-v153",
+  "load_average": [
+   0.33544921875,
+   1.05224609375,
+   1.7509765625
+  ]
+ },
+ "started_at": "2026-10-26T17:37:24+00:00",
+ "free_disk_before": 9052786688,
+ "pg_warren": "0.7.0",
+ "settings": [
+  "fsync=off",
+  "full_page_writes=off",
+  "jit=on",
+  "maintenance_work_mem=1GB",
+  "max_parallel_workers_per_gather=2",
+  "max_wal_size=1GB",
+  "shared_buffers=1GB",
+  "shared_preload_libraries=",
+  "statement_timeout=0",
+  "synchronous_commit=off",
+  "wal_level=minimal",
+  "warren.max_build_memory=4GB",
+  "warren.max_cache_memory=8GB",
+  "warren.max_compute_memory=4GB",
+  "warren.shared_cache_memory=4GB",
+  "warren.threads=4",
+  "work_mem=64MB"
+ ],
+ "steps": [
+  {
+   "name": "generate",
+   "kind": "stage",
+   "seconds": [
+    0.0077
+   ],
+   "median_seconds": 0.0077,
+   "peak_rss_anon": 5677056,
+   "vm_hwm": 37179392,
+   "rss_anon_before": 5652480,
+   "rss_anon_after": 5677056,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 9052114944
+  },
+  {
+   "name": "graph",
+   "kind": "stage",
+   "seconds": [
+    0.0164
+   ],
+   "median_seconds": 0.0164,
+   "peak_rss_anon": 11231232,
+   "vm_hwm": 78413824,
+   "rss_anon_before": 5677056,
+   "rss_anon_after": 11231232,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 9052041216
+  },
+  {
+   "name": "refresh",
+   "kind": "stage",
+   "seconds": [
+    46.634
+   ],
+   "median_seconds": 46.634,
+   "peak_rss_anon": 2615365632,
+   "vm_hwm": 3190276096,
+   "rss_anon_before": 11231232,
+   "rss_anon_after": 43290624,
+   "notices": [],
+   "warnings": [],
+   "value": "1",
+   "free_disk_before": 9052016640
+  },
+  {
+   "name": "version",
+   "kind": "measure",
+   "seconds": 0.0016,
+   "value": "{\"seq\": 1, \"bytes\": 2401244229, \"label\": null, \"staged\": false, \"current\": true, \"vectors\": 0, \"version\": 1, \"built_at\": \"2026-10-26T17:37:24.863998+00:00\", \"id_space\": 10000000, \"built_lsn\": \"0/1CC2000\", \"staleness\": \"00:00:46.634618\", \"edge_count\": 99999771, \"node_count\": 10000000, \"label_vector\": null, \"parent_graph\": null, \"target_width\": 4, \"dropped_edges\": 0, \"compacted_from\": null, \"parent_version\": null, \"deduplicated_edges\": 150}",
+   "free_disk_before": 5497745408
+  },
+  {
+   "name": "embeddings d=32",
+   "kind": "stage",
+   "seconds": [
+    43.1871
+   ],
+   "median_seconds": 43.1871,
+   "peak_rss_anon": 3907678208,
+   "vm_hwm": 5085106176,
+   "rss_anon_before": 43307008,
+   "rss_anon_after": 3854561280,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 5497745408
+  },
+  {
+   "name": "aggregate_neighbours d=32",
+   "kind": "stage",
+   "seconds": [
+    27.2918
+   ],
+   "median_seconds": 27.2918,
+   "peak_rss_anon": 7730061312,
+   "vm_hwm": 8908640256,
+   "rss_anon_before": 3854561280,
+   "rss_anon_after": 5151883264,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "target_seconds": 300,
+   "met": true,
+   "free_disk_before": 5497745408
+  },
+  {
+   "name": "drop d=32",
+   "kind": "stage",
+   "seconds": [
+    1.6881
+   ],
+   "median_seconds": 1.6881,
+   "peak_rss_anon": 5151883264,
+   "vm_hwm": 6330470400,
+   "rss_anon_before": 5151883264,
+   "rss_anon_after": 2591875072,
+   "notices": [],
+   "warnings": [],
+   "value": "|",
+   "free_disk_before": 4169441280
+  },
+  {
+   "name": "entities",
+   "kind": "stage",
+   "seconds": [
+    15.8902
+   ],
+   "median_seconds": 15.8902,
+   "peak_rss_anon": 2783621120,
+   "vm_hwm": 3962208256,
+   "rss_anon_before": 2591875072,
+   "rss_anon_after": 2583605248,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 5483237376
+  },
+  {
+   "name": "embeddings from the table",
+   "kind": "stage",
+   "seconds": [
+    7.3248
+   ],
+   "median_seconds": 7.3248,
+   "peak_rss_anon": 3205484544,
+   "vm_hwm": 4384153600,
+   "rss_anon_before": 2583605248,
+   "rss_anon_after": 2903621632,
+   "notices": [],
+   "warnings": [],
+   "value": "2",
+   "target_seconds": 300,
+   "met": true,
+   "free_disk_before": 4327448576
+  },
+  {
+   "name": "aggregate_neighbours",
+   "kind": "stage",
+   "seconds": [
+    7.523
+   ],
+   "median_seconds": 7.523,
+   "peak_rss_anon": 3885494272,
+   "vm_hwm": 5064032256,
+   "rss_anon_before": 2903621632,
+   "rss_anon_after": 3223625728,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "target_seconds": 300,
+   "met": true,
+   "free_disk_before": 3995402240
+  },
+  {
+   "name": "rows without neighbours",
+   "kind": "measure",
+   "seconds": 7.6637,
+   "value": "872",
+   "free_disk_before": 3663347712
+  },
+  {
+   "name": "smooth",
+   "kind": "stage",
+   "seconds": [
+    8.349
+   ],
+   "median_seconds": 8.349,
+   "peak_rss_anon": 4484440064,
+   "vm_hwm": 5663068160,
+   "rss_anon_before": 3223629824,
+   "rss_anon_after": 3855417344,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 3663347712
+  },
+  {
+   "name": "write back",
+   "kind": "stage",
+   "seconds": [
+    40.4448
+   ],
+   "median_seconds": 40.4448,
+   "peak_rss_anon": 3885174784,
+   "vm_hwm": 5063675904,
+   "rss_anon_before": 3855417344,
+   "rss_anon_after": 3863805952,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "target_seconds": 300,
+   "met": true,
+   "free_disk_before": 2999238656
+  },
+  {
+   "name": "sample neighbours",
+   "kind": "stage",
+   "seconds": [
+    6.5797
+   ],
+   "median_seconds": 6.5797,
+   "peak_rss_anon": 3900055552,
+   "vm_hwm": 5078880256,
+   "rss_anon_before": 3863805952,
+   "rss_anon_after": 3872198656,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 1284554752
+  },
+  {
+   "name": "within before",
+   "kind": "measure",
+   "seconds": 2.9421,
+   "value": "0.8142268482006123",
+   "free_disk_before": 1281409024
+  },
+  {
+   "name": "within after",
+   "kind": "measure",
+   "seconds": 2.7457,
+   "value": "0.884541905784824",
+   "free_disk_before": 1281409024
+  },
+  {
+   "name": "between before",
+   "kind": "measure",
+   "seconds": 2.8084,
+   "value": "0.04341704107041178",
+   "free_disk_before": 1281409024
+  },
+  {
+   "name": "between after",
+   "kind": "measure",
+   "seconds": 2.6752,
+   "value": "0.057350703677701606",
+   "free_disk_before": 1281409024
+  },
+  {
+   "name": "broadcast",
+   "kind": "stage",
+   "seconds": [
+    1.7969
+   ],
+   "median_seconds": 1.7969,
+   "peak_rss_anon": 4495835136,
+   "vm_hwm": 5675028480,
+   "rss_anon_before": 3855814656,
+   "rss_anon_after": 4495835136,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 1281404928
+  },
+  {
+   "name": "narrow matrix",
+   "kind": "stage",
+   "seconds": [
+    4.0862
+   ],
+   "median_seconds": 4.0862,
+   "peak_rss_anon": 4620460032,
+   "vm_hwm": 5799161856,
+   "rss_anon_before": 4504227840,
+   "rss_anon_after": 4592619520,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 1281400832
+  }
+ ],
+ "checks": [
+  {
+   "name": "compiled",
+   "claim": "the smoothing expression takes the compiled path",
+   "value": "compiled",
+   "passed": true
+  },
+  {
+   "name": "every row written",
+   "claim": "the round trip writes every entity's smoothed row back",
+   "value": "0",
+   "passed": true
+  },
+  {
+   "name": "aggregate equals AVG",
+   "claim": "aggregate_neighbours equals SQL AVG over neighbour rows within 1e-5 (sampled nodes)",
+   "value": "1.544302160594313e-07/10000",
+   "passed": true
+  },
+  {
+   "name": "within gains",
+   "claim": "mean within-community cosine similarity increases after smoothing",
+   "value": "t",
+   "passed": true
+  },
+  {
+   "name": "between bounded",
+   "claim": "between-community similarity grows by at most 10% of the within-community gain",
+   "value": "0.19816043797734786244",
+   "passed": false
+  },
+  {
+   "name": "broadcast is elementwise",
+   "claim": "vector_map broadcasts scalars over width-d rows",
+   "value": "0",
+   "passed": true
+  },
+  {
+   "name": "mismatched widths",
+   "claim": "vector_map refuses mismatched widths with an error",
+   "value": "22023",
+   "passed": true
+  }
+ ],
+ "values": {
+  "version": "{\"seq\": 1, \"bytes\": 2401244229, \"label\": null, \"staged\": false, \"current\": true, \"vectors\": 0, \"version\": 1, \"built_at\": \"2026-10-26T17:37:24.863998+00:00\", \"id_space\": 10000000, \"built_lsn\": \"0/1CC2000\", \"staleness\": \"00:00:46.634618\", \"edge_count\": 99999771, \"node_count\": 10000000, \"label_vector\": null, \"parent_graph\": null, \"target_width\": 4, \"dropped_edges\": 0, \"compacted_from\": null, \"parent_version\": null, \"deduplicated_edges\": 150}",
+  "without_neighbours": "872",
+  "within_before": "0.8142268482006123",
+  "within_after": "0.884541905784824",
+  "between_before": "0.04341704107041178",
+  "between_after": "0.057350703677701606"
+ },
+ "verdicts": [
+  {
+   "stage": "aggregate_neighbours d=32",
+   "target_seconds": 300,
+   "median_seconds": 27.2918,
+   "met": true
+  },
+  {
+   "stage": "embeddings from the table",
+   "target_seconds": 300,
+   "median_seconds": 7.3248,
+   "met": true
+  },
+  {
+   "stage": "aggregate_neighbours",
+   "target_seconds": 300,
+   "median_seconds": 7.523,
+   "met": true
+  },
+  {
+   "stage": "write back",
+   "target_seconds": 300,
+   "median_seconds": 40.4448,
+   "met": true
+  }
+ ],
+ "passed": 6,
+ "failed": 1,
+ "finished_at": "2026-10-26T17:41:29+00:00",
+ "load_average_after": [
+  1.11767578125,
+  1.09912109375,
+  1.6025390625
+ ]
+}

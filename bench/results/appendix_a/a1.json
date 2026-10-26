@@ -1,0 +1,466 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/appendix_a.py",
+   "a1",
+   "--pg-config",
+   "/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "a5a3822",
+   "--extension-profile",
+   "release"
+  ],
+  "harness": {
+   "revision": "a5a3822da7a08a8ce88c409eb699056a3088a156",
+   "dirty": true
+  },
+  "extension": {
+   "revision": "a5a3822",
+   "profile": "release",
+   "library": "/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "012c4ef9c008ce2c73fb6a983807c28d0fd9634ac6282d613f5efd0045026246"
+  }
+ },
+ "case": "a1",
+ "section": "A.1",
+ "scale": 1,
+ "sizes": {
+  "honest_accounts": 3350000,
+  "rings": 670,
+  "nodes": 10067758,
+  "edges": 7000163,
+  "top_rings": 837
+ },
+ "threads": 4,
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872804352,
+  "kernel": "6.18.44-fc-v153",
+  "load_average": [
+   0.90673828125,
+   1.6396484375,
+   1.3125
+  ]
+ },
+ "started_at": "2026-10-26T16:31:12+00:00",
+ "free_disk_before": 9054523392,
+ "pg_warren": "0.7.0",
+ "settings": [
+  "fsync=off",
+  "full_page_writes=off",
+  "jit=on",
+  "maintenance_work_mem=1GB",
+  "max_parallel_workers_per_gather=2",
+  "max_wal_size=1GB",
+  "shared_buffers=1GB",
+  "shared_preload_libraries=",
+  "statement_timeout=0",
+  "synchronous_commit=off",
+  "wal_level=minimal",
+  "warren.max_build_memory=4GB",
+  "warren.max_cache_memory=4GB",
+  "warren.max_compute_memory=4GB",
+  "warren.shared_cache_memory=4GB",
+  "warren.threads=4",
+  "work_mem=64MB"
+ ],
+ "steps": [
+  {
+   "name": "generate",
+   "kind": "stage",
+   "seconds": [
+    14.9358
+   ],
+   "median_seconds": 14.9358,
+   "peak_rss_anon": 194465792,
+   "vm_hwm": 513380352,
+   "rss_anon_before": 5652480,
+   "rss_anon_after": 39809024,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 9053851648
+  },
+  {
+   "name": "hub degrees",
+   "kind": "measure",
+   "seconds": 1.6328,
+   "value": "168270,27088,67280",
+   "free_disk_before": 8347643904
+  },
+  {
+   "name": "graph",
+   "kind": "stage",
+   "seconds": [
+    0.0045
+   ],
+   "median_seconds": 0.0045,
+   "peak_rss_anon": 31449088,
+   "vm_hwm": 506871808,
+   "rss_anon_before": 31449088,
+   "rss_anon_after": 31449088,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 8347430912
+  },
+  {
+   "name": "refresh",
+   "kind": "stage",
+   "seconds": [
+    11.2627
+   ],
+   "median_seconds": 11.2627,
+   "peak_rss_anon": 954163200,
+   "vm_hwm": 1982472192,
+   "rss_anon_before": 31449088,
+   "rss_anon_after": 66248704,
+   "notices": [],
+   "warnings": [],
+   "value": "1",
+   "free_disk_before": 8347406336
+  },
+  {
+   "name": "version",
+   "kind": "measure",
+   "seconds": 0.0014,
+   "value": "{\"seq\": 1, \"bytes\": 1030890735, \"label\": null, \"staged\": false, \"current\": true, \"vectors\": 0, \"version\": 1, \"built_at\": \"2026-10-26T16:31:28.975431+00:00\", \"id_space\": 10066824, \"built_lsn\": \"0/1F50000\", \"staleness\": \"00:00:11.263301\", \"edge_count\": 14017878, \"node_count\": 10066824, \"label_vector\": null, \"parent_graph\": null, \"target_width\": 4, \"dropped_edges\": 0, \"compacted_from\": null, \"parent_version\": null, \"deduplicated_edges\": 0}",
+   "free_disk_before": 6215106560
+  },
+  {
+   "name": "program",
+   "kind": "stage",
+   "seconds": [
+    0.0023
+   ],
+   "median_seconds": 0.0023,
+   "peak_rss_anon": 66248704,
+   "vm_hwm": 1240174592,
+   "rss_anon_before": 66248704,
+   "rss_anon_after": 66248704,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 6215106560
+  },
+  {
+   "name": "suspicion program",
+   "kind": "stage",
+   "seconds": [
+    25.173
+   ],
+   "median_seconds": 25.173,
+   "peak_rss_anon": 1988505600,
+   "vm_hwm": 3164962816,
+   "rss_anon_before": 66248704,
+   "rss_anon_after": 1907970048,
+   "notices": [],
+   "warnings": [],
+   "value": "41",
+   "target_seconds": 60,
+   "met": true,
+   "free_disk_before": 6215081984
+  },
+  {
+   "name": "suspicious mask",
+   "kind": "stage",
+   "seconds": [
+    0.0763
+   ],
+   "median_seconds": 0.0763,
+   "peak_rss_anon": 1988505600,
+   "vm_hwm": 3165454336,
+   "rss_anon_before": 1907970048,
+   "rss_anon_after": 1988505600,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 6215061504
+  },
+  {
+   "name": "label propagation",
+   "kind": "stage",
+   "seconds": [
+    2.8559
+   ],
+   "median_seconds": 2.8559,
+   "peak_rss_anon": 2369798144,
+   "vm_hwm": 3546238976,
+   "rss_anon_before": 1988505600,
+   "rss_anon_after": 2076303360,
+   "notices": [],
+   "warnings": [],
+   "value": "4",
+   "target_seconds": 30,
+   "met": true,
+   "free_disk_before": 6215061504
+  },
+  {
+   "name": "aggregation",
+   "kind": "stage",
+   "seconds": [
+    11.0359
+   ],
+   "median_seconds": 11.0359,
+   "peak_rss_anon": 2206404608,
+   "vm_hwm": 3383025664,
+   "rss_anon_before": 2076303360,
+   "rss_anon_after": 2069278720,
+   "notices": [],
+   "warnings": [],
+   "value": "136793|39|4|16.394134240456125|{137263,144676,298416,305829,459569,466982,620722,628135,781875,789288,943028,950441,1104181,1265334,1426487,1580227,1587640,1741380,1748793,1902533,1909946,2063686,2071099,2224839,2232252,2385992,2393405,2547145,2554558,2708298,2715711,2869451,2876864,3030604,3038017,3191757,3199170,3352910,3360323}",
+   "target_seconds": 30,
+   "met": true,
+   "free_disk_before": 6131412992
+  },
+  {
+   "name": "ring members",
+   "kind": "stage",
+   "seconds": [
+    8.8553
+   ],
+   "median_seconds": 8.8553,
+   "peak_rss_anon": 2207408128,
+   "vm_hwm": 3384266752,
+   "rss_anon_before": 2069278720,
+   "rss_anon_after": 2071334912,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 6131400704
+  },
+  {
+   "name": "output rings",
+   "kind": "stage",
+   "seconds": [
+    0.0155
+   ],
+   "median_seconds": 0.0155,
+   "peak_rss_anon": 2071334912,
+   "vm_hwm": 3248484352,
+   "rss_anon_before": 2071334912,
+   "rss_anon_after": 2071334912,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 6127181824
+  },
+  {
+   "name": "scores",
+   "kind": "stage",
+   "seconds": [
+    2.581
+   ],
+   "median_seconds": 2.581,
+   "peak_rss_anon": 2115940352,
+   "vm_hwm": 3292758016,
+   "rss_anon_before": 2071334912,
+   "rss_anon_after": 2058752000,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 6126133248
+  },
+  {
+   "name": "flagged",
+   "kind": "stage",
+   "seconds": [
+    0.3118
+   ],
+   "median_seconds": 0.3118,
+   "peak_rss_anon": 2058752000,
+   "vm_hwm": 3235946496,
+   "rss_anon_before": 2058752000,
+   "rss_anon_after": 2058752000,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 5679951872
+  },
+  {
+   "name": "persisted write",
+   "kind": "measure",
+   "seconds": 0.2669,
+   "value": "83558400",
+   "free_disk_before": 5678886912
+  },
+  {
+   "name": "largest ring",
+   "kind": "measure",
+   "seconds": 0.0011,
+   "value": "40",
+   "free_disk_before": 5595328512
+  },
+  {
+   "name": "flagged rings",
+   "kind": "measure",
+   "seconds": 0.0048,
+   "value": "665",
+   "free_disk_before": 5595328512
+  },
+  {
+   "name": "suspicion program without hub mask",
+   "kind": "stage",
+   "seconds": [
+    23.5124
+   ],
+   "median_seconds": 23.5124,
+   "peak_rss_anon": 2323427328,
+   "vm_hwm": 3500515328,
+   "rss_anon_before": 2162356224,
+   "rss_anon_after": 2162368512,
+   "notices": [],
+   "warnings": [],
+   "value": "41",
+   "free_disk_before": 5595328512
+  },
+  {
+   "name": "suspicious mask without hub mask",
+   "kind": "stage",
+   "seconds": [
+    0.0739
+   ],
+   "median_seconds": 0.0739,
+   "peak_rss_anon": 2242904064,
+   "vm_hwm": 3420110848,
+   "rss_anon_before": 2162368512,
+   "rss_anon_after": 2162368512,
+   "notices": [],
+   "warnings": [],
+   "value": "",
+   "free_disk_before": 5595295744
+  },
+  {
+   "name": "label propagation without hub mask",
+   "kind": "stage",
+   "seconds": [
+    5.5656
+   ],
+   "median_seconds": 5.5656,
+   "peak_rss_anon": 2536394752,
+   "vm_hwm": 3713601536,
+   "rss_anon_before": 2162368512,
+   "rss_anon_after": 2162368512,
+   "notices": [],
+   "warnings": [],
+   "value": "8",
+   "free_disk_before": 5595295744
+  },
+  {
+   "name": "ring members without hub mask",
+   "kind": "stage",
+   "seconds": [
+    9.645
+   ],
+   "median_seconds": 9.645,
+   "peak_rss_anon": 2287955968,
+   "vm_hwm": 3465162752,
+   "rss_anon_before": 2162368512,
+   "rss_anon_after": 2151882752,
+   "notices": [],
+   "warnings": [],
+   "value": null,
+   "free_disk_before": 5511729152
+  },
+  {
+   "name": "unmasked convergence",
+   "kind": "measure",
+   "seconds": 0.0003,
+   "value": "41",
+   "free_disk_before": 5507526656
+  }
+ ],
+ "checks": [
+  {
+   "name": "compiled",
+   "claim": "every vector_map expression of the program takes the compiled path",
+   "value": "0/7",
+   "passed": true
+  },
+  {
+   "name": "convergence",
+   "claim": "the program converges to 1e-6 of the seed mass in about 40 of its 50 iterations",
+   "value": "41",
+   "passed": true
+  },
+  {
+   "name": "no huge ring",
+   "claim": "no output ring has more than 500 accounts (the hubs did not merge the population)",
+   "value": "40",
+   "passed": true
+  },
+  {
+   "name": "rings found",
+   "claim": "every planted ring with a flagged account has half its accounts in one of the top 837 rings",
+   "value": "0",
+   "passed": true
+  },
+  {
+   "name": "unflagged members found",
+   "claim": "\u2265 90% of unflagged ring members score > 0.01",
+   "value": "0.99700990469071201645",
+   "passed": true
+  },
+  {
+   "name": "honest not found",
+   "claim": "\u2264 1% of honest accounts score > 0.01",
+   "value": "0.00491880597014925373",
+   "passed": true
+  },
+  {
+   "name": "masked rings unmixed",
+   "claim": "with the hub mask no output ring mixes planted rings",
+   "value": "0",
+   "passed": true
+  },
+  {
+   "name": "unmasked rings mixed",
+   "claim": "without the hub mask output rings mix planted rings",
+   "value": "1",
+   "passed": true
+  },
+  {
+   "name": "unmasked largest ring",
+   "claim": "without the hub mask the largest ring grows at least 5\u00d7",
+   "value": "360.575",
+   "passed": true
+  }
+ ],
+ "values": {
+  "hub_degrees": "168270,27088,67280",
+  "version": "{\"seq\": 1, \"bytes\": 1030890735, \"label\": null, \"staged\": false, \"current\": true, \"vectors\": 0, \"version\": 1, \"built_at\": \"2026-10-26T16:31:28.975431+00:00\", \"id_space\": 10066824, \"built_lsn\": \"0/1F50000\", \"staleness\": \"00:00:11.263301\", \"edge_count\": 14017878, \"node_count\": 10066824, \"label_vector\": null, \"parent_graph\": null, \"target_width\": 4, \"dropped_edges\": 0, \"compacted_from\": null, \"parent_version\": null, \"deduplicated_edges\": 0}",
+  "persisted_write_bytes": "83558400",
+  "largest_masked": "40",
+  "flagged_rings": "665",
+  "unmasked_iterations": "41"
+ },
+ "verdicts": [
+  {
+   "stage": "suspicion program",
+   "target_seconds": 60,
+   "median_seconds": 25.173,
+   "met": true
+  },
+  {
+   "stage": "label propagation",
+   "target_seconds": 30,
+   "median_seconds": 2.8559,
+   "met": true
+  },
+  {
+   "stage": "aggregation",
+   "target_seconds": 30,
+   "median_seconds": 11.0359,
+   "met": true
+  }
+ ],
+ "passed": 9,
+ "failed": 0,
+ "finished_at": "2026-10-26T16:33:15+00:00",
+ "load_average_after": [
+  1.3759765625,
+  1.6220703125,
+  1.3525390625
+ ]
+}
