@@ -3,26 +3,33 @@
   "argv": [
    "bench/corpus/suite.py",
    "check",
-   "--tier",
-   "tiny",
-   "--tier",
-   "medium",
+   "yago3-10",
+   "hetionet",
+   "karate",
+   "lesmis",
+   "celegans",
+   "polblogs",
+   "london_transport",
+   "transport-airline",
+   "facebook",
+   "kg-codex-s",
+   "wn18rr",
    "--pg-config",
-   "/var/tmp/warren-corpus/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "/var/tmp/m11-corpus-nightly/pgtree/usr/lib/postgresql/16/bin/pg_config",
    "--extension-revision",
-   "1ffdcd9",
+   "a35bbe6",
    "--extension-profile",
    "release"
   ],
   "harness": {
-   "revision": "6bded0a30cd86d7ea3d64cd82be3a002348d0b48",
+   "revision": "eae7c8d7942c13925e5c3fb7b4caa42f3a666aa4",
    "dirty": true
   },
   "extension": {
-   "revision": "1ffdcd9",
+   "revision": "a35bbe6",
    "profile": "release",
-   "library": "/var/tmp/warren-corpus/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
-   "library_sha256": "5499e8bca4b5710e1b28f9addaf05fe9538a6100b34dcf8406c30e2ff4ac2174"
+   "library": "/var/tmp/m11-corpus-nightly/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "19f6b8fb27c2117f98e220dc6e57fce45435a7d8c3912a96acfd77457f886457"
   }
  },
  "hardware": {
@@ -31,9 +38,9 @@
   "memory_bytes": 16872804352,
   "kernel": "6.18.44-fc-v153",
   "load_average": [
-   0.64404296875,
-   1.1953125,
-   1.8896484375
+   20.509765625,
+   19.7666015625,
+   19.88623046875
   ]
  },
  "dataset": "celegans",
@@ -46,6 +53,10 @@
    "relations": 0,
    "self_loops": 0
   },
+  "sha256": {
+   "nodes.csv": "8c18306d496cf5919e0f00e5c0b03606fc0ba763311359e72e02bf38ed4e16ea",
+   "edges.csv": "ecfaa431e18abb8010dda09114ba3317c67b7c5019dbeec6c81f66ef1c2ad8e4"
+  },
   "provenance": {
    "entryId": "celegans",
    "catalogue": {
@@ -53,7 +64,7 @@
     "version": "1.33.0"
    },
    "category": "graph/v1",
-   "retrievedAt": "2026-10-24T13:47:10.430Z",
+   "retrievedAt": "2026-10-25T23:38:23.843Z",
    "source": {
     "url": "https://snap.stanford.edu/data/C-elegans-frontal.txt.gz",
     "status": "live",
@@ -69,6 +80,10 @@
    "byteLength": 1897
   }
  },
+ "oracles": {
+  "igraph": "1.0.0",
+  "networkx": "3.7"
+ },
  "version": {
   "seq": 1,
   "bytes": 10460,
@@ -77,10 +92,10 @@
   "current": true,
   "vectors": 0,
   "version": 1,
-  "built_at": "2026-10-24T14:01:18.620319+00:00",
+  "built_at": "2026-10-26T01:47:21.675391+00:00",
   "id_space": 131,
-  "built_lsn": "0/22C8000",
-  "staleness": "00:00:00.010962",
+  "built_lsn": "0/1A3DA000",
+  "staleness": "00:00:00.018362",
   "edge_count": 764,
   "node_count": 131,
   "label_vector": null,
@@ -91,7 +106,7 @@
   "parent_version": null,
   "deduplicated_edges": 0
  },
- "seconds": 0.8,
+ "seconds": 2.3,
  "findings": [
   {
    "check": "node_count",
@@ -101,7 +116,8 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "tables"
   },
   {
    "check": "dropped_edges",
@@ -111,7 +127,8 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "tables"
   },
   {
    "check": "degree out",
@@ -121,7 +138,19 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "igraph"
+  },
+  {
+   "check": "degree out",
+   "status": "match",
+   "compared": 131,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx"
   },
   {
    "check": "degree in",
@@ -131,7 +160,19 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "igraph"
+  },
+  {
+   "check": "degree in",
+   "status": "match",
+   "compared": 131,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx"
   },
   {
    "check": "degree both",
@@ -141,7 +182,19 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "igraph"
+  },
+  {
+   "check": "degree both",
+   "status": "match",
+   "compared": 131,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx"
   },
   {
    "check": "bfs depths",
@@ -152,6 +205,7 @@
    "examples": [],
    "only_warren": 0,
    "only_oracle": 0,
+   "against": "igraph",
    "source": "72"
   },
   {
@@ -163,6 +217,31 @@
    "examples": [],
    "only_warren": 0,
    "only_oracle": 0,
+   "against": "networkx",
+   "source": "72"
+  },
+  {
+   "check": "bfs depths",
+   "status": "match",
+   "compared": 118,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "igraph",
+   "source": "129"
+  },
+  {
+   "check": "bfs depths",
+   "status": "match",
+   "compared": 118,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx",
    "source": "129"
   },
   {
@@ -170,7 +249,16 @@
    "status": "match",
    "warren_parts": 1,
    "oracle_parts": 1,
-   "differing_parts": 0
+   "differing_parts": 0,
+   "against": "igraph"
+  },
+  {
+   "check": "components",
+   "status": "match",
+   "warren_parts": 1,
+   "oracle_parts": 1,
+   "differing_parts": 0,
+   "against": "networkx"
   },
   {
    "check": "shortest_path length",
@@ -180,13 +268,44 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "igraph"
   },
   {
    "check": "shortest_path edges",
    "status": "match",
    "compared": 25,
-   "invalid": []
+   "invalid": [],
+   "against": "igraph"
+  },
+  {
+   "check": "shortest_path length",
+   "status": "match",
+   "compared": 25,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx"
+  },
+  {
+   "check": "shortest_path edges",
+   "status": "match",
+   "compared": 25,
+   "invalid": [],
+   "against": "networkx"
+  },
+  {
+   "check": "pagerank",
+   "status": "match",
+   "compared": 131,
+   "mismatches": 0,
+   "max_error": 1.4942637405201964e-11,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "igraph"
   },
   {
    "check": "pagerank",
@@ -196,7 +315,8 @@
    "max_error": 6.938893903907228e-18,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "networkx"
   },
   {
    "check": "triangles",
@@ -206,7 +326,30 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "igraph"
+  },
+  {
+   "check": "triangles",
+   "status": "match",
+   "compared": 131,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx"
+  },
+  {
+   "check": "clustering",
+   "status": "match",
+   "compared": 131,
+   "mismatches": 0,
+   "max_error": 5.551115123125783e-17,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "igraph"
   },
   {
    "check": "clustering",
@@ -216,7 +359,8 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "networkx"
   },
   {
    "check": "core_number",
@@ -226,7 +370,86 @@
    "max_error": 0.0,
    "examples": [],
    "only_warren": 0,
-   "only_oracle": 0
+   "only_oracle": 0,
+   "against": "igraph"
+  },
+  {
+   "check": "core_number",
+   "status": "match",
+   "compared": 131,
+   "mismatches": 0,
+   "max_error": 0.0,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx"
+  },
+  {
+   "check": "betweenness",
+   "status": "match",
+   "compared": 131,
+   "mismatches": 0,
+   "max_error": 8.326672684688674e-17,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "igraph"
+  },
+  {
+   "check": "betweenness",
+   "status": "match",
+   "compared": 131,
+   "mismatches": 0,
+   "max_error": 8.326672684688674e-17,
+   "examples": [],
+   "only_warren": 0,
+   "only_oracle": 0,
+   "against": "networkx"
+  },
+  {
+   "check": "modularity definition",
+   "status": "match",
+   "warren": 0.4023001699514816,
+   "oracle": 0.40230016995148155,
+   "difference": 5.551115123125783e-17,
+   "note": "warren.modularity and igraph scoring igraph's Louvain partition",
+   "against": "igraph"
+  },
+  {
+   "check": "louvain",
+   "status": "match",
+   "warren": 0.4145394177791179,
+   "oracle": 0.4023001699514816,
+   "difference": 0.012239247827636301,
+   "slack": 0.02,
+   "against": "igraph"
+  },
+  {
+   "check": "louvain returned modularity",
+   "status": "match",
+   "warren": 0.4145394177791179,
+   "oracle": 0.4145394177791178,
+   "difference": 1.1102230246251565e-16,
+   "communities": 5,
+   "against": "igraph"
+  },
+  {
+   "check": "leiden",
+   "status": "match",
+   "warren": 0.41271740769167514,
+   "oracle": 0.4023001699514816,
+   "difference": 0.010417237740193541,
+   "slack": 0.02,
+   "against": "igraph"
+  },
+  {
+   "check": "leiden returned modularity",
+   "status": "match",
+   "warren": 0.41271740769167514,
+   "oracle": 0.41271740769167503,
+   "difference": 1.1102230246251565e-16,
+   "communities": 6,
+   "against": "igraph"
   },
   {
    "check": "modularity definition",
@@ -234,7 +457,8 @@
    "warren": 0.4047192374112552,
    "oracle": 0.4047192374112552,
    "difference": 0.0,
-   "note": "warren.modularity and NetworkX scoring NetworkX's Louvain partition"
+   "note": "warren.modularity and networkx scoring networkx's Louvain partition",
+   "against": "networkx"
   },
   {
    "check": "louvain",
@@ -242,7 +466,8 @@
    "warren": 0.4145394177791179,
    "oracle": 0.4047192374112552,
    "difference": 0.009820180367862696,
-   "slack": 0.02
+   "slack": 0.02,
+   "against": "networkx"
   },
   {
    "check": "louvain returned modularity",
@@ -250,7 +475,8 @@
    "warren": 0.4145394177791179,
    "oracle": 0.41453941777911785,
    "difference": 5.551115123125783e-17,
-   "communities": 5
+   "communities": 5,
+   "against": "networkx"
   },
   {
    "check": "leiden",
@@ -258,7 +484,8 @@
    "warren": 0.41271740769167514,
    "oracle": 0.4047192374112552,
    "difference": 0.007998170280419936,
-   "slack": 0.02
+   "slack": 0.02,
+   "against": "networkx"
   },
   {
    "check": "leiden returned modularity",
@@ -266,7 +493,8 @@
    "warren": 0.41271740769167514,
    "oracle": 0.4127174076916751,
    "difference": 5.551115123125783e-17,
-   "communities": 6
+   "communities": 6,
+   "against": "networkx"
   }
  ]
 }

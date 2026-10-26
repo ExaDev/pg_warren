@@ -127,7 +127,7 @@ The out-of-crate harness is Python 3 (DESIGN.md §12). Set it up once, in a
 virtualenv if you like:
 
 ```sh
-pip install -r bench/requirements.txt      # numpy, networkx, scipy, pytest (pinned)
+pip install -r bench/requirements.txt      # numpy, networkx, scipy, igraph, pytest (pinned)
 ```
 
 ```sh
@@ -174,8 +174,9 @@ bench/parallel.py --scale 1000 --rows 10000 --repeat 1 \
     --extension-revision "$(git rev-parse --short HEAD)" --extension-profile release
 # The real-graph suite (bench/corpus/README.md): keepset datasets, fetched
 # with the pinned keepset CLI (needs Node 22 and network) into
-# /var/tmp/warren-corpus, checked against NetworkX and timed (release build
-# in --pg-config's tree); results in bench/results/corpus/
+# /var/tmp/warren-corpus, checked against NetworkX and igraph (--oracle picks
+# one) and timed (release build in --pg-config's tree); results in
+# bench/results/corpus/. CI checks the tiny tier nightly (corpus.yml).
 bench/corpus/suite.py fetch --tier tiny
 bench/corpus/suite.py check --tier tiny --pg-config $T/usr/lib/postgresql/16/bin/pg_config \
     --extension-revision "$(git rev-parse --short HEAD)" --extension-profile release
