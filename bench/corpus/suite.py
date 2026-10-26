@@ -165,7 +165,7 @@ def command_head_to_head(args, datasets):
     server = _neo4j(args, engines)
     clustered = (Cluster(args.pg_config, args.runas, parent=args.parent, settings=SETTINGS) if "pg_warren" in engines
                  else contextlib.nullcontext())
-    with clustered as cluster:
+    with clustered as cluster, contextlib.closing(server) if server else contextlib.nullcontext():
         for dataset in datasets:
             directory = _fetched(args, dataset)
             print(f"{dataset.name}:", flush=True)

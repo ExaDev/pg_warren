@@ -7,8 +7,10 @@ followed both ways.
 - `degree`: distinct neighbours per node, summed in the server;
 - `bfs depth 6`: a variable-length pattern returning distinct nodes, which
   the planner runs as a pruning breadth-first expand;
-- `bfs depths`: `ANY SHORTEST` from the start to every node
-  (StatefulShortestPath, a breadth-first search from the start);
+- `bfs depths`: `shortestPath` from the start to every other node (the
+  start is at depth 0); `ANY SHORTEST (s)-->*(n)`, the newer form, took
+  more than 600 s on facebook's 4,039 nodes, as did `REPEATABLE ELEMENTS`
+  with a bound, so it is not used;
 - `shortest paths`: `shortestPath` between each pair, counting hops;
 - `triangles`: the undirected simple graph's triangles, as a total.
 
@@ -53,7 +55,7 @@ def queries(workload, dataset):
     if kind == "reach":
         return Queries(f"MATCH {node}-[*0..{workload.depth}]{arrow}(n) RETURN count(DISTINCT n) AS value", None)
     if kind == "depths":
-        each = f"MATCH p = ANY SHORTEST {node}-[]{arrow}*(n:{NODE_LABEL}) "
+        each = f"MATCH {node} MATCH p = shortestPath((s)-[*]{arrow}(n:{NODE_LABEL})) WHERE n <> s "
         return Queries(each + "RETURN count(n) AS reached, max(length(p)) AS depth",
                        each + "RETURN n.id AS id, length(p) AS value")
     if kind == "paths":
@@ -107,7 +109,8 @@ class CypherEngine:
         if workload.kind == "paths":
             by_pair = {r["i"]: r["value"] for r in records}
             return {f"{a}->{b}": by_pair.get(i) for i, (a, b) in enumerate(workload.pairs)}
-        return {str(r["id"]): r["value"] for r in records}
+        found = {str(r["id"]): r["value"] for r in records}
+        return {workload.source: 0, **found} if workload.kind == "depths" else found
 
     def close(self):
         self.records = None

@@ -27,6 +27,7 @@ from .engine import EngineError, Timeout
 PINS = Path(__file__).resolve().parent / "pins.json"
 BOLT_PORT = 7687
 START_TIMEOUT = 300
+STOP_TIMEOUT = 120
 NODE_LABEL = "Node"
 RELATIONSHIP_TYPE = "LINK"  # the type of every edge of a dataset without relations
 TIMED_OUT = ("Neo.ClientError.Transaction.TransactionTimedOut",
@@ -185,7 +186,11 @@ class Server:
             self.driver = None
         if self.process is not None:
             self.process.terminate()
-            self.process.wait()
+            try:
+                self.process.wait(STOP_TIMEOUT)
+            except subprocess.TimeoutExpired:  # a shutdown waits for running transactions
+                self.process.kill()
+                self.process.wait()
             self.process = None
 
     def restart(self):
