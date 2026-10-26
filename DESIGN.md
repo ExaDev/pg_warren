@@ -1764,6 +1764,15 @@ The label changes nothing for a serial plan, and with the label `RESTRICTED` no 
 
 *The large tier (not run):* keepset 0.57.0 holds a graph/v1 document in memory and its crosswalk copies every edge (about 2 kB an edge, measured at 7.8 GB for roadNet-TX). Fetching LiveJournal (34.7M edges) or ogbn-mag (21.1M) through it therefore needs about 74 or 45 GB of Node heap, and `fetch` refuses it on a smaller machine. The two ways forward are a streaming fetch upstream, or converting once on a machine with ≥ 96 GB and carrying the pinned tables. Past the fetch, each dataset needs about 6–8 GB of disk at its peak: the transient JSON (2.4 GB for LiveJournal), an edges table and its indexes of about 3 GB, 0.6 GB of CSV, and two versions of 0.4–0.6 GB each. Both versions fit the default 4 GB caps. By the medium tier's rates, `refresh` should take 30–40 s, the library minutes, and each dataset under an hour with `eigen` capped at 10 minutes. NetworkX needs 10–15 GB or more at that size, so the large tier is timed only.
 
+**Appendix A at 10M (M11; `bench/appendix_a.py`, `bench/use_cases/`, `bench/results/appendix_a/`, whose README has the tables).** Each use case generates its planted structure in SQL (deterministic draws, no fixture files), runs Appendix A's program in stages, each timed with the backend's peak memory, and checks the outcomes that can be checked at that scale: planted structure recovered, determinism, invariants, and SQL oracles on samples. A release build of 0.7.0 (a5a3822) on PG 16, 4 shared vCPUs, 15.7 GB of RAM and about 8.5 GB of free disk, `warren.threads = 4` (the targets assume 8), the shared cache off. *Caveat:* the scratch cluster runs with `fsync`, `full_page_writes` and `synchronous_commit` off and `wal_level = minimal`, so writes are cheaper than on a durable server. Sizes were set by the disk, not by Appendix A's edge counts:
+- *A.1* (10.07M nodes, 7.0M undirected edges: 3.35M honest accounts with their own identifiers, 670 rings, hubs of degree 168K, 27K and 67K): suspicion program 25 s (< 60), label propagation 2.9 s (< 30), aggregation 11 s (< 30), peak 2.4 GB RssAnon. All 9 checks pass: 41 iterations; largest ring 40; every ring with a flagged member in the top 837; 99.7% of unflagged members and 0.49% of honest accounts above 0.01; without the hub mask rings mix and the largest grows 360×, to 14,423 accounts. The program as first written persisted four vectors an iteration (83.6 MB each here), about 14 GB in one call: its vectors are now transient (A.1).
+- *A.2* (10M entities in 20 communities, 50M undirected edges, k = 20, ingest variants of 1M entities): staged refresh 32–41 s (< 8 min), `diff` 8–9 s, `eigen` 113–128 s (< 10 min) except the dense bridge's 1,332 s, subspace distance 1 s (< 30), peak 8.1 GB RssAnon (9.2 GB VmHWM), 44 min in all. Passed: `diff`'s counts, dense ids kept, rollback leaves nothing, a committed staged version invisible by default, bitwise-identical repeated solves, the shadow-schema distance equal (difference 0); volume 0.44, novel 1.41, dense bridge 1.45. Failed: the bridge at A.2's density (5 edges an entity, base degree 10) turns the subspace 0.40, less than volume's 0.44, and drifts embeddings less than volume (it links two communities about as strongly as any two already are; 20 edges an entity, as `test/sql/a2_spectral.sql` ingests, is the largest); cross-graph `distance('edit')` is refused (53400, 10.9 GB by `align_graph`'s over-estimate, docs/limits.md). The dense bridge's solve took 11× the steps, without a warning: its 20th eigenvalue moved from the community cluster into the bulk's lower edge (0.405 against 0.166 at a tenth of the size, `a2-scale10.json`), the crowded case of §6.5.
+- *A.3* (9.92M nodes: 1.45M entities, 4.35M records, 5.57M identifiers; 11.5M edges): supersteps 29.3 s with `text[]` messages (**misses** 20 s; the same messages as `bigint` take 11.7 s, the binary send/receive path of §6.4 the difference), 7.7 s and 7.8 s; components 1.3 s; peak 1.5 GB RssAnon. All 8 checks pass: each superstep equals its SQL oracle on a 0.1% sample, 53400 at 64 MB, precision 0.994 and recall 0.964 with the trust rules, 0.835 without.
+- *A.4* (10M nodes: 8M papers, 1.9M people, 100K institutions; 32.5M edges): the three-step `walk` 0.54 s warm over IRIs and 0.18 s over `bigint` (< 2 s), 2.1–2.6 s cold; refresh 104 s (IRIs) and 22 s (`bigint`); peak 2.7 GB RssAnon. All 11 checks pass, the CTE oracles forward and reversed among them. The 10-hop segment took 0.57 s, and its deduplicating CTE 0.19 s rather than over 60 s: the root's 10-hop neighbourhood is small on this generator.
+- *A.5* (10M entities, 50M undirected edges, d = 8 through a `real[]` column, pgvector not installed; d = 768 is 31 GB a matrix): `aggregate_neighbours` 7.5 s at d = 8 and 27 s at d = 32 (< 5 min); the round trip from and back to the table 64 s (< 10 min); peak 7.2 GB RssAnon (d = 32). Passed: compiled, every row written, `AVG` oracle within 1.5·10⁻⁷ on 10,000 nodes, within-community similarity 0.814 → 0.885, broadcasting, 22023 for mismatched widths. Failed: between-community similarity rose 0.043 → 0.057, 20% of the within gain (bound 10%): at d = 8 the random centroids are not near-orthogonal, and smoothing pulls between pairs toward their centroids' similarity. 872 entities have no neighbour in the two relations, and their NaN mean made A.5's program as first written write NaN rows: it now keeps their own row (A.5). The disk fell to 0.3 GB free.
+
+*Found and fixed:* a read of a graph inside a parallel `CREATE TABLE AS` (A.3's sampled oracle builds a table from `id_map`) failed with "cannot start commands during a parallel operation" (§9.3, parallel labels).
+
 Benchmark harness: generators for random, power-law (preferential attachment), grid, and *evolving* graphs (a base graph plus a parameterised perturbation, so `distance` methods can be evaluated for sensitivity and monotonicity); loads into `nodes`/`edges`; builds; runs the matrix against baselines (recursive CTE, NetworkX, igraph). Commit results per version to `bench/results/`. *Implemented (M2):* `bench/run.sh` runs `bench/matrix.json`; a workload names the functions it `requires` and is recorded as skipped until they exist. Real graphs are M11's suite (§13, `bench/corpus`, "Real graphs" above), sourced through keepset recipes.
 
 ## 13. Repository layout and milestones
@@ -1875,11 +1884,12 @@ Test it by installing as a non-superuser in CI and running the suite. **Make the
   - Each dataset runs:
     - correctness checks against an oracle (NetworkX or igraph) where one is feasible;
     - the §12 performance matrix;
-    - Appendix A's use cases at 10M nodes, which have not been run.
+    - Appendix A's use cases at 10M nodes. *Done (§12, "Appendix A at 10M"):* on generated data (`bench/appendix_a.py`), 65 of 70 checks passing; what remains is below.
   - *Progress (§12 "Real graphs"):*
     - Built: `bench/corpus`, 19 pinned datasets in three tiers, NetworkX and igraph correctness for the tiny and medium tiers (igraph adds exact betweenness up to WN18RR's size and checks a medium dataset in seconds), the §12 matrix on the medium tier, and a nightly, non-gating CI job that checks the tiny tier (`corpus.yml`).
     - Measured: correctness and the medium tier's timings.
-    - Not yet run: the large tier and Appendix A at 10M. *Deferred (owner, 2026-10-25):* the large tier is deferred to the end of M11, not dropped; keepset's fetch holds a dataset in memory, so the large datasets don't download on this machine. They are performance runs, not on the critical path.
+    - Run: Appendix A at 10M. Left from it: A.2's bridge at A.2's density and A.5's between-community bound fail as specified (a fixture density and an embedding width to revisit, not code); A.3's first superstep misses 20 s with `text` messages; cross-graph `distance('edit')` needs a tighter memory estimate to run at 10M; the dense bridge's `eigen` misses 10 min (§6.5's crowded case); A.1 was run at 7M edges and A.3 at 11.5M, below their targets' 100M and 50M, for the disk.
+    - Not yet run: the large tier. *Deferred (owner, 2026-10-25):* the large tier is deferred to the end of M11, not dropped; keepset's fetch holds a dataset in memory, so the large datasets don't download on this machine. They are performance runs, not on the critical path.
   - A head-to-head with igraph and Neo4j (with and without GDS) on the same machine, on graphs from the same suite, published with its caveats. *Done (M11):* `suite.py head-to-head` (engines behind a port, the runner tested against a fake engine), run on the medium tier and four tiny graphs; results, caveats and where pg_warren loses in §12 *Head-to-head* and `bench/results/corpus/head_to_head/`. The large tier's head-to-head waits on the large tier.
 - Robustness:
   - a soak of several days behind a connection pooler, watching for memory growth. *The harness and CI are done; the multi-day run is not* (`test/pooler_soak.py`, `test/harness/pooler_soak/`; CI on PG 16, preloaded, 2 min, about 2.5 min with setup). PgBouncer in transaction and in session pooling at once, each a login role in the graphs' owner role with 48 clients over 8 server connections (a pool hands out its last released connection first, so a few backends see most clients); the clients mix traversals on a `bigint` and a `text` graph, `last_stats()` in the traversal's transaction, transient vectors on a version named by id, persisted vectors written, read and dropped, prepared statements (SQL `PREPARE` in session pooling, the protocol's unnamed statement in transaction pooling), introspection and calls cut short by `statement_timeout`; writers edit the source and refresh, stage then promote or drop, and compact, so versions retire under the readers; a chaos thread cancels calls and makes clients disconnect idle in a transaction or in a call. Sampled: each pooled backend's `smaps_rollup`, its memory contexts' total (`pg_log_backend_memory_contexts`, read back from the log) and its `backends()` private and transient bytes; the shared cache, the DSM segments the cluster maps, the activity and progress rows, the versions, segments, vectors and chunks and the catalog tables' sizes; and the poolers' `SHOW` counters. A series *grew* when its robust slope (Theil–Sen) over the steady window, after the warm-up, and over each half of it, adds more than its tolerance (an absolute amount plus a fraction of its level; it does not scale with time, so a longer run is stricter); a backend's warm-up starts at its first sample, and each pool is also judged by the median of its backends' slopes, since pools replace the server connections clients broke. It also fails on an SQLSTATE an operation does not allow, on anything left once clients and then poolers stop (activity and progress rows, pins, staged versions, orphans, retention, the DSM segments, and, after `evict`, the shared bytes), on session state that session pooling loses or leaks, and on trouble in the server log; it writes `samples.csv` as it goes and `summary.json`. It probes what each mode keeps of a session: transaction pooling loses a `SET`, a transient vector, a SQL prepared statement and `last_stats()` from one transaction to the next and leaks them to other clients, and session pooling carries them and, through `DISCARD ALL`, leaks nothing (docs/limits.md, "Behind a connection pooler"). *Runs:* the CI mode on PG 16 and 18 (debug builds, 2 min); and 2.5 h on PG 16 (debug, 64 clients per pool, 0.2 s think time, a 30-minute warm-up): 7.0M statements and transactions, every failure an allowed one, and over the 7,140 s steady window the median pooled backend's anonymous memory grew 0.26 MB/h (session) and 0.40 MB/h (transaction) at 15.5 MB, its memory contexts and pg_warren's private and transient bytes were flat, and the shared cache, DSM segments, versions (5), segments (45), vectors and the catalog's sizes were flat or fell. *Found and fixed:* `DISCARD ALL` left a backend's transient vectors and `last_stats()` (§6.2), so in session pooling the next client could read them and they stayed until the backend exited (about 10 MB per session backend in the first runs); and a persisted vector dropped on another backend stayed in the cache of the backend that wrote it whenever the shared cache served that backend's reads, since only a private load pruned (§5.5), so a transaction-pooled backend gained about 8 MB a minute, up to `warren.max_cache_memory`. The harness's own clients first left a persisted vector behind when a cancel kept a persist from its drop or a compaction moved the vector to the compacted version (§7), each keeping its version from retention; an application that drops a vector by the version it wrote has the same hazard. *Left:* the multi-day run. A GitHub-hosted job stops after 6 hours, so it needs a machine of our own: a self-hosted runner, or the owner's machine, running `--hours 48` (or longer) on a release build in a private tree with `--no-lock`, its `summary.json` and the slopes recorded here. Chained 6-hour scheduled jobs on hosted runners would not be one run: each starts a new cluster and new backends, so no backend lives long enough to show a slow leak;
@@ -2139,25 +2149,28 @@ CREATE FUNCTION fraud_suspicion(graph text, hub_degree int DEFAULT 50, damping f
 RETURNS int LANGUAGE plpgsql AS $$
 DECLARE ran int := 0; delta float8; mass float8;
 BEGIN
-  PERFORM warren.vector_from_query(graph, 'seed',       'SELECT id, 1.0 FROM accounts WHERE confirmed_fraud OR chargebacks >= 2');
+  PERFORM warren.vector_from_query(graph, 'seed',       'SELECT id, 1.0 FROM accounts WHERE confirmed_fraud OR chargebacks >= 2',
+                                   persist := false);
   mass := warren.vector_reduce(graph, 'seed', 'sum');
-  PERFORM warren.vector_from_query(graph, 'is_account', 'SELECT id, 1.0 FROM accounts');
-  PERFORM warren.vector_degree(graph, 'deg');
-  PERFORM warren.vector_map(graph, 'live',    format('CASE WHEN is_account = 1 OR deg <= %s THEN 1 ELSE 0 END', hub_degree));
-  PERFORM warren.vector_map(graph, 'inv_deg', 'CASE WHEN deg > 0 THEN 1.0 / deg ELSE 0 END');
-  PERFORM warren.vector_map(graph, 'score',   'seed');
+  PERFORM warren.vector_from_query(graph, 'is_account', 'SELECT id, 1.0 FROM accounts', persist := false);
+  PERFORM warren.vector_degree(graph, 'deg', persist := false);
+  PERFORM warren.vector_map(graph, 'live',    format('CASE WHEN is_account = 1 OR deg <= %s THEN 1 ELSE 0 END', hub_degree), persist := false);
+  PERFORM warren.vector_map(graph, 'inv_deg', 'CASE WHEN deg > 0 THEN 1.0 / deg ELSE 0 END', persist := false);
+  PERFORM warren.vector_map(graph, 'score',   'seed', persist := false);
   FOR i IN 1..50 LOOP
     ran := i;   -- the FOR variable is not visible after the loop
-    PERFORM warren.vector_map(graph, 'msg',      'score * inv_deg * live');
-    PERFORM warren.spmv(graph, 'msg', 'gathered', semiring := 'plus_times', mask := 'live');
-    PERFORM warren.vector_map(graph, 'next',     format('%s * seed + %s * gathered', 1 - damping, damping));
+    PERFORM warren.vector_map(graph, 'msg',      'score * inv_deg * live', persist := false);
+    PERFORM warren.spmv(graph, 'msg', 'gathered', semiring := 'plus_times', mask := 'live', persist := false);
+    PERFORM warren.vector_map(graph, 'next',     format('%s * seed + %s * gathered', 1 - damping, damping), persist := false);
     delta := warren.vector_norm_diff(graph, 'next', 'score', 'l1');
-    PERFORM warren.vector_map(graph, 'score',    'next');
+    PERFORM warren.vector_map(graph, 'score',    'next', persist := false);
     EXIT WHEN delta < 1e-6 * mass;   -- relative to the seed mass
   END LOOP;
   RETURN ran;
 END $$;
 ```
+
+Its vectors are transient (`persist := false`, §6.2): they are intermediates the session reads and drops. Persisted, every iteration would write four vectors to the catalog in the caller's transaction, about 8.3 bytes a node each (84 MB at 10M nodes, measured), so about 14 GB over 40 iterations that nothing reads again and only a `VACUUM` after the transaction reclaims (M11, Appendix A at 10M, §12).
 
 Then cluster the suspicious subgraph with min-label propagation on the masked graph (`warren.label_propagation` restricted by a `score > 0.01 AND live = 1` mask, seeded from `warren.vector_dense_id`), and aggregate in SQL:
 
@@ -2190,6 +2203,8 @@ v1.1 extension: `warren.contract('fraud', 'label', 'fraud_rings')` gives a ring-
 
 *Measured (M5, `test/sql/a1_fraud_rings.sql`, at the fixture scale above):* the program converges in about 40 iterations; no output ring exceeds 500 accounts; 98% of unflagged ring members and 0.5% of honest accounts (the flagged ones) score above 0.01; one 6-account planted ring has no flagged account and is not found; without the hub mask output rings mix planted rings and the largest grows from 39 to 340 accounts.
 
+*Measured at 10M (M11, §12 "Appendix A at 10M"; 10.07M nodes, hubs of 168K, 27K and 67K accounts):* every assertion holds (41 iterations, 99.7% and 0.49%, largest masked ring 40), except that without the mask rings of thousands do form: the largest has 14,423 accounts, 360× the masked one. A hub's flagged neighbours grow with its degree, so at this size a hub collects more than 0.01 and joins every suspicious account it links; the parenthetical above holds at the fixture's scale only.
+
 **Scale target.** 10M accounts, 100M edges, 8 threads: suspicion program < 60 s end-to-end; label propagation < 30 s; aggregation query < 30 s.
 
 ### A.2 Corpus ingest gated by structural change (versions, staging, spectral distance)
@@ -2209,6 +2224,8 @@ v1.1 extension: `warren.contract('fraud', 'label', 'fraud_rings')` gives a ring-
 - `distance('embedding')` after `aggregate_neighbours` ranks *bridge* highest (the merged communities' embeddings drift towards each other). At reduced scale (`test/sql/a2_spectral.sql`) it does, by a quarter over *volume* (§8).
 - After `ROLLBACK`, `warren.versions`, `warren.segments` and `warren.vectors` contain no rows for the staged version; after `COMMIT` without `promote`, the staged version is queryable by explicit `version` and invisible by default; dense IDs of all pre-existing entities are identical in both versions.
 - The same comparison run via the shadow-schema pattern (second graph, cross-graph `distance` aligned by external ID) gives the same scalars to within 1e-9.
+
+*Measured at 10M (M11, §12 "Appendix A at 10M"; 20 communities, k = 20, ingests of 1M entities):* the bridge as specified (5 edges an entity against a base degree of 10) does not merge its two communities: it adds one low eigenvalue and turns the subspace 0.40, below volume's 0.44 (novel 1.41), and its embeddings drift less than volume's. With 20 edges an entity it turns it 1.45, the most, as above. The other assertions hold, repeated solves bitwise identical and the shadow-schema distance equal, except cross-graph `distance('edit')`, refused for memory (docs/limits.md).
 
 **Scale target.** 10M entities, 100M edges, k = 20: staged refresh < 8 min, both `eigen` calls < 10 min each, `distance('subspace')` < 30 s.
 
@@ -2255,7 +2272,8 @@ v1.1 extension: `warren.contract('fraud', 'label', 'fraud_rings')` gives a ring-
 ```sql
 SELECT warren.vector_from_query('kg', 'emb', 'SELECT id, embedding::float4[] FROM entities', dtype := 'f32');
 SELECT warren.aggregate_neighbours('kg', 'emb', 'emb_nbr', agg := 'mean', rels := ARRAY['related_to','part_of']);
-SELECT warren.vector_map('kg', 'emb_smooth', '0.7 * emb + 0.3 * emb_nbr');   -- elementwise over width-d rows
+SELECT warren.vector_map('kg', 'emb_smooth',                                    -- elementwise over width-d rows
+  $$0.7 * emb + 0.3 * COALESCE(NULLIF(emb_nbr, 'NaN'), emb)$$);  -- no neighbour: emb_nbr is NaN (§6.7)
 UPDATE entities e SET embedding_smooth = r.row::vector
   FROM warren.matrix_rows('kg', 'emb_smooth') r WHERE r.node_id = e.id;
 ```
@@ -2266,6 +2284,8 @@ UPDATE entities e SET embedding_smooth = r.row::vector
 - `aggregate_neighbours` equals a SQL `AVG` over neighbour rows grouped by node, elementwise within 1e-5 (f32).
 - Mean within-community cosine similarity increases after smoothing and between-community similarity does not increase by more than 10% of that gain.
 - `vector_map` on width-d matrices broadcasts scalars correctly and refuses mismatched widths with a clear error.
+
+*Measured at 10M (M11, §12 "Appendix A at 10M"; d = 8, `real[]` for pgvector):* a node with no neighbour in `rels` gets a NaN mean (§6.7), so the program keeps its own row there (872 of 10M nodes here). The `AVG` oracle holds within 1.5·10⁻⁷ and within-community similarity rises (0.814 → 0.885), but between-community similarity rises by 20% of that gain: at d = 8, random community centroids are far from orthogonal, and smoothing pulls pairs toward their centroids' similarity. The 10% bound assumes nearly orthogonal centroids (a large d).
 
 **Scale target.** 10M entities, d = 768, f32: `aggregate_neighbours` < 5 min; round trip to and from the pgvector column < 10 min.
 
