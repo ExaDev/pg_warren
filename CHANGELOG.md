@@ -101,6 +101,13 @@
   edge in each (one per relation, as parallel edges), for when that
   multiplicity is the signal.
 
+- **`docs/limits.md`, "Behind a connection pooler"**: what transaction
+  pooling loses and leaks between clients (settings, transient vectors,
+  `last_stats()`, SQL `PREPARE`) and what to use instead, checked by
+  `test/pooler_soak.py`, a soak behind PgBouncer in transaction and
+  session pooling that watches pooled backends, the shared cache and the
+  catalog for growth (CI runs it for 2 minutes on PG 16).
+
 ### Fixes
 
 - **On a physical standby, every function that writes fails with

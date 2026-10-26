@@ -355,11 +355,38 @@ test/replicas.py --no-install --pg-config "$(command -v pg_config)"
 # --max-shrinks (default 3) shrunk first. A long run, e.g. before a release:
 test/sql_fuzz.py --no-install --pg-config "$(command -v pg_config)" \
     --seeds 1 2 3 4 5 time --seconds 300 --shared-cache preload on off
+# A soak behind PgBouncer (needs pgbouncer: /usr/sbin/pgbouncer or
+# --pgbouncer), in transaction and session pooling at once, 48 clients over
+# 8 server connections each: reads, compute, persisted and transient
+# vectors, prepared statements, introspection, timeouts, cancels and
+# clients that leave mid-transaction, with writes that retire versions.
+# Fails on memory growth in the steady state, anything left behind, an
+# undocumented SQLSTATE, session state that session pooling loses or
+# leaks, or trouble in the log; samples.csv and summary.json in --out.
+# CI runs 2 minutes on PG 16, preloaded:
+test/pooler_soak.py --no-install --pg-config "$(command -v pg_config)"
 ```
 
-A long fuzz run need not hold the lock if it uses a Postgres tree of its
-own (as for the benchmarks, above): install the build there and pass
+A long fuzz run or soak need not hold the lock if it uses a Postgres tree
+of its own (as for the benchmarks, above): install the build there and pass
 `--no-lock` (which implies `--no-install`) with that tree's `pg_config`.
+A long soak runs for `--hours` and should, run detached so that it
+outlives the shell, with a release build if it is to say anything about
+a release:
+
+```sh
+setsid nohup test/pooler_soak.py --no-lock --hours 48 \
+    --pg-config $T/usr/lib/postgresql/16/bin/pg_config \
+    --out /var/tmp/pooler-soak > /var/tmp/pooler-soak.log 2>&1 &
+```
+
+It prints a line a minute, writes every sample to `samples.csv` as it is
+taken, and judges growth only at the end, so a run that is stopped keeps
+its samples but has no verdict. Its tolerances do not scale with time, so
+a longer run is stricter. A GitHub-hosted job stops after 6 hours, so a
+soak of several days runs on a machine of our own (a self-hosted runner, or
+by hand, as above); a 6-hour scheduled job on hosted runners checks less
+but needs nothing set up (DESIGN.md §13, M11).
 
 ### Packages
 
