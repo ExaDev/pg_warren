@@ -4,5 +4,6 @@
 numpy==2.5.3
 networkx==3.7
 scipy==1.18.1  # networkx.pagerank
-igraph==1.0.0  # bench/corpus: the second oracle
+igraph==1.0.0  # bench/corpus: the second oracle, and an engine of the head-to-head
+neo4j==6.4.1  # bench/corpus/head_to_head: the Bolt driver for Neo4j (Cypher and GDS)
 pytest==9.1.1
