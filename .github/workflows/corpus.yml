@@ -102,22 +102,26 @@ jobs:
             python -c "import json; d = json.load(open('bench/corpus/manifest.json'))['datasets']; print(' '.join(n for n, s in d.items() if s['tier'] == 'tiny' and n != 'transport-airline'))"
           } >>"$GITHUB_ENV"
       - name: Fetch them (keepset, checked against pins.json)
-        run: python bench/corpus/suite.py fetch $DATASETS  # word-split on purpose
+        run: |
+          read -ra datasets <<<"$DATASETS"
+          python bench/corpus/suite.py fetch "${datasets[@]}"
       - name: Every tiny dataset was pinned before this run
         # A dataset without a pin would be pinned by this fetch, unchecked.
         run: git diff --exit-code bench/corpus/pins.json
       - name: Check against NetworkX and igraph
         run: |
-          python bench/corpus/suite.py check $DATASETS --pg-config "$PG_CONFIG" --results "$RESULTS" \
+          read -ra datasets <<<"$DATASETS"
+          python bench/corpus/suite.py check "${datasets[@]}" --pg-config "$PG_CONFIG" --results "$RESULTS" \
             --extension-revision "$(git rev-parse --short HEAD)" --extension-profile release
       - name: Summary
         if: ${{ !cancelled() }}
         run: |
+          read -ra datasets <<<"$DATASETS"
           {
             echo "## bench/corpus check --tier tiny ($(git rev-parse --short HEAD))"
             echo
             if [ -d "$RESULTS/correctness" ]; then
-              python bench/corpus/suite.py summary $DATASETS --results "$RESULTS"
+              python bench/corpus/suite.py summary "${datasets[@]}" --results "$RESULTS"
             else
               echo "No results: the run stopped before checking (see the fetch step)."
             fi
