@@ -3,7 +3,7 @@
 import random
 
 from harness.pooler_soak.fixture import edit_sql, role, setup_sql
-from harness.pooler_soak.workload import READS, Tally, allowed, traversal_sql
+from harness.pooler_soak.workload import READS, Tally, Workload, allowed, traversal_sql
 from harness.session import Outcome
 
 
@@ -58,3 +58,31 @@ def test_an_edit_replaces_one_nodes_edges_and_toggles_a_node_above_half():
     assert sql.startswith("DELETE FROM public.edges WHERE src = ")
     toggled = int(sql.split("DELETE FROM public.nodes WHERE id = ")[1].split()[0])
     assert 51 <= toggled <= 100
+
+
+class ScriptedSession:
+    """Answers each statement with the next outcome whose key it contains."""
+
+    def __init__(self, answers):
+        self.answers, self.ran = answers, []
+
+    def run(self, sql):
+        self.ran.append(sql)
+        for key, outcomes in self.answers.items():
+            if key in sql and outcomes:
+                return outcomes.pop(0)
+        return Outcome([["7"]], "00000", "")
+
+
+def test_a_persisted_vector_whose_drop_failed_is_dropped_by_the_clients_next_persist():
+    cancel = Outcome([], "57014", "canceling statement due to user request")
+    workload = Workload(None, "transaction", "soak_transaction", 1, 0, 100, 1, Tally(), None, 0, 0)
+    first = ScriptedSession({"drop_vector": [cancel]})
+    workload._persist(first, random.Random(1), 0)
+    assert "drop_vector('g', 'p0', 7" in first.ran[-1]
+    second = ScriptedSession({"current_version": [Outcome([["9"]], "00000", "")]})
+    workload._persist(second, random.Random(1), 0)
+    assert any("drop_vector('g', 'p0', 7" in sql for sql in second.ran)
+    third = ScriptedSession({"current_version": [Outcome([["9"]], "00000", "")]})
+    workload._persist(third, random.Random(1), 0)
+    assert not any("', 7" in sql for sql in third.ran)
