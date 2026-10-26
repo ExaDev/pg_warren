@@ -6,7 +6,9 @@
 mode (default: transaction and session at once, each its own login role
 and pool of --pool-size server connections for --clients client
 connections). It first probes what each pool mode keeps of a client's
-session state (harness/pooler_soak/probes.py), then runs the clients'
+session state (harness/pooler_soak/probes.py), warms every server
+connection of each pool with every kind of call
+(harness/pooler_soak/warm.py), then runs the clients'
 mix of reads, compute, persisted vectors, introspection, timeouts,
 cancels, disconnects in transactions and writes that retire versions
 (harness/pooler_soak/workload.py) for --minutes or --hours, sampling
@@ -35,12 +37,13 @@ import tempfile
 import threading
 import time
 from contextlib import ExitStack, nullcontext
+from functools import partial
 from pathlib import Path
 
 from harness import extension, server_log, shared_cache
 from harness.cluster import Cluster
 from harness.pooler import MODES, PGBOUNCER, Pooler
-from harness.pooler_soak import probes, report, settled, verdict
+from harness.pooler_soak import probes, report, settled, verdict, warm
 from harness.pooler_soak.fixture import DATABASE, GRAPHS, role, setup_sql
 from harness.pooler_soak.samples import Sampler
 from harness.pooler_soak.workload import Chaos, Tally, Workload
@@ -147,6 +150,8 @@ def soak(args, out):
                                 roles[mode]) for i, mode in enumerate(args.modes)}
                 sampler = Sampler(cluster, admin, pools, args.context_every)
                 dsm_before = sampler.dsm_count()
+                for pooler, role_name in pools.values():
+                    warm.warm(partial(Session, pooler, DATABASE, user=role_name), args.pool_size, args.nodes, args.seed)
                 rows = run_clients(args, cluster, pools, sampler, tally, out)
                 failures, kept = settled.after_clients(admin, roles)
             failures += settled.after_poolers(admin, roles, args.clients * len(args.modes), dsm_before,

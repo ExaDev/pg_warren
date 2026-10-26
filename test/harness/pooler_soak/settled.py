@@ -3,9 +3,11 @@
 exit should have freed, and nothing in the catalog that leaked.
 
 `after_clients`, with the poolers still up and their server backends
-idle: the session pool's backends hold no transient vector (its
-`DISCARD ALL` reset each one when its client left); the transaction
-pool's are reported (no reset runs between transactions). `after_poolers`,
+idle: no progress row outlived its call (a call a client abandoned may
+still run, until its backend sees the client gone); the session pool's
+backends hold no transient vector (its `DISCARD ALL` reset each one when
+its client left); the transaction pool's are reported (no reset runs
+between transactions). `after_poolers`,
 once the poolers have closed their server connections: no activity row
 of a backend that has gone, no progress row, nothing pinned or mapped in
 the shared cache, no staged version, no segment or chunk without its
@@ -18,15 +20,16 @@ before the soak."""
 import time
 
 from .fixture import GRAPHS
+from .samples import OUTLIVED_PROGRESS_ROWS
 from .workload import PERSISTED_NAMES_PER_CLIENT
 
 SETTLE_SECONDS = 15
 RETAIN = {"g": 3, "t": 2}
 
 
-def until(admin, sql, seconds=SETTLE_SECONDS):
-    """Polls `sql`, a count, until it is 0 or `seconds` pass; its last value."""
-    deadline = time.monotonic() + seconds
+def until(admin, sql):
+    """Polls `sql`, a count, until it is 0 or `SETTLE_SECONDS` pass; its last value."""
+    deadline = time.monotonic() + SETTLE_SECONDS
     while (value := admin.run(sql).value()) != "0" and time.monotonic() < deadline:
         time.sleep(0.2)
     return value
@@ -35,6 +38,8 @@ def until(admin, sql, seconds=SETTLE_SECONDS):
 def after_clients(admin, roles):
     """Failures, and a report of the transient bytes the transaction pool's backends keep."""
     failures, report = [], {}
+    if (left := until(admin, OUTLIVED_PROGRESS_ROWS)) != "0":
+        failures.append(f"{left} progress rows outlived their call once the clients stopped")
     for mode, role in roles.items():
         sql = (f"SELECT coalesce(sum(b.transient_bytes), 0) FROM warren.backends() b JOIN pg_stat_activity a "
                f"USING (pid) WHERE b.kind = 'backend' AND a.usename = '{role}'")
