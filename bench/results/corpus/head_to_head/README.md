@@ -229,9 +229,10 @@ engine reached is `check.modularity` in each file.
   are the two BFS wins above, and components on cit-hepth and fb15k-237.
   pg_warren's traversals also return their rows to SQL; the timed query
   counts them.
-- *A missing feature.* pg_warren has no weighted single-source shortest
-  path (only `dijkstra` between two nodes), so weighted lesmis is compared
-  on pairs only.
+- *Not timed: weighted single-source paths.* pg_warren's weighted
+  single-source shortest path is `sssp_vector` (Bellman-Ford with
+  `min_plus` products, persisting a vector), which this run does not time,
+  so weighted lesmis is compared on pairs (`dijkstra`) only.
 
 **Neo4j.** Plain Cypher on Community runs each query on one thread. Once
 warm, it answers reach and pair queries in milliseconds to a few hundred.
