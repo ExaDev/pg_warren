@@ -4,7 +4,8 @@ sees it (`/proc/<pid>/smaps_rollup`) and as Postgres does (the memory
 context totals `pg_log_backend_memory_contexts` writes to the server
 log), pg_warren's own accounting (`warren.backends()`'s private,
 transient and mapped bytes per backend; `warren.shared_cache()`), the
-activity and progress rows, the DSM segments the cluster's processes map,
+activity and progress rows (and the progress rows that outlived their
+call: `OUTLIVED_PROGRESS_ROWS`), the DSM segments the cluster's processes map,
 the catalog's rows and table sizes, and each pooler's `SHOW POOLS` and
 `SHOW STATS`.
 
@@ -25,9 +26,19 @@ BACKENDS = ("SELECT a.usename, a.pid, coalesce(b.private_bytes, 0), coalesce(b.t
             "coalesce(b.mapped_bytes, 0) FROM pg_stat_activity a "
             "LEFT JOIN warren.backends() b ON b.pid = a.pid AND b.kind = 'backend' "
             "WHERE a.backend_type = 'client backend' AND a.usename = ANY ('{{{roles}}}')")
+# A progress row is a call in progress: its frames end with the call, or
+# with the statement or transaction around it (DESIGN.md §5.7). One that
+# outlived its call is on a backend that has since gone idle: its command
+# began before the backend's state last changed, to a state other than
+# running a statement. A call that begins after `pg_stat_activity`'s
+# snapshot shows the backend idle began after that change, so a row the
+# two reads see apart is not counted.
+OUTLIVED_PROGRESS_ROWS = ("SELECT count(*) FROM warren.progress() p JOIN pg_stat_activity a USING (pid) "
+                          "WHERE a.state <> 'active' AND p.command_start < a.state_change")
 CLUSTER_METRICS = {
     "activity_rows": "SELECT count(*) FROM warren.backends() WHERE kind = 'backend'",
     "progress_rows": "SELECT count(*) FROM warren.progress()",
+    "outlived_progress_rows": OUTLIVED_PROGRESS_ROWS,
     "shared_bytes": "SELECT coalesce(sum(bytes), 0) FROM warren.shared_cache() WHERE kind = 'cluster'",
     "shared_entries": "SELECT count(*) FROM warren.shared_cache() WHERE kind IN ('version', 'vector')",
     "shared_pinned": "SELECT count(*) FROM warren.shared_cache() WHERE kind IN ('version', 'vector') AND pins > 0",

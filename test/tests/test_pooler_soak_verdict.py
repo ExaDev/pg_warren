@@ -67,3 +67,22 @@ def test_a_backend_born_late_has_its_own_warm_up():
     judged = {(j.metric, j.subject): j.growth for j in judge_rows(rows, warmup=60)}
     assert judged[("anonymous", "transaction/9")].points == 34, "its first 60 s are its warm-up"
     assert not judged[("anonymous", "transaction/9")].grew
+
+
+def test_calls_in_flight_are_reported_not_judged():
+    """`progress_rows` counts the calls running as each sample is taken: a
+    gauge of the load, around 5 calls in the CI soak, whose robust slope
+    over 18 samples exceeded a bound of 2 in up to one run in twenty
+    with no trend at all (CI run 40390992808: 2.6 over 85 s at a level of
+    5, both halves over 2)."""
+    counts = [2, 5, 3, 6, 2, 4, 5, 4, 6, 3, 6, 5, 7, 4, 6, 5, 9, 8]
+    rows = [(30 + 5 * i, "progress_rows", "cluster", count) for i, count in enumerate(counts)]
+    assert [j.metric for j in judge_rows(rows, warmup=30)] == []
+
+
+def test_progress_rows_that_outlive_their_call_grow_from_the_first():
+    left = [(t, "outlived_progress_rows", "cluster", t // 100) for t in range(0, 600, 10)]
+    none = [(t, "outlived_progress_rows", "cluster", 0) for t in range(0, 600, 10)]
+    assert ("outlived_progress_rows", "cluster") in names(judge_rows(left, warmup=60))
+    assert names(judge_rows(none, warmup=60)) == set()
+    assert CLUSTER_TOLERANCES["outlived_progress_rows"].allowed(0) == 0
