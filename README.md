@@ -20,6 +20,95 @@ transactionally in extension tables. A version can be built inside the
 transaction that changes the data, compared with the current one, and
 committed or rolled back with it.
 
+## A ten-line example
+
+After [installing](#install) it and running `CREATE EXTENSION pg_warren;`:
+
+```sql
+CREATE TABLE people  (id bigint PRIMARY KEY, name text NOT NULL);
+CREATE TABLE follows (src bigint NOT NULL, dst bigint NOT NULL);
+INSERT INTO people  VALUES (1, 'ada'), (2, 'bob'), (3, 'cy'), (4, 'dee'), (5, 'eve');
+INSERT INTO follows VALUES (1, 2), (2, 3), (3, 1), (3, 4), (4, 5);
+
+SELECT warren.create_graph('social', 'SELECT id FROM people', 'SELECT src, dst FROM follows');
+SELECT warren.refresh('social');                                   -- builds version 1
+
+SELECT p.name, b.depth                                             -- who ada reaches in 3 hops
+FROM warren.bfs('social', ARRAY[1::bigint], 3) b
+JOIN people p ON p.id = b.node_id ORDER BY b.depth, p.name;
+--  ada 0 | bob 1 | cy 2 | dee 3
+
+SELECT warren.pagerank('social', 'pr');                            -- writes vector 'pr'
+SELECT p.name, round(r.value::numeric, 3) AS rank
+FROM warren.vector_topk('social', 'pr', 3, NULL::bigint) r
+JOIN people p ON p.id = r.node_id ORDER BY rank DESC, p.name;
+--  cy 0.243 | bob 0.209 | eve 0.209
+```
+
+The graph's ids are `bigint`, so id arguments are cast (`1::bigint`), and
+functions with no id argument take a type witness (`NULL::bigint`) for their
+result type. A traversal reads the version, not the tables: rows inserted
+after `refresh` appear after the next `refresh`
+([docs/semantics.md](docs/semantics.md)).
+
+## How it compares
+
+pg_warren was timed against [igraph](https://igraph.org/) (python-igraph 1.0.0)
+and Neo4j 2026.10 Community. Neo4j ran both as plain Cypher and with the
+Graph Data Science library (GDS). All three ran on the same machine, over 12
+real graphs from the benchmark corpus, from 77 nodes up to 1.4M nodes and
+3.8M edges. A time counts only if that engine's answer matched the reference.
+
+### Features
+
+| | pg_warren | igraph | Neo4j (Cypher) | Neo4j + GDS |
+|---|:---:|:---:|:---:|:---:|
+| **Where it lives** | | | | |
+| Runs inside PostgreSQL, over your existing tables | ✅ | ❌ | ❌ | ❌ |
+| No separate service to run | ✅ | ✅ (in-process library) | ❌ | ❌ |
+| Queried from SQL, joined with relational data | ✅ | ❌ | ❌ | ❌ |
+| **Consistency and freshness** | | | | |
+| Analytics see the live data with no rebuild | ❌ (reads a built version) | ❌ (load on each run) | ✅ | ❌ (projections) |
+| Graph built inside your transaction, rolled back with it | ✅ | ❌ | ✅ (the store is the graph) | ❌ |
+| Versioned graphs: stage, diff, promote | ✅ | ❌ | ❌ | ❌ |
+| Replicated to streaming standbys | ✅ | ❌ | Enterprise | Enterprise |
+| **Querying and algorithms** | | | | |
+| Graph query language, pattern matching | ❌ (SQL functions) | ❌ | ✅ | ✅ |
+| Traversals (BFS, reach, k-hop, paths) | ✅ | ✅ | ✅ | ✅ |
+| Centralities, components, community detection | ✅ (core set) | ✅ (very broad) | ❌ | ✅ (broad) |
+| Node embeddings, link prediction, ML pipelines | ❌ (building blocks only) | ❌ | ❌ | ✅ |
+| Semiring linear algebra, spectral analysis | ✅ | partial | ❌ | ❌ |
+| Multi-threaded | ✅ | ❌ | Enterprise | ✅ (4 threads in Community) |
+| **Maturity** | | | | |
+| Production track record, tooling, visualisation | ❌ (pre-1.0) | ✅ | ✅ | ✅ |
+
+### Performance
+
+Times are warm medians.
+
+| Workload | pg_warren | igraph | Neo4j + GDS | Verdict |
+|---|---:|---:|---:|---|
+| Shortest paths, 25 pairs (dblp) | **6 ms** | 1.04 s | 2.22 s | 🟢 Fastest on 11 of 12 graphs |
+| Louvain communities (dblp) | **1.16 s** | 5.49 s | 12.7 s | 🟢 Faster than GDS on every graph, than igraph on 7 of 12 |
+| Triangles (hetionet) | **0.12 s** | 0.49 s | 2.88 s | 🟢 Faster than igraph on 10 of 12 graphs |
+| Time to first query | **0.01–3.5 s** | about the same | 13–18 s | 🟢 No server to start or data to import |
+| PageRank, 20 iterations (roadNet-TX) | 1.0 s | 0.88 s | **0.62 s** | 🟡 Close on large graphs, slower on small ones |
+| BFS and connected components | 🟡 | **fastest** | slower | 🟡 Ahead of GDS; igraph 1.2–60× faster |
+| Leiden communities (FB15k-237) | 1.49 s | **0.14 s** | 0.46 s | 🔴 igraph and GDS faster; improvement planned |
+
+Plain Cypher is not in the table. It cannot express PageRank, components,
+Louvain, Leiden or betweenness. On the larger graphs, its traversal and
+triangle queries ran past a 300-second timeout.
+
+**Caveats.** This is one run on a shared 4-vCPU VM. pg_warren and GDS used
+4 threads; igraph and Cypher are single-threaded. Every time includes the
+client round trip. pg_warren pays a fixed 0.2–2 ms per call, which dominates
+on tiny graphs. The PageRank, Louvain, GDS and loading figures predate two
+later optimisations, so pg_warren's times there may now be lower. The
+triangles and Leiden rows were re-timed after those optimisations, against
+igraph only. Full tables, settings and caveats are in
+[bench/results/corpus/head_to_head](bench/results/corpus/head_to_head/README.md).
+
 ## The principle: meet Postgres users where they are
 
 pg_warren is an escape valve for graph workloads that Postgres alone handles
@@ -181,35 +270,6 @@ settings are in [docs/limits.md](docs/limits.md#the-shared-cache).
 `ALTER EXTENSION pg_warren UPDATE;` in every database that has the extension,
 *before* calling any `warren.*` function. The new library is loaded at once,
 but the catalog changes only with the update, so calls in between can fail.
-
-## A ten-line example
-
-```sql
-CREATE TABLE people  (id bigint PRIMARY KEY, name text NOT NULL);
-CREATE TABLE follows (src bigint NOT NULL, dst bigint NOT NULL);
-INSERT INTO people  VALUES (1, 'ada'), (2, 'bob'), (3, 'cy'), (4, 'dee'), (5, 'eve');
-INSERT INTO follows VALUES (1, 2), (2, 3), (3, 1), (3, 4), (4, 5);
-
-SELECT warren.create_graph('social', 'SELECT id FROM people', 'SELECT src, dst FROM follows');
-SELECT warren.refresh('social');                                   -- builds version 1
-
-SELECT p.name, b.depth                                             -- who ada reaches in 3 hops
-FROM warren.bfs('social', ARRAY[1::bigint], 3) b
-JOIN people p ON p.id = b.node_id ORDER BY b.depth, p.name;
---  ada 0 | bob 1 | cy 2 | dee 3
-
-SELECT warren.pagerank('social', 'pr');                            -- writes vector 'pr'
-SELECT p.name, round(r.value::numeric, 3) AS rank
-FROM warren.vector_topk('social', 'pr', 3, NULL::bigint) r
-JOIN people p ON p.id = r.node_id ORDER BY rank DESC, p.name;
---  cy 0.243 | bob 0.209 | eve 0.209
-```
-
-The graph's ids are `bigint`, so id arguments are cast (`1::bigint`), and
-functions with no id argument take a type witness (`NULL::bigint`) for their
-result type. A traversal reads the version, not the tables: rows inserted
-after `refresh` appear after the next `refresh`
-([docs/semantics.md](docs/semantics.md)).
 
 ## When to use it: frontier size, not hop count
 
