@@ -432,9 +432,12 @@ mod tests {
              SET parallel_setup_cost = 0; SET parallel_tuple_cost = 0;
              SET min_parallel_table_scan_size = 0; SET max_parallel_workers_per_gather = 2",
         )?;
-        // The id map joined to a parallel scan: the leader takes part in
-        // the scan, so it runs id_map in parallel mode, loading the
-        // version it no longer holds.
+        // The id map joined to a parallel scan, as A.3's oracle does. The
+        // leader may take part in the scan and run id_map in parallel
+        // mode, loading the version it no longer holds, but whether it
+        // does is the planner's choice, which this test does not observe;
+        // `every_read_runs_in_a_parallel_create_table_as` is the one that
+        // runs each read in the leader.
         let query = "SELECT p.g, m.dense_id FROM pairs p
                      JOIN warren.id_map('pp', NULL::bigint) m ON m.node_id = p.g % 5 + 1";
         assert!(workers_launched(query)? >= 1, "{:?}", analyzed(query)?);
