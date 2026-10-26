@@ -51,6 +51,7 @@ before changing code. Commands, toolchain setup and environment gotchas are in
      `read_only` (single-row SPI reads that assign no transaction id, and
      `writing`, the one writable SPI connection),
      `parallel_worker` (what a parallel worker records and raises),
+     `discard` (what `DISCARD ALL` resets of pg_warren's session state),
      `external_ids/` (id arguments ↔ dense ids), `selection/` (direction and
      relations), `traversal_sql/`, `vector/` (persistence and cache of named
      vectors; `quota`, the bound on readers' vectors), `compute_sql/`, `spectral_sql/` (eigen, distance),
@@ -67,7 +68,8 @@ before changing code. Commands, toolchain setup and environment gotchas are in
      the compute pool, `interrupts::pool`); `compute_sql` → `spectral_sql`;
      `build`, `compute_sql`
      → `community_sql`;
-     `parallel_worker` → `cache`, `traversal_sql`; never the reverse.
+     `parallel_worker` → `cache`, `traversal_sql`; `cache`, `vector`,
+     `traversal_sql` → `discard`; never the reverse.
    - Each module's `mod.rs` doc comment states its responsibility. Add a
      submodule when the code exists, not before.
 4. **Ubiquitous language (from DESIGN.md).** Use these terms exactly, in code,

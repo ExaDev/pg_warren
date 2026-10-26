@@ -32,6 +32,12 @@ fn last_stats() -> Option<JsonB> {
     LAST.with_borrow(|last| last.clone().map(JsonB))
 }
 
+/// Forgets the session's last stats (`DISCARD ALL`): `last_stats()` is
+/// NULL until a traversal records again.
+pub(crate) fn forget_last_stats() {
+    LAST.take();
+}
+
 /// Records the stats of one call as it runs.
 pub(crate) struct Recorder {
     function: &'static str,

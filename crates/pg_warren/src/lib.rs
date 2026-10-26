@@ -11,6 +11,7 @@ mod cache;
 mod catalog;
 mod community_sql;
 mod compute_sql;
+mod discard;
 mod extension;
 mod external_ids;
 #[cfg(any(test, feature = "pg_test"))]
@@ -31,7 +32,8 @@ mod traversal_sql;
 mod vector;
 mod version_sql;
 
-/// Library initialisation: registers the GUCs and, when preloaded on
+/// Library initialisation: registers the GUCs, the hook that makes
+/// `DISCARD ALL` free pg_warren's session state and, when preloaded on
 /// PG 15 and 16, the hooks that place the shared cache's registry and the
 /// activity table.
 #[pgrx::pg_guard]
@@ -42,6 +44,7 @@ pub extern "C-unwind" fn _PG_init() {
     cache::define_shared_cache();
     traversal_sql::define_max_walk_paths();
     interrupts::define_compute_settings();
+    discard::install();
 }
 
 /// Required by `cargo pgrx test`; must be visible at the crate root.

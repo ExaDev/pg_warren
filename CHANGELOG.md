@@ -175,6 +175,13 @@
   REPEATABLE READ or SERIALIZABLE either change fails the compaction with
   `serialization_failure` (40001) instead: retry it.
 
+- **`DISCARD ALL` frees the backend's transient vectors, of every role,
+  and forgets `last_stats()`.** It left both, so behind a session pooler
+  (PgBouncer's `server_reset_query`), the next client on a server backend
+  could read the transient vectors and the stats the last client left,
+  and the vectors stayed until the backend exited (found by
+  `test/pooler_soak.py`; regression test `test/sql/discard_all.sql`).
+
 - **A persisted vector dropped by another backend no longer stays in the
   cache of the backend that wrote it.** That backend pruned dead vectors
   only when it next loaded one privately; with the shared cache serving
