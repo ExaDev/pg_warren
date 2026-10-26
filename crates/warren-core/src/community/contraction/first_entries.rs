@@ -48,7 +48,9 @@ impl FirstEntries {
                 work.spend(entries.len() as u64 + 1).map_err(ComputeError::from)?;
                 let start = starts[position];
                 for (at, target) in entries.clone().zip(csr.neighbours_at(entries)) {
-                    let reached = &mut reached_from[target as usize];
+                    // A target past `id_space` is in no community, and
+                    // `contract` passes over its entries without asking.
+                    let Some(reached) = reached_from.get_mut(target as usize) else { continue };
                     if *reached != source {
                         *reached = source;
                         counts[start + at] = true;
@@ -66,7 +68,10 @@ impl FirstEntries {
     }
 }
 
+// Not under Miri: the reference graphs (`compute::reference`) are not built
+// there.
 #[cfg(test)]
+#[cfg(not(miri))]
 mod tests {
     use super::*;
     use crate::compute::reference::{self, Edges};
