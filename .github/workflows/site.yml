@@ -1,0 +1,53 @@
+name: Website preview
+
+on:
+  pull_request:
+    paths:
+      - site/**
+      - docs/**
+      - README.md
+      - .github/workflows/site.yml
+  push:
+    branches: [main]
+    paths:
+      - site/**
+      - docs/**
+      - README.md
+      - .github/workflows/site.yml
+  workflow_dispatch:
+
+concurrency:
+  group: site-preview-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and check website
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: npm run check:build
+      # This is a downloadable review artifact, not a Pages deployment.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: website-preview
+          path: site/dist
+          if-no-files-found: error
+          retention-days: 7

@@ -1,0 +1,34 @@
+@import '@fontsource-variable/dm-sans';
+@import '@fontsource/ibm-plex-mono/400.css';
+
+:root {
+  --sl-nav-height: 5rem;
+  --sl-font: 'DM Sans Variable', sans-serif;
+  --sl-font-mono: 'IBM Plex Mono', monospace;
+  --sl-color-accent-low: #153729;
+  --sl-color-accent: #80b59a;
+  --sl-color-accent-high: #c7e5d1;
+  --sl-color-black: #131d19;
+}
+:root[data-theme='light'] {
+  --sl-color-accent-low: #e3eee4;
+  --sl-color-accent: #295c43;
+  --sl-color-accent-high: #1a4231;
+  --sl-color-white: #23372e;
+  --sl-color-gray-1: #354b3f;
+  --sl-color-gray-2: #4c5e54;
+  --sl-color-gray-3: #66756b;
+  --sl-color-gray-4: #b7bfb5;
+  --sl-color-gray-5: #dedfd5;
+  --sl-color-gray-6: #f0f0e7;
+  --sl-color-black: #faf9f3;
+}
+.site-title { font-weight: 650; letter-spacing: -.055em; }
+.site-title img { height: 2rem; }
+h1, h2, h3 { letter-spacing: -.035em; }
+.sl-markdown-content { font-size: 1.0625rem; line-height: 1.75; }
+.sl-markdown-content table { font-size: 1rem; }
+.sl-markdown-content :is(th, td) { padding: .8rem 1rem; }
+.expressive-code { --ec-codeFontSize: .9375rem; margin-block: 1.25rem; }
+header.header { backdrop-filter: blur(16px); }
+:focus-visible { outline: 3px solid var(--sl-color-accent); outline-offset: 4px; }
