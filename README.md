@@ -147,7 +147,7 @@ sudo apt install postgresql-17-pg-warren   # or -15, -16, -18
 
 Check the key before trusting it: `gpg --show-keys /etc/apt/keyrings/pg_warren.asc`
 must show the fingerprint
-`(set by the owner before the first release)` <!-- apt key -->,
+`A7FF D766 EE91 5EE8 E970  85F8 DF33 D764 5F72 1A34` <!-- apt key -->,
 which every GitHub Release's notes repeat.
 
 The package does not edit `postgresql.conf`. Add the preload yourself
