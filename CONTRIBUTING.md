@@ -486,7 +486,17 @@ runs no build code, take what they built, **as data**:
   has no `packages: write`), after checking with GitHub's API that the
   package is linked to no repository, and commits the formula to the tap
   with `HOMEBREW_TAP_DEPLOY_KEY`;
-- the `pages` job then deploys the repository to GitHub Pages.
+- after the image and tap steps succeed, it attaches an immutable apt snapshot:
+  `pg_warren-apt-X.Y.Z.tar.gz`, its single-file checksum manifest
+  `pg_warren-apt-X.Y.Z.sha256`, and the detached signature
+  `pg_warren-apt-X.Y.Z.sha256.asc`. The signature is attached last. A rerun
+  verifies and retains a complete existing snapshot rather than replacing it.
+  A partial upload fails: review and remove that release's three snapshot
+  assets before rerunning publication;
+- successful publication triggers `.github/workflows/pages.yml`, which builds
+  the website and combines it with the verified apt snapshot before deploying
+  the whole tree behind the `github-pages` environment's approval. The release
+  workflow itself no longer deploys to Pages.
 
 Republishing an older release attaches and rebuilds the same way, but moves
 neither the images' `pgNN` tags nor the tap. Later: reproducible builds, so
@@ -513,9 +523,59 @@ Not built yet: RPM packages (yum/dnf) and a PGXN release (a `META.json`
 and an upload with a PGXN credential kept in the `release` environment);
 both are later steps.
 
-GitHub Pages serves at most 1 GB, and every release adds its 32 packages
-to the repository. When it nears that, prune old releases' `.deb` assets
-(the repository is rebuilt from the Releases' assets each time).
+GitHub Pages serves at most 1 GB. The website and apt repository share that
+budget, and assembly refuses a combined tree over 1,000,000,000 bytes. Every
+release adds its 32 packages. Plan a reviewed retention policy or a separate
+package host before reaching the limit; deleting assets from an immutable
+snapshot does not prune its published contents and can break verification.
+
+### Website and apt deployment
+
+`pages.yml` is the sole Pages deployment owner. It runs on website/source
+changes on `main`, manually on `main`, and after a successful `Release
+(publish)` workflow on `main`. A `workflow_run` trigger is used because
+release events created with `GITHUB_TOKEN` do not trigger another workflow.
+Pull requests only build review artifacts; they cannot deploy.
+
+One workflow-level `github-pages` concurrency group serialises the entire
+build, snapshot selection, environment approval, and deployment. After
+acquiring that lock, each run checks out current `main` and resolves current
+published releases. An older queued push or an older release republished
+later therefore cannot deploy an older source checkout or select an older
+software release by timestamp.
+Skipped failed-release events and dispatches on other branches use isolated
+concurrency groups so they cannot displace a useful pending deployment.
+
+The build job has `contents: read`, no release secrets, and no Pages write
+permission. `release/pages.py` selects the highest numeric recorded,
+published, non-prerelease packaged software version. Releases from 0.7.0
+require a snapshot; earlier source-only releases are ignored, while earlier
+releases with package/snapshot assets also require one. If no packaged
+release has been published, the first website deployment contains no `/apt/`.
+A newer packaged release with a missing or partial snapshot blocks deployment
+instead of falling back to older packages or dropping `/apt/`. A failed GitHub
+API request is an error, not evidence that no packages exist.
+
+`release/pages_archive.py` checks the snapshot's exact checksum entry, archive
+digest, the public key's primary fingerprint against README, the detached
+manifest signature, and all four distributions' `InRelease` signatures. It
+accepts only bounded regular files and directories under `apt/`, rejecting
+links, traversal paths, duplicate members, and unexpected archive metadata.
+Verification and assembly happen in private staging; the output becomes
+available only after every check succeeds. Website files cannot claim the
+reserved `apt/` or `deployment.json` paths. `deployment.json` records the
+checked-out source commit and apt software version/digest.
+
+The deploy job runs no repository code. It has only `pages: write` and
+`id-token: write`, uses the existing `github-pages` environment, and deploys
+the combined artifact. Approving that environment publishes both the website
+and its selected apt snapshot.
+
+If publication fails before attaching the snapshot, finish or rerun the
+release workflow, then rerun the Pages workflow on `main`. Do not deploy a
+website-only artifact as a workaround. For a first deployment, enable Pages
+from Actions and approve the waiting `github-pages` deployment below. Local
+website commands and canonical-content maintenance are in [site/README.md](site/README.md).
 
 ### Release settings (owner setup)
 
@@ -584,9 +644,11 @@ Set once in the repository's settings; the workflows assume them.
    **GitHub Actions**. This creates the `github-pages` environment. In
    Settings → Environments → `github-pages`: add yourself as a *Required
    reviewer*, and check *Deployment branches and tags* admits only `main`.
-   The `pages` job deploys to it after the publish job, so after the
-   `release` approval, and then waits for this second one. The whole site
-   is the apt repository (`/apt/`).
+   The `deploy` job in `pages.yml` waits for this approval before publishing
+   the website and `/apt/` together. Package snapshots can only be signed by
+   the `release` environment, whose approval remains separate. Website-only
+   updates reuse the signed snapshot without needing the release signing
+   secret. The first website can deploy before any packages are published.
 7. **The Docker images**: the publish job pushes with a credential only the
    `release` environment holds, not `GITHUB_TOKEN`, so no other workflow
    can push. GHCR takes neither GitHub App nor fine-grained tokens, so

@@ -27,8 +27,9 @@ name: Release (publish)
 # assembles and signs the apt repository (aptly) from this release's
 # checked packages and earlier releases' that their signed SHA256SUMS
 # list; it pushes the images to GHCR with the environment's GHCR_TOKEN and
-# the formula to the tap with the tap's deploy key; the pages job deploys
-# the apt repository to GitHub Pages.
+# the formula to the tap with the tap's deploy key; after those succeed it
+# publishes a signed apt snapshot. The shared Pages workflow combines that
+# snapshot with the website and deploys it behind the github-pages gate.
 #
 # Both jobs check out the same commit, github.sha: the push (or dispatch)
 # that started the run. What the approver sees, "vX.Y.Z → <commit>" and the
@@ -415,6 +416,14 @@ jobs:
           for codename in bookworm trixie jammy noble; do
             gpgv --keyring "$keyring" "$site/apt/dists/$codename/InRelease"
           done
+          # A durable, independently verifiable snapshot lets website-only
+          # deploys reuse these exact apt bytes without the private signing key.
+          snapshot="$RUNNER_TEMP/apt-snapshot"
+          python3 release/pages_archive.py pack "$site/apt" "$VERSION" "$snapshot"
+          manifest="$snapshot/pg_warren-apt-$VERSION.sha256"
+          gpg --batch --yes --armor --local-user "$fingerprint" --detach-sign \
+            -o "$manifest.asc" "$manifest"
+          gpgv --keyring "$keyring" "$manifest.asc" "$manifest"
           echo "$fingerprint" >"$RUNNER_TEMP/fingerprint"
           {
             echo "## apt repository"
@@ -451,9 +460,6 @@ jobs:
             if grep -qxF -- "$asset" <<<"$present"; then echo "already attached: $asset"; continue; fi
             gh release upload "v$VERSION" --repo "$GITHUB_REPOSITORY" -- "$asset"
           done
-      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
-        with:
-          path: ${{ runner.temp }}/site
       - name: Docker images to ghcr.io (with the environment's GHCR_TOKEN)
         env:
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
@@ -521,20 +527,37 @@ jobs:
             commit -q -m "pg_warren $VERSION"
           git push origin HEAD
 
-  pages:
-    # Deploys the apt repository the publish job assembled and signed, so
-    # only after the release environment's approval. Runs no repository
-    # code. The github-pages environment (created by enabling Pages from
-    # Actions) admits only main.
-    name: Deploy the apt repository to GitHub Pages
-    needs: publish
-    runs-on: ubuntu-24.04
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}apt/
-    permissions:
-      pages: write
-      id-token: write
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+      - name: Publish the immutable signed apt snapshot after release publication succeeds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          archive="pg_warren-apt-$VERSION.tar.gz"
+          manifest="pg_warren-apt-$VERSION.sha256"
+          signature="$manifest.asc"
+          snapshot="$RUNNER_TEMP/apt-snapshot"
+          present="$(gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          count=0
+          for name in "$archive" "$manifest" "$signature"; do
+            if grep -qxF -- "$name" <<<"$present"; then count=$((count + 1)); fi
+          done
+          if [[ "$count" == 3 ]]; then
+            # Signed snapshots are immutable. A rebuild may timestamp indexes
+            # differently: verify and retain the published bytes on a rerun.
+            existing="$RUNNER_TEMP/existing-apt-snapshot"
+            mkdir -p "$existing"
+            gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" --dir "$existing" \
+              -p "$archive" -p "$manifest" -p "$signature"
+            python3 release/pages_archive.py restore "$existing/$archive" "$existing/$manifest" \
+              "$existing/$signature" "$(cat "$RUNNER_TEMP/fingerprint")" "$RUNNER_TEMP/verified-snapshot"
+            echo "Verified and retained the existing apt snapshot for v$VERSION"
+          elif [[ "$count" == 0 ]]; then
+            gh release upload "v$VERSION" --repo "$GITHUB_REPOSITORY" -- "$snapshot/$archive" "$snapshot/$manifest"
+            # The detached signature is attached last, after the other release
+            # channels succeeded. Missing/partial snapshots block Pages safely.
+            gh release upload "v$VERSION" --repo "$GITHUB_REPOSITORY" -- "$snapshot/$signature"
+          else
+            echo "::error::v$VERSION has a partial apt snapshot. Review and remove its three snapshot assets, then rerun publication; existing assets are never overwritten."
+            exit 1
+          fi
+          echo "Signed apt snapshot for v$VERSION is ready for the shared Pages workflow." >>"$GITHUB_STEP_SUMMARY"

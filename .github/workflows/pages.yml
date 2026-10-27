@@ -1,0 +1,97 @@
+name: Publish website and apt repository
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - site/**
+      - docs/**
+      - README.md
+      - CHANGELOG.md
+      - CONTRIBUTING.md
+      - Cargo.toml
+      - sql/**
+      - bench/results/corpus/head_to_head/**
+      - release/pages.py
+      - release/pages_archive.py
+      - release/tests/test_pages*.py
+      - .github/workflows/pages.yml
+  workflow_run:
+    workflows: ['Release (publish)']
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+
+# Acquire the lock before checking out main or selecting a package snapshot.
+# There is one Pages owner, including after a release. A queued older event
+# rebuilds current main and resolves the newest published snapshot afresh.
+concurrency:
+  # A skipped failed-release or non-main dispatch must not replace a useful
+  # pending run in GitHub's single pending slot for the deployment group.
+  group: ${{ github.ref == 'refs/heads/main' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') && 'github-pages' || format('pages-skipped-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  build:
+    name: Assemble website and verified apt snapshot
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name != 'workflow_run' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.13'
+      - name: Check snapshot verification and assembly
+        run: |
+          python -m pip install pytest==9.1.1
+          python -m pytest release/tests/test_pages.py release/tests/test_pages_archive.py
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - name: Build and check the website without release secrets
+        working-directory: site
+        run: |
+          npm ci
+          npm test
+          npm run build
+          npm run check:build
+      - name: Combine the site and the latest published signed apt snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 release/pages.py assemble --site site/dist \
+            --output "$RUNNER_TEMP/pages" --repository "$GITHUB_REPOSITORY"
+      - name: Deployment provenance
+        run: cat "$RUNNER_TEMP/pages/deployment.json" >>"$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/pages
+
+  deploy:
+    name: Deploy the complete Pages site
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      # No checkout or repository code in the environment-gated deployment job.
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

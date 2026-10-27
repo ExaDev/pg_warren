@@ -1,9 +1,10 @@
 # pg_warren website
 
 An Astro homepage and Starlight documentation, built as static files for
-`https://exadev.github.io/pg_warren/`. The website workflow builds a downloadable
-review artifact; it does not yet deploy to Pages.
-The existing signed apt repository and release workflows are unchanged.
+`https://exadev.github.io/pg_warren/`. Pull requests build a downloadable review
+artifact. On `main`, the shared Pages workflow combines the website with the
+latest published, verified apt snapshot and deploys both behind the existing
+`github-pages` environment approval.
 
 ## Run locally
 
@@ -59,17 +60,24 @@ blocks remain identical to the canonical documentation.
   page compares the current workspace version with `../sql/released.commits`
   and always directs readers to published assets to verify package availability:
   a frozen release record does not mean publication has succeeded.
-  A dedicated site tree for stable releases is part of the publication phase.
+  Released source and documentation remain linked from those notices; the
+  website currently presents development documentation.
 - The PR workflow uploads `website-preview`. To view a downloaded artifact,
   put its contents in a directory named `pg_warren`, serve the parent with a
   local HTTP server, and open `/pg_warren/`. Opening HTML through `file://`
   does not support the absolute project paths or search.
 
-## Publication phase
+## Publication
 
-Before deploying, implement the shared website/apt assembly path: persist a
-verifiable signed apt tree, preserve the release and Pages approval gates, serialize all Pages
-deployments before resolving source snapshots, and verify the combined size.
-No independent website-only Pages deployment should replace the existing
-package repository. Stable content will follow published releases; development
-content must retain its label.
+`.github/workflows/pages.yml` is the sole Pages deployment owner. It serialises
+build and deployment, checks out fresh `main`, builds the site, and runs
+`release/pages.py` to verify and assemble its apt snapshot. That build job has
+no signing key. `release-publish.yml` attaches signed snapshots as immutable
+GitHub Release assets only after its publishing steps succeed.
+
+The first website can deploy without apt before any packaged release is
+published. Once one exists, a missing or invalid snapshot blocks deployment;
+the pipeline does not publish the website by itself. `deployment.json` records
+the checked-out source SHA and apt version. The combined output must fit
+within 1,000,000,000 bytes. See the [deployment procedures](../CONTRIBUTING.md#website-and-apt-deployment)
+for trust checks, concurrency, reruns, partial-upload recovery, and approval.

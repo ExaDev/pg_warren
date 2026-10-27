@@ -1805,10 +1805,18 @@ has curated documentation, operations, and architecture overviews. It targets
 the `/pg_warren/` Pages base path and explicitly labels development
 documentation. `.github/workflows/site.yml` tests source preservation and
 signature extraction, builds every page, checks links, anchors, canonicals and
-search, and uploads a review artifact only. It does not deploy: the release
-workflow currently owns Pages and its signed `/apt/` repository. Any later
-website publication must assemble both trees together and preserve the release
-and Pages approval gates (see `site/README.md`).
+search, and uploads a PR review artifact. `.github/workflows/pages.yml` is the
+sole Pages publisher: one workflow-level lock precedes a fresh `main` checkout,
+release selection, site build, and the existing `github-pages` approval gate.
+The release workflow attaches an immutable apt archive, checksum, and detached
+signature after publication succeeds. Read-only website builds verify those
+assets against README's key fingerprint and all four `InRelease` signatures,
+then combine their exact apt bytes with the site. Missing or partial packaged
+snapshots block deployment; before the first packaged release a brochure-only
+deployment is allowed. Link/path/archive and combined-size checks precede
+publication. Release signing remains behind the `release` approval with no
+private key available to website builds (see `CONTRIBUTING.md`, "Website and
+apt deployment", and `site/README.md`).
 
 **M0 — Skeleton and prior-art reading.** Layout, pgrx builds, `CREATE EXTENSION pg_warren`, `warren.version()`, CI. Licence: Apache-2.0. The §4A reading is completed, `docs/prior-art-notes.md` is written, and §14 item 16 is recorded before M1 begins.
 
