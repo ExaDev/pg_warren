@@ -1,6 +1,7 @@
 ---
 import { Code } from 'astro:components';
 import mark from '../assets/mark.svg';
+import Attribution from '../components/Attribution.astro';
 import '../styles/home.css';
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
@@ -46,7 +47,7 @@ SELECT warren.refresh('social');`;
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
     <header class="site-header wrap">
-      <a class="brand" href={`${base}/`} aria-label="pg_warren home"><img src={mark.src} width="38" height="38" alt="" />pg_warren<span class="brand-dot">.</span></a>
+      <div class="brand-stack"><a class="brand" href={`${base}/`} aria-label="pg_warren home"><img src={mark.src} width="38" height="38" alt="" />pg_warren<span class="brand-dot">.</span></a><Attribution /></div>
       <nav aria-label="Main navigation">
         <a href="#capabilities">Capabilities</a>
         <a href={`${base}/docs/traversal/`}>Documentation</a>

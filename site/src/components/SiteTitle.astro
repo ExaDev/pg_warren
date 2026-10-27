@@ -1,0 +1,13 @@
+---
+import DefaultSiteTitle from '@astrojs/starlight/components/SiteTitle.astro';
+import Attribution from './Attribution.astro';
+---
+
+<div class="brand-stack">
+  <DefaultSiteTitle />
+  <Attribution />
+</div>
+
+<style>
+  .brand-stack { display: flex; flex-direction: column; gap: 2px; }
+</style>

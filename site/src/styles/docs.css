@@ -2,6 +2,7 @@
 @import '@fontsource/ibm-plex-mono/400.css';
 
 :root {
+  --sl-nav-height: 5rem;
   --sl-font: 'DM Sans Variable', sans-serif;
   --sl-font-mono: 'IBM Plex Mono', monospace;
   --sl-color-accent-low: #153729;

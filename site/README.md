@@ -35,6 +35,10 @@ blocks remain identical to the canonical documentation.
 
 - Edit `src/pages/index.astro` for homepage content and `src/styles/` for
   presentation. Fonts are bundled locally; the site needs no font service.
+- `src/assets/exadev.svg` is the symbol from the ExaDev logo retrieved from
+  `https://exadev.io/_next/static/media/header-logo.b17c8968.svg`, with the
+  stacked wordmark removed and its view box cropped to the symbol. The header
+  attribution links to `https://exadev.io` on the homepage and documentation.
 - Edit `../docs/traversal.md` for the guide. `scripts/prepare-docs.mjs` generates
   its ignored Starlight page before development and builds. Do not edit the
   generated page. Its SQL remains covered by `../test/sql/docs_examples.sql`.

@@ -10,6 +10,7 @@ export default defineConfig({
     logo: { src: './src/assets/mark.svg' },
     description: 'Deep traversal and whole-graph computation for PostgreSQL.',
     customCss: ['./src/styles/docs.css'],
+    components: { SiteTitle: './src/components/SiteTitle.astro' },
     social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/ExaDev/pg_warren' }],
     sidebar: [
       { label: 'Overview', link: '/' },
