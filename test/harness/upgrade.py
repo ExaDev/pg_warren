@@ -267,23 +267,37 @@ REFUSAL = """
 REFUSED = "SELECT coalesce(string_agg(state || ':' || (message LIKE '%warren.refresh%'), ' '), '') FROM upgrade_refusal"
 
 
-def old_format_problem(upgraded, statement, what):
-    """None if `statement`, which reads a version built before the update,
-    is refused as a version to refresh (its CSRs are in the segment format
-    before sparse offsets, 0.7.0, DESIGN.md §5.3), else what is wrong."""
+# The release whose builds first wrote CSRs with sparse offsets
+# (DESIGN.md §5.3).
+SPARSE_OFFSETS = (0, 7, 0)
+
+
+def predates_sparse_offsets(version):
+    """Whether release `version` built its CSRs in the segment format
+    before sparse offsets."""
+    return tuple(int(part) for part in version.split(".")) < SPARSE_OFFSETS
+
+
+def old_format_problem(upgraded, statement, what, release):
+    """None if `statement`, which reads a version built by `release`
+    before the update, behaves as that release's segment format requires,
+    else what is wrong: a version from before sparse offsets is refused as
+    one to refresh, and a later one is read."""
     upgraded.execute(REFUSAL.format(statement=statement))
     refused = upgraded.query(REFUSED)
     upgraded.execute("DROP TABLE upgrade_refusal")
-    return None if refused == [["55000:true"]] else f"{what} gave {refused}, not 55000 naming warren.refresh"
+    if predates_sparse_offsets(release):
+        return None if refused == [["55000:true"]] else f"{what} gave {refused}, not 55000 naming warren.refresh"
+    return None if refused == [[""]] else f"{what} gave {refused}, not no error"
 
 
 # Each graph's node order (0.4.0): graphs from before it are backfilled 'id'.
 NODE_ORDERS = "SELECT string_agg(name || ':' || node_order, ' ' ORDER BY name) FROM warren.graphs"
 
 
-def after_update(upgraded):
-    """Checks the upgraded state, then runs a promotion on it; returns the
-    problems found."""
+def after_update(upgraded, release):
+    """Checks the state `release` left, upgraded, then runs a promotion on
+    it; returns the problems found."""
     problems = []
     orders = upgraded.query(NODE_ORDERS)
     if orders != [["upgrade:id upgrade_typed:id"]]:
@@ -292,15 +306,16 @@ def after_update(upgraded):
     if seeded != [["upgrade_owner:4"]]:
         problems.append(f"backfilled vectors are {seeded}")
     problem = old_format_problem(upgraded, "warren.vector_values('upgrade', 'old', NULL::bigint, 1)",
-                                 "reading the old vector")
+                                 "reading the old vector", release)
     if problem:
         problems.append(problem)
-    # The version 'upgrade_typed' had before the update is refused, and
+    # The version 'upgrade_typed' had before the update is refused (or,
+    # from a release with sparse offsets, read), and
     # the version a refresh builds on it gives the results the release gave.
     built = upgraded.query("SELECT current_version FROM warren.graphs WHERE name = 'upgrade_typed'")[0][0]
     problem = old_format_problem(
         upgraded, f"warren.bfs('upgrade_typed', ARRAY[1::bigint], 3, 'both', version := {built})",
-        "reading the pre-update multi-relation version")
+        "reading the pre-update multi-relation version", release)
     if problem:
         problems.append(problem)
     upgraded.execute("SELECT warren.refresh('upgrade_typed')")
@@ -595,6 +610,6 @@ def check(cluster, current, installer, releases, installed):
         diff = differences(expected, describe(upgraded))
         if diff:
             failures.append(f"{version} -> {current}: the upgraded catalog differs\n{diff}")
-        failures += [f"{version} -> {current}: {problem}" for problem in after_update(upgraded)]
+        failures += [f"{version} -> {current}: {problem}" for problem in after_update(upgraded, version)]
     failures += update_from_release(cluster, installer, expected)
     return failures
