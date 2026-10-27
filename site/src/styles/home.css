@@ -27,6 +27,8 @@ nav a:hover,.text-link:hover { color:var(--copper); }
 .status-dot { display:inline-block; width:6px; height:6px; background:var(--green); border-radius:50%; flex-shrink:0; }
 h1 { font-size:clamp(40px,4.4vw,62px); letter-spacing:-2.6px; line-height:1.12; margin:22px 0 20px; font-weight:520; }
 .hero-description { font-size:19px; line-height:1.65; max-width:630px; color:var(--body); }
+.hero-performance { font-size:17px; line-height:1.7; max-width:630px; color:var(--body); }
+.hero-performance a { color:var(--ink); text-decoration:underline; text-underline-offset:3px; }
 .hero-actions { display:flex; gap:26px; align-items:center; margin-top:24px; }
 .button { padding:15px 22px; border-radius:5px; display:inline-flex; gap:31px; font-size:16px; font-weight:550; }
 .primary { background:var(--ink); color:var(--paper); transition:transform .2s; }
