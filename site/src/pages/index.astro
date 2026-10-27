@@ -26,15 +26,15 @@ SELECT warren.refresh('social');`;
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="Deep traversal and whole-graph computation for PostgreSQL. Keep your tables, follow the connections, and bring the results back to SQL." />
+    <meta name="description" content="Deep graph traversal and whole-graph computation inside PostgreSQL, over nodes and edges in ordinary tables." />
     <meta name="theme-color" content="#f7f6ef" />
-    <meta property="og:title" content="pg_warren — Your tables. A whole graph of possibilities." />
+    <meta property="og:title" content="pg_warren — Deep graph traversal inside PostgreSQL" />
     <meta property="og:description" content="Deep traversal and whole-graph computation, inside PostgreSQL, over your ordinary tables." />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://exadev.github.io/pg_warren/" />
     <link rel="canonical" href="https://exadev.github.io/pg_warren/" />
     <link rel="icon" type="image/svg+xml" href={mark.src} />
-    <title>pg_warren — Your tables. A whole graph of possibilities.</title>
+    <title>pg_warren — Deep graph traversal inside PostgreSQL</title>
     <script is:inline>
       try {
         const saved = localStorage.getItem('starlight-theme');
@@ -48,7 +48,7 @@ SELECT warren.refresh('social');`;
     <header class="site-header wrap">
       <a class="brand" href={`${base}/`} aria-label="pg_warren home"><img src={mark.src} width="38" height="38" alt="" />pg_warren<span class="brand-dot">.</span></a>
       <nav aria-label="Main navigation">
-        <a href="#possibilities">Explore</a>
+        <a href="#capabilities">Capabilities</a>
         <a href={`${base}/docs/traversal/`}>Documentation</a>
         <a class="github-link" href={repo}>GitHub <span aria-hidden="true">↗</span></a>
         <button class="theme-toggle" type="button" aria-label="Switch colour theme" title="Switch colour theme"><span aria-hidden="true">◐</span></button>
@@ -57,11 +57,11 @@ SELECT warren.refresh('social');`;
     <main id="main">
       <section class="hero wrap" aria-labelledby="hero-title">
         <div class="hero-copy">
-          <a class="eyebrow release-note" href={`${repo}/blob/main/CHANGELOG.md`}><span class="status-dot"></span> GROWING TOWARDS 1.0 <span aria-hidden="true">↗</span></a>
-          <h1 id="hero-title">Your tables.<br />A whole graph<br />of <em>possibilities.</em></h1>
-          <p class="hero-description">Deep traversal and whole-graph computation for PostgreSQL. All the connections in your data, right where your data lives.</p>
-          <div class="hero-actions"><a class="button primary" href="#get-started">Get started <span aria-hidden="true">↗</span></a><a class="text-link" href={`${base}/docs/traversal/`}>Read the docs <span aria-hidden="true">→</span></a></div>
-          <p class="hero-footnote">Ordinary tables. Familiar SQL. New paths to explore.</p>
+          <a class="eyebrow release-note" href={`${repo}/blob/main/CHANGELOG.md`}><span class="status-dot"></span> PRE-1.0 · IN DEVELOPMENT <span aria-hidden="true">↗</span></a>
+          <h1 id="hero-title">Deep graph traversal<br />inside PostgreSQL.</h1>
+          <p class="hero-description">A PostgreSQL extension for deep traversal and whole-graph computation over nodes and edges in your ordinary tables. Query with SQL functions and join the results back to your data.</p>
+          <div class="hero-actions"><a class="button primary" href={`${repo}#install`}>Installation <span aria-hidden="true">↗</span></a><a class="text-link" href={`${base}/docs/traversal/`}>Read the docs <span aria-hidden="true">→</span></a></div>
+          <p class="hero-footnote">BFS · shortest paths · PageRank · communities · spectral analysis</p>
         </div>
         <div class="hero-art">
           <svg class="warren-map" viewBox="0 0 580 540" role="img" aria-labelledby="map-title map-desc">
@@ -89,13 +89,13 @@ SELECT warren.refresh('social');`;
             <g class="table-tag"><rect x="323" y="25" width="195" height="48" rx="8"/><path d="M338 42h16m-16 6h16m-16 6h16m-11-12v12" fill="none" stroke="currentColor"/><text x="366" y="54">your ordinary tables</text></g>
             <path d="M418 73L404 129" class="table-connector" fill="none" stroke-dasharray="3 5" />
           </svg>
-          <div class="map-caption"><span class="status-dot"></span> FOLLOW THE CONNECTIONS <span>fig. 01 / a little warren</span></div>
+          <div class="map-caption"><span class="status-dot"></span> GRAPH TRAVERSAL <span>start → depth 3</span></div>
         </div>
       </section>
-      <div class="foundation-strip"><div class="wrap"><span>BUILT FOR THE POSTGRES WAY</span><p>Your data stays in your tables.</p><span class="strip-plus" aria-hidden="true">+</span><p>Your logic stays in SQL.</p><span class="strip-plus" aria-hidden="true">+</span><p>Your graph lives alongside.</p></div></div>
+      <div class="foundation-strip"><div class="wrap"><span>POSTGRESQL 15–18</span><p>SQL-callable functions</p><span class="strip-plus" aria-hidden="true">·</span><p>Transactional graph versions</p><span class="strip-plus" aria-hidden="true">·</span><p>No separate graph service</p></div></div>
 
       <section class="example-section wrap section-space" aria-labelledby="example-title">
-        <div class="section-heading"><span class="eyebrow">01 / A FAMILIAR STARTING POINT</span><h2 id="example-title">Follow a path.<br />Bring back rows.</h2><p>Start with the people and relationships you already store. Traverse the graph, then join the results back to the details that matter.</p><a class="text-link" href={`${base}/docs/traversal/`}>Explore traversal <span aria-hidden="true">→</span></a></div>
+        <div class="section-heading"><span class="eyebrow">SQL EXAMPLE</span><h2 id="example-title">Traverse a graph.<br />Join the results.</h2><p>This breadth-first search returns nodes within three hops of Ada, including the start at depth zero. The result joins directly to the people table by external id.</p><a class="text-link" href={`${base}/docs/traversal/`}>Explore traversal <span aria-hidden="true">→</span></a></div>
         <div class="query-window">
           <div class="window-bar"><span><i></i><i></i><i></i></span><span>social.sql</span><button type="button" class="copy-query" aria-label="Copy traversal SQL">Copy SQL</button><span class="sr-only copy-status" role="status"></span></div>
           <div class="query-code"><Code code={query} lang="sql" theme="css-variables" /></div>
@@ -105,23 +105,23 @@ SELECT warren.refresh('social');`;
         <div class="example-note"><p>This query reads a built graph version. Refresh the graph to include later table changes.</p><details><summary>See the complete example setup</summary><Code code={setup} lang="sql" theme="css-variables" /><p>After installing the extension, run this setup in a fresh database, then run the query above. The example and its results are checked in the project’s <a href={`${repo}/blob/main/test/sql/docs_examples.sql`}>SQL documentation tests</a>.</p></details></div>
       </section>
 
-      <section id="possibilities" class="possibilities section-space" aria-labelledby="possibilities-title"><div class="wrap">
-        <div class="section-top"><div><span class="eyebrow">02 / ROOM TO EXPLORE</span><h2 id="possibilities-title">One graph.<br />Many ways in.</h2></div><p>From a single connection to the shape of the whole network. The same compact graph supports traversal, computation, and comparison.</p></div>
+      <section id="capabilities" class="possibilities section-space" aria-labelledby="possibilities-title"><div class="wrap">
+        <div class="section-top"><div><span class="eyebrow">CAPABILITIES</span><h2 id="possibilities-title">Traversal, compute,<br />and change detection.</h2></div><p>One compact adjacency structure supports path queries, iterative graph algorithms, and structural comparisons between graph versions.</p></div>
         <div class="capabilities">
-          <a href={`${base}/docs/traversal/`} class="capability"><span class="capability-number">01</span><svg viewBox="0 0 100 60" aria-hidden="true"><path d="M10 40L38 15 65 40 90 15"/><circle cx="10" cy="40" r="5"/><circle cx="38" cy="15" r="5"/><circle cx="65" cy="40" r="5"/><circle cx="90" cy="15" r="5"/></svg><h3>Find your way.</h3><p>Reachability, shortest paths, and typed walks. Follow relationships as far as the question takes you.</p><span class="capability-link">Traversal <span aria-hidden="true">↗</span></span></a>
-          <a href={`${repo}/blob/main/docs/communities.md`} class="capability"><span class="capability-number">02</span><svg viewBox="0 0 100 60" aria-hidden="true"><path d="M15 30L30 12 42 42 15 30M63 15L87 30 66 48 63 15M42 42L63 15"/><circle cx="15" cy="30" r="5"/><circle cx="30" cy="12" r="5"/><circle cx="42" cy="42" r="5"/><circle cx="63" cy="15" r="5"/><circle cx="87" cy="30" r="5"/><circle cx="66" cy="48" r="5"/></svg><h3>See what connects.</h3><p>PageRank, components, Louvain, and Leiden. Find influential nodes and the communities around them.</p><span class="capability-link">Algorithms & communities <span aria-hidden="true">↗</span></span></a>
-          <a href={`${repo}/blob/main/docs/change-detection.md`} class="capability"><span class="capability-number">03</span><svg viewBox="0 0 100 60" aria-hidden="true"><path d="M13 30L35 12 50 40 13 30M50 40L76 15 90 43 50 40"/><path class="new-edge" d="M35 12L76 15"/><circle cx="13" cy="30" r="5"/><circle cx="35" cy="12" r="5"/><circle cx="50" cy="40" r="5"/><circle cx="76" cy="15" r="5"/><circle cx="90" cy="43" r="5"/></svg><h3>Understand change.</h3><p>Build a staged version, compare its structure, and decide whether to commit. In one transaction.</p><span class="capability-link">Versions & change detection <span aria-hidden="true">↗</span></span></a>
+          <a href={`${base}/docs/traversal/`} class="capability"><span class="capability-number">01</span><svg viewBox="0 0 100 60" aria-hidden="true"><path d="M10 40L38 15 65 40 90 15"/><circle cx="10" cy="40" r="5"/><circle cx="38" cy="15" r="5"/><circle cx="65" cy="40" r="5"/><circle cx="90" cy="15" r="5"/></svg><h3>Deep traversal</h3><p>Breadth-first search, reachability, shortest paths, and typed walks with relation and node filters.</p><span class="capability-link">Traversal <span aria-hidden="true">↗</span></span></a>
+          <a href={`${repo}/blob/main/docs/communities.md`} class="capability"><span class="capability-number">02</span><svg viewBox="0 0 100 60" aria-hidden="true"><path d="M15 30L30 12 42 42 15 30M63 15L87 30 66 48 63 15M42 42L63 15"/><circle cx="15" cy="30" r="5"/><circle cx="30" cy="12" r="5"/><circle cx="42" cy="42" r="5"/><circle cx="63" cy="15" r="5"/><circle cx="87" cy="30" r="5"/><circle cx="66" cy="48" r="5"/></svg><h3>Graph algorithms</h3><p>PageRank, connected components, Louvain, Leiden, and spectral analysis over the same graph versions.</p><span class="capability-link">Algorithms & communities <span aria-hidden="true">↗</span></span></a>
+          <a href={`${repo}/blob/main/docs/change-detection.md`} class="capability"><span class="capability-number">03</span><svg viewBox="0 0 100 60" aria-hidden="true"><path d="M13 30L35 12 50 40 13 30M50 40L76 15 90 43 50 40"/><path class="new-edge" d="M35 12L76 15"/><circle cx="13" cy="30" r="5"/><circle cx="35" cy="12" r="5"/><circle cx="50" cy="40" r="5"/><circle cx="76" cy="15" r="5"/><circle cx="90" cy="43" r="5"/></svg><h3>Version comparisons</h3><p>Build a staged version, compare its structure, and decide whether to commit. In one transaction.</p><span class="capability-link">Versions & change detection <span aria-hidden="true">↗</span></span></a>
         </div>
       </div></section>
 
-      <section class="architecture wrap section-space" aria-labelledby="architecture-title"><div class="section-top"><div><span class="eyebrow">03 / RIGHT AT HOME</span><h2 id="architecture-title">A graph engine.<br />A Postgres citizen.</h2></div><p>Define your nodes and edges with two SQL queries. pg_warren builds a compact, memory-resident CSR adjacency structure. Your tables remain the source of truth.</p></div>
+      <section class="architecture wrap section-space" aria-labelledby="architecture-title"><div class="section-top"><div><span class="eyebrow">ARCHITECTURE</span><h2 id="architecture-title">From tables to graph<br />to SQL results.</h2></div><p>Define your nodes and edges with two SQL queries. pg_warren builds a compact, memory-resident CSR adjacency structure. Your tables remain the source of truth.</p></div>
         <ol class="pipeline"><li><span class="pipeline-index">01</span><h3>Your tables</h3><p>Nodes and edges.<br />Defined with SQL.</p><code>create_graph</code></li><li><span class="pipeline-index">02</span><h3>A graph version</h3><p>Immutable. Transactional.<br />Built when you choose.</p><code>refresh</code></li><li><span class="pipeline-index">03</span><h3>Follow or compute</h3><p>Paths, vectors,<br />and whole-graph algorithms.</p><code>warren.*</code></li><li><span class="pipeline-index">04</span><h3>Back to your rows</h3><p>Join by node id.<br />Keep using SQL.</p><code>JOIN</code></li></ol>
-        <div class="fit-note"><span class="eyebrow">WHEN TO REACH FOR IT</span><p>Small frontiers are a natural fit for recursive SQL. When a traversal touches a large part of the graph—or an algorithm repeatedly works over all of it—pg_warren gives that work a dedicated engine.</p><a class="text-link" href={`${repo}#when-to-use-it-frontier-size-not-hop-count`}>Find the right fit <span aria-hidden="true">↗</span></a></div>
+        <div class="fit-note"><span class="eyebrow">WHEN TO USE IT</span><p>Small frontiers are a natural fit for recursive SQL. When a traversal touches a large part of the graph—or an algorithm repeatedly works over all of it—pg_warren gives that work a dedicated engine.</p><a class="text-link" href={`${repo}#when-to-use-it-frontier-size-not-hop-count`}>Find the right fit <span aria-hidden="true">↗</span></a></div>
       </section>
 
-      <section id="get-started" class="get-started"><div class="wrap start-inner"><div><span class="eyebrow">THE NEXT CONNECTION IS YOURS</span><h2>Down the<br /><em>rabbit hole.</em></h2><p>Start with a small graph. Ask a bigger question.</p></div><div class="start-links"><a href={`${repo}#install`}><span><small>START HERE</small>Install pg_warren</span><span aria-hidden="true">↗</span></a><a href={`${base}/docs/traversal/`}><span><small>GET TO KNOW THE ENGINE</small>Read the traversal guide</span><span aria-hidden="true">→</span></a><a href={`${repo}/tree/main/bench/results/corpus/head_to_head`}><span><small>LOOK UNDER THE HOOD</small>Explore the benchmarks</span><span aria-hidden="true">↗</span></a></div></div></section>
+      <section id="get-started" class="get-started"><div class="wrap start-inner"><div><span class="eyebrow">INSTALLATION & DOCUMENTATION</span><h2>Use pg_warren</h2><p>Install the extension, define a graph, and run your first query.</p></div><div class="start-links"><a href={`${repo}#install`}><span><small>START HERE</small>Install pg_warren</span><span aria-hidden="true">↗</span></a><a href={`${base}/docs/traversal/`}><span><small>SQL FUNCTIONS</small>Read the traversal guide</span><span aria-hidden="true">→</span></a><a href={`${repo}/tree/main/bench/results/corpus/head_to_head`}><span><small>PERFORMANCE</small>Read benchmark results</span><span aria-hidden="true">↗</span></a></div></div></section>
     </main>
-    <footer class="wrap site-footer"><a class="brand" href={`${base}/`}><img src={mark.src} width="30" height="30" alt="" />pg_warren<span class="brand-dot">.</span></a><p>A little warren. Right inside Postgres.</p><nav aria-label="Footer"><a href={`${repo}/blob/main/LICENSE`}>Apache 2.0</a><a href={`${repo}/blob/main/CONTRIBUTING.md`}>Contribute ↗</a><a href={repo}>GitHub ↗</a></nav><p class="preview-note">Design preview · Documentation follows development on main.</p></footer>
+    <footer class="wrap site-footer"><a class="brand" href={`${base}/`}><img src={mark.src} width="30" height="30" alt="" />pg_warren<span class="brand-dot">.</span></a><p>Graph traversal and computation for PostgreSQL.</p><nav aria-label="Footer"><a href={`${repo}/blob/main/LICENSE`}>Apache 2.0</a><a href={`${repo}/blob/main/CONTRIBUTING.md`}>Contribute ↗</a><a href={repo}>GitHub ↗</a></nav><p class="preview-note">Design preview · Documentation follows development on main.</p></footer>
     <script>
       const toggle = document.querySelector<HTMLButtonElement>('.theme-toggle');
       function updateThemeLabel() {
