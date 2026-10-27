@@ -1796,6 +1796,15 @@ pg_warren/
 
 Each milestone leaves `main` green and demonstrable.
 
+**Website (design preview).** `site/` contains an Astro static homepage and a
+Starlight guide generated from canonical `docs/traversal.md`, without changing
+its tested SQL. It targets the `/pg_warren/` Pages base path and explicitly
+labels development documentation. `.github/workflows/site.yml` builds and
+checks a downloadable review artifact only. It does not deploy: the release
+workflow currently owns Pages and its signed `/apt/` repository. Any later
+website publication must assemble both trees together and preserve the release
+and Pages approval gates (see `site/README.md`).
+
 **M0 — Skeleton and prior-art reading.** Layout, pgrx builds, `CREATE EXTENSION pg_warren`, `warren.version()`, CI. Licence: Apache-2.0. The §4A reading is completed, `docs/prior-art-notes.md` is written, and §14 item 16 is recorded before M1 begins.
 
 **M1 — warren-core: structure and traversal.** CSR with per-relation segments and tombstones; stable-ID merge; BFS, reachable set, shortest path, components. Property tests. `criterion` micro-benchmarks.
