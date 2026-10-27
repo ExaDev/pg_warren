@@ -504,8 +504,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Build postgresql-16-pg-warren (release/packages.py deb)
-        run: python3 release/packages.py deb bookworm . dist --majors 16
+      # Two majors in one build, as a release builds four: one major alone
+      # never exercised how they reach pg_buildext.
+      - name: Build postgresql-15-pg-warren and postgresql-16-pg-warren (release/packages.py deb)
+        run: python3 release/packages.py deb bookworm . dist --majors 15 16
       - name: The publish job's check passes on it (release/assets.py check-deb)
         run: |
           set -euo pipefail
@@ -523,18 +525,29 @@ jobs:
       - name: Docker image from it, and its smoke test
         run: python3 release/packages.py image dist/postgresql-16-pg-warren_*.deb pg_warren:ci-pg16
 
-  packages-arm64:
-    # The same on arm64 and Ubuntu, off the pull-request path (as Miri):
-    # on pushes to main, dispatches (each release branch) and release PRs,
-    # so a release's arm64 and Ubuntu builds are proven before it is tagged.
-    name: Debian package and image (PG 18, noble, arm64)
+  packages-release:
+    # What a release builds (release-publish.yml's debs job), off the
+    # pull-request path (as Miri): on pushes to main, dispatches (each
+    # release branch) and release PRs, so every distribution and arch a
+    # release publishes, with PG 15-18 in one build, is proven before it is
+    # tagged. Each package installed with apt and smoke-tested; on trixie
+    # (the postgres images' base) the Docker images made from them too.
+    name: Debian packages (PG 15-18, ${{ matrix.codename }}, ${{ matrix.arch }})
     if: github.event_name != 'pull_request' || startsWith(github.head_ref, 'release-')
-    runs-on: ubuntu-24.04-arm
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        codename: [bookworm, trixie, jammy, noble]
+        arch: [amd64, arm64]
+    env:
+      CODENAME: ${{ matrix.codename }}
+      ARCH: ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Build postgresql-18-pg-warren (release/packages.py deb)
-        run: python3 release/packages.py deb noble . dist --majors 18
-      - name: The publish job's check passes on it (release/assets.py check-deb)
+      - name: Build postgresql-{15..18}-pg-warren (release/packages.py deb)
+        run: python3 release/packages.py deb "$CODENAME" . dist
+      - name: The publish job's check passes on them (release/assets.py check-deb)
         run: |
           set -euo pipefail
           version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
@@ -544,8 +557,17 @@ jobs:
             cp -- "$deb" "$RUNNER_TEMP/assets/${name//\~/.}"
             python3 release/assets.py check-deb "$RUNNER_TEMP/assets/${name//\~/.}" "$version"
           done
-      - name: Install it with apt, preload, restart, smoke test
-        run: python3 release/packages.py check dist/postgresql-18-pg-warren_*.deb
+      - name: Install each with apt, preload, restart, smoke test
+        run: |
+          set -euo pipefail
+          for deb in dist/*.deb; do python3 release/packages.py check "$deb"; done
+      - name: Docker images, each smoke-tested
+        if: matrix.codename == 'trixie'
+        run: |
+          set -euo pipefail
+          for major in 15 16 17 18; do
+            python3 release/packages.py image dist/postgresql-"$major"-pg-warren_*.deb "pg_warren:ci-pg$major-$ARCH"
+          done
 
   actionlint:
     name: Workflows (actionlint)
