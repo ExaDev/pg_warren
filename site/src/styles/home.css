@@ -32,7 +32,6 @@ h1 { font-size:clamp(40px,4.4vw,62px); letter-spacing:-2.6px; line-height:1.12; 
 .primary { background:var(--ink); color:var(--paper); transition:transform .2s; }
 .primary:hover { transform:translateY(-2px); }
 .text-link { font-size:16px; font-weight:550; display:inline-flex; gap:18px; align-items:center; }
-.hero-footnote { font-size:14px; line-height:1.7; color:var(--body); margin-top:18px; }
 .hero-art { align-self:stretch; display:flex; flex-direction:column; justify-content:center; min-width:0; }
 .warren-map { display:block; width:100%; max-width:420px; margin-inline:auto; overflow:visible; }
 .contours { opacity:.08; }
@@ -45,8 +44,6 @@ h1 { font-size:clamp(40px,4.4vw,62px); letter-spacing:-2.6px; line-height:1.12; 
 .table-tag rect { fill:var(--card); stroke:var(--line); }
 .table-tag text { fill:var(--ink); font:13px var(--mono); }
 .table-connector { stroke:var(--body); }
-.map-caption { display:flex; gap:9px; align-items:center; font:12px var(--mono); letter-spacing:.5px; padding:0 12px; }
-.map-caption>span:last-child { margin-left:auto; font-size:12px; letter-spacing:0; color:var(--body); }
 .foundation-strip { border-block:1px solid var(--line); }
 .foundation-strip .wrap { display:flex; align-items:center; justify-content:space-between; gap:18px; padding-block:12px; }
 .foundation-strip .wrap>span:first-child { font:12px var(--mono); letter-spacing:.5px; color:var(--body); }
@@ -123,7 +120,6 @@ h3 { font-size:23px; letter-spacing:-.8px; font-weight:500; margin:0 0 14px; }
   .hero { grid-template-columns:1.3fr .7fr; gap:20px; }
   h1 { font-size:46px; }
   .hero-description { font-size:18px; }
-  .map-caption { display:none; }
   .foundation-strip .wrap { flex-wrap:wrap; justify-content:center; gap:8px 18px; }
   .foundation-strip .wrap>span:first-child { flex-basis:100%; text-align:center; }
   .foundation-strip p { margin-block:4px; }

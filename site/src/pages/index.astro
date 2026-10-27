@@ -61,7 +61,6 @@ SELECT warren.refresh('social');`;
           <h1 id="hero-title">Deep graph traversal<br />inside PostgreSQL.</h1>
           <p class="hero-description">A PostgreSQL extension for deep traversal and whole-graph computation over nodes and edges in your ordinary tables. Query with SQL functions and join the results back to your data.</p>
           <div class="hero-actions"><a class="button primary" href={`${repo}#install`}>Installation <span aria-hidden="true">↗</span></a><a class="text-link" href={`${base}/docs/traversal/`}>Read the docs <span aria-hidden="true">→</span></a></div>
-          <p class="hero-footnote">BFS · shortest paths · PageRank · communities · spectral analysis</p>
         </div>
         <div class="hero-art">
           <svg class="warren-map" viewBox="0 0 580 540" role="img" aria-labelledby="map-title map-desc">
@@ -86,10 +85,9 @@ SELECT warren.refresh('social');`;
             <g class="large-nodes" stroke-width="2"><circle cx="105" cy="286" r="15"/><circle cx="198" cy="207" r="12"/><circle cx="299" cy="265" r="12"/><circle cx="404" cy="189" r="12"/></g>
             <circle cx="105" cy="286" r="5" class="root-node" />
             <g class="map-labels"><text x="77" y="323">START</text><text x="182" y="182">01</text><text x="287" y="301">02</text><text x="394" y="163">03</text></g>
-            <g class="table-tag"><rect x="323" y="25" width="195" height="48" rx="8"/><path d="M338 42h16m-16 6h16m-16 6h16m-11-12v12" fill="none" stroke="currentColor"/><text x="366" y="54">your ordinary tables</text></g>
+            <g class="table-tag"><rect x="300" y="25" width="240" height="48" rx="8"/><path d="M315 42h16m-16 6h16m-16 6h16m-11-12v12" fill="none" stroke="currentColor"/><text x="343" y="54">your ordinary tables</text></g>
             <path d="M418 73L404 129" class="table-connector" fill="none" stroke-dasharray="3 5" />
           </svg>
-          <div class="map-caption"><span class="status-dot"></span> GRAPH TRAVERSAL <span>start → depth 3</span></div>
         </div>
       </section>
       <div class="foundation-strip"><div class="wrap"><span>POSTGRESQL 15–18</span><p>SQL-callable functions</p><span class="strip-plus" aria-hidden="true">·</span><p>Transactional graph versions</p><span class="strip-plus" aria-hidden="true">·</span><p>No separate graph service</p></div></div>
