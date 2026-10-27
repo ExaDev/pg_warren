@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.7.0 — in development
+## 0.7.0 — proven on real graphs and real deployments (2026-10-27)
 
 Milestone M11 of DESIGN.md §13: proven on real graphs and in real
 deployments. pg_warren now runs a suite of 19 real graphs pinned through
