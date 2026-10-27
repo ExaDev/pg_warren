@@ -6,6 +6,11 @@ on:
       - site/**
       - docs/**
       - README.md
+      - CHANGELOG.md
+      - CONTRIBUTING.md
+      - Cargo.toml
+      - sql/**
+      - bench/results/corpus/head_to_head/**
       - .github/workflows/site.yml
   push:
     branches: [main]
@@ -13,6 +18,11 @@ on:
       - site/**
       - docs/**
       - README.md
+      - CHANGELOG.md
+      - CONTRIBUTING.md
+      - Cargo.toml
+      - sql/**
+      - bench/results/corpus/head_to_head/**
       - .github/workflows/site.yml
   workflow_dispatch:
 
