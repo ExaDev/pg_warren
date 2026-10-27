@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.8.0 — in development
+
 ## 0.7.0 — proven on real graphs and real deployments (2026-10-27)
 
 Milestone M11 of DESIGN.md §13: proven on real graphs and in real
