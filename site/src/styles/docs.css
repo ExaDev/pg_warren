@@ -30,5 +30,10 @@ h1, h2, h3 { letter-spacing: -.035em; }
 .sl-markdown-content table { font-size: 1rem; }
 .sl-markdown-content :is(th, td) { padding: .8rem 1rem; }
 .expressive-code { --ec-codeFontSize: .9375rem; margin-block: 1.25rem; }
+.starlight-aside--note {
+  --sl-color-asides-text-accent: var(--sl-color-accent-high);
+  --sl-color-asides-border: var(--sl-color-accent);
+  background: var(--sl-color-accent-low);
+}
 header.header { backdrop-filter: blur(16px); }
 :focus-visible { outline: 3px solid var(--sl-color-accent); outline-offset: 4px; }

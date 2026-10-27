@@ -2,3 +2,15 @@ node_modules/
 dist/
 .astro/
 src/content/docs/docs/traversal.md
+src/content/docs/docs/semantics.md
+src/content/docs/docs/compute.md
+src/content/docs/docs/communities.md
+src/content/docs/docs/change-detection.md
+src/content/docs/docs/limits.md
+src/content/docs/docs/installation.md
+src/content/docs/docs/quickstart.md
+src/content/docs/docs/performance.md
+src/content/docs/docs/changelog.md
+src/content/docs/docs/benchmarks.md
+src/content/docs/docs/contributing.md
+src/content/docs/docs/reference.md

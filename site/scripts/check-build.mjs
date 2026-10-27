@@ -1,9 +1,13 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { generatedPages } from './prepare-docs.mjs';
 
 const siteUrl = new URL('https://exadev.github.io/pg_warren/');
 const defaultDirectory = fileURLToPath(new URL('../dist/', import.meta.url));
+export const requiredPages = ['index.html', 'docs/index.html',
+  ...generatedPages.map(({ slug }) => `docs/${slug}/index.html`),
+  ...['operations', 'architecture', 'reference'].map((slug) => `docs/${slug}/index.html`)];
 
 function entities(value) {
   const named = { amp: '&', quot: '"', apos: "'", lt: '<', gt: '>' };
@@ -59,12 +63,13 @@ export async function checkBuild(directory = defaultDirectory) {
     });
   }
 
-  for (const file of ['index.html', 'docs/traversal/index.html']) {
-    const document = documents.get(file);
-    if (!document) {
-      errors.push(`Missing required page: ${file}`);
-      continue;
-    }
+  for (const file of requiredPages) {
+    if (!documents.has(file)) errors.push(`Missing required page: ${file}`);
+  }
+  for (const [file, document] of documents) {
+    // Astro emits 404.html with a /404/ preferred URL. It is the sole
+    // exception; every actual content page must identify its own public URL.
+    if (file === '404.html') continue;
     const canonical = document.elements.filter(({ name, attributes }) =>
       name === 'link' && attributes.rel?.split(/\s+/).includes('canonical'));
     const expected = new URL(pagePath(file), siteUrl).href;

@@ -839,10 +839,10 @@ the client and is left for whoever gets that backend next
 Persisted vectors, graphs and versions are in the catalog and read the
 same through any backend.
 
-**Not yet supported:** `text` node ids; incremental maintenance (every
+**Not yet supported:** incremental maintenance (every
 `refresh` is a full rebuild); `refresh` or `compact` of a graph derived by
-contraction (contract again); edge properties beyond one weight;
-per-role quotas on readers' vectors. (`DROP ROLE` still cleans up nothing
+contraction (contract again); edge properties beyond one weight.
+(`DROP ROLE` still cleans up nothing
 by itself: see docs/semantics.md, "Dropping a role".)
 
 **Cost shapes to know.**

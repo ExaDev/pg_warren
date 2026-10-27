@@ -1796,11 +1796,16 @@ pg_warren/
 
 Each milestone leaves `main` green and demonstrable.
 
-**Website (design preview).** `site/` contains an Astro static homepage and a
-Starlight guide generated from canonical `docs/traversal.md`, without changing
-its tested SQL. It targets the `/pg_warren/` Pages base path and explicitly
-labels development documentation. `.github/workflows/site.yml` builds and
-checks a downloadable review artifact only. It does not deploy: the release
+**Website.** `site/` contains an Astro static homepage and Starlight
+documentation. The build imports canonical user guides, README installation,
+quickstart and comparisons, the changelog, contributor guide, and benchmark
+methodology without changing their tested SQL. A reference generator derives
+public signatures from the workspace version's install SQL. The site also
+has curated documentation, operations, and architecture overviews. It targets
+the `/pg_warren/` Pages base path and explicitly labels development
+documentation. `.github/workflows/site.yml` tests source preservation and
+signature extraction, builds every page, checks links, anchors, canonicals and
+search, and uploads a review artifact only. It does not deploy: the release
 workflow currently owns Pages and its signed `/apt/` repository. Any later
 website publication must assemble both trees together and preserve the release
 and Pages approval gates (see `site/README.md`).
