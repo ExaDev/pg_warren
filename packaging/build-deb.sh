@@ -41,7 +41,8 @@ cd "$build"
 rustup toolchain install   # rust-toolchain.toml
 cargo install cargo-pgrx --version "$PGRX_VERSION" --locked --quiet
 
-export PG_SUPPORTED_VERSIONS="${PG_MAJORS// /,}"
+# One major a line (supported-versions splits it with xargs -n1).
+export PG_SUPPORTED_VERSIONS="$PG_MAJORS"
 pg_buildext updatecontrol
 # -d: rustc and cargo-pgrx come from rustup, not Build-Depends.
 dpkg-buildpackage -b -us -uc -d

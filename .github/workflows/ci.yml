@@ -504,8 +504,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Build postgresql-16-pg-warren (release/packages.py deb)
-        run: python3 release/packages.py deb bookworm . dist --majors 16
+      # Two majors in one build, as a release builds four: one major alone
+      # never exercised how they reach pg_buildext.
+      - name: Build postgresql-15-pg-warren and postgresql-16-pg-warren (release/packages.py deb)
+        run: python3 release/packages.py deb bookworm . dist --majors 15 16
       - name: The publish job's check passes on it (release/assets.py check-deb)
         run: |
           set -euo pipefail
