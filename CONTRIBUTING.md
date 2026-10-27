@@ -493,13 +493,16 @@ neither the images' `pgNN` tags nor the tap. Later: reproducible builds, so
 that a second, independent build could confirm the published packages
 (DESIGN.md §13).
 
-CI keeps the path from rotting: `packages` builds `postgresql-16-pg-warren`
-for bookworm on every pull request with the same `release/packages.py`,
-checks it as the publish job does (`release/assets.py check-deb`),
-installs it with apt into a clean container, preloads, restarts and runs
-`packaging/smoke.sql`, makes the tarball, and builds and checks the Docker
-image; `packages-arm64` does the same for noble on arm64 off the
-pull-request path (as Miri); `macos` runs `brew style` and `brew audit` on
+CI keeps the path from rotting: `packages` builds `postgresql-15-pg-warren`
+and `postgresql-16-pg-warren` in one build for bookworm on every pull
+request with the same `release/packages.py`, checks them as the publish
+job does (`release/assets.py check-deb`), installs the PG 16 one with apt
+into a clean container, preloads, restarts and runs `packaging/smoke.sql`,
+makes the tarball, and builds and checks the Docker image;
+`packages-release` builds what a release builds, PG 15-18 for every
+distribution and arch, checks and installs each, and on trixie builds and
+checks the images, off the pull-request path (as Miri: on pushes to main,
+dispatches and release PRs); `macos` runs `brew style` and `brew audit` on
 the formula. Locally, with Docker:
 
 ```sh

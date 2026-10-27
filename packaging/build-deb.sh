@@ -10,7 +10,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
   build-essential ca-certificates clang curl debhelper fakeroot git gnupg libclang-dev \
-  pkgconf postgresql-common >/dev/null
+  libicu-dev pkgconf postgresql-common >/dev/null
 # PGDG (apt.postgresql.org), as its packages are built: the server headers
 # of each major, and pg_buildext.
 /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y >/dev/null
