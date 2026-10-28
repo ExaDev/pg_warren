@@ -14,3 +14,6 @@ src/content/docs/docs/changelog.md
 src/content/docs/docs/benchmarks.md
 src/content/docs/docs/contributing.md
 src/content/docs/docs/reference.md
+src/content/docs/docs/examples.md
+src/content/docs/docs/examples/
+public/examples/

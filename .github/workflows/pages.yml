@@ -6,6 +6,7 @@ on:
     paths:
       - site/**
       - docs/**
+      - examples/**
       - README.md
       - CHANGELOG.md
       - CONTRIBUTING.md
