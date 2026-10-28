@@ -32,6 +32,10 @@
   iteration, and holds four vectors of the id space (five with a seed)
   where the loop held eleven: 0.32 GB of scratch at 10M nodes instead of
   0.88 GB.
+  Twenty iterations, head to head before and after (median warm times,
+  `warren.threads = 4`): lesmis 34.7 → 1.6 ms, facebook 47.3 → 6.3 ms,
+  email-enron 74.9 → 22.6 ms, cit-hepth 65.7 → 18.6 ms and DBLP
+  318 → 113 ms, as fast as igraph or faster except on the smallest graph.
 
 ## 0.7.0 — proven on real graphs and real deployments (2026-10-27)
 
