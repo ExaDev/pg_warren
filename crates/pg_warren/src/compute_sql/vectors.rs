@@ -50,6 +50,15 @@ pub(crate) fn vector_bytes(dtype: Dtype, width: usize, length: u64) -> u64 {
 /// never replace, and so delete, a persisted vector.
 const RESERVED_PREFIX: &str = "_warren_";
 
+/// Refuses `name` if it has the prefix of the library's intermediates:
+/// for a persisted vector, or a library function's argument (§6.7).
+pub(crate) fn refuse_reserved(name: &str) -> Result<(), ComputeSqlError> {
+    match name.starts_with(RESERVED_PREFIX) {
+        true => Err(ComputeSqlError::ReservedName(name.to_owned())),
+        false => Ok(()),
+    }
+}
+
 /// A vector name bound to a version, and its element type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BoundName {
@@ -227,8 +236,8 @@ impl<E: CachedIds> Vectors<E> {
         if name.is_empty() {
             return Err(ComputeSqlError::EmptyName);
         }
-        if persist && name.starts_with(RESERVED_PREFIX) {
-            return Err(ComputeSqlError::ReservedName(name.to_owned()));
+        if persist {
+            refuse_reserved(name)?;
         }
         if let Some(old) = self.record(name) {
             require_creator_or_owner(old.created_by, self.graph.owner, &self.graph.name, name)?;

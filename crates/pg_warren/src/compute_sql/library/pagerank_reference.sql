@@ -1,4 +1,6 @@
--- warren.pagerank (DESIGN.md §6.7): PageRank by power iteration, as
+-- The oracle of warren.pagerank's tests: the PL/pgSQL library function
+-- it replaced (0.7.0, DESIGN.md §6.7), as public.pagerank_reference, line
+-- for line over the compute primitives. PageRank by power iteration, as
 -- NetworkX computes it. Rank flows along edges, split by out-weight (the
 -- edge count when unweighted); dangling nodes' rank, and the 1 - damping
 -- teleport, go to the personalisation: uniform, or proportional to vector
@@ -7,11 +9,12 @@
 -- the iterations run. Constants enter expressions as constant vectors,
 -- never as text, so no client setting (extra_float_digits) rounds them.
 -- A pair linked in several relations is one edge, or with `per_relation`
--- an edge in each (DESIGN.md §5.3).
-CREATE FUNCTION warren.pagerank(graph text, "out" text, damping float8 DEFAULT 0.85,
-                                tol float8 DEFAULT 1e-6, max_iter int DEFAULT 100,
-                                seed text DEFAULT NULL, rels text[] DEFAULT NULL,
-                                weighted boolean DEFAULT NULL, version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
+-- an edge in each (DESIGN.md §5.3). It also reports its progress, as the
+-- library did.
+CREATE FUNCTION public.pagerank_reference(graph text, "out" text, damping float8 DEFAULT 0.85,
+                                          tol float8 DEFAULT 1e-6, max_iter int DEFAULT 100,
+                                          seed text DEFAULT NULL, rels text[] DEFAULT NULL,
+                                          weighted boolean DEFAULT NULL, version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
 RETURNS int LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   v bigint := coalesce(version, (warren.info(graph) ->> 'current_version')::bigint);

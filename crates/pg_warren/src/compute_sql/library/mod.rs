@@ -2,9 +2,12 @@
 //! compute primitives, shipped as readable templates. Each pins the
 //! version it starts on, keeps its intermediate vectors transient
 //! (`persist := false`) under names `_warren_<algorithm>_<part>`, drops
-//! them when it finishes, and persists only its output.
+//! them when it finishes, and persists only its output. `pagerank`, a
+//! PL/pgSQL function through 0.7.0, is a native kernel (`pagerank`) that
+//! computes what that function did; the function is its tests' oracle.
 
-pgrx::extension_sql_file!("pagerank.sql", name = "pagerank", requires = [extension::warren]);
+mod pagerank;
+
 pgrx::extension_sql_file!(
     "degree_vector.sql",
     name = "degree_vector",

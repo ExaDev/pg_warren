@@ -2,6 +2,37 @@
 
 ## 0.8.0 — in development
 
+### Upgrading
+
+- **Run `ALTER EXTENSION pg_warren UPDATE;` in every database that has
+  the extension**, after installing the new build. The update replaces
+  `warren.pagerank`'s PL/pgSQL definition with the native kernel (under
+  Performance), keeping its privileges; it changes no table. Until the
+  update, 0.7.0's definition still runs with the new library, as it did.
+
+### Behaviour changes
+
+- `warren.pagerank` refuses a NULL `out` or `damping` before it runs, as
+  `out must not be NULL` and `damping must not be NULL` (SQLSTATE 22004,
+  as before; 0.7.0 ran first and then named `y`, or `value`). An empty
+  or unwritable `out` is refused before the run, too. Its intermediates
+  (`_warren_pagerank_*`) no longer exist, even during a run, and it no
+  longer carries `SET search_path`: the access guard pins it for the call
+  (DESIGN.md §7). Everything else is kept: its signature, ranks to the
+  bit, iteration counts, SQLSTATEs, progress, parallel label and
+  privileges, including a NULL `tol` never stopping it early and a NULL
+  `max_iter` running no iteration.
+
+### Performance
+
+- `warren.pagerank` is a native kernel, not a PL/pgSQL loop over the
+  compute primitives (DESIGN.md §6.7). The loop made eleven calls an
+  iteration, about 1.5 ms of overhead an iteration however small the
+  graph; the kernel makes two parallel passes and one product an
+  iteration, and holds four vectors of the id space (five with a seed)
+  where the loop held eleven: 0.32 GB of scratch at 10M nodes instead of
+  0.88 GB.
+
 ## 0.7.0 — proven on real graphs and real deployments (2026-10-27)
 
 Milestone M11 of DESIGN.md §13: proven on real graphs and in real
