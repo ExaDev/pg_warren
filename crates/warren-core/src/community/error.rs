@@ -58,6 +58,10 @@ pub enum CommunityError {
         /// Its weight.
         weight: f64,
     },
+    /// The refinement's draws need a randomness `θ` that is a finite
+    /// number of at least 0.
+    #[error("randomness must be a finite number of at least 0, not {0}")]
+    Randomness(f64),
 }
 
 impl From<Cancelled> for CommunityError {

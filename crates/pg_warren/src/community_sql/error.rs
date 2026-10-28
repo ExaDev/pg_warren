@@ -169,7 +169,8 @@ fn community_sqlstate(error: &CommunityError) -> PgSqlErrorCode {
         CommunityError::LabelWidth(_)
         | CommunityError::NotIntegral { .. }
         | CommunityError::UnknownAggregate(_)
-        | CommunityError::NegativeWeight { .. } => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+        | CommunityError::NegativeWeight { .. }
+        | CommunityError::Randomness(_) => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
         CommunityError::LabelLength { .. } | CommunityError::UnknownLabel { .. } => {
             PgSqlErrorCode::ERRCODE_INTERNAL_ERROR
         }
