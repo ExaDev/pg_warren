@@ -9,15 +9,23 @@ after the release PR has merged.
                                        # and no version or commit is recorded twice
     release/publish.py commit X.Y.Z    # X.Y.Z's recorded commit, once shown to be the release
     release/publish.py tag X.Y.Z       # annotated tag vX.Y.Z on X.Y.Z's recorded commit
+    release/publish.py published X.Y.Z # true if the GitHub Release on stdin (gh release view
+                                       # --json tagName,isDraft,assets) has signed sums
 
 `tag` makes the tag only on the commit sql/released.commits records for
 the version, once that commit is in HEAD's history (the release PR was
 merged with a merge commit, not squashed or rebased) and holds the released
 install script. A tag already on that commit is success, so a re-run
 succeeds; a tag on any other commit is an error, and is left alone.
+
+`published` says whether vX.Y.Z's packages are already published: its
+GitHub Release is not a draft and has SHA256SUMS and SHA256SUMS.asc
+attached. Those signed sums then name the release's packages; publishing
+it again builds nothing and takes the packages they list.
 """
 
 import hashlib
+import json
 import re
 import subprocess
 import sys
@@ -95,6 +103,11 @@ def tag(version):
     print(f"tagged {name} at {sha}")
 
 
+def published(version, view):
+    names = {asset["name"] for asset in view["assets"]}
+    return view["tagName"] == f"v{version}" and not view["isDraft"] and {"SHA256SUMS", "SHA256SUMS.asc"} <= names
+
+
 def main(argv):
     try:
         if argv == ["latest"]:
@@ -105,6 +118,8 @@ def main(argv):
             print(release_commit(argv[1]))
         elif len(argv) == 2 and argv[0] == "tag" and re.fullmatch(r"\d+\.\d+\.\d+", argv[1]):
             tag(argv[1])
+        elif len(argv) == 2 and argv[0] == "published" and re.fullmatch(r"\d+\.\d+\.\d+", argv[1]):
+            print("true" if published(argv[1], json.load(sys.stdin)) else "false")
         else:
             print(__doc__, file=sys.stderr)
             return 2

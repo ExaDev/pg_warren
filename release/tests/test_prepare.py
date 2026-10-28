@@ -171,7 +171,8 @@ def test_a_tagged_version_is_refused(repo):
 
 
 def test_a_version_not_in_development_is_refused(repo):
-    refused(repo, prepare(repo, "0.7.0", "0.8.0"), "the version in development is 0.5.0, not 0.7.0")
+    # A version no release will have, so a tag of it never answers first.
+    refused(repo, prepare(repo, "0.99.0", "0.100.0"), "the version in development is 0.5.0, not 0.99.0")
 
 
 def test_a_next_version_not_after_the_release_is_refused(repo):

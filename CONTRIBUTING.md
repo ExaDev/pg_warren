@@ -302,7 +302,12 @@ format. To benchmark a new function, add a workload with `requires` to
      key, creates the GitHub Release with CHANGELOG's section as its
      notes, and publishes the packages. A re-run succeeds if the tag is already on the recorded commit
      and fails if it is on another; run it by hand (with a version, or
-     none for the latest) to publish again.
+     none for the latest) to publish again. A release already published
+     (its GitHub Release has `SHA256SUMS` and `SHA256SUMS.asc`) is not
+     built again, since a rebuild's bytes would differ from the attached
+     packages, bottle and images: the run takes the `.deb` files its
+     signed `SHA256SUMS` lists, checked, and only completes what is
+     missing, such as its apt snapshot.
 - **Manual fallback**, without the workflows: on a branch from main,
   `release/prepare.py X.Y.Z NEXT --title "..."` (it needs cargo-pgrx
   initialised for `$PG`, default pg16), push it and open the PR, run
@@ -575,7 +580,10 @@ the combined artifact. Approving that environment publishes both the website
 and its selected apt snapshot.
 
 If publication fails before attaching the snapshot, finish or rerun the
-release workflow, then rerun the Pages workflow on `main`. Do not deploy a
+release workflow, then rerun the Pages workflow on `main`. A release published
+without a snapshot (0.7.0, by the workflow before this one) gets one when
+Release (publish) is run by hand for it: it builds nothing, and assembles the
+snapshot from the packages its signed `SHA256SUMS` lists. Do not deploy a
 website-only artifact as a workaround. For a first deployment, enable Pages
 from Actions and approve the waiting `github-pages` deployment below. Local
 website commands and canonical-content maintenance are in [site/README.md](site/README.md).
