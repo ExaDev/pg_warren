@@ -4,6 +4,7 @@ on its recorded commit once, so that a re-run succeeds and a tag on another
 commit fails."""
 
 import hashlib
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -140,3 +141,31 @@ def test_the_recorded_commit_is_printed(repo):
     done = publish(repo, "commit", "1.0.0")
     assert done.returncode == 0, done.stderr
     assert done.stdout == f"{released(repo)}\n"
+
+
+def published(view, version="1.0.0"):
+    """`publish.py published` on a `gh release view --json tagName,isDraft,assets` answer."""
+    return subprocess.run([sys.executable, str(PUBLISH), "published", version], input=json.dumps(view),
+                          capture_output=True, text=True)
+
+
+def view(*names, tag="v1.0.0", draft=False):
+    return {"tagName": tag, "isDraft": draft, "assets": [{"name": name} for name in names]}
+
+
+def test_a_release_with_signed_sums_attached_is_published():
+    done = published(view("pg_warren-1.0.0.tar.gz", "SHA256SUMS", "SHA256SUMS.asc"))
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == "true\n"
+
+
+@pytest.mark.parametrize("release", [
+    view("pg_warren-1.0.0.tar.gz", "SHA256SUMS"),
+    view("SHA256SUMS.asc"),
+    view("SHA256SUMS", "SHA256SUMS.asc", draft=True),
+    view("SHA256SUMS", "SHA256SUMS.asc", tag="v1.0.1"),
+], ids=["unsigned sums", "no sums", "a draft", "another tag"])
+def test_a_release_without_signed_sums_is_not_published(release):
+    done = published(release)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == "false\n"

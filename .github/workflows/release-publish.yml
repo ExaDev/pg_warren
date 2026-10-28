@@ -31,6 +31,12 @@ name: Release (publish)
 # publishes a signed apt snapshot. The shared Pages workflow combines that
 # snapshot with the website and deploys it behind the github-pages gate.
 #
+# A release already published (its GitHub Release has signed SHA256SUMS:
+# release/publish.py published) is not built again: a rebuild's bytes
+# would differ from the attached packages, bottle and images. Publishing
+# it again only takes the packages its signed SHA256SUMS lists, checked,
+# and completes what is missing, such as its apt snapshot.
+#
 # Both jobs check out the same commit, github.sha: the push (or dispatch)
 # that started the run. What the approver sees, "vX.Y.Z → <commit>" and the
 # notes, is read from that commit, and the publish job tags from it; a
@@ -64,6 +70,7 @@ jobs:
       version: ${{ steps.release.outputs.version }}
       commit: ${{ steps.release.outputs.commit }}
       latest: ${{ steps.release.outputs.latest }}
+      published: ${{ steps.published.outputs.published }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -95,6 +102,31 @@ jobs:
           # Only the latest release moves the images' pgNN tags and the tap.
           if [[ "$version" == "$(python3 release/publish.py latest)" ]]; then latest=true; else latest=false; fi
           echo "latest=$latest" >>"$GITHUB_OUTPUT"
+      - name: Whether v${{ steps.release.outputs.version }} is already published
+        id: published
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          # A failed API request is an error, not evidence of no release.
+          err="$RUNNER_TEMP/release-view.err"
+          if view="$(gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,assets 2>"$err")"; then
+            published="$(python3 release/publish.py published "$VERSION" <<<"$view")"
+          elif grep -q "release not found" "$err"; then
+            published=false
+          else
+            cat "$err" >&2
+            exit 1
+          fi
+          if [[ "$published" == true ]]; then
+            {
+              echo
+              echo "v$VERSION is already published: this run builds nothing. It takes the packages its signed"
+              echo "SHA256SUMS lists and completes what is missing, such as its apt snapshot."
+            } >>"$GITHUB_STEP_SUMMARY"
+          fi
+          echo "published=$published" >>"$GITHUB_OUTPUT"
       - name: The source tarball, pg_warren-${{ steps.release.outputs.version }}.tar.gz
         env:
           VERSION: ${{ steps.release.outputs.version }}
@@ -121,6 +153,7 @@ jobs:
     # the tarballs and images again from them once they are checked.
     name: .deb ${{ matrix.codename }} ${{ matrix.arch }}
     needs: verify
+    if: needs.verify.outputs.published == 'false'
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     permissions:
       contents: read
@@ -172,6 +205,7 @@ jobs:
     # written into the formula (brew bottle --merge --write).
     name: Homebrew bottle (arm64 macOS)
     needs: verify
+    if: needs.verify.outputs.published == 'false'
     runs-on: macos-15
     permissions:
       contents: read
@@ -220,6 +254,12 @@ jobs:
   publish:
     name: Tag v${{ needs.verify.outputs.version }} → ${{ needs.verify.outputs.commit }}
     needs: [verify, debs, homebrew]
+    # The builds are skipped for a release already published, and then
+    # only for one.
+    if: >-
+      !cancelled() && needs.verify.result == 'success' &&
+      (needs.verify.outputs.published == 'true' ||
+       (needs.debs.result == 'success' && needs.homebrew.result == 'success'))
     runs-on: ubuntu-24.04
     environment: release
     # No packages: write: this repository's GITHUB_TOKEN cannot push the
@@ -233,6 +273,7 @@ jobs:
       VERSION: ${{ needs.verify.outputs.version }}
       COMMIT: ${{ needs.verify.outputs.commit }}
       LATEST: ${{ needs.verify.outputs.latest }}
+      PUBLISHED: ${{ needs.verify.outputs.published }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -269,6 +310,7 @@ jobs:
       # (release/assets.py, release/homebrew.py, from github.sha) before it
       # is signed or published, and none of it runs.
       - name: The build's artifacts, by name
+        if: env.PUBLISHED == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -281,6 +323,7 @@ jobs:
           for name in "${names[@]}"; do args+=(-n "$name"); done
           gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/artifacts" "${args[@]}"
       - name: Check the packages and render the formula
+        if: env.PUBLISHED == 'false'
         run: |
           set -euo pipefail
           artifacts="$RUNNER_TEMP/artifacts"
@@ -318,6 +361,7 @@ jobs:
           (cd "$assets" && sha256sum -- * >SHA256SUMS)
           ls -l "$assets"
       - name: Docker images from the checked trixie packages
+        if: env.PUBLISHED == 'false'
         run: |
           set -euo pipefail
           # PGDG's postgres:NN-trixie, pinned by digest, with the checked
@@ -360,19 +404,22 @@ jobs:
           keyring="$RUNNER_TEMP/apt-key.gpg"
           gpg --batch --export "$fingerprint" >"$keyring"
           assets="$RUNNER_TEMP/assets"
-          gpg --batch --yes --armor --local-user "$fingerprint" --detach-sign -o "$assets/SHA256SUMS.asc" "$assets/SHA256SUMS"
-          gpgv --keyring "$keyring" "$assets/SHA256SUMS.asc" "$assets/SHA256SUMS"
-          # This release's packages are the checked local files. An earlier
-          # release's are taken only if it is recorded in
-          # sql/released.commits, is not a draft, and has a SHA256SUMS
-          # signed by this key, and only the .deb files that lists, each
-          # matching it and checked as this release's are; a release from
-          # before signed sums contributes nothing.
           debs="$RUNNER_TEMP/repo-debs"
           mkdir -p "$debs"
-          cp -- "$assets"/*.deb "$debs/"
+          # This release's packages are the checked local files, unless it
+          # is already published: then they are taken as an earlier
+          # release's are. An earlier release's are taken only if it is
+          # recorded in sql/released.commits, is not a draft, and has a
+          # SHA256SUMS signed by this key, and only the .deb files that
+          # lists, each matching it and checked as this release's are; a
+          # release from before signed sums contributes nothing.
+          if [[ "$PUBLISHED" == false ]]; then
+            gpg --batch --yes --armor --local-user "$fingerprint" --detach-sign -o "$assets/SHA256SUMS.asc" "$assets/SHA256SUMS"
+            gpgv --keyring "$keyring" "$assets/SHA256SUMS.asc" "$assets/SHA256SUMS"
+            cp -- "$assets"/*.deb "$debs/"
+          fi
           awk '{print $2}' sql/released.commits | while read -r earlier; do
-            [[ "$earlier" == "$VERSION" ]] && continue
+            [[ "$earlier" == "$VERSION" && "$PUBLISHED" == false ]] && continue
             view="$(gh release view "v$earlier" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,assets 2>/dev/null)" || continue
             [[ "$(jq -r '.tagName' <<<"$view")" == "v$earlier" && "$(jq -r '.isDraft' <<<"$view")" == false ]] || continue
             jq -e '[.assets[].name] | index("SHA256SUMS") and index("SHA256SUMS.asc")' <<<"$view" >/dev/null || continue
@@ -388,6 +435,8 @@ jobs:
               cp -- "$deb" "$debs/"
             done
           done
+          count="$(find "$debs" -name "postgresql-*-pg-warren_$VERSION-1.*.deb" | wc -l)"
+          [[ "$count" == 32 ]] || { echo "::error::$count of v$VERSION's packages for the repository, not 32"; exit 1; }
           aptly_root="$RUNNER_TEMP/aptly"
           printf '{"rootDir": "%s", "gpgProvider": "gpg2"}\n' "$aptly_root" >"$RUNNER_TEMP/aptly.conf"
           aptly() { command aptly -config="$RUNNER_TEMP/aptly.conf" "$@"; }
@@ -448,6 +497,7 @@ jobs:
           gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "pg_warren $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
       - name: Attach the packages to v${{ env.VERSION }}
+        if: env.PUBLISHED == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -461,6 +511,7 @@ jobs:
             gh release upload "v$VERSION" --repo "$GITHUB_REPOSITORY" -- "$asset"
           done
       - name: Docker images to ghcr.io (with the environment's GHCR_TOKEN)
+        if: env.PUBLISHED == 'false'
         env:
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
           GHCR_USERNAME: ${{ vars.GHCR_USERNAME }}
@@ -501,7 +552,7 @@ jobs:
             docker buildx imagetools create "${tags[@]}" "$image:$VERSION-pg$major-amd64" "$image:$VERSION-pg$major-arm64"
           done
       - name: The formula to exadev/homebrew-tap
-        if: needs.verify.outputs.latest == 'true'
+        if: needs.verify.outputs.latest == 'true' && env.PUBLISHED == 'false'
         env:
           DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         run: |
