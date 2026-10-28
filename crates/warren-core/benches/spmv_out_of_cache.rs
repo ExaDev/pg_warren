@@ -4,17 +4,21 @@
 //! random and in hub-first node order, `f64` and `f32`, one thread and
 //! every core. Beside it, the per-iteration vector work of `pagerank`
 //! (its four maps, a sum, an L1 `norm_diff` and `y`'s fill) at the same
-//! size, and on the G(n, m) graph one whole iteration of `pagerank.sql`'s
-//! loop, its SQL calls made directly.
+//! size, and on the G(n, m) graph one whole iteration of the PL/pgSQL
+//! `pagerank`'s loop (through 0.7.0), its SQL calls made directly, against
+//! 20 iterations of the kernel that replaced it.
 
 use std::thread::available_parallelism;
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use warren_core::compute::{
-    map, norm_diff, reduce, spmv, AnyExpr, AnyVector, Arithmetic, BoolOp, Comparands, Comparison,
-    ComputeError, ComputeMemory, Expr, F64Op, Norm, Product, Reduction, Semiring, Vector, Workers,
+    map, norm_diff, pagerank, reduce, spmv, AnyExpr, AnyVector, Arithmetic, BoolOp, Comparands,
+    Comparison, ComputeError, ComputeMemory, Expr, F64Op, Norm, PageRank, Product, Reduction,
+    Semiring, Vector, Workers,
 };
-use warren_core::graph::{EdgeList, GraphCsr, GraphError, RelationDictionary};
+use warren_core::graph::{
+    EdgeList, GraphCsr, GraphError, RelationDictionary, RelationSelection, Tombstones,
+};
 use warren_core::interrupts::Uninterrupted;
 
 const ID_SPACE: u64 = 4_000_000;
@@ -110,13 +114,29 @@ fn bench_spmv(c: &mut Criterion) {
                 group.bench_function(format!("{name}/pagerank_iteration/threads_{threads}"), |b| {
                     b.iter(|| pagerank_iteration(&workers, &memory, &graph, &vectors))
                 });
+                let Ok(live) = Tombstones::new(ID_SPACE) else { continue };
+                let twenty = PageRank {
+                    relations: RelationSelection::All,
+                    weighted: None,
+                    per_relation: false,
+                    damping: 0.85,
+                    tol: None,
+                    max_iter: 20,
+                    seed: None,
+                };
+                let run =
+                    || pagerank(&workers, &memory, &mut Uninterrupted, &graph, &live, &twenty);
+                group.bench_function(
+                    format!("{name}/pagerank_20_iterations/threads_{threads}"),
+                    |b| b.iter(run),
+                );
             }
         }
     }
     group.finish();
 }
 
-/// One iteration of `pagerank.sql`'s loop over `[x, out, y, p, dangling,
+/// One iteration of the PL/pgSQL `pagerank`'s loop over `[x, out, y, p, dangling,
 /// damping, teleport]`, its SQL calls made directly: the two maps, the
 /// dangling sum, the product into a fresh `y`, the update, its L1 change
 /// and the copy back into `x`.
@@ -152,7 +172,7 @@ fn pagerank_vectors(memory: &ComputeMemory) -> Result<Vec<AnyVector>, ComputeErr
     [0.25f64, 10.0, 0.5, 0.25, 0.1, 0.85, 0.15].map(vector).into_iter().collect()
 }
 
-/// `pagerank`'s maps (`pagerank.sql`), over vectors `[x, out, y, p,
+/// The PL/pgSQL `pagerank`'s maps, over vectors `[x, out, y, p,
 /// dangling, damping, teleport]`: `msg`, `dangling_x`, `next` and the
 /// copy of `next` into `x`.
 fn pagerank_maps() -> [(&'static str, AnyExpr); 4] {
