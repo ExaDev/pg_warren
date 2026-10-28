@@ -1,0 +1,218 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "head-to-head",
+   "email-enron",
+   "--engine",
+   "pg_warren",
+   "--engine",
+   "igraph",
+   "--workload",
+   "leiden",
+   "--threads",
+   "4",
+   "--pg-config",
+   "/var/tmp/leiden-perf/new/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "99aeb74",
+   "--extension-profile",
+   "release",
+   "--results",
+   "/var/tmp/leiden-perf/results-new"
+  ],
+  "harness": {
+   "revision": "99aeb74c0aa9216449d88c9f757a9eabb483b548",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "99aeb74",
+   "profile": "release",
+   "library": "/var/tmp/leiden-perf/new/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "228d3318c18afde3cd0512e833ceb5969f6063e06fb89c282016658d09181c44"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v185",
+  "load_average": [
+   4.5517578125,
+   5.041015625,
+   3.7646484375
+  ]
+ },
+ "dataset": "email-enron",
+ "tier": "medium",
+ "fetched": {
+  "tables": {
+   "nodes": 36692,
+   "edges": 367662,
+   "ids": "integer",
+   "relations": 0,
+   "self_loops": 0
+  },
+  "sha256": {
+   "nodes.csv": "4290f02465290cdc56a42dc1d0930d69e6719b0ccda484f4c41303ac82f37846",
+   "edges.csv": "75d041d514c75b7d0362677e9ccf9d5e0591b502fdd8dca5021763222fe25977"
+  },
+  "provenance": {
+   "entryId": "email-enron",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-26T05:48:21.705Z",
+   "source": {
+    "url": "https://snap.stanford.edu/data/email-Enron.txt.gz",
+    "status": "live"
+   },
+   "fetchedUrl": "https://snap.stanford.edu/data/email-Enron.txt.gz",
+   "sha256": "55cfead79b1f0161786179a48796c2a119bd7026a246238b257b6be9d8b69b68",
+   "byteLength": 1055993
+  }
+ },
+ "repeat": 5,
+ "budget_seconds": 120,
+ "timeout_seconds": 600,
+ "workloads": [
+  {
+   "name": "leiden",
+   "kind": "leiden",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": null
+  }
+ ],
+ "engines": {
+  "pg_warren": {
+   "describe": {
+    "version": "0.8.0",
+    "threads": 4,
+    "settings": [
+     "fsync=off",
+     "full_page_writes=off",
+     "jit=on",
+     "maintenance_work_mem=1GB",
+     "max_parallel_workers_per_gather=2",
+     "max_wal_size=1GB",
+     "shared_buffers=1GB",
+     "shared_preload_libraries=",
+     "statement_timeout=10min",
+     "synchronous_commit=off",
+     "wal_level=minimal",
+     "warren.max_build_memory=4GB",
+     "warren.max_cache_memory=4GB",
+     "warren.max_compute_memory=4GB",
+     "warren.shared_cache_memory=4GB",
+     "warren.threads=4",
+     "work_mem=64MB"
+    ],
+    "graph": {
+     "node_count": 36692,
+     "edge_count": 367662,
+     "dropped_edges": 0,
+     "bytes": 4120164
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.14461833099994692
+     ],
+     "median_seconds": 0.14461833099994692
+    },
+    "build": {
+     "seconds": [
+      0.1244134930002474,
+      0.09826861200008352,
+      0.0952506280000307
+     ],
+     "median_seconds": 0.09826861200008352
+    }
+   },
+   "workloads": {
+    "leiden": {
+     "cold_seconds": 0.1836763169999358,
+     "warm_seconds": [
+      0.16901817600000868,
+      0.17508029999999053,
+      0.16806357499990554,
+      0.17012780799996108,
+      0.1672623519998524
+     ],
+     "warm_median_seconds": 0.16901817600000868,
+     "cold_phases": {
+      "evict": 0.0005111740001666476
+     },
+     "check": {
+      "check": "leiden",
+      "status": "match",
+      "warren": 0.6255431011759016,
+      "oracle": 0.615225196167674,
+      "difference": 0.010317905008227601,
+      "slack": 0.02,
+      "modularity": 0.6255431011759016,
+      "communities": 1255
+     },
+     "counted": true
+    }
+   }
+  },
+  "igraph": {
+   "describe": {
+    "version": "1.0.0",
+    "threads": 1,
+    "settings": {
+     "pagerank": "PRPACK (solved)",
+     "louvain": "community_multilevel",
+     "leiden": "community_leiden, modularity, 2 iterations",
+     "seed": 1
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.12755157200035683
+     ],
+     "median_seconds": 0.12755157200035683
+    },
+    "build": {
+     "seconds": [
+      0.0699759549997907
+     ],
+     "median_seconds": 0.0699759549997907
+    }
+   },
+   "workloads": {
+    "leiden": {
+     "cold_seconds": 0.12125653500015687,
+     "warm_seconds": [
+      0.11953075900009935,
+      0.12017572200011273,
+      0.12030885900003341,
+      0.12002480300043317,
+      0.12067201199988631
+     ],
+     "warm_median_seconds": 0.12017572200011273,
+     "cold_phases": {},
+     "check": {
+      "check": "leiden",
+      "status": "match",
+      "warren": 0.6237075161606281,
+      "oracle": 0.615225196167674,
+      "difference": 0.008482319992954124,
+      "slack": 0.02,
+      "modularity": 0.6237075161606281,
+      "communities": 1234
+     },
+     "counted": true
+    }
+   }
+  }
+ }
+}

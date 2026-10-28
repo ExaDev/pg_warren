@@ -1,0 +1,172 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "head-to-head",
+   "lesmis",
+   "--engine",
+   "pg_warren",
+   "--workload",
+   "leiden",
+   "--threads",
+   "4",
+   "--pg-config",
+   "/var/tmp/leiden-perf/base/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "4592b0e",
+   "--extension-profile",
+   "release",
+   "--results",
+   "/var/tmp/leiden-perf/results-base"
+  ],
+  "harness": {
+   "revision": "99aeb74c0aa9216449d88c9f757a9eabb483b548",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "4592b0e",
+   "profile": "release",
+   "library": "/var/tmp/leiden-perf/base/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "1a22b9c2ebfe174a351f1aaa7e8dabbae8caae24ccc9fe8fde1cc4f3b4452ff6"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v185",
+  "load_average": [
+   6.88818359375,
+   5.43603515625,
+   3.82177734375
+  ]
+ },
+ "dataset": "lesmis",
+ "tier": "tiny",
+ "fetched": {
+  "tables": {
+   "nodes": 77,
+   "edges": 254,
+   "ids": "integer",
+   "relations": 0,
+   "self_loops": 0
+  },
+  "sha256": {
+   "nodes.csv": "257ce17f87934e67fa44b89368c0d03d90477324b198651ccb9d2ad1217365d4",
+   "edges.csv": "67f504339314cb3a02caaef574771298d13c0404f170806daa079697cecf0beb"
+  },
+  "provenance": {
+   "entryId": "lesmis",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-26T05:47:57.765Z",
+   "source": {
+    "url": "http://konect.cc/files/download.tsv.moreno_lesmis.tar.bz2",
+    "status": "live",
+    "snapshot": {
+     "url": "https://web.archive.org/web/20230323100419/http://konect.cc/files/download.tsv.moreno_lesmis.tar.bz2",
+     "timestamp": "20230323100419",
+     "sha256": "04f8ed2c517fbda9c60d244041837a08328ee13c3102efe847e911dc97a27fbe",
+     "byteLength": 2301
+    }
+   },
+   "fetchedUrl": "http://konect.cc/files/download.tsv.moreno_lesmis.tar.bz2",
+   "sha256": "04f8ed2c517fbda9c60d244041837a08328ee13c3102efe847e911dc97a27fbe",
+   "byteLength": 2301,
+   "member": "moreno_lesmis/out.moreno_lesmis_lesmis"
+  }
+ },
+ "repeat": 5,
+ "budget_seconds": 120,
+ "timeout_seconds": 600,
+ "workloads": [
+  {
+   "name": "leiden",
+   "kind": "leiden",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": null
+  }
+ ],
+ "engines": {
+  "pg_warren": {
+   "describe": {
+    "version": "0.8.0",
+    "threads": 4,
+    "settings": [
+     "fsync=off",
+     "full_page_writes=off",
+     "jit=on",
+     "maintenance_work_mem=1GB",
+     "max_parallel_workers_per_gather=2",
+     "max_wal_size=1GB",
+     "shared_buffers=1GB",
+     "shared_preload_libraries=",
+     "statement_timeout=10min",
+     "synchronous_commit=off",
+     "wal_level=minimal",
+     "warren.max_build_memory=4GB",
+     "warren.max_cache_memory=4GB",
+     "warren.max_compute_memory=4GB",
+     "warren.shared_cache_memory=4GB",
+     "warren.threads=4",
+     "work_mem=64MB"
+    ],
+    "graph": {
+     "node_count": 77,
+     "edge_count": 508,
+     "dropped_edges": 0,
+     "bytes": 14836
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.01558318400020653
+     ],
+     "median_seconds": 0.01558318400020653
+    },
+    "build": {
+     "seconds": [
+      0.004298909999761236,
+      0.001853293999829475,
+      0.002023471000029531
+     ],
+     "median_seconds": 0.002023471000029531
+    }
+   },
+   "workloads": {
+    "leiden": {
+     "cold_seconds": 0.03178212600005281,
+     "warm_seconds": [
+      0.026383485000224027,
+      0.024778647999937675,
+      0.025520974000301067,
+      0.024846162000358163,
+      0.024816519000069093
+     ],
+     "warm_median_seconds": 0.024846162000358163,
+     "cold_phases": {
+      "evict": 0.000387145999866334
+     },
+     "check": {
+      "check": "leiden",
+      "status": "match",
+      "warren": 0.5666879833432482,
+      "oracle": 0.5654156751933374,
+      "difference": 0.0012723081499108613,
+      "slack": 0.02,
+      "modularity": 0.5666879833432482,
+      "communities": 6
+     },
+     "counted": true
+    }
+   }
+  }
+ }
+}
