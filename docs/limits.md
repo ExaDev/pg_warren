@@ -160,8 +160,8 @@ differs.
   edges; measured: a 1.2 GB version loads at a 1.69 GB peak, a 6.0 GB one at
   7.3 GB). `refresh` (below) is bounded by neither. A `refresh` or a
   `contract` adds its build scratch, charged to `warren.max_build_memory`,
-  so a statement that runs one, as `louvain` and `leiden` run `contract`
-  once a level, is bounded by the three settings together: on the 0.4.0
+  so a statement that runs one, as `louvain` runs `contract`
+  once a level (and `leiden` did before 0.8.0), is bounded by the three settings together: on the 0.4.0
   soak's five-relation graph `louvain` peaked at 9.50 GB, past the 8.59 GB
   of cache and compute (at 1M nodes, its peak with all three limits at
   the least it needs was within 1.5% of their sum, that 1.5% Postgres's
@@ -696,6 +696,9 @@ graph; every later one contracts the whole graph by the partition found so
 far, so each small late level costs a contraction. Leiden's second iteration
 repeats the levels from the first's partition, so it costs about as much
 again, and raises modularity on these blocks from 0.837 to 0.898.
+Those `leiden` figures are 0.7.0's and earlier: since 0.8.0 each later
+level contracts the level below, in memory, and writes nothing
+(DESIGN.md §6.7, *Leiden's levels*).
 
 **The library at the soak's scale** (0.4.0 soak, `bench/results/soak/`,
 release build of 5b0bf81, PG 16, `warren.threads = 4`, every limit at its
@@ -860,13 +863,18 @@ by itself: see docs/semantics.md, "Dropping a role".)
   quotient graph for that ([communities.md](communities.md)).
 - `louvain` and `leiden` cost a pass over the stored edges per sweep of
   local moving (after the first sweep, only over the rows of nodes whose
-  neighbours moved) and a contraction of the whole graph per level. Their
-  scratch is charged to `warren.max_compute_memory`: the undirected view
+  neighbours moved) and a contraction per level: of the whole graph for
+  `louvain`, and for `leiden` (since 0.8.0) of the level below's
+  undirected view, held in memory and charged to
+  `warren.max_compute_memory` with the rest of the run (at its peak the
+  graph's view, the level's, and the next level's while it is
+  contracted). Their scratch is charged to `warren.max_compute_memory`: the undirected view
   (16 bytes per stored edge, both directions of a directed graph, and per
   node), up to 56 bytes per node while moving, and in Leiden's refinement
   24 bytes per node (beside its 8-byte-a-node label vector) plus 48 per
   community (and, for the communities being refined at once, one per
-  thread, 24 bytes per member). Each level writes
+  thread, 24 bytes per member). Each of `louvain`'s levels (and
+  `leiden`'s before 0.8.0; it now writes none) writes
   its graph's version (segments and WAL), each relation's forward CSR
   only (no reverse or merged CSR, whatever the input's layout); the
   level's graph is dropped when the next is built, but its rows stay until
@@ -877,8 +885,8 @@ by itself: see docs/semantics.md, "Dropping a role".)
   two); at 10M nodes (0.72 GB of segments) `louvain` wrote 2.5 GB of
   segments and `leiden`, with its default two iterations, 7.8 GB (and as
   much WAL).
-- **At 10M nodes, on graphs with little community structure, Louvain and
-  Leiden need several GB of disk** (the 0.4.0 soak's uniform random graphs
+- **At 10M nodes, on graphs with little community structure, Louvain
+  needs several GB of disk, and Leiden did before 0.8.0** (the 0.4.0 soak's uniform random graphs
   of 10M nodes and 100M edges; see "The library at the soak's scale"
   above): a random graph's levels merge little (1M nodes → 448,022
   communities at level 1), so several levels keep nearly all the edges,
@@ -894,11 +902,12 @@ by itself: see docs/semantics.md, "Dropping a role".)
     which charged 88 bytes per node beside the 3.2 GB undirected view; it
     now charges about 38 there and fits the 4GB default, but its eight or
     so large levels are likely still past a disk like the soak's.
-  - The planned fix for the disk is for `contract` to keep a quotient in
-    memory for the rest of the statement instead of writing it as a
-    version, which helps every multilevel algorithm (DESIGN.md §6.7,
-    §13, §14 item 40); a native in-memory Louvain/Leiden kernel is
-    deferred past 0.4.0.
+  - `leiden` is native since 0.8.0 and keeps its levels in memory, so it
+    writes no level; not yet re-run at this scale. The planned fix for
+    `louvain`'s disk is for `contract` to keep a quotient in memory for
+    the rest of the statement instead of writing it as a version, which
+    helps every multilevel algorithm users write (DESIGN.md §6.7, §13,
+    §14 item 40).
 - `contract` is linear: a counting sort of the nodes by community, then one
   pass over the stored edges, on one thread, plus a build of the quotient
   (its edges, at most the parent's). Its scratch, charged to

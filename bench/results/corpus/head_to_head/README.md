@@ -445,7 +445,7 @@ Findings. Betweenness ran only where N·M ≤ 5·10⁸.
 are release builds (`cargo pgrx package`, PostgreSQL 16.15, the settings
 above, `warren.threads = 4`). `4592b0e` is main before the change: 0.7.0
 with the community regression fixed, so faster than the ae51d77 column
-above. `99aeb74` is native `leiden` with its levels in memory.
+above. `99aeb74` is native `leiden` with its levels in memory; rebased onto main's later commits (examples and the website, none to the extension) it is f618847.
 
 The command line, per dataset, alternated the two builds so they shared
 the machine's load:
