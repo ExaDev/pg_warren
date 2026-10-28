@@ -32,6 +32,7 @@ mod visibility;
 pub(crate) use backend::claim;
 #[cfg(test)]
 pub(crate) use backend::own;
+pub(crate) use command::{report_command, Report};
 pub(crate) use counters::{
     count_private_evictions, count_read, count_refusal, count_shared_evictions, count_wait,
     record_mapped, record_private, Read,

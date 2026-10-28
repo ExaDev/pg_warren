@@ -1,7 +1,8 @@
 //! `warren.local_moving` and `warren.leiden_refine` (DESIGN.md §6.7): the
 //! two phases of a Louvain or Leiden level as primitives over a version's
-//! undirected weighted view. `warren.louvain` and `warren.leiden` are
-//! PL/pgSQL over them, `contract`, `project` and `lift`.
+//! undirected weighted view. `warren.louvain` is PL/pgSQL over them,
+//! `contract`, `project` and `lift`; `warren.leiden` runs the same kernels
+//! natively, its levels in memory.
 
 use pgrx::prelude::*;
 use warren_core::community::{local_moving as moving, refine, LocalMoving, Refinement};

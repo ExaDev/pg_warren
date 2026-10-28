@@ -120,6 +120,17 @@ fn register() {
     }
 }
 
+/// Sets the command frame to `report`, cleared when the statement or its
+/// transaction ends: what `warren.report_progress` sets for PL/pgSQL, and
+/// what a native algorithm of levels and iterations (`warren.leiden`)
+/// sets itself, on a graph whose access it has checked.
+pub(crate) fn report_command(report: Report<'_>) {
+    claim();
+    register();
+    let now = now();
+    record(|values| values.command = reported(&values.command, report, now));
+}
+
 /// The id of graph `name`, which the caller must be able to read.
 fn graph_id(name: &str) -> Result<i32, ReportError> {
     let user = current_user().to_u32();
@@ -180,9 +191,7 @@ fn report_progress(
         // remembers is forgotten when the statement ends.
         register();
         let graph = graph.map(graph_id).transpose()?;
-        let report = Report { command, graph, phase: phase.unwrap_or_default(), done, total };
-        let now = now();
-        record(|values| values.command = reported(&values.command, report, now));
+        report_command(Report { command, graph, phase: phase.unwrap_or_default(), done, total });
         Ok::<_, ReportError>(())
     })
 }
