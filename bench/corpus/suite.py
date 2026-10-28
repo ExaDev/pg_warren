@@ -171,7 +171,7 @@ def command_head_to_head(args, datasets):
             print(f"{dataset.name}:", flush=True)
             source = oracle.Source.read(directory, dataset)
             reference = answers.Reference(source, oracle.IGraphReference(source))
-            planned = workloads.plan(source, args.betweenness_work)
+            planned = workloads.plan(source, args.betweenness_work, args.workload or None)
             result = {"provenance": _provenance(args), "hardware": hardware(), "dataset": dataset.name,
                       "tier": dataset.tier, "fetched": json.loads((directory / "dataset.json").read_text()),
                       "repeat": args.repeat, "budget_seconds": args.budget, "timeout_seconds": args.timeout,
@@ -236,6 +236,8 @@ def main(argv):
                          help="warren.threads for timings, and GDS's concurrency in the head-to-head")
     options.add_argument("--engine", action="append", choices=report.ENGINES, default=[],
                          help="the engines `head-to-head` runs (repeatable; default: every one)")
+    options.add_argument("--workload", action="append", choices=workloads.KINDS, default=[],
+                         help="head-to-head: the kinds of workload to run (repeatable; default: every one)")
     options.add_argument("--repeat", type=int, default=5, help="head-to-head: warm runs of each workload")
     options.add_argument("--budget", type=float, default=120,
                          help="head-to-head: seconds after which no more warm runs start (one always runs)")

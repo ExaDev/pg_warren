@@ -178,6 +178,13 @@ def test_every_dataset_runs_the_core_set_and_betweenness_only_where_affordable(t
     assert "betweenness" not in [w.name for w in workloads.plan(read, betweenness_work=5)]
 
 
+def test_a_plan_can_be_narrowed_to_some_kinds_of_workload(tmp_path):
+    read = source(tmp_path, ["1", "2", "3"], [["1", "2"], ["2", "3"]])
+    narrowed = workloads.plan(read, betweenness_work=100, kinds=["leiden", "louvain"])
+    assert [w.name for w in narrowed] == ["louvain", "leiden"]
+    assert sorted(workloads.KINDS) == sorted(w.kind for w in workloads.plan(read, betweenness_work=100))
+
+
 def test_shortest_paths_are_seeded_pairs_and_weighted_when_the_graph_is(tmp_path):
     read = source(tmp_path, ["1", "2", "3", "4"], [["1", "2", "2"], ["2", "3", "1"]], weighted=True)
     paths = next(w for w in workloads.plan(read) if w.kind == "paths")
