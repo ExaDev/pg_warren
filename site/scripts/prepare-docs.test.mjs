@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { generatedPages, extractSection, renderPage, routeForSource, prepareDocs } from './prepare-docs.mjs';
 import { workspaceVersion } from './sql-reference.mjs';
+import { examplePages, expandExampleSql } from './examples.mjs';
 
 const repository = fileURLToPath(new URL('../../', import.meta.url));
 const traversal = { slug: 'traversal', title: 'Traversal', source: 'docs/traversal.md' };
@@ -15,6 +16,7 @@ test('covers all canonical guides, README sections, changelog, benchmarks, and c
   assert.deepEqual(generatedPages.map(({ slug }) => slug), [
     'semantics', 'traversal', 'compute', 'communities', 'change-detection', 'limits',
     'installation', 'quickstart', 'performance', 'changelog', 'benchmarks', 'contributing',
+    ...examplePages.map(({ slug }) => slug),
   ]);
 });
 
@@ -82,11 +84,11 @@ test('all imported pages retain canonical SQL, resolved links, and deterministic
     const recorded = await readFile(path.join(repository, 'sql/released.commits'), 'utf8');
     const current = workspaceVersion(manifest);
     const latest = recorded.trim().split(/\s+/).at(-1);
-    await prepareDocs(repository, destination, { reference: false });
+    await prepareDocs(repository, destination, { reference: false, downloads: false });
     const outputs = new Map();
     for (const page of generatedPages) {
       const raw = await readFile(path.join(repository, page.source), 'utf8');
-      const source = page.section ? extractSection(raw, page.section) : raw;
+      const source = await expandExampleSql(page.section ? extractSection(raw, page.section) : raw, repository);
       const filename = path.join(destination, 'docs', `${page.slug}.md`);
       const generated = await readFile(filename, 'utf8');
       assert.deepEqual(sqlBlocks(generated), sqlBlocks(source), page.slug);
@@ -105,7 +107,7 @@ test('all imported pages retain canonical SQL, resolved links, and deterministic
       if (page.slug === 'quickstart') assert.ok(generated.includes('[installing](/pg_warren/docs/installation/#install)'));
       outputs.set(filename, generated);
     }
-    await prepareDocs(repository, destination, { reference: false });
+    await prepareDocs(repository, destination, { reference: false, downloads: false });
     for (const [filename, generated] of outputs) {
       assert.equal(await readFile(filename, 'utf8'), generated, path.basename(filename));
     }

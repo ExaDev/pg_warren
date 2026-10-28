@@ -23,6 +23,9 @@ when installing or upgrading.
    providers must adopt the extension before you can use it there.
 2. [Create your first graph](/pg_warren/docs/quickstart/) from two small
    tables, run a breadth-first search, and compute PageRank.
+   Then explore the [example library](/pg_warren/docs/examples/) for complete
+   walkthroughs over a reproducible graph of 10,000 people: communities,
+   semirings, taint propagation, paths, and graph versions.
 3. Read [graphs and versions](/pg_warren/docs/semantics/) before connecting
    a changing application dataset. Queries read a built graph version;
    a later table change appears after a refresh.

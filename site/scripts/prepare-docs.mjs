@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { prepareSqlReference, workspaceVersion } from './sql-reference.mjs';
+import { examplePages, expandExampleSql, writeExampleDownloads } from './examples.mjs';
 
 const repository = fileURLToPath(new URL('../../', import.meta.url));
 const githubSource = 'https://github.com/ExaDev/pg_warren/blob/main/';
@@ -20,6 +21,7 @@ export const generatedPages = [
   { slug: 'changelog', source: 'CHANGELOG.md', title: 'Changelog', description: 'Development changes, release history, and upgrade instructions.' },
   { slug: 'benchmarks', source: 'bench/results/corpus/head_to_head/README.md', title: 'Benchmark methodology', description: 'Head-to-head benchmark provenance, settings, results, and caveats.' },
   { slug: 'contributing', source: 'CONTRIBUTING.md', title: 'Contributing', description: 'Build, test, benchmark, and contribute to pg_warren.' },
+  ...examplePages,
 ];
 
 const readmeAnchors = new Map([
@@ -95,6 +97,7 @@ export function renderPage(markdown, page, status = {}) {
 ${versionStatus}Package channels begin with 0.7.0. A recorded release marks frozen source; it does not establish that release approvals have completed or that apt, Docker, or Homebrew packages are live. The canonical instructions below may describe an upcoming release: consult the [published release notes and assets](https://github.com/ExaDev/pg_warren/releases) before assuming a package or image is available. Follow the signing-key verification instructions before using the apt repository.
 :::
 ` : '';
+  const download = page.sql ? `\n[Download the complete SQL script](/pg_warren/examples/${page.slug.split('/').at(-1)}.sql), including dataset setup for a fresh database.\n` : '';
   return `---
 title: ${JSON.stringify(page.title)}
 description: ${JSON.stringify(page.description || page.title)}
@@ -105,11 +108,12 @@ editUrl: ${JSON.stringify(`https://github.com/ExaDev/pg_warren/edit/main/${page.
 This page follows the development branch. For the software and documentation of a released version, consult the [published releases](https://github.com/ExaDev/pg_warren/releases).
 :::
 ${availability}
+${download}
 <span id="${headingAnchor(heading[1])}"></span>
 ${body}`;
 }
 
-export async function prepareDocs(sourceRoot = repository, destinationRoot = path.join(repository, 'site/src/content/docs'), { reference = true } = {}) {
+export async function prepareDocs(sourceRoot = repository, destinationRoot = path.join(repository, 'site/src/content/docs'), { reference = true, downloads = path.join(sourceRoot, 'site/public/examples') } = {}) {
   const manifest = await readFile(path.join(sourceRoot, 'Cargo.toml'), 'utf8');
   const releases = await readFile(path.join(sourceRoot, 'sql/released.commits'), 'utf8');
   const current = workspaceVersion(manifest);
@@ -118,9 +122,12 @@ export async function prepareDocs(sourceRoot = repository, destinationRoot = pat
   await mkdir(path.join(destinationRoot, 'docs'), { recursive: true });
   for (const page of generatedPages) {
     const source = await readFile(path.join(sourceRoot, page.source), 'utf8');
-    const markdown = page.section ? extractSection(source, page.section) : source;
-    await writeFile(path.join(destinationRoot, 'docs', `${page.slug}.md`), renderPage(markdown, page, { current, latest }));
+    const markdown = await expandExampleSql(page.section ? extractSection(source, page.section) : source, sourceRoot);
+    const destination = path.join(destinationRoot, 'docs', `${page.slug}.md`);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await writeFile(destination, renderPage(markdown, page, { current, latest }));
   }
+  if (downloads) await writeExampleDownloads(sourceRoot, downloads);
   if (reference) {
     await prepareSqlReference(sourceRoot, destinationRoot);
   }

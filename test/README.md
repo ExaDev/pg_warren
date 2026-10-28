@@ -8,6 +8,10 @@ recursive CTEs / NetworkX on generated fixtures, and the Appendix A use cases
 - `run.py` installs pg_warren (`cargo pgrx install`, under
   `/tmp/pgrx-test.lock`), starts a scratch cluster and runs `sql/*.sql`.
 - `sql/` holds the tests; `sql/include/` holds scripts they `\ir`.
+- `sql/example_library.sql` runs the canonical scripts in `../examples/`
+  that the website embeds and offers as downloads. It checks semiring walk
+  counts against recursive SQL, min-plus distances against BFS, and taint
+  routes against source edges, seed membership, and shortest-distance rules.
 - `lib/assert.sql` is the `assert` schema every test database gets.
 - `oracle.py` writes a NetworkX reference table into any database.
 - `upgrade.py` checks `ALTER EXTENSION pg_warren UPDATE` from every released

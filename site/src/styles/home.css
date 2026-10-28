@@ -141,7 +141,7 @@ h3 { font-size:23px; letter-spacing:-.8px; font-weight:500; margin:0 0 14px; }
   .brand { font-size:24px; }
   .brand img { width:32px; height:32px; }
   nav { gap:14px; font-size:14px; }
-  .site-header nav>a:first-child,.site-header .github-link { display:none; }
+  .site-header nav>a:first-child,.site-header .github-link,.site-header .docs-link { display:none; }
   .hero { grid-template-columns:1fr; padding-block:30px; }
   h1 { font-size:40px; letter-spacing:-1.8px; }
   .hero-description { font-size:18px; }

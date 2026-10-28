@@ -56,6 +56,12 @@ blocks remain identical to the canonical documentation.
 - The overview, operations guide, and architecture overview are tracked in
   `src/content/docs/docs/`. Edit these files directly. Their edit links lead to
   the website source, while imported guides lead to the original Markdown.
+- The example library lives in `../docs/examples/`. Its `<!-- sql:file.sql -->`
+  markers embed the exact scripts in `../examples/`; edit those scripts rather
+  than copying SQL into Markdown. `scripts/examples.mjs` declares the pages
+  and their script order, and generates complete downloads under
+  `public/examples/`, including dataset setup for a fresh database. The same
+  scripts run in `../test/sql/example_library.sql` with correctness assertions.
 - Documentation explicitly follows development on `main`. The installation
   page compares the current workspace version with `../sql/released.commits`
   and always directs readers to published assets to verify package availability:

@@ -26,6 +26,17 @@ export default defineConfig({
         { slug: 'docs/communities' },
         { slug: 'docs/change-detection' },
       ] },
+      { label: 'Example library', items: [
+        { slug: 'docs/examples' },
+        { slug: 'docs/examples/setup' },
+        { slug: 'docs/examples/bfs' },
+        { slug: 'docs/examples/communities' },
+        { slug: 'docs/examples/walk-counts' },
+        { slug: 'docs/examples/min-plus' },
+        { slug: 'docs/examples/boolean-spread' },
+        { slug: 'docs/examples/taint' },
+        { slug: 'docs/examples/versions' },
+      ] },
       { label: 'Reference and operations', items: [
         { slug: 'docs/reference' },
         { slug: 'docs/limits' },
