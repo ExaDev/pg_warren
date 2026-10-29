@@ -32,7 +32,7 @@
   superuser's graph, give it to a non-superuser with `set_owner` or
   `reassign_owned`. No SQL surface changes.
 
-### Added
+### New
 
 - **Limits that an administrator sets for a shared instance** (DESIGN.md
   §14 item 52; docs/limits.md, "Limits for a shared instance"):
@@ -64,6 +64,15 @@
   administrator without a shell sees the cap work. It is counted whether
   or not a cap is set, and shown under the same privacy rule as the other
   sizes (DESIGN.md §5.7, §14 item 52; docs/limits.md).
+- **A guide to running pg_warren beside a managed database**
+  (`docs/beside-managed.md`), for Amazon RDS, Aurora and other services
+  that cannot install it: a server of your own with pg_warren, fed by
+  logical replication from the managed primary and refreshed on a
+  schedule, with results read back on the primary through `postgres_fdw`
+  (or the graph's sources read through it), how stale and how consistent
+  each version is, security and limitations. Its SQL runs in CI, on a
+  primary without pg_warren and a graph server
+  (`test/logical_replication.py`).
 
 ### Documentation
 
@@ -78,6 +87,14 @@
   what the two predefined roles also allow. `test/dump.py` now checks the
   whole round trip with no superuser, as on RDS, then `warren.drop_owned`
   and `DROP EXTENSION` by the same non-superuser.
+- The README's feature matrix (How it compares) puts pgGraph 1.2.1 first,
+  as the closest alternative inside PostgreSQL, with rows for the
+  differences both ways: where pgGraph has the tick (GQL/openCypher,
+  trigger sync, discovery from keys) and where pg_warren does (versions,
+  in-transaction builds, standbys, whole-graph algorithms, semirings).
+  pgGraph's cells are sourced from its v1.2.1 documentation, and
+  `docs/positioning.md` points to the matrix and spells out the nuanced
+  differences (row-level security, parallel edge rows).
 
 ## 0.8.0 — native PageRank and Leiden, leaner calls (2026-10-29)
 

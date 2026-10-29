@@ -827,6 +827,52 @@ jobs:
           fi
           echo "ok: both builds give pg_warren.so $here"
 
+  beside-managed:
+    # DESIGN.md §13, 0.9.0 "Running beside RDS today": docs/beside-managed.md
+    # as written, on a primary pg_warren is never created on and a graph
+    # server fed from it by logical replication and postgres_fdw; the
+    # graphs there answer as one built directly from the primary's rows,
+    # before and after the rows change. On every major, since logical
+    # replication and postgres_fdw differ between them (PG 18 applies
+    # large transactions in parallel by default).
+    name: Beside a managed primary (PG ${{ matrix.pg }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: ["15", "16", "17", "18"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: ./.github/actions/setup-postgres
+        # A stalled PGDG mirror once held a job here for hours; fail and re-run instead.
+        timeout-minutes: 30
+        with:
+          pg-major: ${{ matrix.pg }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: beside-managed-pg${{ matrix.pg }}
+          cache-bin: "false"
+      - name: Cache cargo-pgrx ${{ env.PGRX_VERSION }}
+        id: cargo-pgrx-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cargo/bin/cargo-pgrx
+          key: cargo-pgrx-${{ env.PGRX_VERSION }}-${{ runner.os }}-${{ runner.arch }}-rust-${{ hashFiles('rust-toolchain.toml') }}
+      - name: Install cargo-pgrx
+        if: steps.cargo-pgrx-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-pgrx --version "$PGRX_VERSION" --locked
+      - name: Let the runner user install into the PG ${{ matrix.pg }} tree
+        run: |
+          sudo chmod a+rwx "$("$PG_CONFIG" --pkglibdir)" "$("$PG_CONFIG" --sharedir)/extension"
+      - name: cargo pgrx init
+        run: cargo pgrx init --pg${{ matrix.pg }} "$PG_CONFIG"
+      - name: The guide on two servers (test/logical_replication.py)
+        # It installs pg_warren first. The harness is standard-library Python.
+        run: python3 test/logical_replication.py --pg-config "$PG_CONFIG"
+
   actionlint:
     name: Workflows (actionlint)
     runs-on: ubuntu-latest
