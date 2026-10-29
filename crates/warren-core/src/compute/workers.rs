@@ -17,7 +17,7 @@
 
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rayon::{ThreadPool, ThreadPoolBuilder};
 
@@ -26,6 +26,13 @@ use crate::interrupts::{Cancellation, Interrupts};
 
 /// How often the caller polls its interrupts while a job runs.
 const POLL_INTERVAL: Duration = Duration::from_millis(1);
+
+/// How long the caller spins, yielding, once it has started a job, before
+/// it first parks: a short job (a kernel's step over a small graph, which
+/// PageRank runs three times an iteration) then returns without waiting for
+/// the operating system to wake the caller, which costs tens of
+/// microseconds a job.
+const SPIN: Duration = Duration::from_micros(50);
 
 /// A pool of compute threads.
 #[derive(Debug)]
@@ -115,6 +122,7 @@ impl Workers {
                 let _finished = Finished { running: &running, caller: &caller };
                 result = job(cancellation);
             });
+            spin_until(|| running.is_finished(), SPIN);
             while !running.is_finished() {
                 if interrupts.check().is_err() {
                     interrupted = true;
@@ -131,6 +139,21 @@ impl Workers {
             true => Err(ComputeError::Cancelled),
             false => result,
         }
+    }
+}
+
+/// Spins, yielding the processor, until `done` or for `budget`; whether
+/// `done` was seen.
+fn spin_until(done: impl Fn() -> bool, budget: Duration) -> bool {
+    let started = Instant::now();
+    loop {
+        if done() {
+            return true;
+        }
+        if started.elapsed() >= budget {
+            return false;
+        }
+        thread::yield_now();
     }
 }
 
@@ -223,6 +246,21 @@ mod tests {
             Ok((rayon::current_thread_index().is_some(), rayon::current_num_threads()))
         });
         assert_eq!(result, Ok((true, 3)));
+    }
+
+    #[test]
+    fn the_caller_spins_until_the_job_finishes_or_its_budget_is_spent() {
+        assert!(spin_until(|| true, Duration::ZERO));
+        let polls = std::cell::Cell::new(0);
+        let third = || {
+            polls.set(polls.get() + 1);
+            polls.get() == 3
+        };
+        assert!(spin_until(third, Duration::from_secs(10)));
+        assert_eq!(polls.get(), 3);
+        let started = Instant::now();
+        assert!(!spin_until(|| false, Duration::from_millis(5)));
+        assert!(started.elapsed() >= Duration::from_millis(5));
     }
 
     #[test]
