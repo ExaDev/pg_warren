@@ -98,6 +98,11 @@ real graphs from the benchmark corpus, from 77 nodes up to 1.4M nodes and
 
 ### Performance
 
+Faster than pgGraph 1.2.1, the closest alternative inside PostgreSQL, on
+every workload both support (2.4–89× on shortest paths, 1.7–14× on
+connected components), with versions, standbys and whole-graph
+algorithms it doesn't have.
+
 Times are warm medians.
 
 | Workload | pg_warren | pgGraph | igraph | Neo4j + GDS | Verdict |
