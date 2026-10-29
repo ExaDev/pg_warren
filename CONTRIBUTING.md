@@ -333,7 +333,7 @@ format. To benchmark a new function, add a workload with `requires` to
 ```sh
 test/upgrade.py --pg-config "$(command -v pg_config)"   # builds each release from its recorded commit, then checks its path
 test/upgrade.py --no-install --trusted   # the same, installed and updated by a non-superuser
-test/dump.py --pg-config "$(command -v pg_config)"   # pg_dump and restore of graphs (plain, custom, trusted)
+test/dump.py --pg-config "$(command -v pg_config)"   # pg_dump and restore of graphs (plain, custom, trusted, managed: no superuser)
 ```
 
 Robustness under concurrency, crashes, replication and hostile input
