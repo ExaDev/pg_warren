@@ -245,17 +245,18 @@ or operator that the queries then call as the graph's owner at every
 create graphs under a `search_path` of schemas only their owner can write;
 `create_graph` raises a `NOTICE` when it finds such a schema.
 
-Graphs, versions and vectors are ordinary tables, so a superuser's
-`pg_dump` includes them, and a plain (`psql`) or custom (`pg_restore`)
-restore brings them back. The roles that own and read graphs must exist
+Graphs, versions and vectors are ordinary tables, so `pg_dump` includes
+them, and a plain (`psql`) or custom (`pg_restore`) restore brings them
+back. The roles that own and read graphs must exist
 first. `pg_dump` warns about circular foreign-key constraints on
 `warren.versions` (it references itself) and suggests `--disable-triggers`:
 ignore that hint, which would skip pg_warren's catalog checks, and restore
-normally. Because only that superuser can read the catalog, a non-superuser's
-`pg_dump` of the database fails while pg_warren is installed. Dump as a
-superuser, or leave the graphs out with `--exclude-table-data='warren.*'`
-and, after the restore, create them again with `warren.create_graph` and
-`warren.refresh`.
+normally. Without a superuser, dump as a role granted `pg_read_all_data`
+and restore as one granted `pg_write_all_data` (on Amazon RDS from PG 15,
+the master user has both); other non-superusers cannot read or write the
+catalog, so their `pg_dump` fails while pg_warren is installed. Those two
+roles reach every graph directly, so grant them only for the dump or the
+restore ([docs/security.md, "Dumps and restores"](docs/security.md#dumps-and-restores)).
 
 **The shared cache.** A loaded graph version is kept once per cluster, in
 dynamic shared memory, and mapped by every backend that reads it, so pooled

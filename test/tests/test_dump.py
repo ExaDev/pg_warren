@@ -2,7 +2,8 @@
 
 from pathlib import Path
 
-from harness.dump import STATE, differences, restore_command, restore_errors, unexpected_warnings
+from harness.dump import (GRAPHS, MANAGED_ADMIN, MANAGED_ROLES, SEED, STATE, TRIGGER, differences, missing_roles,
+                          restore_command, restore_errors, unexpected_warnings)
 
 
 class FakeCluster:
@@ -84,3 +85,25 @@ psql:/tmp/d.sql:12: WARNING:  no privileges were granted for "graphs"
         "warning: errors ignored on restore: 1",
         'warning: no privileges were granted for "graphs"',
     ]
+
+
+def test_the_managed_administrator_is_no_superuser_and_holds_the_predefined_roles_as_rds_superuser_does():
+    statements = " ".join(MANAGED_ROLES.split())
+    assert "SUPERUSER" not in statements.replace("NOSUPERUSER", "")
+    assert f"CREATE ROLE {MANAGED_ADMIN} LOGIN NOSUPERUSER CREATEROLE CREATEDB" in statements
+    assert "GRANT pg_read_all_data, pg_write_all_data TO warren_rds_superuser WITH ADMIN OPTION" in statements
+    assert f"GRANT warren_rds_superuser TO {MANAGED_ADMIN}" in statements
+
+
+def test_only_the_superusers_seed_creates_the_event_trigger():
+    assert TRIGGER not in GRAPHS and SEED == GRAPHS + TRIGGER
+
+
+def test_roles_missing_on_the_target_are_named_once_each():
+    stderr = """pg_restore: error: could not execute query: ERROR:  role "dump_reader" does not exist
+CONTEXT:  COPY graphs, line 1, column readers: "{dump_reader}"
+psql:/tmp/d.sql:9: ERROR:  role "dump_reader" does not exist
+psql:/tmp/d.sql:12: ERROR:  role "gone" does not exist
+psql:/tmp/d.sql:13: ERROR:  relation "public.nodes" does not exist
+"""
+    assert missing_roles(stderr) == ["dump_reader", "gone"]

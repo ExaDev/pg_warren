@@ -2,6 +2,20 @@
 
 ## 0.9.0 — in development
 
+### Documentation
+
+- **Dumps and restores without a superuser** (DESIGN.md §14 item 51,
+  [#103](https://github.com/ExaDev/pg_warren/issues/103)): a role granted
+  `pg_read_all_data` dumps graphs, versions and vectors, and a role with
+  `CREATE` on the target database and `pg_write_all_data` restores them.
+  On Amazon RDS from PG 15 the master user has both. pg_warren itself
+  grants no role access to its catalog, and nothing in the SQL surface
+  changes. The roles named in the catalog must exist on the target first:
+  a missing one makes the restore fail, naming it. docs/security.md says
+  what the two predefined roles also allow. `test/dump.py` now checks the
+  whole round trip with no superuser, as on RDS, then `warren.drop_owned`
+  and `DROP EXTENSION` by the same non-superuser.
+
 ## 0.8.0 — native PageRank and Leiden, leaner calls (2026-10-29)
 
 ### Upgrading
