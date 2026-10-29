@@ -1,9 +1,21 @@
-# pg_warren
+<p align="center">
+  <a href="https://exadev.github.io/pg_warren/">
+    <img src="site/src/assets/mark.svg" alt="pg_warren logo" width="80" height="80">
+  </a>
+</p>
 
-[![GitHub](https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white)](https://github.com/ExaDev/pg_warren) [![Release](https://img.shields.io/github/v/release/ExaDev/pg_warren)](https://github.com/ExaDev/pg_warren/releases/latest) [![CI](https://img.shields.io/github/actions/workflow/status/ExaDev/pg_warren/ci.yml?branch=main)](https://github.com/ExaDev/pg_warren/actions)
+<h1 align="center">pg_warren</h1>
 
-Deep traversal and whole-graph computation for PostgreSQL, over graphs whose
-nodes and edges live in your ordinary tables.
+<p align="center">
+  <a href="https://github.com/ExaDev/pg_warren"><img src="https://img.shields.io/badge/GitHub-181717?logo=github&amp;logoColor=white" alt="GitHub"></a>
+  <a href="https://github.com/ExaDev/pg_warren/releases/latest"><img src="https://img.shields.io/github/v/release/ExaDev/pg_warren" alt="Latest release"></a>
+  <a href="https://github.com/ExaDev/pg_warren/actions"><img src="https://img.shields.io/github/actions/workflow/status/ExaDev/pg_warren/ci.yml?branch=main" alt="CI status"></a>
+</p>
+
+<p align="center">
+  Deep traversal and whole-graph computation for PostgreSQL.<br>
+  Over graphs whose nodes and edges live in your ordinary tables.
+</p>
 
 pg_warren builds a compact, memory-resident CSR adjacency structure from two
 SQL queries (one for nodes, one for edges) and exposes it through `warren.*`
