@@ -123,6 +123,32 @@
   could not represent failed with 22P05 ("has no equivalent in
   encoding"), since each message passed through `textsend`.
 
+### Supply chain
+
+- **Each release has a vendored source tarball and an SBOM**, both covered
+  by the signed `SHA256SUMS`: `pg_warren-X.Y.Z-vendored.tar.gz`, the source
+  with every crate `Cargo.lock` pins, which builds with `cargo build
+  --frozen` and no network; and `pg_warren-X.Y.Z.cdx.json`, a CycloneDX 1.5
+  SBOM of pg_warren and its crates with their licences and checksums. Both
+  are the same bytes each time they are made, and the publish job checks
+  both against the source tarball. CONTRIBUTING.md, "Supply chain", says
+  how to build offline and how to verify a release.
+- **Builds are reproducible from the same inputs.** The packages ship the
+  committed install script, `sql/pg_warren--X.Y.Z.sql`, instead of the one
+  `cargo pgrx package` generates, whose entity order changed from build to
+  build: that alone made every rebuilt `.deb` differ. Two builds of a
+  package from the same source now give the same bytes (CI checks it), and
+  `pg_warren.so` is the same bytes wherever it is built and whether its
+  crates come from crates.io or the vendored tarball
+  (`packaging/reproducibly.sh`; CI builds it both ways and compares). A
+  rebuild long after a release can still differ, since the build
+  container installs the current PostgreSQL headers and build tools; what
+  is and is not reproducible is in CONTRIBUTING.md, "Reproducible builds".
+- **Dependency checks in CI** (`cargo-deny`): RustSec advisories, a licence
+  allow-list, crates.io as the only source. They found two advisories,
+  fixed by updating `crossbeam-epoch` (in the library, through rayon) to
+  0.9.21 and a test dependency's `ctutils` to 0.4.7.
+
 ### Performance
 
 - `warren.pagerank` is a native kernel, not a PL/pgSQL loop over the

@@ -234,6 +234,11 @@ cd crates/pg_warren
 cargo pgrx install --release --pg-config "$(command -v pg_config)"
 ```
 
+To build without network access (each release's
+`pg_warren-X.Y.Z-vendored.tar.gz` carries every crate), or reproducibly, or
+to verify a release's signed `SHA256SUMS`, its SBOM and its source, see
+[CONTRIBUTING.md, "Supply chain"](CONTRIBUTING.md#supply-chain).
+
 Then, in each database:
 
 ```sql

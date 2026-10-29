@@ -54,6 +54,32 @@ jobs:
           fi
           echo "ok: warren-core is Postgres-free"
 
+  deny:
+    # deny.toml's policy over Cargo.lock (CONTRIBUTING.md, "Supply chain"):
+    # RustSec advisories, licences, bans and sources. Advisories run apart,
+    # so that one published overnight (the nightly run catches it) shows as
+    # its own failure, not as a licence or source problem.
+    name: cargo-deny (${{ matrix.checks }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        checks: [advisories, bans licenses sources]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-deny@0.20.2
+      - name: cargo deny check ${{ matrix.checks }}
+        env:
+          CHECKS: ${{ matrix.checks }}
+        run: |
+          set -euo pipefail
+          read -ra checks <<<"$CHECKS"
+          cargo deny --locked check "${checks[@]}"
+
   core-test:
     name: warren-core unit + property tests
     runs-on: ubuntu-latest
@@ -343,6 +369,9 @@ jobs:
         run: |
           set -euo pipefail
           brew tap-new --no-git exadev/tap
+          # Newer Homebrew loads formulae only from trusted taps; older brews
+          # have no `brew trust` and trust every tap.
+          if brew trust --help >/dev/null 2>&1; then brew trust exadev/tap; fi
           git archive --format=tar.gz --prefix=pg_warren-0.0.0/ -o "$RUNNER_TEMP/pg_warren-0.0.0.tar.gz" HEAD
           python3 release/homebrew.py "$RUNNER_TEMP/pg_warren-0.0.0.tar.gz" \
             >"$(brew --repo exadev/tap)/Formula/pg_warren.rb"
@@ -666,6 +695,14 @@ jobs:
         run: python3 release/packages.py tarball dist/postgresql-16-pg-warren_*.deb dist
       - name: Docker image from it, and its smoke test
         run: python3 release/packages.py image dist/postgresql-16-pg-warren_*.deb pg_warren:ci-pg16
+      # CONTRIBUTING.md, "Reproducible builds": the same source, built again
+      # in a fresh container straight after, gives the same .deb bytes.
+      - name: A second build gives the same packages
+        run: |
+          set -euo pipefail
+          python3 release/packages.py deb bookworm . "$RUNNER_TEMP/again" --majors 15 16
+          (cd dist && sha256sum ./*.deb) | tee "$RUNNER_TEMP/first.sha256"
+          (cd "$RUNNER_TEMP/again" && sha256sum --check "$RUNNER_TEMP/first.sha256")
 
   packages-release:
     # What a release builds (release-publish.yml's debs job), off the
@@ -710,6 +747,85 @@ jobs:
           for major in 15 16 17 18; do
             python3 release/packages.py image dist/postgresql-"$major"-pg-warren_*.deb "pg_warren:ci-pg$major-$ARCH"
           done
+
+  source-build:
+    # A release's source assets and the build a provider would run
+    # (CONTRIBUTING.md, "Building from source", "Reproducible builds"):
+    # the vendored source tarball and the SBOM made from this commit's
+    # `git archive` as release-publish.yml makes them, each checked as the
+    # publish job checks them; then pg_warren.so built twice with
+    # packaging/reproducibly.sh, once here from crates.io and once from the
+    # vendored tarball unpacked elsewhere, offline with an empty
+    # CARGO_HOME. The two libraries must be the same bytes.
+    name: Vendored offline build, SBOM, reproducible pg_warren.so (PG 16)
+    runs-on: ubuntu-24.04
+    env:
+      # Not -D warnings: only packaging/reproducibly.sh's flags, as a
+      # provider's build has.
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: ./.github/actions/setup-postgres
+        timeout-minutes: 30
+        with:
+          pg-major: "16"
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-cyclonedx@0.5.9
+      - name: The vendored source tarball and the SBOM, each checked
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          assets="$RUNNER_TEMP/assets"
+          mkdir -p "$assets"
+          git archive --format=tar.gz --prefix="pg_warren-$version/" -o "$assets/pg_warren-$version.tar.gz" HEAD
+          python3 release/source.py vendored "$assets/pg_warren-$version.tar.gz" "$assets"
+          python3 release/source.py sbom "$assets/pg_warren-$version.tar.gz" "$assets"
+          python3 release/assets.py check-vendored "$assets/pg_warren-$version-vendored.tar.gz" \
+            "$assets/pg_warren-$version.tar.gz"
+          python3 release/assets.py check-sbom "$assets/pg_warren-$version.cdx.json" "$assets/pg_warren-$version.tar.gz"
+          # The same bytes when made again.
+          mkdir -p "$RUNNER_TEMP/again"
+          python3 release/source.py vendored "$assets/pg_warren-$version.tar.gz" "$RUNNER_TEMP/again"
+          python3 release/source.py sbom "$assets/pg_warren-$version.tar.gz" "$RUNNER_TEMP/again"
+          (cd "$assets" && sha256sum "pg_warren-$version-vendored.tar.gz" "pg_warren-$version.cdx.json") \
+            | (cd "$RUNNER_TEMP/again" && sha256sum --check)
+          ls -l "$assets"
+          echo "VERSION=$version" >>"$GITHUB_ENV"
+      # `cargo rustc --lib ... -- -C link-arg=-Wl,--no-gc-sections` is the
+      # build `cargo pgrx package` runs on Linux (cargo-pgrx 0.19.3).
+      - name: pg_warren.so from this checkout, with crates from crates.io
+        run: |
+          set -euo pipefail
+          cargo fetch --locked
+          packaging/reproducibly.sh . \
+            cargo rustc --locked --release -p pg_warren --lib --no-default-features --features pg16 \
+              -- -C link-arg=-Wl,--no-gc-sections
+          sha256sum target/release/libpg_warren.so | tee "$RUNNER_TEMP/here.sha256"
+      - name: pg_warren.so from the vendored tarball, elsewhere and offline
+        run: |
+          set -euo pipefail
+          elsewhere="$RUNNER_TEMP/elsewhere/build"
+          mkdir -p "$elsewhere" "$RUNNER_TEMP/empty-cargo-home"
+          tar -xzf "$RUNNER_TEMP/assets/pg_warren-$VERSION-vendored.tar.gz" -C "$elsewhere"
+          cd "$elsewhere/pg_warren-$VERSION"
+          export CARGO_HOME="$RUNNER_TEMP/empty-cargo-home"
+          packaging/reproducibly.sh . \
+            cargo rustc --frozen --release -p pg_warren --lib --no-default-features --features pg16 \
+              -- -C link-arg=-Wl,--no-gc-sections
+          sha256sum target/release/libpg_warren.so | tee "$RUNNER_TEMP/elsewhere.sha256"
+      - name: The two libraries are the same bytes
+        run: |
+          set -euo pipefail
+          here="$(cut -d' ' -f1 "$RUNNER_TEMP/here.sha256")"
+          elsewhere="$(cut -d' ' -f1 "$RUNNER_TEMP/elsewhere.sha256")"
+          if [[ "$here" != "$elsewhere" ]]; then
+            echo "::error::pg_warren.so is $here built here and $elsewhere from the vendored tarball elsewhere (CONTRIBUTING.md, \"Reproducible builds\")"
+            exit 1
+          fi
+          echo "ok: both builds give pg_warren.so $here"
 
   actionlint:
     name: Workflows (actionlint)
