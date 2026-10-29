@@ -1,4 +1,4 @@
-# Head-to-head: pg_warren, igraph, Neo4j and Neo4j GDS (M11)
+# Head-to-head: pg_warren, igraph, Neo4j, Neo4j GDS and pgGraph
 
 `bench/corpus/suite.py head-to-head` output (DESIGN.md §12 "Real graphs",
 §13 M11; `bench/corpus/README.md` describes the runner). There is one file per
@@ -10,7 +10,10 @@ was left out by design. The large tier is deferred (DESIGN.md §13).
 Each file holds the provenance, the machine, every engine's versions and
 settings (`describe`), its load phases, and for each workload the cold time,
 the warm times and their median, the check against the reference and the
-partition's modularity.
+partition's modularity. The files at the top level are the M11 run,
+against pg_warren 0.7.0; `pggraph-1.2.1/` holds a later run of pgGraph
+1.2.1 beside pg_warren 0.8.0 and igraph, described in its own section
+below.
 
 **Read the caveats before quoting a number.** This is one run on one shared
 virtual machine. The engines keep their results differently, are cold in
@@ -112,7 +115,9 @@ Read every number here with these in mind.
     degree reads its `SINGLE`-folded projection.
   - *Shortest paths*: 25 seeded pairs in one call (one SQL statement, one
     Cypher query, a loop of igraph calls). igraph's `distances` with a
-    target runs a full single-source search per pair; pg_warren's
+    target stops at the target but first builds the whole graph's
+    adjacency list, on every call; the pgGraph run's `paths/` uses the
+    faster `get_shortest_path` (see that section). pg_warren's
     `shortest_path` and Cypher's `shortestPath` search from both ends.
   - *Triangles*: per node in pg_warren, igraph (local transitivity times
     the pairs of neighbours, on the simple graph) and GDS; a total in
@@ -166,8 +171,10 @@ engine reached is `check.modularity` in each file.
 - *Shortest paths between pairs.* pg_warren's bidirectional BFS
   (`shortest_path`) beat igraph on 11 of 12 datasets. The margin was 2–220×:
   dblp took 6 ms against 1.04 s, and roadnet-tx 1.46 s against 2.98 s.
-  igraph's `distances` with a target runs a whole single-source search for
-  each pair. pg_warren also beat GDS Dijkstra by 5–370×, and Cypher's
+  igraph's `distances` with a target builds the whole graph's adjacency
+  list for each pair before it searches; against igraph's faster
+  `get_shortest_path`, pg_warren 0.8.0 won on 7 of 12 (the pgGraph section
+  below). pg_warren also beat GDS Dijkstra by 5–370×, and Cypher's
   `shortestPath` warm on 11 of 11. Cypher's warm times here are 18–330 ms;
   roadnet-tx took 5.9 s.
 - *Louvain.* pg_warren beat GDS everywhere, by 1.7–280×: GDS took 3–16 s
@@ -551,3 +558,259 @@ igraph on wn18rr (1.24×), facebook (1.35×) and email-enron (1.36×).
 GDS was not re-run. Against its warm times in the main table above, which
 are from the M11 run, the new `pagerank` is faster on all 12 datasets: on
 roadnet-tx 0.22 s against 0.62 s, on yago3-10 0.043 s against 0.146 s.
+
+## pgGraph 1.2.1 against pg_warren 0.8.0 and igraph (2026-10-29)
+
+[pgGraph](https://github.com/Evokoa/pgGraph) (Apache-2.0, Rust and pgrx,
+PostgreSQL 14–18) is the closest project to pg_warren: it also builds a CSR
+from your tables and answers graph queries in SQL. This run times it on the
+same 12 datasets, in the same scratch cluster, beside pg_warren 0.8.0 and
+igraph. `pggraph-1.2.1/run/` holds one file per dataset with every workload
+for pg_warren and igraph and what pgGraph runs. `pggraph-1.2.1/paths/`
+re-times shortest paths for all three, once igraph's pairs went through a
+fairer call (below). Neo4j and GDS were not re-run: their figures above are
+from the M11 run, against 0.7.0.
+
+### Provenance
+
+| | |
+|---|---|
+| pg_warren | 0.8.0, release build of 8dd426c, the release commit that `v0.8.0` tags (the tag was not yet on origin when this ran); `cargo pgrx package` with cargo-pgrx 0.19.3 and Rust 1.97.0 into a private PostgreSQL 16.15 tree; `pg_warren.so` sha256 `b720e538f278899d8846e017d0f2667f71a0163d3552bf8ce48c3ff3af5bfde0`; `warren.threads = 4` |
+| pgGraph | 1.2.1, the latest release (tag `v1.2.1`, commit `1bbe30149100b49fc4a1494bd3afbeba82070092`), built in release mode (its profile: opt-level 3, fat LTO, one codegen unit) with Rust 1.96.0 and cargo-pgrx 0.19.1, as it pins them; `cargo pgrx package --no-default-features --features pg16`, installed into the same private tree; `graph.so` sha256 `7cb8900debd93f77f8df88fc52bddf21581723432400200d2f110a882e5535ba`. `head_to_head/pins.json` and `bench/corpus/README.md` have the recipe |
+| pgGraph's settings | Its recommended starting configuration: `shared_preload_libraries = 'graph'`, `graph.memory_limit_mb = 4096`, `persist_on_build` and `auto_load` on, `csr_readonly`; `graph.sync_mode = 'manual'`, its advice for a static graph; `graph.maintenance_memory_mb = 4096`. Each session raises the circuit breakers so a whole-graph answer is not cut short: `graph.max_nodes` and `graph.max_frontier` 10,000,000 (their maximum), `graph.query_work_limit` 2,000,000,000 (its maximum), `graph.query_memory_mb` 4096 (the memory limit). Every setting is in each file (`engines.pggraph.describe`); string settings at their defaults read empty there |
+| The cluster | PostgreSQL 16.15 with the soak's settings, as in M11 (`shared_buffers = 1GB`, `fsync = off`, `synchronous_commit = off`), plus pgGraph's preload, which pg_warren's backends also load |
+| igraph | python-igraph 1.0.0 (its C core 1.0.0), CPython 3.13.16, one thread |
+| Harness | `run/`: fe2aed7, `suite.py head-to-head <the 12 datasets> --engine pg_warren --engine pggraph --engine igraph --extension-revision 8dd426c --extension-profile release --timeout 300`, with the defaults `--repeat 5 --budget 120 --threads 4`. The tree reads dirty from dblp on: the igraph change below was edited in during the run, after the process had loaded its modules, so that run's igraph pairs still use `distances`. `paths/`: 794b65a, the same command with `--workload paths` |
+| Machine | The M11 VM (4 vCPUs, 15 GiB, no swap, kernel 6.18.44), shared with other agents. One-minute load average at the start of each dataset: 0.5–3.5 for `run/`, 0.2–1.0 for `paths/` (`hardware.load_average`) |
+
+### How pgGraph runs each workload
+
+pgGraph's SQL API (its [api-reference](https://github.com/Evokoa/pgGraph/blob/v1.2.1/docs/user_guide/api-reference.mdx))
+has traversal, unweighted and weighted shortest paths, connected components,
+search, aggregation over traversals and a GQL subset. It has no degree,
+PageRank, triangle count, community detection or betweenness, so those
+workloads are recorded as unsupported. `graph.gql` cannot count each node's
+distinct neighbours either: `MATCH ... OPTIONAL MATCH` is a syntax error in
+its subset, and a plain match leaves out nodes with none.
+
+- *Loading.* `nodes` and `edges` are loaded by the same `load.sql` as
+  pg_warren's (`ingest`). pgGraph reads a relationship table's primary key
+  as each edge's identity. The suite's `edges` has none (a parallel edge
+  repeats its `(src, dst)`), so `key` adds a surrogate `bigint` identity
+  primary key. `register` is `graph.add_table` and `graph.add_edge`: an
+  undirected graph's edges `bidirectional` (stored both ways), a directed
+  one's one way, the relation as the edge's dynamic label, the weight as
+  its weight. `build` is `graph.build()`, which also writes the persisted
+  artifact (the median of three). The sum of the phases is the time to
+  first query.
+- *Cold and warm.* Cold follows `graph.unload_graph`, so the call loads
+  the graph from its artifact (`graph.auto_load`), as pg_warren's cold
+  follows `warren.evict`. A query runs on its backend's one thread;
+  pgGraph has no thread setting.
+- *BFS reach and depths.* `count(*)` over `graph.traverse(start, depth,
+  direction := 'out', hydrate := false, max_rows := 2147483647)`, as
+  pg_warren's `count(*)` over `warren.bfs`. `traverse` takes a depth bound,
+  and it reserves memory and work for every visited node's path to that
+  depth. So it has no unbounded search, and a depth bound far beyond the
+  answer's fails its own resource check. `bfs depths` passes the start's
+  eccentricity from the reference (3–756), the smallest bound that reaches
+  every node. That favours pgGraph: it is told the answer's depth.
+- *Shortest paths.* `max(step)` of `graph.shortest_path(s, t, max_depth
+  := 2147483647, hydrate := false)` for each pair, all in one statement as
+  pg_warren's; on lesmis, `max(total_cost)` of
+  `graph.weighted_shortest_path`. pgGraph's weights are integers, and
+  lesmis's are whole numbers. A depth bound of 20, its default, or of 2³¹−1
+  timed the same.
+- *Components.* `count(DISTINCT component_id)` over
+  `graph.connected_components()`, a union-find over the whole graph (weak
+  components).
+
+Parallel edges stay in pgGraph's graph (its "bag semantics": it returns
+edge identities), where pg_warren folds them. No workload pgGraph runs can
+tell the difference, and none did.
+
+### Correctness
+
+Every pgGraph time counted is of an answer that matched the reference
+exactly: reach, depths, path lengths and costs, components as partitions.
+So did every pg_warren and igraph answer in both runs. Two pgGraph runs did
+not finish, both `bfs depths` on the road networks, where the start's
+eccentricity is 537 (ss-gleich-usroads-48) and 756 (roadnet-tx). `traverse`
+refused them before running (SQLSTATE 54000, PG007): the paths it reserves
+for would need 4.5 GB and 68.6 GB, against a 4 GB limit. Raising the limit
+past the recommended configuration was not tried; the VM has 15 GB.
+
+### Loading (median seconds of each phase; ms and µs where marked)
+
+| Dataset | Engine | Phases (median seconds) | First query |
+| --- | --- | --- | --- |
+| lesmis | pg_warren | ingest 0.011, build 2.60 ms | 0.014 |
+| lesmis | pggraph | ingest 0.012, key 7.18 ms, register 5.26 ms, build 0.041 | 0.066 |
+| lesmis | igraph | ingest 373 µs, build 261 µs | 634 µs |
+| polblogs | pg_warren | ingest 0.026, build 7.42 ms | 0.034 |
+| polblogs | pggraph | ingest 0.024, key 0.016, register 5.06 ms, build 0.123 | 0.168 |
+| polblogs | igraph | ingest 5.89 ms, build 8.25 ms | 0.014 |
+| facebook | pg_warren | ingest 0.050, build 0.028 | 0.078 |
+| facebook | pggraph | ingest 0.048, key 0.057, register 5.39 ms, build 0.615 | 0.725 |
+| facebook | igraph | ingest 0.028, build 0.017 | 0.044 |
+| wn18rr | pg_warren | ingest 0.147, build 0.075 | 0.222 |
+| wn18rr | pggraph | ingest 0.147, key 0.072, register 5.94 ms, build 0.697 | 0.921 |
+| wn18rr | igraph | ingest 0.094, build 0.054 | 0.148 |
+| cit-hepth | pg_warren | ingest 0.163, build 0.116 | 0.280 |
+| cit-hepth | pggraph | ingest 0.165, key 0.239, register 4.73 ms, build 2.43 | 2.84 |
+| cit-hepth | igraph | ingest 0.161, build 0.211 | 0.372 |
+| email-enron | pg_warren | ingest 0.210, build 0.129 | 0.339 |
+| email-enron | pggraph | ingest 0.169, key 0.341, register 5.43 ms, build 4.28 | 4.80 |
+| email-enron | igraph | ingest 0.154, build 0.082 | 0.236 |
+| fb15k-237 | pg_warren | ingest 0.302, build 0.196 | 0.498 |
+| fb15k-237 | pggraph | ingest 0.348, key 0.216, register 4.86 ms, build 2.33 | 2.90 |
+| fb15k-237 | igraph | ingest 0.292, build 0.165 | 0.457 |
+| ss-gleich-usroads-48 | pg_warren | ingest 0.161, build 0.079 | 0.240 |
+| ss-gleich-usroads-48 | pggraph | ingest 0.161, key 0.093, register 5.17 ms, build 2.13 | 2.39 |
+| ss-gleich-usroads-48 | igraph | ingest 0.107, build 0.037 | 0.143 |
+| dblp | pg_warren | ingest 0.663, build 0.445 | 1.11 |
+| dblp | pggraph | ingest 0.642, key 0.526, register 4.81 ms, build 14.77 | 15.94 |
+| dblp | igraph | ingest 0.848, build 0.394 | 1.24 |
+| yago3-10 | pg_warren | ingest 0.968, build 0.691 | 1.66 |
+| yago3-10 | pggraph | ingest 0.849, key 0.678, register 4.80 ms, build 10.68 | 12.22 |
+| yago3-10 | igraph | ingest 1.53, build 0.904 | 2.44 |
+| hetionet | pg_warren | ingest 1.41, build 1.04 | 2.45 |
+| hetionet | pggraph | ingest 1.11, key 1.38, register 5.68 ms, build 20.73 | 23.23 |
+| hetionet | igraph | ingest 1.72, build 2.30 | 4.02 |
+| roadnet-tx | pg_warren | ingest 2.39, build 1.37 | 3.76 |
+| roadnet-tx | pggraph | ingest 3.02, key 2.44, register 5.55 ms, build 72.37 | 77.83 |
+| roadnet-tx | igraph | ingest 5.06, build 1.12 | 6.18 |
+
+pgGraph's time to first query is 0.07–78 s, against pg_warren's
+0.01–3.8 s; nearly all of it is `graph.build()`, which on roadnet-tx took
+72 s (the median of three), against `warren.refresh`'s 1.4 s.
+
+### BFS and components (cold / warm median, seconds; ms and µs where marked)
+
+| Dataset | Workload | pg_warren | pggraph | igraph | pggraph / pg_warren |
+| --- | --- | --- | --- | --- | --- |
+| lesmis | bfs depth 6 | 860 µs / 245 µs | 8.30 ms / 6.21 ms | 12 µs / 4 µs | 25 |
+| lesmis | bfs depths | 797 µs / 210 µs | 8.15 ms / 6.11 ms | 16 µs / 11 µs | 29 |
+| lesmis | components | 831 µs / 184 µs | 4.87 ms / 2.63 ms | 39 µs / 4 µs | 14 |
+| polblogs | bfs depth 6 | 1.37 ms / 574 µs | 0.059 / 0.053 | 99 µs / 43 µs | 92 |
+| polblogs | bfs depths | 1.38 ms / 550 µs | 0.059 / 0.054 | 209 µs / 167 µs | 99 |
+| polblogs | components | 1.49 ms / 623 µs | 8.77 ms / 3.66 ms | 363 µs / 273 µs | 5.9 |
+| facebook | bfs depth 6 | 4.33 ms / 1.81 ms | 0.239 / 0.207 | 450 µs / 340 µs | 114 |
+| facebook | bfs depths | 3.58 ms / 1.79 ms | 0.240 / 0.209 | 1.00 ms / 953 µs | 117 |
+| facebook | components | 3.72 ms / 1.69 ms | 0.042 / 7.08 ms | 858 µs / 92 µs | 4.2 |
+| wn18rr | bfs depth 6 | 0.014 / 2.47 ms | 0.649 / 0.635 | 1.06 ms / 261 µs | 257 |
+| wn18rr | bfs depths | 0.014 / 4.97 ms | 1.93 / 1.89 | 4.33 ms / 4.07 ms | 381 |
+| wn18rr | components | 0.018 / 9.14 ms | 0.040 / 0.015 | 6.19 ms / 5.34 ms | 1.66 |
+| cit-hepth | bfs depth 6 | 7.81 ms / 2.64 ms | 0.786 / 0.708 | 1.45 ms / 589 µs | 268 |
+| cit-hepth | bfs depths | 8.39 ms / 4.63 ms | 1.68 / 1.93 | 4.12 ms / 3.88 ms | 418 |
+| cit-hepth | components | 0.011 / 6.89 ms | 0.119 / 0.016 | 0.011 / 7.54 ms | 2.3 |
+| email-enron | bfs depth 6 | 0.014 / 7.75 ms | 2.28 / 2.26 | 3.29 ms / 2.13 ms | 291 |
+| email-enron | bfs depths | 0.020 / 7.89 ms | 2.33 / 2.06 | 5.45 ms / 4.98 ms | 261 |
+| email-enron | components | 0.012 / 7.61 ms | 0.215 / 0.025 | 4.14 ms / 2.85 ms | 3.3 |
+| fb15k-237 | bfs depth 6 | 0.073 / 4.78 ms | 0.880 / 0.727 | 2.46 ms / 1.14 ms | 152 |
+| fb15k-237 | bfs depths | 0.067 / 4.90 ms | 0.825 / 0.727 | 2.58 ms / 2.38 ms | 148 |
+| fb15k-237 | components | 0.073 / 4.98 ms | 0.113 / 0.012 | 8.45 ms / 6.18 ms | 2.4 |
+| ss-gleich-usroads-48 | bfs depth 6 | 8.69 ms / 263 µs | 0.065 / 8.43 ms | 147 µs / 20 µs | 32 |
+| ss-gleich-usroads-48 | bfs depths | 0.041 / 0.035 | error (PG007) | 0.016 / 0.015 |  |
+| ss-gleich-usroads-48 | components | 0.036 / 0.022 | 0.111 / 0.040 | 0.014 / 2.90 ms | 1.80 |
+| dblp | bfs depth 6 | 0.147 / 0.071 | 28.44 / 26.19 | 0.043 / 0.034 | 366 |
+| dblp | bfs depths | 0.129 / 0.081 | 29.31 / 28.48 | 0.071 / 0.063 | 351 |
+| dblp | components | 0.100 / 0.069 | 0.905 / 0.133 | 0.055 / 7.54 ms | 1.93 |
+| yago3-10 | bfs depth 6 | 0.049 / 4.45 ms | 0.991 / 0.506 | 2.16 ms / 932 µs | 114 |
+| yago3-10 | bfs depths | 0.042 / 4.95 ms | 1.07 / 0.546 | 0.015 / 0.014 | 110 |
+| yago3-10 | components | 0.071 / 0.031 | 0.573 / 0.060 | 0.029 / 0.024 | 1.93 |
+| hetionet | bfs depth 6 | 0.067 / 0.015 | 2.81 / 1.51 | 4.77 ms / 3.18 ms | 103 |
+| hetionet | bfs depths | 0.064 / 0.015 | 2.85 / 1.53 | 0.011 / 0.010 | 103 |
+| hetionet | components | 0.070 / 0.017 | 1.35 / 0.053 | 0.049 / 1.01 ms | 3.2 |
+| roadnet-tx | bfs depth 6 | 0.106 / 635 µs | 2.65 / 0.015 | 1.21 ms / 412 µs | 24 |
+| roadnet-tx | bfs depths | 0.500 / 0.379 | error (PG007) | 0.217 / 0.211 |  |
+| roadnet-tx | components | 0.416 / 0.301 | 2.82 / 0.585 | 0.151 / 0.148 | 1.94 |
+
+The last column divides the warm medians.
+
+### Shortest paths, 25 pairs in one call (`paths/`)
+
+| Dataset | pg_warren | pggraph | igraph (`get_shortest_path`) | igraph / pg_warren | pggraph / pg_warren | igraph (`distances`, main run) |
+| --- | --- | --- | --- | --- | --- | --- |
+| lesmis | 1.68 ms / 899 µs | 0.059 / 0.055 | 740 µs / 329 µs | 0.37 | 62 | 454 µs / 331 µs |
+| polblogs | 2.58 ms / 1.28 ms | 0.064 / 0.057 | 792 µs / 521 µs | 0.41 | 45 | 3.20 ms / 3.00 ms |
+| facebook | 5.32 ms / 2.50 ms | 0.098 / 0.065 | 2.60 ms / 2.39 ms | 0.95 | 26 | 0.020 / 0.020 |
+| wn18rr | 0.011 / 1.21 ms | 0.124 / 0.107 | 0.016 / 0.014 | 12 | 89 | 0.087 / 0.081 |
+| cit-hepth | 9.92 ms / 5.33 ms | 0.216 / 0.114 | 0.018 / 0.015 | 2.9 | 21 | 0.077 / 0.075 |
+| email-enron | 8.05 ms / 2.67 ms | 0.245 / 0.058 | 0.020 / 0.019 | 7.1 | 22 | 0.109 / 0.105 |
+| fb15k-237 | 0.066 / 3.65 ms | 0.189 / 0.095 | 0.011 / 9.79 ms | 2.7 | 26 | 0.046 / 0.047 |
+| ss-gleich-usroads-48 | 0.168 / 0.145 | 0.403 / 0.348 | 0.100 / 0.099 | 0.68 | 2.4 | 0.254 / 0.251 |
+| dblp | 0.043 / 5.81 ms | 0.836 / 0.073 | 0.263 / 0.256 | 44 | 13 | 1.33 / 1.40 |
+| yago3-10 | 0.044 / 1.24 ms | 0.572 / 0.107 | 0.019 / 0.017 | 14 | 86 | 0.296 / 0.287 |
+| hetionet | 0.053 / 2.47 ms | 1.36 / 0.149 | 0.031 / 0.025 | 10 | 60 | 0.194 / 0.188 |
+| roadnet-tx | 1.69 / 1.45 | 7.04 / 5.05 | 1.27 / 1.29 | 0.89 | 3.5 | 3.79 / 3.76 |
+
+Cold / warm median, seconds; the ratios divide the warm medians. The last
+column is igraph's time in `run/`, before the change below.
+
+*igraph's single-pair call.* The M11 run and `run/` call igraph's
+`distances(source, target)` for each pair. In igraph's C core 1.0.0
+(`src/paths/unweighted.c`) that search does stop once it reaches the
+target, but first builds the whole graph's adjacency list
+(`igraph_adjlist_init`), on every call. `get_shortest_path(v, to=...)`
+(`igraph_get_shortest_paths`) also stops at the target and reads each
+visited node's edges as it goes (`igraph_incident`), so it skips that
+pass. Weighted, both run Dijkstra over a lazy incidence list and stop at
+the target. `paths/` uses `get_shortest_path` with `output="epath"`: the hop
+count is the path's length, a weighted cost its weights' sum, and an
+empty path between two different nodes means there is none. It was 2.5–17×
+faster than `distances` on the unweighted datasets (dblp 0.26 s against
+1.40 s) and the same on lesmis, where both run Dijkstra, and its answers
+matched the reference on every dataset. The M11 claim that igraph "runs a
+whole single-source search for each pair" was wrong: the adjacency list,
+not the search, was the cost.
+
+### Findings
+
+**pgGraph was slower than pg_warren on every workload both run, on every
+dataset, warm and cold.** Warm, by:
+
+- *BFS reach and depths*: 24–420×. The cost is in pgGraph's output. Every
+  row of `traverse` carries the node's path as JSON. `path_coordinates_json`
+  names each step's table through `catalog::validate::relation_name`, an SPI
+  query, which gdb samples of a wn18rr run found in the planner. With most of
+  a graph returned, that is 45–110 µs a row. pgGraph documents traversal for
+  bounded neighbourhoods ("Bounded BFS/DFS with depth, node, and frontier
+  circuit breakers"), not for whole-graph sweeps.
+- *Shortest paths*: 2.4–89×. A pgGraph call costs about 2.5 ms even on
+  lesmis, the same for any depth bound, and 25 calls cost 55 ms there.
+  Its closest results are on the road networks: ss-gleich-usroads-48
+  (0.35 s against 0.14 s) and roadnet-tx (5.1 s against 1.45 s).
+- *Components*: 1.7–14×; closest on wn18rr (15 ms against 9.1 ms),
+  ss-gleich-usroads-48 (40 ms against 22 ms), dblp, yago3-10 and roadnet-tx
+  (1.9×).
+- *Cold*: pgGraph's first call loads the artifact; pg_warren's reads its
+  segments. pgGraph's cold times were 1.5–230× pg_warren's.
+- *Time to first query*: 5–21× (above).
+
+**Where pgGraph wins.** Against igraph, on shortest paths on dblp: 73 ms
+against 0.26 s, since igraph's search covers much of a 317,080-node graph
+for each pair and pgGraph's, like pg_warren's, does not. Against igraph's
+slower `distances` call in `run/`, pgGraph was also faster on email-enron,
+yago3-10 and hetionet; that call is no longer the one compared. Nowhere
+else, and nowhere against pg_warren.
+
+**Shortest paths against igraph's fairer call.** pg_warren runs a
+bidirectional BFS for each pair, all 25 in one SQL call. igraph's
+`get_shortest_path` searches from one end and stops at the target.
+pg_warren was faster on 7 of 12 datasets, by 2.7–44× (dblp 5.8 ms
+against 0.26 s, yago3-10 1.2 ms against 17 ms). igraph was faster on 5:
+lesmis (0.33 ms against 0.90 ms) and polblogs (0.52 ms against 1.28 ms),
+where one SQL call's fixed cost dominates; facebook, within 5%
+(2.39 ms against 2.50 ms); and the road networks, ss-gleich-usroads-48
+(99 ms against 145 ms) and roadnet-tx (1.29 s against 1.45 s), whose
+paths run to hundreds of hops. The road networks were not profiled.
+Plain Cypher's `shortestPath`, the like-for-like algorithm (it also
+searches from both ends), was 2.6–23× slower than pg_warren warm in the
+M11 run on the 11 datasets it ran (dblp 26 ms against 6.0 ms,
+ss-gleich-usroads-48 0.33 s against 0.13 s).
+
+**pg_warren 0.8.0 against igraph elsewhere in `run/`.** As in M11, igraph
+was faster on BFS reach on every dataset (1.5–66×), and on BFS depths and
+components on all but three cells: yago3-10's depths (4.9 ms against
+14 ms), and cit-hepth's and fb15k-237's components.

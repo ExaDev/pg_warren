@@ -1,0 +1,1022 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "head-to-head",
+   "lesmis",
+   "polblogs",
+   "facebook",
+   "wn18rr",
+   "cit-hepth",
+   "email-enron",
+   "fb15k-237",
+   "ss-gleich-usroads-48",
+   "dblp",
+   "yago3-10",
+   "hetionet",
+   "roadnet-tx",
+   "--engine",
+   "pg_warren",
+   "--engine",
+   "pggraph",
+   "--engine",
+   "igraph",
+   "--pg-config",
+   "/var/tmp/warren-corpus/head-to-head/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "8dd426c",
+   "--extension-profile",
+   "release",
+   "--timeout",
+   "300",
+   "--results",
+   "/var/tmp/warren-corpus/head-to-head/run"
+  ],
+  "harness": {
+   "revision": "fe2aed7876ef14bf5f36aa9bfc161f81555be561",
+   "dirty": true
+  },
+  "extension": {
+   "revision": "8dd426c",
+   "profile": "release",
+   "library": "/var/tmp/warren-corpus/head-to-head/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "b720e538f278899d8846e017d0f2667f71a0163d3552bf8ce48c3ff3af5bfde0"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v185",
+  "load_average": [
+   1.2958984375,
+   1.72265625,
+   1.61181640625
+  ]
+ },
+ "dataset": "hetionet",
+ "tier": "medium",
+ "fetched": {
+  "tables": {
+   "nodes": 45158,
+   "edges": 2250197,
+   "ids": "text",
+   "relations": 24,
+   "self_loops": 0
+  },
+  "sha256": {
+   "nodes.csv": "25f91a49480a558b0eceac486bec5289f4dfef3ee19e08f7cd156b83006a9dbd",
+   "edges.csv": "c4d86b3a2fdee1e9911c190e843a028ec6613f8622d1b9d6aec5f740c4d83733"
+  },
+  "provenance": {
+   "entryId": "hetionet",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-26T05:48:52.818Z",
+   "source": {
+    "url": "https://media.githubusercontent.com/media/hetio/hetionet/main/hetnet/tsv/hetionet-v1.0-edges.sif.gz",
+    "status": "live",
+    "snapshot": {
+     "url": "https://web.archive.org/web/20261022011839/https://media.githubusercontent.com/media/hetio/hetionet/main/hetnet/tsv/hetionet-v1.0-edges.sif.gz",
+     "timestamp": "20261022011839",
+     "sha256": "611f0411ac666be4e0270e54bbca67407e14720bfc3099311f0f5eec25c5a947",
+     "byteLength": 12401407
+    }
+   },
+   "fetchedUrl": "https://media.githubusercontent.com/media/hetio/hetionet/main/hetnet/tsv/hetionet-v1.0-edges.sif.gz",
+   "sha256": "611f0411ac666be4e0270e54bbca67407e14720bfc3099311f0f5eec25c5a947",
+   "byteLength": 12401407
+  }
+ },
+ "repeat": 5,
+ "budget_seconds": 120,
+ "timeout_seconds": 300,
+ "workloads": [
+  {
+   "name": "degree",
+   "kind": "degree",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": null
+  },
+  {
+   "name": "bfs depth 6",
+   "kind": "reach",
+   "source": "Anatomy::UBERON:0000955",
+   "depth": 6,
+   "pairs": [],
+   "weighted": false,
+   "iterations": null
+  },
+  {
+   "name": "bfs depths",
+   "kind": "depths",
+   "source": "Anatomy::UBERON:0000955",
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": null
+  },
+  {
+   "name": "shortest paths",
+   "kind": "paths",
+   "source": null,
+   "depth": null,
+   "pairs": [
+    [
+     "Biological Process::GO:0070350",
+     "Pathway::PC7_3328"
+    ],
+    [
+     "Biological Process::GO:0031122",
+     "Gene::119764"
+    ],
+    [
+     "Biological Process::GO:0051567",
+     "Gene::8720"
+    ],
+    [
+     "Gene::6811",
+     "Gene::80178"
+    ],
+    [
+     "Side Effect::C0520757",
+     "Gene::5007"
+    ],
+    [
+     "Compound::DB00726",
+     "Biological Process::GO:0043966"
+    ],
+    [
+     "Gene::84648",
+     "Biological Process::GO:0006851"
+    ],
+    [
+     "Gene::51669",
+     "Gene::6238"
+    ],
+    [
+     "Side Effect::C0020550",
+     "Anatomy::UBERON:0001516"
+    ],
+    [
+     "Gene::6547",
+     "Gene::138724"
+    ],
+    [
+     "Gene::100287399",
+     "Pharmacologic Class::N0000006269"
+    ],
+    [
+     "Biological Process::GO:0045992",
+     "Gene::26035"
+    ],
+    [
+     "Biological Process::GO:0007098",
+     "Biological Process::GO:0006171"
+    ],
+    [
+     "Biological Process::GO:0006541",
+     "Side Effect::C0428886"
+    ],
+    [
+     "Molecular Function::GO:0016765",
+     "Biological Process::GO:0001657"
+    ],
+    [
+     "Gene::50802",
+     "Symptom::D014474"
+    ],
+    [
+     "Compound::DB01182",
+     "Gene::57513"
+    ],
+    [
+     "Biological Process::GO:0006925",
+     "Molecular Function::GO:0004781"
+    ],
+    [
+     "Compound::DB06237",
+     "Gene::643236"
+    ],
+    [
+     "Gene::8745",
+     "Molecular Function::GO:0043028"
+    ],
+    [
+     "Gene::10165",
+     "Gene::340069"
+    ],
+    [
+     "Gene::100532726",
+     "Side Effect::C1504465"
+    ],
+    [
+     "Compound::DB01392",
+     "Gene::7482"
+    ],
+    [
+     "Gene::201299",
+     "Biological Process::GO:0006060"
+    ],
+    [
+     "Gene::5683",
+     "Molecular Function::GO:0050509"
+    ]
+   ],
+   "weighted": false,
+   "iterations": null
+  },
+  {
+   "name": "pagerank 20 iterations",
+   "kind": "pagerank",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": 20
+  },
+  {
+   "name": "components",
+   "kind": "components",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": null
+  },
+  {
+   "name": "triangles",
+   "kind": "triangles",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": null
+  },
+  {
+   "name": "louvain",
+   "kind": "louvain",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": null
+  },
+  {
+   "name": "leiden",
+   "kind": "leiden",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": null
+  }
+ ],
+ "engines": {
+  "pg_warren": {
+   "describe": {
+    "version": "0.8.0",
+    "threads": 4,
+    "settings": [
+     "fsync=off",
+     "full_page_writes=off",
+     "jit=on",
+     "maintenance_work_mem=1GB",
+     "max_parallel_workers_per_gather=2",
+     "max_wal_size=1GB",
+     "shared_buffers=1GB",
+     "shared_preload_libraries=graph",
+     "statement_timeout=5min",
+     "synchronous_commit=off",
+     "wal_level=minimal",
+     "warren.max_build_memory=4GB",
+     "warren.max_cache_memory=4GB",
+     "warren.max_compute_memory=4GB",
+     "warren.shared_cache_memory=4GB",
+     "warren.threads=4",
+     "work_mem=64MB"
+    ],
+    "graph": {
+     "node_count": 45158,
+     "edge_count": 2250197,
+     "dropped_edges": 0,
+     "bytes": 42070240
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      1.408794023000155
+     ],
+     "median_seconds": 1.408794023000155
+    },
+    "build": {
+     "seconds": [
+      1.0621100810003554,
+      0.9913884159996087,
+      1.0388495419997525
+     ],
+     "median_seconds": 1.0388495419997525
+    }
+   },
+   "workloads": {
+    "degree": {
+     "cold_seconds": 0.06784883199998148,
+     "warm_seconds": [
+      0.015734958000393817,
+      0.014926220999768702,
+      0.014995453000210546,
+      0.013659800000368705,
+      0.014120579000064026
+     ],
+     "warm_median_seconds": 0.014926220999768702,
+     "cold_phases": {
+      "evict": 0.0005239800002527772
+     },
+     "check": {
+      "check": "degree",
+      "status": "match",
+      "compared": 45158,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "bfs depth 6": {
+     "cold_seconds": 0.06710738900028446,
+     "warm_seconds": [
+      0.014430681999783701,
+      0.01591170299980149,
+      0.014217837000160216,
+      0.014675057999738783,
+      0.015014758999768674
+     ],
+     "warm_median_seconds": 0.014675057999738783,
+     "cold_phases": {
+      "evict": 0.0027324840002620476
+     },
+     "check": {
+      "check": "bfs depth 6",
+      "status": "match",
+      "compared": 1,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "bfs depths": {
+     "cold_seconds": 0.0636696659998961,
+     "warm_seconds": [
+      0.014844122999875253,
+      0.014989659000093525,
+      0.01468269799988775,
+      0.014428861999931542,
+      0.01508647899981952
+     ],
+     "warm_median_seconds": 0.014844122999875253,
+     "cold_phases": {
+      "evict": 0.0022041269999135693
+     },
+     "check": {
+      "check": "bfs depths",
+      "status": "match",
+      "compared": 35404,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "shortest paths": {
+     "cold_seconds": 0.05158224000024347,
+     "warm_seconds": [
+      0.002606846000162477,
+      0.002974012999857223,
+      0.0027075459997831786,
+      0.0034960860002684058,
+      0.0031105400003070827
+     ],
+     "warm_median_seconds": 0.002974012999857223,
+     "cold_phases": {
+      "evict": 0.0027976579999631213
+     },
+     "check": {
+      "check": "shortest paths",
+      "status": "match",
+      "compared": 25,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "pagerank 20 iterations": {
+     "cold_seconds": 0.08258743199985474,
+     "warm_seconds": [
+      0.033185724999839294,
+      0.03396715700000641,
+      0.0323033919999034,
+      0.03520875799995338,
+      0.031862050000199815
+     ],
+     "warm_median_seconds": 0.033185724999839294,
+     "cold_phases": {
+      "evict": 0.0027899659999093274
+     },
+     "check": {
+      "check": "pagerank 20 iterations",
+      "status": "match",
+      "compared": 45158,
+      "mismatches": 0,
+      "max_error": 6.830473686658678e-18,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0,
+      "convention": "normalised"
+     },
+     "counted": true
+    },
+    "components": {
+     "cold_seconds": 0.06974496000020736,
+     "warm_seconds": [
+      0.016900160999739455,
+      0.017020451000007597,
+      0.0167410139997628,
+      0.01662308100003429,
+      0.01669218600000022
+     ],
+     "warm_median_seconds": 0.0167410139997628,
+     "cold_phases": {
+      "evict": 0.0031073780000951956
+     },
+     "check": {
+      "check": "components",
+      "status": "match",
+      "warren_parts": 1,
+      "oracle_parts": 1,
+      "differing_parts": 0
+     },
+     "counted": true
+    },
+    "triangles": {
+     "cold_seconds": 0.1767928959998244,
+     "warm_seconds": [
+      0.12705331500001193,
+      0.11189557499983493,
+      0.12915925699962827,
+      0.11460550799984048,
+      0.12428349399988292
+     ],
+     "warm_median_seconds": 0.12428349399988292,
+     "cold_phases": {
+      "evict": 0.0029407379997792304
+     },
+     "check": {
+      "check": "triangles",
+      "status": "match",
+      "compared": 45158,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "louvain": {
+     "cold_seconds": 1.8713160249999419,
+     "warm_seconds": [
+      1.7318823300001895,
+      1.770481717000166,
+      1.7671337790002326,
+      1.743095522999738,
+      1.8399108670000714
+     ],
+     "warm_median_seconds": 1.7671337790002326,
+     "cold_phases": {
+      "evict": 0.004253690999576065
+     },
+     "check": {
+      "check": "louvain",
+      "status": "match",
+      "warren": 0.3481523102551597,
+      "oracle": 0.34736690954896565,
+      "difference": 0.0007854007061940393,
+      "slack": 0.02,
+      "modularity": 0.3481523102551597,
+      "communities": 10
+     },
+     "counted": true
+    },
+    "leiden": {
+     "cold_seconds": 2.514226143000087,
+     "warm_seconds": [
+      2.4543756419998317,
+      2.6409273870003744,
+      2.482092284000373,
+      2.4847303880001164,
+      2.43875273499998
+     ],
+     "warm_median_seconds": 2.482092284000373,
+     "cold_phases": {
+      "evict": 0.004983886999980314
+     },
+     "check": {
+      "check": "leiden",
+      "status": "match",
+      "warren": 0.35230301060387736,
+      "oracle": 0.34736690954896565,
+      "difference": 0.004936101054911712,
+      "slack": 0.02,
+      "modularity": 0.35230301060387736,
+      "communities": 10
+     },
+     "counted": true
+    }
+   }
+  },
+  "pggraph": {
+   "describe": {
+    "version": "1.2.1",
+    "threads": 1,
+    "pin": {
+     "version": "1.2.1",
+     "repository": "https://github.com/Evokoa/pgGraph",
+     "licence": "Apache-2.0",
+     "tag": "v1.2.1",
+     "tag_object": "502e50290793726d0b1e2df8d161d4ecb44f519b",
+     "commit": "1bbe30149100b49fc4a1494bd3afbeba82070092",
+     "latest": "the latest release tag on 2026-10-29",
+     "rust": "1.96.0, as graph/rust-toolchain.toml pins it",
+     "cargo_pgrx": "0.19.1, as graph/Cargo.toml pins pgrx; installed into its own CARGO_INSTALL_ROOT, with its own PGRX_HOME",
+     "profile": "release (graph/Cargo.toml: opt-level 3, fat LTO, one codegen unit), as its Makefile's install builds it",
+     "build": "cd graph && cargo pgrx package --no-default-features --features pg16 --pg-config /usr/lib/postgresql/16/bin/pg_config",
+     "install": "the package's usr/ copied into the private PostgreSQL 16 tree that holds pg_warren (CONTRIBUTING.md, as for the soak)"
+    },
+    "library": {
+     "path": "/var/tmp/warren-corpus/head-to-head/pgtree/usr/lib/postgresql/16/lib/graph.so",
+     "sha256": "7cb8900debd93f77f8df88fc52bddf21581723432400200d2f110a882e5535ba"
+    },
+    "settings": [
+     "graph.allow_rls_tables=off",
+     "graph.auto_load=on",
+     "graph.build_batch_size=10000",
+     "graph.build_scan_mode=",
+     "graph.compaction_threshold=50000",
+     "graph.data_dir=",
+     "graph.default_case_sensitive=off",
+     "graph.default_hydrate=on",
+     "graph.default_max_depth=5",
+     "graph.default_projection_mode=",
+     "graph.default_search_mode=",
+     "graph.edge_buffer_size=100000",
+     "graph.enabled=on",
+     "graph.enforce_tenant_scope=on",
+     "graph.hot_eager_load=off",
+     "graph.idle_unload_secs=0",
+     "graph.low_memory_build=off",
+     "graph.maintenance_memory_mb=4096",
+     "graph.max_exact_path_count=100000",
+     "graph.max_frontier=10000000",
+     "graph.max_loaded_graphs_per_backend=1",
+     "graph.max_nodes=10000000",
+     "graph.max_overlay_memory_mb=256",
+     "graph.max_tx_delta_edges=100000",
+     "graph.max_tx_delta_nodes=100000",
+     "graph.memory_limit_mb=4096",
+     "graph.mutable_enabled=off",
+     "graph.oom_action=",
+     "graph.operation_timeout_ms=0",
+     "graph.persist_on_build=on",
+     "graph.projection_retention_generations=2",
+     "graph.query_freshness=",
+     "graph.query_memory_mb=4096",
+     "graph.query_work_limit=2000000000",
+     "graph.rls_mode=",
+     "graph.spill_disk_limit_mb=4096",
+     "graph.sync_batch_size=1000",
+     "graph.sync_mode=manual",
+     "graph.tenant_setting=",
+     "graph.vacuum_interval_secs=60",
+     "shared_preload_libraries=graph",
+     "statement_timeout=300000"
+    ],
+    "session": [
+     "SET graph.max_nodes = 10000000",
+     "SET graph.max_frontier = 10000000",
+     "SET graph.query_work_limit = 2000000000",
+     "SET graph.query_memory_mb = 4096"
+    ],
+    "depth_bounds": {
+     "Anatomy::UBERON:0000955": 4
+    },
+    "graph": {
+     "node_count": 45158,
+     "edge_count": 2250197,
+     "memory_used_mb": 93.79361152648926
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      1.1123726470000292
+     ],
+     "median_seconds": 1.1123726470000292
+    },
+    "key": {
+     "seconds": [
+      1.3757370650000667
+     ],
+     "median_seconds": 1.3757370650000667
+    },
+    "register": {
+     "seconds": [
+      0.005679372000031435
+     ],
+     "median_seconds": 0.005679372000031435
+    },
+    "build": {
+     "seconds": [
+      19.479931983999904,
+      20.73225373699961,
+      20.939090951999788
+     ],
+     "median_seconds": 20.73225373699961
+    }
+   },
+   "workloads": {
+    "degree": {
+     "status": "unsupported",
+     "reason": "no degree function in pgGraph's SQL API, and graph.gql's subset rejects a per-node count with OPTIONAL MATCH",
+     "counted": false
+    },
+    "bfs depth 6": {
+     "cold_seconds": 2.8094203890000244,
+     "warm_seconds": [
+      1.5225361970001359,
+      1.512018012000226,
+      1.510345574999974,
+      1.518452554000305,
+      1.5124602609998874
+     ],
+     "warm_median_seconds": 1.5124602609998874,
+     "cold_phases": {
+      "unload": 0.015616550000231655
+     },
+     "check": {
+      "check": "bfs depth 6",
+      "status": "match",
+      "compared": 1,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "bfs depths": {
+     "cold_seconds": 2.853066482000031,
+     "warm_seconds": [
+      1.5435162690000652,
+      1.5280217299996366,
+      1.5359100669998043,
+      1.5252711719999752,
+      1.5183560450000186
+     ],
+     "warm_median_seconds": 1.5280217299996366,
+     "cold_phases": {
+      "unload": 0.0169300799998382
+     },
+     "check": {
+      "check": "bfs depths",
+      "status": "match",
+      "compared": 35404,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "shortest paths": {
+     "cold_seconds": 1.6665335340003367,
+     "warm_seconds": [
+      0.20046800799991615,
+      0.16102847899992412,
+      0.16697164700008216,
+      0.15757796000025337,
+      0.15584574900003645
+     ],
+     "warm_median_seconds": 0.16102847899992412,
+     "cold_phases": {
+      "unload": 0.047437045000151556
+     },
+     "check": {
+      "check": "shortest paths",
+      "status": "match",
+      "compared": 25,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "pagerank 20 iterations": {
+     "status": "unsupported",
+     "reason": "no PageRank in pgGraph's SQL API",
+     "counted": false
+    },
+    "components": {
+     "cold_seconds": 1.3543626470000163,
+     "warm_seconds": [
+      0.05251109800019549,
+      0.05295268300005773,
+      0.05267737300027875,
+      0.05296160699981556,
+      0.05345147200023348
+     ],
+     "warm_median_seconds": 0.05295268300005773,
+     "cold_phases": {
+      "unload": 0.01662553400001343
+     },
+     "check": {
+      "check": "components",
+      "status": "match",
+      "warren_parts": 1,
+      "oracle_parts": 1,
+      "differing_parts": 0
+     },
+     "counted": true
+    },
+    "triangles": {
+     "status": "unsupported",
+     "reason": "no triangle count in pgGraph's SQL API",
+     "counted": false
+    },
+    "louvain": {
+     "status": "unsupported",
+     "reason": "no community detection in pgGraph's SQL API",
+     "counted": false
+    },
+    "leiden": {
+     "status": "unsupported",
+     "reason": "no community detection in pgGraph's SQL API",
+     "counted": false
+    }
+   }
+  },
+  "igraph": {
+   "describe": {
+    "version": "1.0.0",
+    "threads": 1,
+    "settings": {
+     "pagerank": "PRPACK (solved)",
+     "louvain": "community_multilevel",
+     "leiden": "community_leiden, modularity, 2 iterations",
+     "seed": 1
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      1.7203663590003089
+     ],
+     "median_seconds": 1.7203663590003089
+    },
+    "build": {
+     "seconds": [
+      2.3001893450000352
+     ],
+     "median_seconds": 2.3001893450000352
+    }
+   },
+   "workloads": {
+    "degree": {
+     "cold_seconds": 0.0008437550000053307,
+     "warm_seconds": [
+      0.0002031489998444158,
+      0.00017978500000026543,
+      0.00018019099979937891,
+      0.0003853600001093582,
+      0.00033219799979633535
+     ],
+     "warm_median_seconds": 0.0002031489998444158,
+     "cold_phases": {},
+     "check": {
+      "check": "degree",
+      "status": "match",
+      "compared": 45158,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "bfs depth 6": {
+     "cold_seconds": 0.004774810000071739,
+     "warm_seconds": [
+      0.0044916599999851314,
+      0.0035890729996026494,
+      0.003182165999987774,
+      0.0029242990003695013,
+      0.0030095910001364246
+     ],
+     "warm_median_seconds": 0.003182165999987774,
+     "cold_phases": {},
+     "check": {
+      "check": "bfs depth 6",
+      "status": "match",
+      "compared": 1,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "bfs depths": {
+     "cold_seconds": 0.011093748999883246,
+     "warm_seconds": [
+      0.010781290000068111,
+      0.010153618999993341,
+      0.010233587000129774,
+      0.0099675629999183,
+      0.00980094700025802
+     ],
+     "warm_median_seconds": 0.010153618999993341,
+     "cold_phases": {},
+     "check": {
+      "check": "bfs depths",
+      "status": "match",
+      "compared": 35404,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "shortest paths": {
+     "cold_seconds": 0.19442611999966175,
+     "warm_seconds": [
+      0.18231549899974198,
+      0.1832678420000775,
+      0.19030372899987924,
+      0.18842302399980326,
+      0.19539185499979794
+     ],
+     "warm_median_seconds": 0.18842302399980326,
+     "cold_phases": {},
+     "check": {
+      "check": "shortest paths",
+      "status": "match",
+      "compared": 25,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "pagerank 20 iterations": {
+     "cold_seconds": 0.06982650400004786,
+     "warm_seconds": [
+      0.08845976099973996,
+      0.07016316099998221,
+      0.07124700699978348,
+      0.06966591500031427,
+      0.06936933699989822
+     ],
+     "warm_median_seconds": 0.07016316099998221,
+     "cold_phases": {},
+     "check": {
+      "check": "pagerank 20 iterations",
+      "status": "match",
+      "compared": 45158,
+      "mismatches": 0,
+      "max_error": 1.3124267297937031e-15,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0,
+      "convention": "fixed point"
+     },
+     "counted": true
+    },
+    "components": {
+     "cold_seconds": 0.04871162499966886,
+     "warm_seconds": [
+      0.0010129699999197328,
+      0.0009948770002665697,
+      0.0010105319997819606,
+      0.0010061749999294989,
+      0.0009941859998434666
+     ],
+     "warm_median_seconds": 0.0010061749999294989,
+     "cold_phases": {},
+     "check": {
+      "check": "components",
+      "status": "match",
+      "warren_parts": 1,
+      "oracle_parts": 1,
+      "differing_parts": 0
+     },
+     "counted": true
+    },
+    "triangles": {
+     "cold_seconds": 0.47744805699994686,
+     "warm_seconds": [
+      0.4750662179999381,
+      0.4804178420004064,
+      0.4756028689998857,
+      0.4771257990000777,
+      0.47441959000025236
+     ],
+     "warm_median_seconds": 0.4756028689998857,
+     "cold_phases": {},
+     "check": {
+      "check": "triangles",
+      "status": "match",
+      "compared": 45158,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    },
+    "louvain": {
+     "cold_seconds": 2.952105633999963,
+     "warm_seconds": [
+      3.033315311000024,
+      3.023970147,
+      2.8375357639997674,
+      2.8807379019999644,
+      2.8677182919996085
+     ],
+     "warm_median_seconds": 2.8807379019999644,
+     "cold_phases": {},
+     "check": {
+      "check": "louvain",
+      "status": "match",
+      "warren": 0.34736690954896565,
+      "oracle": 0.34736690954896565,
+      "difference": 0.0,
+      "slack": 0.02,
+      "modularity": 0.34736690954896565,
+      "communities": 10
+     },
+     "counted": true
+    },
+    "leiden": {
+     "cold_seconds": 1.8455963659998815,
+     "warm_seconds": [
+      1.8433205490000546,
+      1.8636170019999554,
+      1.8847680429998945,
+      1.8733197070000642,
+      1.8326813119997496
+     ],
+     "warm_median_seconds": 1.8636170019999554,
+     "cold_phases": {},
+     "check": {
+      "check": "leiden",
+      "status": "match",
+      "warren": 0.34951541872087916,
+      "oracle": 0.34736690954896565,
+      "difference": 0.002148509171913504,
+      "slack": 0.02,
+      "modularity": 0.34951541872087916,
+      "communities": 11
+     },
+     "counted": true
+    }
+   }
+  }
+ }
+}

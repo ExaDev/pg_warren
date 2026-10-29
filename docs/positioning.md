@@ -26,8 +26,12 @@ For example: “If this warehouse closes, which locations lose a route to
 supply?” Or: “Which accounts form unusually connected groups, and how has
 that changed since yesterday?”
 
-We haven’t benchmarked pg_warren against pgGraph, so we make no speed
-claim. pg_warren is also pre-1.0; check that it meets your operational needs.
+In one benchmark run against pgGraph 1.2.1, on 12 public graphs, pg_warren
+was faster on every workload both support: traversal, shortest paths and
+connected components (`bench/results/corpus/head_to_head/README.md`,
+"pgGraph 1.2.1 against pg_warren 0.8.0 and igraph").
+That is one run on one shared machine. pg_warren is also pre-1.0; check
+that it meets your operational needs.
 
 Try the complete [community detection](examples/communities.md),
 [exposure and path tracing](examples/taint.md), and
@@ -120,5 +124,13 @@ assuming the authorization behaviour is interchangeable.
 
 
 The published [performance comparisons](../README.md#how-it-compares)
-cover igraph and Neo4j, not pgGraph. They do not establish a speed advantage
-over pgGraph.
+cover igraph, Neo4j and pgGraph 1.2.1. pgGraph ran with its recommended
+configuration, on the workloads its SQL API offers: BFS, shortest paths
+and connected components. pg_warren was faster on every one of them, on
+all 12 graphs: 24–420× on BFS, 2.4–89× on shortest paths and 1.7–14× on
+components. pgGraph's build also took 5–21× longer than pg_warren's
+refresh. pgGraph has no PageRank, triangle count or community detection,
+so those were not compared. pgGraph's traversal is documented for bounded
+neighbourhoods, and these workloads sweep most of each graph; the
+head-to-head notes (`bench/results/corpus/head_to_head/README.md`) explain
+where its time goes.
