@@ -919,15 +919,15 @@ by itself: see docs/semantics.md, "Dropping a role".)
   on every call; keep iterative scratch transient (`persist := false`).
 - `walk` in `paths` mode can be exponential in the number of hops; it is
   always bounded by `max_results`.
-- `distance('edit')` across two graphs (`graph2`) rebuilds the second
-  graph's CSRs in the first's ids and charges that rebuild to
-  `warren.max_compute_memory` by an over-estimate: 96 bytes an edge
-  (stored direction) plus 16 a node, which counts 8-byte weights and a
-  merged CSR whatever the graphs hold. At 10M nodes and 110M directed
-  edges it asks for 10.9 GB and is refused with 53400 at the 4GB default,
-  on a machine whose RAM could not grant that much (Appendix A.2 at 10M,
-  `bench/results/appendix_a/`). Within one graph, `edit` aligns by dense
-  id and rebuilds nothing.
+- `distance('edit')` across two graphs (`graph2`) rebuilds nothing: it
+  maps the second graph's edges into the first's dense ids as it reads
+  them, looking each up by binary search in the first graph's row, so it
+  holds only the id mapping, 8 bytes a node of the second graph, charged
+  to `warren.max_compute_memory` (88 MB at Appendix A.2's 11M nodes).
+  Before 0.8.0 it rebuilt the second graph's CSRs and charged 96 bytes an
+  edge for them, so A.2 at 10M asked for 10.9 GB and was refused with
+  53400 at the 4GB default. Within one graph, `edit` aligns by dense id
+  and maps nothing.
 - `gather` with messages of a type other than the numbers, `boolean`,
   `text`, `varchar`, `char` and `bytea` (`jsonb`, `numeric`, arrays...)
   sends each through its type's binary send and receive functions
