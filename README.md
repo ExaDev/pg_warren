@@ -1,9 +1,21 @@
-# pg_warren
+<p align="center">
+  <a href="https://exadev.github.io/pg_warren/">
+    <img src="site/src/assets/mark.svg" alt="pg_warren logo" width="80" height="80">
+  </a>
+</p>
 
-[![GitHub](https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white)](https://github.com/ExaDev/pg_warren) [![Release](https://img.shields.io/github/v/release/ExaDev/pg_warren)](https://github.com/ExaDev/pg_warren/releases/latest) [![CI](https://img.shields.io/github/actions/workflow/status/ExaDev/pg_warren/ci.yml?branch=main)](https://github.com/ExaDev/pg_warren/actions)
+<h1 align="center">pg_warren</h1>
 
-Deep traversal and whole-graph computation for PostgreSQL, over graphs whose
-nodes and edges live in your ordinary tables.
+<p align="center">
+  <a href="https://github.com/ExaDev/pg_warren"><img src="https://img.shields.io/badge/GitHub-181717?logo=github&amp;logoColor=white" alt="GitHub"></a>
+  <a href="https://github.com/ExaDev/pg_warren/releases/latest"><img src="https://img.shields.io/github/v/release/ExaDev/pg_warren" alt="Latest release"></a>
+  <a href="https://github.com/ExaDev/pg_warren/actions"><img src="https://img.shields.io/github/actions/workflow/status/ExaDev/pg_warren/ci.yml?branch=main" alt="CI status"></a>
+</p>
+
+<p align="center">
+  Deep traversal and whole-graph computation for PostgreSQL.<br>
+  Over graphs whose nodes and edges live in your ordinary tables.
+</p>
 
 pg_warren builds a compact, memory-resident CSR adjacency structure from two
 SQL queries (one for nodes, one for edges) and exposes it through `warren.*`
@@ -51,11 +63,22 @@ The graph's ids are `bigint`, so id arguments are cast (`1::bigint`), and
 functions with no id argument take a type witness (`NULL::bigint`) for their
 result type. A traversal reads the version, not the tables: rows inserted
 after `refresh` appear after the next `refresh`
-([docs/semantics.md](docs/semantics.md)).
+([docs/semantics.md](docs/semantics.md)). Tables linked by foreign keys
+need no queries: `warren.create_graph_from_keys('shop', ARRAY['customers',
+'orders']::regclass[])` makes their rows nodes and their foreign keys edges
+([graphs from keys](docs/semantics.md#graphs-from-keys)).
 
 ## How it compares
 
-pg_warren was timed against [igraph](https://igraph.org/) (python-igraph 1.0.0)
+The closest alternative inside PostgreSQL is
+[pgGraph](https://github.com/Evokoa/pgGraph) (Apache-2.0, Rust/pgrx), so it
+comes first below. Its column was checked against pgGraph 1.2.1, its latest
+release on 29 October 2026: its user guide and, for threading, its source.
+[Where pg_warren fits](docs/positioning.md#pggraph-and-pg_warren) compares the
+two in more depth. pgGraph has not been benchmarked against pg_warren, so it
+has no column under Performance.
+
+Outside PostgreSQL, pg_warren was timed against [igraph](https://igraph.org/) (python-igraph 1.0.0)
 and Neo4j 2026.10 Community. Neo4j ran both as plain Cypher and with the
 Graph Data Science library (GDS). All three ran on the same machine, over 12
 real graphs from the benchmark corpus, from 77 nodes up to 1.4M nodes and
@@ -63,56 +86,83 @@ real graphs from the benchmark corpus, from 77 nodes up to 1.4M nodes and
 
 ### Features
 
-| | pg_warren | igraph | Neo4j (Cypher) | Neo4j + GDS |
-|---|:---:|:---:|:---:|:---:|
-| **Where it lives** | | | | |
-| Runs inside PostgreSQL, over your existing tables | ✅ | ❌ | ❌ | ❌ |
-| No separate service to run | ✅ | ✅ (in-process library) | ❌ | ❌ |
-| Queried from SQL, joined with relational data | ✅ | ❌ | ❌ | ❌ |
-| **Consistency and freshness** | | | | |
-| Analytics see the live data with no rebuild | ❌ (reads a built version) | ❌ (load on each run) | ✅ | ❌ (projections) |
-| Graph built inside your transaction, rolled back with it | ✅ | ❌ | ✅ (the store is the graph) | ❌ |
-| Versioned graphs: stage, diff, promote | ✅ | ❌ | ❌ | ❌ |
-| Replicated to streaming standbys | ✅ | ❌ | Enterprise | Enterprise |
-| **Querying and algorithms** | | | | |
-| Graph query language, pattern matching | ❌ (SQL functions) | ❌ | ✅ | ✅ |
-| Traversals (BFS, reach, k-hop, paths) | ✅ | ✅ | ✅ | ✅ |
-| Centralities, components, community detection | ✅ (core set) | ✅ (very broad) | ❌ | ✅ (broad) |
-| Node embeddings, link prediction, ML pipelines | ❌ (building blocks only) | ❌ | ❌ | ✅ |
-| Semiring linear algebra, spectral analysis | ✅ | partial | ❌ | ❌ |
-| Multi-threaded | ✅ | ❌ | Enterprise | ✅ (4 threads in Community) |
-| **Maturity** | | | | |
-| Production track record, tooling, visualisation | ❌ (pre-1.0) | ✅ | ✅ | ✅ |
+| | pg_warren | pgGraph 1.2.1 | igraph | Neo4j (Cypher) | Neo4j + GDS |
+|---|:---:|:---:|:---:|:---:|:---:|
+| **Where it lives** | | | | | |
+| Runs inside PostgreSQL, over your existing tables | ✅ | ✅ | ❌ | ❌ | ❌ |
+| No separate service to run | ✅ | ✅ | ✅ (in-process library) | ❌ | ❌ |
+| Queried from SQL, joined with relational data | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Builds the graph from primary and foreign keys | ✅ (`create_graph_from_keys`, over the tables you list) | ✅ | — | — | — |
+| **Consistency and freshness** | | | | | |
+| Analytics see the live data with no rebuild | ❌ (reads a built version) | ✅ (trigger sync, applied on read) | ❌ (load on each run) | ✅ | ❌ (projections) |
+| Graph built inside your transaction, rolled back with it | ✅ | ❌ (a build needs your changes committed) | ❌ | ✅ (the store is the graph) | ❌ |
+| Versioned graphs: stage, diff, promote | ✅ | ❌ (generations published under MVCC; no staging or diff) | ❌ | ❌ | ❌ |
+| Saved results bound to the graph version that made them | ✅ | ❌ (results are returned, not stored) | ❌ | ❌ | partial (mutate mode, in the in-memory projection) |
+| Graph stored in WAL-logged PostgreSQL tables | ✅ | ❌ (validated files under `$PGDATA`) | — | — | — |
+| Replicated to streaming standbys | ✅ | ❌ (documented: no standby support) | ❌ | Enterprise | Enterprise |
+| **Querying and algorithms** | | | | | |
+| Path pattern matching: multi-step paths by relation, direction, node filter and hop range | ✅ (`warren.walk`) | ✅ (GQL and openCypher `MATCH`) | partial (subgraph isomorphism) | ✅ | ✅ |
+| Graph query language (Cypher, GQL): variables and joins inside a pattern | ❌ (SQL functions; join walks in SQL) | ✅ (bounded GQL and openCypher subsets) | ❌ | ✅ | ✅ |
+| Traversals (BFS, reach, k-hop, paths) | ✅ | ✅ (BFS, DFS, weighted paths) | ✅ | ✅ | ✅ |
+| Connected components | ✅ | ✅ | ✅ | ❌ | ✅ |
+| PageRank and centralities | ✅ (core set) | ❌ | ✅ (very broad) | ❌ | ✅ (broad) |
+| Community detection (Louvain, Leiden) | ✅ | ❌ | ✅ | ❌ | ✅ |
+| Node embeddings, link prediction, ML pipelines | ❌ (building blocks only) | ❌ | ❌ | ❌ | ✅ |
+| Semiring linear algebra, spectral analysis | ✅ | ❌ | partial | ❌ | ❌ |
+| Multi-threaded | ✅ | ❌ (one thread per query; builds can run in a background worker) | ❌ | Enterprise | ✅ (4 threads in Community) |
+| **Maturity** | | | | | |
+| Production track record, tooling, visualisation | ❌ (pre-1.0) | partial (1.x since July 2026; SQL playground) | ✅ | ✅ | ✅ |
+
+— : the row is about PostgreSQL tables and does not apply to an engine
+outside PostgreSQL. pgGraph's cells are sourced from its
+[supported features](https://github.com/Evokoa/pgGraph/blob/v1.2.1/docs/user_guide/supported_features.mdx),
+[limits and fit](https://github.com/Evokoa/pgGraph/blob/v1.2.1/docs/user_guide/limitations-and-fit.mdx),
+[sync](https://github.com/Evokoa/pgGraph/blob/v1.2.1/docs/user_guide/sync-and-maintenance.mdx),
+[persistence](https://github.com/Evokoa/pgGraph/blob/v1.2.1/docs/user_guide/build-and-persistence.mdx)
+and [SQL API](https://github.com/Evokoa/pgGraph/blob/v1.2.1/docs/user_guide/api-reference.mdx)
+pages.
 
 ### Performance
 
+Faster than pgGraph 1.2.1, the closest alternative inside PostgreSQL, on
+every workload both support (2.4–89× on shortest paths, 1.7–14× on
+connected components), with versions, standbys and whole-graph
+algorithms it doesn't have.
+
 Times are warm medians.
 
-| Workload | pg_warren | igraph | Neo4j + GDS | Verdict |
-|---|---:|---:|---:|---|
-| Shortest paths, 25 pairs (dblp) | **6 ms** | 1.04 s | 2.22 s | 🟢 Fastest on 11 of 12 graphs |
-| Louvain communities (dblp) | **1.16 s** | 5.49 s | 12.7 s | 🟢 Faster than GDS on every graph, than igraph on 7 of 12 |
-| Triangles (hetionet) | **0.12 s** | 0.49 s | 2.88 s | 🟢 Faster than igraph on 10 of 12 graphs |
-| Time to first query | **0.01–3.5 s** | about the same | 13–18 s | 🟢 No server to start or data to import |
-| PageRank, 20 iterations (roadNet-TX) | **0.22 s** | 0.81 s | 0.62 s | 🟢 Faster than igraph on 7 of 12 graphs; slower on 5, by 1.2–3× and on the tiny lesmis 100× (a call's fixed cost); faster than GDS on all 12 |
-| BFS and connected components | 🟡 | **fastest** | slower | 🟡 Ahead of GDS; igraph 1.2–60× faster |
-| Leiden communities (FB15k-237) | 0.21 s | **0.14 s** | 0.46 s | 🟡 Within 1.6× of igraph on medium graphs, faster on 4 of 12; faster than GDS on 7 of 11 |
+| Workload | pg_warren | pgGraph | igraph | Neo4j + GDS | Verdict |
+|---|---:|---:|---:|---:|---|
+| Shortest paths, 25 pairs (dblp) | **5.8 ms** | 73 ms | 0.26 s | 2.22 s | 🟢 Bidirectional BFS, all pairs in one call: faster than pgGraph on 12 of 12 graphs (2.4–89×), than igraph's early-exit `get_shortest_path` on 7 of 12 (2.7–44×; igraph up to 2.7× faster on tiny and road graphs), than Cypher's like-for-like `shortestPath` on 11 of 11 (2.6–23×) |
+| Louvain communities (dblp) | **1.16 s** | — | 5.49 s | 12.7 s | 🟢 Faster than GDS on every graph, than igraph on 7 of 12 |
+| Triangles (hetionet) | **0.12 s** | — | 0.49 s | 2.88 s | 🟢 Faster than igraph on 10 of 12 graphs |
+| Time to first query | **0.01–3.8 s** | 0.07–78 s | about the same | 13–18 s | 🟢 No server to start or data to import; pgGraph's build takes 5–21× longer |
+| PageRank, 20 iterations (roadNet-TX) | **0.22 s** | — | 0.81 s | 0.62 s | 🟢 Faster than igraph on 7 of 12 graphs; slower on 5, by 1.2–3× and on the tiny lesmis 100× (a call's fixed cost); faster than GDS on all 12 |
+| BFS and connected components | 🟡 | slowest | **fastest** | slower | 🟡 Ahead of GDS, and of pgGraph by 1.7–420×; igraph 1.2–66× faster on all but 3 of 36 cells |
+| Leiden communities (FB15k-237) | 0.21 s | — | **0.14 s** | 0.46 s | 🟡 Within 1.6× of igraph on medium graphs, faster on 4 of 12; faster than GDS on 7 of 11 |
 
 Plain Cypher is not in the table. It cannot express PageRank, components,
 Louvain, Leiden or betweenness. On the larger graphs, its traversal and
-triangle queries ran past a 300-second timeout.
+triangle queries ran past a 300-second timeout. pgGraph's SQL API has
+traversal, shortest paths and components, but no degree, PageRank,
+triangles or community detection (—).
 
-**Caveats.** Most rows are one run on a shared 4-vCPU VM. pg_warren and GDS used
-4 threads; igraph and Cypher are single-threaded. Every time includes the
-client round trip. A warm pg_warren traversal call costs 25–70 µs more than
-`SELECT 1`. A function that writes a vector costs about 1 ms more, to persist
-it and commit. These fixed costs dominate on tiny graphs; the table's
-0.2–2 ms rows were measured on 0.7.0. The Louvain and loading figures predate two later
-optimisations, so pg_warren's times there may now be lower. The triangles
-row was re-timed after them, and the PageRank and Leiden rows on 0.8.0's
-native `pagerank` and `leiden`, against igraph only (PageRank in three
-interleaved rounds on all 12 graphs). GDS was not re-run: every GDS figure
-is from the earlier run, against 0.7.0. Full tables, settings and caveats are in
+**Caveats.** Most rows are one run on a shared 4-vCPU VM. pg_warren and GDS
+used 4 threads; igraph, Cypher and pgGraph are single-threaded. Every time
+includes the client round trip. A warm pg_warren traversal call costs 25–70
+µs more than `SELECT 1`. A function that writes a vector costs about 1 ms
+more, to persist it and commit. These fixed costs dominate on tiny graphs.
+The Louvain figure predates two later optimisations, so pg_warren's time
+there may now be lower. The triangles row was re-timed after them, and the
+PageRank and Leiden rows on 0.8.0's native `pagerank` and `leiden`, against
+igraph only (PageRank in three interleaved rounds on all 12 graphs). The
+shortest-paths, time-to-first-query and BFS rows, and every pgGraph figure,
+are from a later run of 0.8.0 beside pgGraph 1.2.1 (its recommended
+configuration) and igraph, where igraph's pairs used `get_shortest_path`,
+which stops at the target without first rebuilding the adjacency list as
+`distances` does; the Cypher margins are from the earlier run, against
+0.7.0. GDS was not re-run: every GDS figure is from the earlier run, against
+0.7.0. Full tables, settings and caveats are in
 [bench/results/corpus/head_to_head](bench/results/corpus/head_to_head/README.md).
 
 ## The principle: meet Postgres users where they are
@@ -206,7 +256,9 @@ RPM packages (RHEL, Fedora) and PGXN are planned, not built yet.
 
 **Managed PostgreSQL** (Amazon RDS and Aurora, Cloud SQL, Azure, Supabase,
 Neon and the like) installs only the extensions the provider ships, so
-pg_warren cannot be used there until a provider adopts it.
+pg_warren cannot be installed there until a provider adopts it. You can run
+it on a server of your own beside the managed database, fed by logical
+replication: [docs/beside-managed.md](docs/beside-managed.md).
 
 **From source**, with Rust (the toolchain pinned in `rust-toolchain.toml`),
 the server headers (`postgresql-server-dev-NN`), `clang`/`libclang-dev`, and
@@ -215,12 +267,17 @@ cargo-pgrx at exactly the version the extension uses:
 ```sh
 git clone https://github.com/ExaDev/pg_warren.git
 cd pg_warren
-git checkout v0.7.0   # the latest release; main is the version in development
+git checkout v0.8.0   # the latest release; main is the version in development
 cargo install cargo-pgrx --version 0.19.3 --locked
 cargo pgrx init --pg16 "$(command -v pg_config)"
 cd crates/pg_warren
 cargo pgrx install --release --pg-config "$(command -v pg_config)"
 ```
+
+To build without network access (each release's
+`pg_warren-X.Y.Z-vendored.tar.gz` carries every crate), or reproducibly, or
+to verify a release's signed `SHA256SUMS`, its SBOM and its source, see
+[CONTRIBUTING.md, "Supply chain"](CONTRIBUTING.md#supply-chain).
 
 Then, in each database:
 
@@ -247,17 +304,18 @@ or operator that the queries then call as the graph's owner at every
 create graphs under a `search_path` of schemas only their owner can write;
 `create_graph` raises a `NOTICE` when it finds such a schema.
 
-Graphs, versions and vectors are ordinary tables, so a superuser's
-`pg_dump` includes them, and a plain (`psql`) or custom (`pg_restore`)
-restore brings them back. The roles that own and read graphs must exist
+Graphs, versions and vectors are ordinary tables, so `pg_dump` includes
+them, and a plain (`psql`) or custom (`pg_restore`) restore brings them
+back. The roles that own and read graphs must exist
 first. `pg_dump` warns about circular foreign-key constraints on
 `warren.versions` (it references itself) and suggests `--disable-triggers`:
 ignore that hint, which would skip pg_warren's catalog checks, and restore
-normally. Because only that superuser can read the catalog, a non-superuser's
-`pg_dump` of the database fails while pg_warren is installed. Dump as a
-superuser, or leave the graphs out with `--exclude-table-data='warren.*'`
-and, after the restore, create them again with `warren.create_graph` and
-`warren.refresh`.
+normally. Without a superuser, dump as a role granted `pg_read_all_data`
+and restore as one granted `pg_write_all_data` (on Amazon RDS from PG 15,
+the master user has both); other non-superusers cannot read or write the
+catalog, so their `pg_dump` fails while pg_warren is installed. Those two
+roles reach every graph directly, so grant them only for the dump or the
+restore ([docs/security.md, "Dumps and restores"](docs/security.md#dumps-and-restores)).
 
 **The shared cache.** A loaded graph version is kept once per cluster, in
 dynamic shared memory, and mapped by every backend that reads it, so pooled
@@ -306,7 +364,7 @@ reads the graph, an optional `version` (default: the current version).
 
 | Area | Functions |
 |---|---|
-| Graphs and versions | `create_graph`, `refresh`, `promote`, `drop_version`, `compact`, `diff`, `info`, `drop_graph`, `grant`, `revoke`, `prewarm`, `evict` |
+| Graphs and versions | `create_graph`, `create_graph_from_keys`, `queries_from_keys`, `refresh`, `promote`, `drop_version`, `compact`, `diff`, `info`, `drop_graph`, `grant`, `revoke`, `prewarm`, `evict` |
 | Traversal | `bfs`, `neighbours`, `degree`, `has_edge`, `reachable`, `reachable_set`, `shortest_path`, `dijkstra`, `components`, `walk`, `last_stats` |
 | Walk steps | `s` and `steps` (jsonb), which build the composite type `warren.step`; the cast `jsonb::warren.step[]` |
 | Vectors | `vector_from_query`, `vector_const`, `vector_degree`, `vector_dense_id`, `vector_values`, `matrix_rows`, `vector_topk`, `vector_stats`, `id_map`, `drop_vector` |
@@ -335,6 +393,9 @@ Signatures are in `\df warren.*` and in DESIGN.md (§6, §8, §9.3).
   what it installs, privileges, failure model, resource limits, test
   evidence and releases.
 - [SECURITY.md](SECURITY.md): how to report a vulnerability privately.
+- [docs/beside-managed.md](docs/beside-managed.md): pg_warren on a server of
+  your own beside a managed database (RDS and the like), fed by logical
+  replication or `postgres_fdw`.
 - [DESIGN.md](DESIGN.md): the full design and the reasons for it.
 
 Every SQL example in the README and `docs/` runs in CI, in

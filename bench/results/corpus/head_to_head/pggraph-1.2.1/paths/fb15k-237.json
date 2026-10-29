@@ -1,0 +1,473 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "head-to-head",
+   "lesmis",
+   "polblogs",
+   "facebook",
+   "wn18rr",
+   "cit-hepth",
+   "email-enron",
+   "fb15k-237",
+   "ss-gleich-usroads-48",
+   "dblp",
+   "yago3-10",
+   "hetionet",
+   "roadnet-tx",
+   "--engine",
+   "pg_warren",
+   "--engine",
+   "pggraph",
+   "--engine",
+   "igraph",
+   "--workload",
+   "paths",
+   "--pg-config",
+   "/var/tmp/warren-corpus/head-to-head/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "8dd426c",
+   "--extension-profile",
+   "release",
+   "--timeout",
+   "300",
+   "--results",
+   "/var/tmp/warren-corpus/head-to-head/run-paths"
+  ],
+  "harness": {
+   "revision": "794b65a672a8337ad21fc5555b9a8a607bfcf1e0",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "8dd426c",
+   "profile": "release",
+   "library": "/var/tmp/warren-corpus/head-to-head/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "b720e538f278899d8846e017d0f2667f71a0163d3552bf8ce48c3ff3af5bfde0"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v185",
+  "load_average": [
+   0.552734375,
+   1.47802734375,
+   2.01025390625
+  ]
+ },
+ "dataset": "fb15k-237",
+ "tier": "medium",
+ "fetched": {
+  "tables": {
+   "nodes": 14541,
+   "edges": 310116,
+   "ids": "text",
+   "relations": 237,
+   "self_loops": 1806
+  },
+  "sha256": {
+   "nodes.csv": "388311a4d3eb10b614d702ce55d09e73bc76e9b866e09b9dbdedead28f5796ba",
+   "edges.csv": "bb64c0468d9fbae25dca3b0c15e8f336d7aa8f20a732e1a8e3bd881b7ec09ae4"
+  },
+  "provenance": {
+   "entryId": "fb15k-237",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-26T05:48:27.098Z",
+   "source": {
+    "url": "https://web.informatik.uni-mannheim.de/pi1/kge-datasets/fb15k-237.tar.gz",
+    "status": "live"
+   },
+   "fetchedUrl": "https://web.informatik.uni-mannheim.de/pi1/kge-datasets/fb15k-237.tar.gz",
+   "sha256": "eb851e61cac226db18ab251f0e52df43dfa8701c1d5f16eb34fb28de968e474c",
+   "byteLength": 3899580,
+   "members": [
+    "fb15k-237/train.txt",
+    "fb15k-237/valid.txt",
+    "fb15k-237/test.txt"
+   ]
+  }
+ },
+ "repeat": 5,
+ "budget_seconds": 120,
+ "timeout_seconds": 300,
+ "workloads": [
+  {
+   "name": "shortest paths",
+   "kind": "paths",
+   "source": null,
+   "depth": null,
+   "pairs": [
+    [
+     "/m/01p45_v",
+     "/m/06zmg7m"
+    ],
+    [
+     "/m/0nm8n",
+     "/m/0jz71"
+    ],
+    [
+     "/m/0gl02yg",
+     "/m/0197tq"
+    ],
+    [
+     "/m/02cvp8",
+     "/m/01kyln"
+    ],
+    [
+     "/m/05_5rjx",
+     "/m/0ggbhy7"
+    ],
+    [
+     "/m/04g4w9",
+     "/m/04v09"
+    ],
+    [
+     "/m/09v92_x",
+     "/m/03hzt"
+    ],
+    [
+     "/m/0j2pg",
+     "/m/024tcq"
+    ],
+    [
+     "/m/01fy2s",
+     "/m/0556j8"
+    ],
+    [
+     "/m/015cjr",
+     "/m/0mvsg"
+    ],
+    [
+     "/m/03mp37",
+     "/m/046rfv"
+    ],
+    [
+     "/m/080dyk",
+     "/m/0gj9qxr"
+    ],
+    [
+     "/m/0gqwc",
+     "/m/011k11"
+    ],
+    [
+     "/m/0cmpn",
+     "/m/04cnp4"
+    ],
+    [
+     "/m/02h3d1",
+     "/m/0dryh9k"
+    ],
+    [
+     "/m/0jxxt",
+     "/m/0279c15"
+    ],
+    [
+     "/m/07l4zhn",
+     "/m/01hb6v"
+    ],
+    [
+     "/m/02w59b",
+     "/m/015mrk"
+    ],
+    [
+     "/m/014g9y",
+     "/m/0150jk"
+    ],
+    [
+     "/m/09t4hh",
+     "/m/069d68"
+    ],
+    [
+     "/m/012q8y",
+     "/m/0y62n"
+    ],
+    [
+     "/m/03j_q",
+     "/m/0c9c0"
+    ],
+    [
+     "/m/025vl4m",
+     "/m/0425kh"
+    ],
+    [
+     "/m/0dz46",
+     "/m/015f47"
+    ],
+    [
+     "/m/05xzcz",
+     "/m/026fs38"
+    ]
+   ],
+   "weighted": false,
+   "iterations": null
+  }
+ ],
+ "engines": {
+  "pg_warren": {
+   "describe": {
+    "version": "0.8.0",
+    "threads": 4,
+    "settings": [
+     "fsync=off",
+     "full_page_writes=off",
+     "jit=on",
+     "maintenance_work_mem=1GB",
+     "max_parallel_workers_per_gather=2",
+     "max_wal_size=1GB",
+     "shared_buffers=1GB",
+     "shared_preload_libraries=graph",
+     "statement_timeout=5min",
+     "synchronous_commit=off",
+     "wal_level=minimal",
+     "warren.max_build_memory=4GB",
+     "warren.max_cache_memory=4GB",
+     "warren.max_compute_memory=4GB",
+     "warren.shared_cache_memory=4GB",
+     "warren.threads=4",
+     "work_mem=64MB"
+    ],
+    "graph": {
+     "node_count": 14541,
+     "edge_count": 310116,
+     "dropped_edges": 0,
+     "bytes": 8011789
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.2919952270003705
+     ],
+     "median_seconds": 0.2919952270003705
+    },
+    "build": {
+     "seconds": [
+      0.19986541399975977,
+      0.18142492800052423,
+      0.1815534569996089
+     ],
+     "median_seconds": 0.1815534569996089
+    }
+   },
+   "workloads": {
+    "shortest paths": {
+     "cold_seconds": 0.06602629400003934,
+     "warm_seconds": [
+      0.003746270000192453,
+      0.004264115000296442,
+      0.0036486200006038416,
+      0.0034853600000133156,
+      0.003588907000448671
+     ],
+     "warm_median_seconds": 0.0036486200006038416,
+     "cold_phases": {
+      "evict": 0.0005922869995629299
+     },
+     "check": {
+      "check": "shortest paths",
+      "status": "match",
+      "compared": 25,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    }
+   }
+  },
+  "pggraph": {
+   "describe": {
+    "version": "1.2.1",
+    "threads": 1,
+    "pin": {
+     "version": "1.2.1",
+     "repository": "https://github.com/Evokoa/pgGraph",
+     "licence": "Apache-2.0",
+     "tag": "v1.2.1",
+     "tag_object": "502e50290793726d0b1e2df8d161d4ecb44f519b",
+     "commit": "1bbe30149100b49fc4a1494bd3afbeba82070092",
+     "latest": "the latest release tag on 2026-10-29",
+     "rust": "1.96.0, as graph/rust-toolchain.toml pins it",
+     "cargo_pgrx": "0.19.1, as graph/Cargo.toml pins pgrx; installed into its own CARGO_INSTALL_ROOT, with its own PGRX_HOME",
+     "profile": "release (graph/Cargo.toml: opt-level 3, fat LTO, one codegen unit), as its Makefile's install builds it",
+     "build": "cd graph && cargo pgrx package --no-default-features --features pg16 --pg-config /usr/lib/postgresql/16/bin/pg_config",
+     "install": "the package's usr/ copied into the private PostgreSQL 16 tree that holds pg_warren (CONTRIBUTING.md, as for the soak)"
+    },
+    "library": {
+     "path": "/var/tmp/warren-corpus/head-to-head/pgtree/usr/lib/postgresql/16/lib/graph.so",
+     "sha256": "7cb8900debd93f77f8df88fc52bddf21581723432400200d2f110a882e5535ba"
+    },
+    "settings": [
+     "graph.allow_rls_tables=off",
+     "graph.auto_load=on",
+     "graph.build_batch_size=10000",
+     "graph.build_scan_mode=",
+     "graph.compaction_threshold=50000",
+     "graph.data_dir=",
+     "graph.default_case_sensitive=off",
+     "graph.default_hydrate=on",
+     "graph.default_max_depth=5",
+     "graph.default_projection_mode=",
+     "graph.default_search_mode=",
+     "graph.edge_buffer_size=100000",
+     "graph.enabled=on",
+     "graph.enforce_tenant_scope=on",
+     "graph.hot_eager_load=off",
+     "graph.idle_unload_secs=0",
+     "graph.low_memory_build=off",
+     "graph.maintenance_memory_mb=4096",
+     "graph.max_exact_path_count=100000",
+     "graph.max_frontier=10000000",
+     "graph.max_loaded_graphs_per_backend=1",
+     "graph.max_nodes=10000000",
+     "graph.max_overlay_memory_mb=256",
+     "graph.max_tx_delta_edges=100000",
+     "graph.max_tx_delta_nodes=100000",
+     "graph.memory_limit_mb=4096",
+     "graph.mutable_enabled=off",
+     "graph.oom_action=",
+     "graph.operation_timeout_ms=0",
+     "graph.persist_on_build=on",
+     "graph.projection_retention_generations=2",
+     "graph.query_freshness=",
+     "graph.query_memory_mb=4096",
+     "graph.query_work_limit=2000000000",
+     "graph.rls_mode=",
+     "graph.spill_disk_limit_mb=4096",
+     "graph.sync_batch_size=1000",
+     "graph.sync_mode=manual",
+     "graph.tenant_setting=",
+     "graph.vacuum_interval_secs=60",
+     "shared_preload_libraries=graph",
+     "statement_timeout=300000"
+    ],
+    "session": [
+     "SET graph.max_nodes = 10000000",
+     "SET graph.max_frontier = 10000000",
+     "SET graph.query_work_limit = 2000000000",
+     "SET graph.query_memory_mb = 4096"
+    ],
+    "depth_bounds": {},
+    "graph": {
+     "node_count": 14541,
+     "edge_count": 310116,
+     "memory_used_mb": 13.071157455444336
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.2777275769994958
+     ],
+     "median_seconds": 0.2777275769994958
+    },
+    "key": {
+     "seconds": [
+      0.2192853019996619
+     ],
+     "median_seconds": 0.2192853019996619
+    },
+    "register": {
+     "seconds": [
+      0.00477989799946954
+     ],
+     "median_seconds": 0.00477989799946954
+    },
+    "build": {
+     "seconds": [
+      2.2276028530004623,
+      2.097087396000461,
+      2.1483872859998883
+     ],
+     "median_seconds": 2.1483872859998883
+    }
+   },
+   "workloads": {
+    "shortest paths": {
+     "cold_seconds": 0.18857044799915457,
+     "warm_seconds": [
+      0.09566218300005858,
+      0.09474782300003426,
+      0.12923610000052577,
+      0.0936259890004294,
+      0.09504582800036587
+     ],
+     "warm_median_seconds": 0.09504582800036587,
+     "cold_phases": {
+      "unload": 0.0025726249996296247
+     },
+     "check": {
+      "check": "shortest paths",
+      "status": "match",
+      "compared": 25,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    }
+   }
+  },
+  "igraph": {
+   "describe": {
+    "version": "1.0.0",
+    "threads": 1,
+    "settings": {
+     "pagerank": "PRPACK (solved)",
+     "louvain": "community_multilevel",
+     "leiden": "community_leiden, modularity, 2 iterations",
+     "seed": 1,
+     "paths": "get_shortest_path per pair (BFS or Dijkstra, stopping at the target)"
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.2785591399997429
+     ],
+     "median_seconds": 0.2785591399997429
+    },
+    "build": {
+     "seconds": [
+      0.16015465000054974
+     ],
+     "median_seconds": 0.16015465000054974
+    }
+   },
+   "workloads": {
+    "shortest paths": {
+     "cold_seconds": 0.010807208999722206,
+     "warm_seconds": [
+      0.010242037999887543,
+      0.009794403999876522,
+      0.009775210000043444,
+      0.010483797000233608,
+      0.0096046180005942
+     ],
+     "warm_median_seconds": 0.009794403999876522,
+     "cold_phases": {},
+     "check": {
+      "check": "shortest paths",
+      "status": "match",
+      "compared": 25,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    }
+   }
+  }
+ }
+}

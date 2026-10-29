@@ -26,8 +26,12 @@ For example: “If this warehouse closes, which locations lose a route to
 supply?” Or: “Which accounts form unusually connected groups, and how has
 that changed since yesterday?”
 
-We haven’t benchmarked pg_warren against pgGraph, so we make no speed
-claim. pg_warren is also pre-1.0; check that it meets your operational needs.
+In one benchmark run against pgGraph 1.2.1, on 12 public graphs, pg_warren
+was faster on every workload both support: traversal, shortest paths and
+connected components (`bench/results/corpus/head_to_head/README.md`,
+"pgGraph 1.2.1 against pg_warren 0.8.0 and igraph").
+That is one run on one shared machine. pg_warren is also pre-1.0; check
+that it meets your operational needs.
 
 Try the complete [community detection](examples/communities.md),
 [exposure and path tracing](examples/taint.md), and
@@ -55,7 +59,9 @@ its scope extends beyond individual path queries.
 
 The comparison below uses **pgGraph 1.2.1**, its latest published release
 checked on **29 October 2026**, and pg_warren's current documented API.
-It compares supported workflows, not measured speed.
+It compares supported workflows, not measured speed. The
+[feature matrix](../README.md#features) sets the same differences, both
+ways, beside igraph and Neo4j.
 [pgGraph release and overview](https://github.com/Evokoa/pgGraph/tree/v1.2.1),
 [SQL API](https://github.com/Evokoa/pgGraph/blob/v1.2.1/docs/user_guide/api-reference.mdx).
 
@@ -108,17 +114,49 @@ for backup permissions, upgrades, pooling and replicas.
 
 ### Query features and access
 
-pgGraph provides schema and relationship discovery, trigger-based sync,
-source-row hydration, query-time source RLS, and bounded GQL/openCypher
-profiles. Those are useful capabilities if your priority is an application
-querying a changing relational network. pg_warren uses explicit node and
-edge SQL, graph grants, and refreshes; it does not offer a Cypher or GQL
-query language. Review its [access model](semantics.md#access) before
-assuming the authorization behaviour is interchangeable.
+Both return results keyed by your own ids, so they join straight to your
+tables: pgGraph by source table and primary key, pg_warren through its id
+map. pgGraph also discovers relationships across a whole schema, and
+provides trigger-based sync and bounded GQL/openCypher profiles. Those are useful
+capabilities if your priority is an application querying a changing
+relational network. pg_warren builds from node and edge SQL, which
+`create_graph_from_keys` writes from the primary and foreign keys of the
+tables you list ([graphs from keys](semantics.md#graphs-from-keys)), with
+graph grants and refreshes. It matches path patterns with
+[`warren.walk`](traversal.md#walk-typed-path-patterns): steps by relation,
+direction, node filter and hop range, evaluated inside the engine. It has no
+Cypher or GQL query language, so variables and joins across a pattern are
+written in SQL around the walks.
+
+Both apply source-table row-level security, at different times. pg_warren
+applies it once, when a graph is built, as the graph's owner, like a
+materialised view: readers with a grant on the graph see what the owner
+saw. To separate tenants, build a graph per tenant or role and grant each
+separately. pgGraph's documentation says it evaluates the caller's node and
+relationship policies for each query and excludes hidden rows before
+reachability, paths, components or aggregates are computed, so a hidden
+intermediate node blocks the nodes behind it.
+
+When several edge rows link the same two nodes in the same relation,
+pg_warren deduplicates them at build time, so a result cannot say which of
+those rows a path used. pgGraph keeps them apart, and a GQL relationship
+value carries the edge row's columns by its primary key.
+
+Review pg_warren's [access model](semantics.md#access) and pgGraph's
+[RLS boundary](https://github.com/Evokoa/pgGraph/blob/v1.2.1/docs/user_guide/supported_features.mdx#current-rls-boundary)
+before assuming the authorization behaviour is interchangeable.
 [pgGraph supported features](https://github.com/Evokoa/pgGraph/blob/v1.2.1/docs/user_guide/supported_features.mdx),
 [limits and fit](https://github.com/Evokoa/pgGraph/blob/v1.2.1/docs/user_guide/limitations-and-fit.mdx).
 
 
 The published [performance comparisons](../README.md#how-it-compares)
-cover igraph and Neo4j, not pgGraph. They do not establish a speed advantage
-over pgGraph.
+cover igraph, Neo4j and pgGraph 1.2.1. pgGraph ran with its recommended
+configuration, on the workloads its SQL API offers: BFS, shortest paths
+and connected components. pg_warren was faster on every one of them, on
+all 12 graphs: 24–420× on BFS, 2.4–89× on shortest paths and 1.7–14× on
+components. pgGraph's build also took 5–21× longer than pg_warren's
+refresh. pgGraph has no PageRank, triangle count or community detection,
+so those were not compared. pgGraph's traversal is documented for bounded
+neighbourhoods, and these workloads sweep most of each graph; the
+head-to-head notes (`bench/results/corpus/head_to_head/README.md`) explain
+where its time goes.

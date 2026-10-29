@@ -16,13 +16,19 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 
 use pgrx::pg_sys;
+use pgrx::pg_sys::panic::ErrorReport;
 
-use pgrx::{ereport, PgSqlErrorCode};
+use pgrx::{PgLogLevel, PgSqlErrorCode};
 
 /// An error a `warren.*` function reports to its caller as a SQL error.
 pub(crate) trait SqlError: std::fmt::Display {
     /// The SQLSTATE to report.
     fn sqlstate(&self) -> PgSqlErrorCode;
+
+    /// The remedy to report as the error's hint, if there is one.
+    fn hint(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 /// Unwraps `result`, or raises its error as a SQL `ERROR` (which does not
@@ -31,7 +37,13 @@ fn or_raise<T, E: SqlError>(result: Result<T, E>) -> T {
     match result {
         Ok(value) => value,
         Err(error) => {
-            ereport!(ERROR, error.sqlstate(), error.to_string());
+            let report = ErrorReport::new(error.sqlstate(), error.to_string(), "or_raise");
+            match error.hint() {
+                Some(hint) => report.set_hint(hint),
+                None => report,
+            }
+            .report(PgLogLevel::ERROR);
+            unreachable!("an ERROR does not return")
         }
     }
 }
@@ -39,7 +51,7 @@ fn or_raise<T, E: SqlError>(result: Result<T, E>) -> T {
 /// The `search_path` every `warren.*` function body runs under: the system
 /// catalogs, then (explicitly last, so it can never shadow them) the
 /// session's temporary schema.
-const TRUSTED_SEARCH_PATH: &str = "pg_catalog, pg_temp";
+pub(crate) const TRUSTED_SEARCH_PATH: &str = "pg_catalog, pg_temp";
 
 /// What a `warren.*` function knows of its caller's session.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -253,6 +265,10 @@ mod tests {
             "create_graph",
             "warren.create_graph('eves', 'SELECT 1::bigint', 'SELECT 1::bigint, 2::bigint')",
         ),
+        (
+            "create_graph_from_keys",
+            "warren.create_graph_from_keys('eves_k', ARRAY['pg_catalog.pg_namespace'::regclass])",
+        ),
         ("dag_longest_path", "warren.dag_longest_path('victim', 'lp', ARRAY['none'])"),
         ("degree", "warren.degree('victim', 1::bigint)"),
         ("degree_vector", "warren.degree_vector('victim', 'dv')"),
@@ -296,6 +312,10 @@ mod tests {
         ("progress", "warren.progress()"),
         ("project", "warren.project('victim', 'c', 'victim_q', 'p')"),
         ("promote", "warren.promote('victim', {v})"),
+        (
+            "queries_from_keys",
+            "warren.queries_from_keys(ARRAY['pg_catalog.pg_namespace'::regclass])",
+        ),
         ("reachable", "warren.reachable('victim', 1::bigint, 2::bigint)"),
         ("reachable_set", "warren.reachable_set('victim', ARRAY[1::bigint])"),
         ("reassign_owned", "warren.reassign_owned('eve_minion', 'eve')"),

@@ -7,6 +7,8 @@ get signed into the apt repository.
     release/assets.py check-deb DEB X.Y.Z      # pg_warren's files, our postinst, X.Y.Z-1~<suffix>
     release/assets.py listed-debs DIR          # the .deb files DIR/SHA256SUMS lists, each checked
     release/assets.py readme-fingerprint       # the apt key's fingerprint, as README.md states it
+    release/assets.py check-vendored VENDORED SOURCE  # SOURCE's files, its locked crates, the cargo config
+    release/assets.py check-sbom SBOM SOURCE   # a CycloneDX BOM of SOURCE's pg_warren and locked crates
 
 A package passes `check-deb` only if its control archive holds `control`,
 `md5sums` and a `postinst` byte-equal to packaging/debian's template as
@@ -17,17 +19,31 @@ links, and the name, Version and Architecture of a package of X.Y.Z for a
 supported major and distribution; and its files are pg_warren's library,
 extension files and docs, regular files of mode 0644, in directories of
 mode 0755 on their paths only, all owned by root.
+
+The vendored source tarball (release/source.py) passes `check-vendored`
+only if it holds every member of the release's `git archive` tarball,
+SOURCE, byte for byte, and besides them only release/source.py's
+`.cargo/config.toml` and `vendor/`: one directory per crates.io package in
+SOURCE's Cargo.lock, `NAME-VERSION`, whose `.cargo-checksum.json` gives
+Cargo.lock's checksum and lists exactly its files with their sha256 (what
+cargo checks before an offline build), regular files and directories only.
+The SBOM passes `check-sbom` only if it is a CycloneDX 1.5 BOM of pg_warren
+at SOURCE's version whose crates.io components are each a package of
+SOURCE's Cargo.lock, with its checksum.
 """
 
 import hashlib
 import io
+import json
 import re
 import subprocess
 import sys
 import tarfile
+import tomllib
 from pathlib import Path
 
 from packages import DISTRIBUTIONS, MAJORS, ROOT
+from source import CARGO_CONFIG, SourceError, read_source, workspace_version
 
 POSTINST = ROOT / "packaging" / "debian" / "pg-warren.postinst.in"
 CONTROL_IN = ROOT / "packaging" / "debian" / "control.in"
@@ -41,6 +57,7 @@ FIELDS = {"Package", "Version", "Architecture", "Installed-Size", "Depends", *FR
 LIBRARIES = ("libc6", "libgcc-s1")
 ROOT_OWNED = (0, 0, "root", "root")
 DEB_NAME = re.compile(r"postgresql-\d+-pg-warren_\d+\.\d+\.\d+-1\.[a-z0-9.]+_[a-z0-9]+\.deb")
+CRATES_IO = "registry+https://github.com/rust-lang/crates.io-index"
 FINGERPRINT = re.compile(r"`([0-9A-F ]{40,60})` <!-- apt key -->")
 
 
@@ -239,6 +256,117 @@ def readme_fingerprint(readme):
     return digits
 
 
+def tar_members(tarball):
+    """The prefix and `{name: (TarInfo, bytes or None)}` of a tarball,
+    refusing a member outside its first directory or of a kind `git
+    archive` does not write."""
+    try:
+        prefix, _, _, members = read_source(tarball)
+    except (SourceError, tarfile.TarError) as error:
+        raise AssetError(f"{Path(tarball).name}: {error}") from error
+    found = {}
+    for info, data in members:
+        parts = info.name.split("/")
+        if parts[0] != prefix or ".." in parts or "" in parts:
+            raise AssetError(f"{Path(tarball).name}: {info.name} is outside {prefix}/")
+        if not (info.isdir() or info.isfile() or info.issym()):
+            raise AssetError(f"{Path(tarball).name}: {info.name} is not a file, directory or link")
+        found[info.name] = (info, data)
+    return prefix, found
+
+
+def same_member(left, right):
+    (a, a_data), (b, b_data) = left, right
+    return (a.type, a.mode, a.linkname, a_data) == (b.type, b.mode, b.linkname, b_data)
+
+
+def locked_crates(members, prefix):
+    """`{NAME-VERSION: checksum}` of the crates.io packages in Cargo.lock,
+    refusing a package from any other source."""
+    lock = members.get(f"{prefix}/Cargo.lock")
+    if lock is None or lock[1] is None:
+        raise AssetError("the source has no Cargo.lock")
+    crates = {}
+    for package in tomllib.loads(lock[1].decode()).get("package", []):
+        if package.get("source") == CRATES_IO:
+            crates[f"{package['name']}-{package['version']}"] = package["checksum"]
+        elif "source" in package:
+            raise AssetError(f"Cargo.lock's {package['name']} is not from crates.io: {package['source']}")
+    return crates
+
+
+def check_crate(members, directory, checksum):
+    """A vendored crate's files against its .cargo-checksum.json, and that
+    against Cargo.lock's checksum."""
+    name = directory.rpartition("/")[2]
+    listing = members.get(f"{directory}/.cargo-checksum.json")
+    if listing is None or listing[1] is None:
+        raise AssetError(f"vendored {name} has no .cargo-checksum.json")
+    sums = json.loads(listing[1])
+    if sums.get("package") != checksum:
+        raise AssetError(f"vendored {name} is not Cargo.lock's (its package checksum differs)")
+    files = {path.removeprefix(f"{directory}/"): data for path, (info, data) in members.items()
+             if path.startswith(f"{directory}/") and info.isfile() and path != f"{directory}/.cargo-checksum.json"}
+    if set(files) != set(sums.get("files", {})):
+        raise AssetError(f"vendored {name}'s files are not those its .cargo-checksum.json lists")
+    for path, data in files.items():
+        if hashlib.sha256(data).hexdigest() != sums["files"][path]:
+            raise AssetError(f"vendored {name}/{path} does not match its .cargo-checksum.json")
+
+
+def check_vendored(vendored, source):
+    """The vendored tarball against the release's source tarball."""
+    label = Path(vendored).name
+    prefix, members = tar_members(vendored)
+    source_prefix, source_members = tar_members(source)
+    if prefix != source_prefix:
+        raise AssetError(f"{label} is {prefix}/, not {source_prefix}/")
+    for name, member in source_members.items():
+        if name not in members or not same_member(members[name], member):
+            raise AssetError(f"{label}: {name} is not the source's")
+    config = members.get(f"{prefix}/.cargo/config.toml")
+    if config is None or config[1] != CARGO_CONFIG.encode():
+        raise AssetError(f"{label}: .cargo/config.toml is not release/source.py's")
+    crates = locked_crates(source_members, prefix)
+    vendor = f"{prefix}/vendor"
+    for name, (info, _) in members.items():
+        if name in source_members or name in (f"{prefix}/.cargo", f"{prefix}/.cargo/config.toml", vendor):
+            continue
+        if not name.startswith(f"{vendor}/") or name.removeprefix(f"{vendor}/").split("/")[0] not in crates:
+            raise AssetError(f"{label}: {name} is neither the source's nor a locked crate's")
+        if not (info.isdir() or info.isfile()):
+            raise AssetError(f"{label}: {name} is a link")
+    for crate, checksum in sorted(crates.items()):
+        if f"{vendor}/{crate}" not in members:
+            raise AssetError(f"{label}: the locked crate {crate} is not vendored")
+        check_crate(members, f"{vendor}/{crate}", checksum)
+
+
+def check_sbom(sbom, source):
+    """The SBOM against the release's source tarball."""
+    label = Path(sbom).name
+    prefix, members = tar_members(source)
+    try:
+        version = workspace_version(list(members.values()), prefix)
+        bom = json.loads(Path(sbom).read_text())
+    except (SourceError, ValueError) as error:
+        raise AssetError(f"{label}: {error}") from error
+    if bom.get("bomFormat") != "CycloneDX" or bom.get("specVersion") != "1.5":
+        raise AssetError(f"{label} is not a CycloneDX 1.5 BOM")
+    component = bom.get("metadata", {}).get("component", {})
+    if (component.get("name"), component.get("version")) != ("pg_warren", version):
+        raise AssetError(f"{label} describes {component.get('name')} {component.get('version')}, "
+                         f"not pg_warren {version}")
+    crates = locked_crates(members, prefix)
+    for crate in bom.get("components", []):
+        if not crate.get("bom-ref", "").startswith(f"{CRATES_IO}#"):
+            continue
+        hashes = {h.get("alg"): h.get("content") for h in crate.get("hashes", [])}
+        if hashes.get("SHA-256") != crates.get(f"{crate.get('name')}-{crate.get('version')}"):
+            raise AssetError(f"{label}: {crate.get('name')}@{crate.get('version')} "
+                             "is not a crate of Cargo.lock, with its checksum")
+
+
 def main(argv):
     try:
         if len(argv) == 3 and argv[0] == "check-deb":
@@ -247,6 +375,12 @@ def main(argv):
         elif len(argv) == 2 and argv[0] == "listed-debs":
             for path in verify_listed(argv[1], (Path(argv[1]) / "SHA256SUMS").read_text()):
                 print(path)
+        elif len(argv) == 3 and argv[0] == "check-vendored":
+            check_vendored(argv[1], argv[2])
+            print(f"ok: {Path(argv[1]).name} is {Path(argv[2]).name} with its locked crates")
+        elif len(argv) == 3 and argv[0] == "check-sbom":
+            check_sbom(argv[1], argv[2])
+            print(f"ok: {Path(argv[1]).name} is a BOM of {Path(argv[2]).name}'s pg_warren and locked crates")
         elif argv == ["readme-fingerprint"]:
             print(readme_fingerprint((ROOT / "README.md").read_text()))
         else:

@@ -1,10 +1,12 @@
-//! Identity switches (DESIGN.md §7): source queries run as the graph owner;
-//! catalog, segment and vector statements run as the catalog owner.
+//! Identity switches (DESIGN.md §7): source queries run as the graph owner,
+//! and as a superuser only for a superuser; catalog, segment and vector
+//! statements run as the catalog owner.
 
 use std::cell::Cell;
 
 use pgrx::prelude::*;
 
+use super::privilege::require_source_runner;
 use super::AccessError;
 use crate::read_only::read_one;
 
@@ -33,9 +35,21 @@ pub(crate) fn current_user() -> pg_sys::Oid {
     unsafe { pg_sys::GetUserId() }
 }
 
+/// Runs `f`, which runs graph `graph`'s source queries, as `owner`, after
+/// checking that the caller may have them run as that role: only a
+/// superuser may have them run as a superuser ([`require_source_runner`]).
+pub(crate) fn as_graph_owner<R, E: From<AccessError>>(
+    owner: pg_sys::Oid,
+    graph: &str,
+    f: impl FnOnce() -> Result<R, E>,
+) -> Result<R, E> {
+    require_source_runner(owner, graph)?;
+    as_role(owner, f)
+}
+
 /// Runs `f` as `role`, security-restricted, then switches back. If `f`
 /// raises an `ERROR`, the (sub)transaction abort restores the identity.
-pub(crate) fn as_role<R>(role: pg_sys::Oid, f: impl FnOnce() -> R) -> R {
+fn as_role<R>(role: pg_sys::Oid, f: impl FnOnce() -> R) -> R {
     let mut user = pg_sys::Oid::INVALID;
     let mut context = 0;
     // SAFETY: the out-pointers point to live locals.

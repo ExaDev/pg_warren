@@ -12,8 +12,10 @@ mod identity;
 mod privilege;
 
 pub(crate) use error::AccessError;
-pub(crate) use guard::{entry, with_read_only, with_search_path, Caller, SqlError};
-pub(crate) use identity::{as_catalog_owner, as_role, current_user};
+pub(crate) use guard::{
+    entry, with_read_only, with_search_path, Caller, SqlError, TRUSTED_SEARCH_PATH,
+};
+pub(crate) use identity::{as_catalog_owner, as_graph_owner, current_user};
 pub(crate) use privilege::{
     has_privileges_of, is_owner, is_reader, may_drop_orphans, refuse_bootstrap_superuser,
     require_adopter, require_can_become, require_can_receive, require_creator_or_owner,

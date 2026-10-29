@@ -69,6 +69,8 @@ HOSTILE = {
     "double precision": ("NULL", "'NaN'::float8", "'Infinity'::float8", "'-Infinity'::float8", "'-0'::float8",
                          "1e308", "5e-324", "-1"),
     "boolean": ("NULL",),
+    "regclass[]": ("NULL", "'{}'::regclass[]", "ARRAY[NULL]::regclass[]", "ARRAY[0::oid::regclass]",
+                   "ARRAY['pg_catalog.pg_class', 'pg_catalog.pg_class']::regclass[]"),
     "regrole": ("NULL", "'pg_database_owner'", "'pg_read_all_data'", "0::oid::regrole", "'fuzz_stranger'",
                 "'postgres'", "'pg_signal_backend'"),
     "anyelement": ("NULL", "NULL::bigint", "1", "1.5", "'1'::text", "'x'::text", "1::smallint", "1::numeric",
@@ -129,4 +131,8 @@ HOSTILE_EXPRESSIONS = ("''", "'('", literal("1; DROP TABLE public.canary"), "'pu
 
 RELATION_ARRAYS = ("NULL", "ARRAY['a']", "ARRAY['a', 'b']", "ARRAY['c', 'zz']", "'{}'::text[]",
                    f"ARRAY[{', '.join(literal(r) for r in RELATIONS)}]")
+# Lists of tables for graphs from keys: the fixture's (which have no
+# primary key, and are refused) and a catalog every role can read.
+TABLE_LISTS = ("ARRAY['public.nodes8']::regclass[]", "ARRAY['public.nodes_text', 'public.edges_text']::regclass[]",
+               "ARRAY['pg_catalog.pg_namespace']::regclass[]")
 FREE_TEXT = ("'fuzz'", "'phase one'", "NULL", "'ü'")

@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""Crash recovery during refresh (DESIGN.md §13, M11 "Robustness"):
-installs pg_warren (unless --no-install), and for each shared-cache mode
-(default: preload, then on) starts a scratch cluster, builds a graph big
-enough to stop a refresh mid-way, and stops refreshes at each point
-(waiting to read edges, writing segments, before commit) in each way
-(pg_terminate_backend, SIGKILL of the backend, an immediate shutdown),
-checking after each recovery that the catalog and the graph's answers
-are as before, that nothing of the stopped refresh or backend is left,
-that the shared cache works, and the server log; after each way, that a
-refresh succeeds (harness/crash_recovery.py). Holds /tmp/pgrx-test.lock
-for the whole run."""
+"""Crash recovery during refresh, compute and loads (DESIGN.md §13, M11
+"Robustness" and 0.9.0 "Lifecycle"): installs pg_warren (unless
+--no-install), and for each shared-cache mode (default: preload, then
+on) starts a scratch cluster, builds a graph big enough to stop a call
+mid-way, and stops calls at each point (a refresh waiting to read edges,
+writing segments and before commit; `pagerank` iterating; a read
+loading the current version) in each way (pg_terminate_backend,
+pg_cancel_backend where a statement runs, SIGKILL of the backend, an
+immediate shutdown), checking after each recovery that the catalog and
+the graph's answers are as before, that nothing of the stopped call or
+backend is left, that a cancelled backend goes on, that a reader waiting
+on a stopped load reads, that the shared cache works, and the server
+log; after each way, that a refresh succeeds (harness/crash_recovery.py).
+Holds /tmp/pgrx-test.lock for the whole run."""
 
 import argparse
 import os
@@ -60,7 +63,7 @@ def run_mode(args, mode):
         database.execute(f"SELECT warren.refresh('{crash_recovery.GRAPH}'); "
                          f"SELECT warren.vector_const('{crash_recovery.GRAPH}', 'ones', 1)")
         for kind in args.kinds:
-            for point in args.points:
+            for point in (p for p in args.points if crash_recovery.applies(p, kind)):
                 found, seen = scenario(cluster, point, kind)
                 print(f"{'ok  ' if not found else 'FAIL'} {kind} at {point}{seen}", flush=True)
                 failures += [f"{kind} at {point}: {failure}" for failure in found]
@@ -85,7 +88,8 @@ def scenario(cluster, point, kind):
     seen = run.interrupted
     if seen is None or seen.phase is None:
         return found, ""
-    return found, f" (stopped {seen.phase}" + (f", building version {seen.version})" if seen.version else ")")
+    doing = "building" if crash_recovery.statement(point) == crash_recovery.REFRESH else "on"
+    return found, f" (stopped {seen.phase}" + (f", {doing} version {seen.version})" if seen.version else ")")
 
 
 if __name__ == "__main__":

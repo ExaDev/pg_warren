@@ -17,6 +17,8 @@ DEGREE = Function("degree", (Argument("graph", "text"), Argument("node", "anyele
 CREATE = Function("create_graph", (Argument("name", "text"), Argument("node_query", "text"),
                                    Argument("edge_query", "text"), Argument("weighted", "boolean"),
                                    Argument("has_relations", "boolean")), 2, False, "void")
+FROM_KEYS = Function("create_graph_from_keys", (Argument("name", "text"), Argument("tables", "regclass[]")),
+                     0, False, "void")
 BFS = Function("bfs", (Argument("graph", "text"), Argument("start", "anyarray"),
                        Argument("max_depth", "integer")), 0, True, "record")
 QUERY = Function("vector_from_query", (Argument("graph", "text"), Argument("name", "text"),
@@ -74,6 +76,12 @@ def test_a_new_graphs_flags_mostly_match_the_columns_its_edge_query_reads():
         related = named.get("has_relations", "false") == "true"
         matching += (weighted == (", w" in edges)) and (related == (", rel" in edges))
     assert matching > len(made) // 2
+
+
+def test_a_graph_from_keys_is_mostly_new_and_lists_tables():
+    made = calls(FROM_KEYS, 0)
+    assert sum(c.positional[0] not in ("'g8'", "'gt'") for c in made) > len(made) // 2
+    assert all(c.positional[1].endswith("::regclass[]") for c in made)
 
 
 def test_the_sql_a_call_runs_is_recorded():

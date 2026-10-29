@@ -3,6 +3,7 @@
 use pgrx::PgSqlErrorCode;
 use thiserror::Error;
 
+use super::from_keys::KeysError;
 use super::VersionId;
 use crate::access::AccessError;
 use crate::access::SqlError;
@@ -127,6 +128,9 @@ pub(crate) enum CatalogError {
         /// And after it.
         after: u64,
     },
+    /// The listed tables' keys give no graph queries.
+    #[error(transparent)]
+    Keys(#[from] KeysError),
     /// An SPI call failed.
     #[error(transparent)]
     Spi(#[from] pgrx::spi::Error),
@@ -158,7 +162,15 @@ impl SqlError for CatalogError {
             }
             Self::OwnsGraphs(_) => PgSqlErrorCode::ERRCODE_DEPENDENT_OBJECTS_STILL_EXIST,
             Self::QuotaExceeded { .. } => PgSqlErrorCode::ERRCODE_CONFIGURATION_LIMIT_EXCEEDED,
+            Self::Keys(error) => error.sqlstate(),
             Self::Spi(_) => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+        }
+    }
+
+    fn hint(&self) -> Option<&'static str> {
+        match self {
+            Self::Access(error) => error.hint(),
+            _ => None,
         }
     }
 }

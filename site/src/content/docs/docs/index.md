@@ -20,7 +20,9 @@ when installing or upgrading.
 
 1. [Install the extension](/pg_warren/docs/installation/) for your PostgreSQL
    major and platform. PostgreSQL 15–18 are supported on Linux. Managed
-   providers must adopt the extension before you can use it there.
+   providers must adopt the extension before you can install it there;
+   until then, run it on a server of your own
+   [beside a managed database](/pg_warren/docs/beside-managed/).
 2. [Create your first graph](/pg_warren/docs/quickstart/) from two small
    tables, run a breadth-first search, and compute PageRank.
    Then explore the [example library](/pg_warren/docs/examples/) for complete
@@ -51,6 +53,7 @@ intermediate rows or a billion, depending on degree.
 | Compare a staged build before committing a data change | [Change detection](/pg_warren/docs/change-detection/) |
 | Check a function's exact arguments and return type | [SQL reference](/pg_warren/docs/reference/) |
 | Configure memory, the shared cache, or compute threads | [Settings and limits](/pg_warren/docs/limits/) |
+| Use pg_warren with Amazon RDS or another managed database | [Beside a managed database](/pg_warren/docs/beside-managed/) |
 
 Traversals that return nodes use external ids that you can join back to your
 tables. Scalar lookups return values such as a degree or a reachability result.
@@ -71,8 +74,9 @@ for pooling, backups, upgrades, replicas, and troubleshooting.
 
 ## Evaluate performance
 
-The [performance comparison](/pg_warren/docs/performance/) summarises measured
-results against igraph and Neo4j, with and without GDS. The
+The [performance comparison](/pg_warren/docs/performance/) sets pg_warren's
+features beside pgGraph, igraph and Neo4j, and summarises measured results
+against igraph and Neo4j, with and without GDS. The
 [benchmark methodology and full results](/pg_warren/docs/benchmarks/) describe
 the datasets, engine settings, correctness checks, and comparison limits.
 Performance depends on the workload; the results include both wins and losses.

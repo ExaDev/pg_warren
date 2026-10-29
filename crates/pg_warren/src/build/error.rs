@@ -59,4 +59,12 @@ impl SqlError for BuildError {
             Self::NullArgument(_) => PgSqlErrorCode::ERRCODE_NULL_VALUE_NOT_ALLOWED,
         }
     }
+
+    fn hint(&self) -> Option<&'static str> {
+        match self {
+            Self::Catalog(error) => error.hint(),
+            Self::Access(error) => error.hint(),
+            _ => None,
+        }
+    }
 }

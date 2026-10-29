@@ -1,0 +1,475 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "head-to-head",
+   "lesmis",
+   "polblogs",
+   "facebook",
+   "wn18rr",
+   "cit-hepth",
+   "email-enron",
+   "fb15k-237",
+   "ss-gleich-usroads-48",
+   "dblp",
+   "yago3-10",
+   "hetionet",
+   "roadnet-tx",
+   "--engine",
+   "pg_warren",
+   "--engine",
+   "pggraph",
+   "--engine",
+   "igraph",
+   "--workload",
+   "paths",
+   "--pg-config",
+   "/var/tmp/warren-corpus/head-to-head/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "8dd426c",
+   "--extension-profile",
+   "release",
+   "--timeout",
+   "300",
+   "--results",
+   "/var/tmp/warren-corpus/head-to-head/run-paths"
+  ],
+  "harness": {
+   "revision": "794b65a672a8337ad21fc5555b9a8a607bfcf1e0",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "8dd426c",
+   "profile": "release",
+   "library": "/var/tmp/warren-corpus/head-to-head/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "b720e538f278899d8846e017d0f2667f71a0163d3552bf8ce48c3ff3af5bfde0"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v185",
+  "load_average": [
+   0.19580078125,
+   1.53955078125,
+   2.05126953125
+  ]
+ },
+ "dataset": "lesmis",
+ "tier": "tiny",
+ "fetched": {
+  "tables": {
+   "nodes": 77,
+   "edges": 254,
+   "ids": "integer",
+   "relations": 0,
+   "self_loops": 0
+  },
+  "sha256": {
+   "nodes.csv": "257ce17f87934e67fa44b89368c0d03d90477324b198651ccb9d2ad1217365d4",
+   "edges.csv": "67f504339314cb3a02caaef574771298d13c0404f170806daa079697cecf0beb"
+  },
+  "provenance": {
+   "entryId": "lesmis",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-26T05:47:57.765Z",
+   "source": {
+    "url": "http://konect.cc/files/download.tsv.moreno_lesmis.tar.bz2",
+    "status": "live",
+    "snapshot": {
+     "url": "https://web.archive.org/web/20230323100419/http://konect.cc/files/download.tsv.moreno_lesmis.tar.bz2",
+     "timestamp": "20230323100419",
+     "sha256": "04f8ed2c517fbda9c60d244041837a08328ee13c3102efe847e911dc97a27fbe",
+     "byteLength": 2301
+    }
+   },
+   "fetchedUrl": "http://konect.cc/files/download.tsv.moreno_lesmis.tar.bz2",
+   "sha256": "04f8ed2c517fbda9c60d244041837a08328ee13c3102efe847e911dc97a27fbe",
+   "byteLength": 2301,
+   "member": "moreno_lesmis/out.moreno_lesmis_lesmis"
+  }
+ },
+ "repeat": 5,
+ "budget_seconds": 120,
+ "timeout_seconds": 300,
+ "workloads": [
+  {
+   "name": "shortest paths",
+   "kind": "paths",
+   "source": null,
+   "depth": null,
+   "pairs": [
+    [
+     "25",
+     "75"
+    ],
+    [
+     "17",
+     "39"
+    ],
+    [
+     "23",
+     "67"
+    ],
+    [
+     "61",
+     "64"
+    ],
+    [
+     "53",
+     "33"
+    ],
+    [
+     "20",
+     "66"
+    ],
+    [
+     "12",
+     "54"
+    ],
+    [
+     "6",
+     "1"
+    ],
+    [
+     "61",
+     "40"
+    ],
+    [
+     "36",
+     "8"
+    ],
+    [
+     "21",
+     "46"
+    ],
+    [
+     "12",
+     "11"
+    ],
+    [
+     "12",
+     "72"
+    ],
+    [
+     "10",
+     "53"
+    ],
+    [
+     "34",
+     "59"
+    ],
+    [
+     "12",
+     "70"
+    ],
+    [
+     "35",
+     "60"
+    ],
+    [
+     "67",
+     "73"
+    ],
+    [
+     "36",
+     "5"
+    ],
+    [
+     "36",
+     "35"
+    ],
+    [
+     "62",
+     "43"
+    ],
+    [
+     "11",
+     "58"
+    ],
+    [
+     "74",
+     "20"
+    ],
+    [
+     "30",
+     "43"
+    ],
+    [
+     "23",
+     "48"
+    ]
+   ],
+   "weighted": true,
+   "iterations": null
+  }
+ ],
+ "engines": {
+  "pg_warren": {
+   "describe": {
+    "version": "0.8.0",
+    "threads": 4,
+    "settings": [
+     "fsync=off",
+     "full_page_writes=off",
+     "jit=on",
+     "maintenance_work_mem=1GB",
+     "max_parallel_workers_per_gather=2",
+     "max_wal_size=1GB",
+     "shared_buffers=1GB",
+     "shared_preload_libraries=graph",
+     "statement_timeout=5min",
+     "synchronous_commit=off",
+     "wal_level=minimal",
+     "warren.max_build_memory=4GB",
+     "warren.max_cache_memory=4GB",
+     "warren.max_compute_memory=4GB",
+     "warren.shared_cache_memory=4GB",
+     "warren.threads=4",
+     "work_mem=64MB"
+    ],
+    "graph": {
+     "node_count": 77,
+     "edge_count": 508,
+     "dropped_edges": 0,
+     "bytes": 14836
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.02245147099984024
+     ],
+     "median_seconds": 0.02245147099984024
+    },
+    "build": {
+     "seconds": [
+      0.004549795999992057,
+      0.0019875270008924417,
+      0.0030789379998168442
+     ],
+     "median_seconds": 0.0030789379998168442
+    }
+   },
+   "workloads": {
+    "shortest paths": {
+     "cold_seconds": 0.0016803550006443402,
+     "warm_seconds": [
+      0.0008986180000647437,
+      0.0008757810001043254,
+      0.0008896039998944616,
+      0.0014708000007885857,
+      0.0012252400001671049
+     ],
+     "warm_median_seconds": 0.0008986180000647437,
+     "cold_phases": {
+      "evict": 0.0002914500000770204
+     },
+     "check": {
+      "check": "shortest paths",
+      "status": "match",
+      "compared": 25,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    }
+   }
+  },
+  "pggraph": {
+   "describe": {
+    "version": "1.2.1",
+    "threads": 1,
+    "pin": {
+     "version": "1.2.1",
+     "repository": "https://github.com/Evokoa/pgGraph",
+     "licence": "Apache-2.0",
+     "tag": "v1.2.1",
+     "tag_object": "502e50290793726d0b1e2df8d161d4ecb44f519b",
+     "commit": "1bbe30149100b49fc4a1494bd3afbeba82070092",
+     "latest": "the latest release tag on 2026-10-29",
+     "rust": "1.96.0, as graph/rust-toolchain.toml pins it",
+     "cargo_pgrx": "0.19.1, as graph/Cargo.toml pins pgrx; installed into its own CARGO_INSTALL_ROOT, with its own PGRX_HOME",
+     "profile": "release (graph/Cargo.toml: opt-level 3, fat LTO, one codegen unit), as its Makefile's install builds it",
+     "build": "cd graph && cargo pgrx package --no-default-features --features pg16 --pg-config /usr/lib/postgresql/16/bin/pg_config",
+     "install": "the package's usr/ copied into the private PostgreSQL 16 tree that holds pg_warren (CONTRIBUTING.md, as for the soak)"
+    },
+    "library": {
+     "path": "/var/tmp/warren-corpus/head-to-head/pgtree/usr/lib/postgresql/16/lib/graph.so",
+     "sha256": "7cb8900debd93f77f8df88fc52bddf21581723432400200d2f110a882e5535ba"
+    },
+    "settings": [
+     "graph.allow_rls_tables=off",
+     "graph.auto_load=on",
+     "graph.build_batch_size=10000",
+     "graph.build_scan_mode=",
+     "graph.compaction_threshold=50000",
+     "graph.data_dir=",
+     "graph.default_case_sensitive=off",
+     "graph.default_hydrate=on",
+     "graph.default_max_depth=5",
+     "graph.default_projection_mode=",
+     "graph.default_search_mode=",
+     "graph.edge_buffer_size=100000",
+     "graph.enabled=on",
+     "graph.enforce_tenant_scope=on",
+     "graph.hot_eager_load=off",
+     "graph.idle_unload_secs=0",
+     "graph.low_memory_build=off",
+     "graph.maintenance_memory_mb=4096",
+     "graph.max_exact_path_count=100000",
+     "graph.max_frontier=10000000",
+     "graph.max_loaded_graphs_per_backend=1",
+     "graph.max_nodes=10000000",
+     "graph.max_overlay_memory_mb=256",
+     "graph.max_tx_delta_edges=100000",
+     "graph.max_tx_delta_nodes=100000",
+     "graph.memory_limit_mb=4096",
+     "graph.mutable_enabled=off",
+     "graph.oom_action=",
+     "graph.operation_timeout_ms=0",
+     "graph.persist_on_build=on",
+     "graph.projection_retention_generations=2",
+     "graph.query_freshness=",
+     "graph.query_memory_mb=4096",
+     "graph.query_work_limit=2000000000",
+     "graph.rls_mode=",
+     "graph.spill_disk_limit_mb=4096",
+     "graph.sync_batch_size=1000",
+     "graph.sync_mode=manual",
+     "graph.tenant_setting=",
+     "graph.vacuum_interval_secs=60",
+     "shared_preload_libraries=graph",
+     "statement_timeout=300000"
+    ],
+    "session": [
+     "SET graph.max_nodes = 10000000",
+     "SET graph.max_frontier = 10000000",
+     "SET graph.query_work_limit = 2000000000",
+     "SET graph.query_memory_mb = 4096"
+    ],
+    "depth_bounds": {},
+    "graph": {
+     "node_count": 77,
+     "edge_count": 508,
+     "memory_used_mb": 0.02252197265625
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.011985422000179824
+     ],
+     "median_seconds": 0.011985422000179824
+    },
+    "key": {
+     "seconds": [
+      0.004470785000194155
+     ],
+     "median_seconds": 0.004470785000194155
+    },
+    "register": {
+     "seconds": [
+      0.005466915000397421
+     ],
+     "median_seconds": 0.005466915000397421
+    },
+    "build": {
+     "seconds": [
+      0.05580024099981529,
+      0.04170095599965862,
+      0.03817806700044457
+     ],
+     "median_seconds": 0.04170095599965862
+    }
+   },
+   "workloads": {
+    "shortest paths": {
+     "cold_seconds": 0.05857785700027307,
+     "warm_seconds": [
+      0.05565833099990414,
+      0.057009523000488116,
+      0.05536073799976293,
+      0.05447485699914978,
+      0.053398557999571494
+     ],
+     "warm_median_seconds": 0.05536073799976293,
+     "cold_phases": {
+      "unload": 0.0007861829999455949
+     },
+     "check": {
+      "check": "shortest paths",
+      "status": "match",
+      "compared": 25,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    }
+   }
+  },
+  "igraph": {
+   "describe": {
+    "version": "1.0.0",
+    "threads": 1,
+    "settings": {
+     "pagerank": "PRPACK (solved)",
+     "louvain": "community_multilevel",
+     "leiden": "community_leiden, modularity, 2 iterations",
+     "seed": 1,
+     "paths": "get_shortest_path per pair (BFS or Dijkstra, stopping at the target)"
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.0004091649998372304
+     ],
+     "median_seconds": 0.0004091649998372304
+    },
+    "build": {
+     "seconds": [
+      0.0003273539996371255
+     ],
+     "median_seconds": 0.0003273539996371255
+    }
+   },
+   "workloads": {
+    "shortest paths": {
+     "cold_seconds": 0.0007395809998342884,
+     "warm_seconds": [
+      0.0004362170002423227,
+      0.00032938300046225777,
+      0.0003071970004384639,
+      0.0003667660002975026,
+      0.00031606500033376506
+     ],
+     "warm_median_seconds": 0.00032938300046225777,
+     "cold_phases": {},
+     "check": {
+      "check": "shortest paths",
+      "status": "match",
+      "compared": 25,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    }
+   }
+  }
+ }
+}
