@@ -3,7 +3,8 @@
 --no-install), builds graphs in a scratch cluster, dumps them with pg_dump
 (plain and custom formats), restores each dump into a fresh database and
 checks that pg_warren answers as before. Also checks a trusted install's
-installer dump (DESIGN.md §7), and that a text graph restored into a
+installer dump (DESIGN.md §7), a managed service's dump, restore and
+extension lifecycle with no superuser (§14 item 51), and that a text graph restored into a
 database of another encoding is refused (DESIGN.md §5.7). Holds /tmp/pgrx-test.lock for the whole
 run."""
 
@@ -33,12 +34,12 @@ def main(argv):
             with Cluster(args.pg_config, args.runas) as cluster:
                 Installer.trusted().prepare(cluster)
                 failures = (dump.check(cluster, directory) + dump.check_trusted(cluster, directory)
-                            + dump.check_cross_encoding(cluster, directory))
+                            + dump.check_managed(cluster, directory) + dump.check_cross_encoding(cluster, directory))
     finally:
         shutil.rmtree(directory, ignore_errors=True)
     for failure in failures:
         print(failure)
-    print(f"dump and restore (plain, custom, trusted, cross-encoding): {'FAILED' if failures else 'ok'}")
+    print(f"dump and restore (plain, custom, trusted, managed, cross-encoding): {'FAILED' if failures else 'ok'}")
     return 1 if failures else 0
 
 

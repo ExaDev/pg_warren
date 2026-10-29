@@ -53,7 +53,8 @@ before changing code. Commands, toolchain setup and environment gotchas are in
      `admission`, the compute threads a call is granted under the
      cluster's cap),
      `read_only` (single-row SPI reads that assign no transaction id, and
-     `writing`, the one writable SPI connection),
+     `writing`, the one writable SPI connection; `saved`, statements
+     planned once per backend),
      `parallel_worker` (what a parallel worker records and raises),
      `discard` (what `DISCARD ALL` resets of pg_warren's session state),
      `external_ids/` (id arguments ↔ dense ids), `selection/` (direction and
