@@ -79,6 +79,15 @@
   cheap text messages takes 14.5 s rather than 16.7 s (13.5 s as
   `bigint`). Appendix A.3's first superstep goes from 30.8 s to 29.5 s;
   most of it is its message query (DESIGN.md §13, "After 0.7.0").
+- **`distance('edit')` across two graphs (`graph2`) no longer rebuilds
+  the second graph** in the first's dense ids: it maps each edge as it
+  reads it and looks it up in the first graph's row (DESIGN.md §8). It
+  charges only the id mapping, 8 bytes a node of the second graph, where
+  it charged 96 bytes an edge for the rebuild, so Appendix A.2 at 10M
+  asks for 88 MB instead of 10.9 GB and runs under the 4GB default rather
+  than failing with 53400. At 2.2M nodes and 22M stored edges the call's
+  peak memory falls from 290 MB to 9 MB and its time from 1.33 s to
+  0.39 s. Results are unchanged.
 
 ## 0.7.0 — proven on real graphs and real deployments (2026-10-27)
 
