@@ -35,7 +35,7 @@ use crate::selection::{direction, relations};
 use crate::source::{describe, type_name, with_id_type, SourceError};
 pub(crate) use codec::TypeError;
 use codec::{Codec, ResultType};
-use emit::{Build, Row, Stream};
+use emit::{Accumulated, Payloads, Row, Stream, Values};
 use source::MessageSource;
 
 /// The arguments of a `gather` call.
@@ -278,11 +278,11 @@ sql_element!(f64, f32, bool);
 
 impl<E: CachedIds> Run<'_, E> {
     /// Fans `messages` out, combines them, and streams the result, whose
-    /// single values `build` makes.
+    /// values `values` makes.
     fn stream<M: Combine + 'static>(
         &self,
         messages: Messages<M>,
-        build: Build<M>,
+        values: impl Values<M> + 'static,
     ) -> Result<Rows, ComputeSqlError> {
         let loaded = &self.vectors.loaded;
         let selected = relations(&loaded.relations, self.arguments.rels.as_deref());
@@ -303,7 +303,7 @@ impl<E: CachedIds> Run<'_, E> {
             gathered,
             result: self.result,
             message: self.codec.message_type(),
-            build,
+            values: Box::new(values),
             at: RowAt::default(),
         }))
     }
@@ -315,7 +315,7 @@ impl<E: CachedIds> Run<'_, E> {
             .values();
         let mut messages = Messages::<T>::new(&self.vectors.memory)?;
         read::from_vector(self.vectors, values, &mut messages)?;
-        self.stream(messages, Box::new(|value: T, sql| value.datum(sql)))
+        self.stream(messages, Accumulated(Box::new(|value: T, sql| value.datum(sql))))
     }
 
     /// `query`'s fixed-width messages, read as element type `T`.
@@ -324,7 +324,7 @@ impl<E: CachedIds> Run<'_, E> {
         read::from_query(self.vectors, self.caller, query, |node, row| {
             read::element(&mut messages, node, row)
         })?;
-        self.stream(messages, Box::new(|value: T, sql| value.datum(sql)))
+        self.stream(messages, Accumulated(Box::new(|value: T, sql| value.datum(sql))))
     }
 
     /// `query`'s `text`, `varchar`, `char` or `bytea` payloads.
@@ -333,7 +333,7 @@ impl<E: CachedIds> Run<'_, E> {
         read::from_query(self.vectors, self.caller, query, |node, row| {
             read::payload(&mut messages, node, row)
         })?;
-        self.stream(messages, Box::new(|bytes: &[u8], _| emit::payload(bytes)))
+        self.stream(messages, Payloads)
     }
 
     /// `query`'s messages of type `sql`, in their binary send form.
@@ -350,7 +350,7 @@ impl<E: CachedIds> Run<'_, E> {
         read::from_query(self.vectors, self.caller, query, |node, row| {
             read::binary(send, &mut messages, node, row)
         })?;
-        self.stream(messages, emit::receiver(receive, ioparam))
+        self.stream(messages, Accumulated::<Bytes>(emit::receiver(receive, ioparam)))
     }
 }
 

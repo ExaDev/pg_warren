@@ -195,48 +195,60 @@ mod tests {
         Ok(())
     }
 
-    /// `text`, `varchar`, `char(n)` and a domain over `text` (DESIGN.md
-    /// §6.4): every combiner that takes them equals its SQL aggregate over
-    /// the same edges, in collect order (ascending sender dense id, then
-    /// message order), for empty, multibyte, padded and toasted messages.
+    /// `text`, `varchar`, `char(n)`, a domain over `text` and `bytea`
+    /// (DESIGN.md §6.4): every combiner that takes them equals its SQL
+    /// aggregate over the same edges, in collect order (ascending sender
+    /// dense id, then message order), for empty, multibyte, padded and
+    /// toasted messages; a collected array is byte for byte `array_agg`'s.
     #[pg_test]
     fn text_messages_equal_their_sql_aggregates() -> Result<(), Error> {
         small("t")?;
         Spi::run(
             "CREATE DOMAIN t_label AS text;
-             CREATE TABLE t_texts (ord int, id bigint, t text, v varchar(8), c char(6), d t_label);
+             CREATE TABLE t_texts (ord int, id bigint, t text, v varchar(8), c char(6), d t_label,
+                                   b bytea);
              INSERT INTO t_texts
-             SELECT row_number() OVER (), id, m, left(m, 8), left(m, 6), m
+             SELECT row_number() OVER (), id, m, left(m, 8), left(m, 6), m, convert_to(m, 'UTF8')
              FROM t_nodes, LATERAL (VALUES ('n' || id), (''), (NULL), ('é€' || id || ' '),
                                            (repeat(md5(id::text), 200))) x(m)",
         )?;
+        let sorted = "ORDER BY d.dense_id, m.ord";
         let combiners = [
-            ("collect", "[]", "array_agg(m ORDER BY d.dense_id, m.ord)::text"),
-            ("first", "", "(array_agg(m ORDER BY d.dense_id, m.ord))[1]::text"),
-            ("count", "", "count(*)::text"),
-            ("concat", "", "string_agg(m::text, '' ORDER BY d.dense_id, m.ord)"),
+            ("collect", "[]", format!("array_agg(m {sorted})")),
+            ("first", "", format!("(array_agg(m {sorted}))[1]")),
+            ("count", "", "count(*)".to_owned()),
+            ("concat", "", format!("string_agg(m::text, '' {sorted})")),
         ];
-        for (column, sql) in [("t", "text"), ("v", "varchar"), ("c", "bpchar"), ("d", "text")] {
-            for (combiner, array, aggregate) in combiners {
-                let value_type = match combiner {
+        let columns =
+            [("t", "text"), ("v", "varchar"), ("c", "bpchar"), ("d", "text"), ("b", "bytea")];
+        for (column, sql) in columns {
+            for (combiner, array, aggregate) in &combiners {
+                let value_type = match *combiner {
                     "count" => "bigint",
+                    "concat" if sql == "bytea" => continue,
                     "concat" => "text",
                     _ => sql,
                 };
-                let expected = rows(&format!(
-                    "SELECT e.dst || ':' || {aggregate}
-                     FROM t_edges e
-                     JOIN (SELECT ord, id, {column} AS m FROM t_texts) m ON m.id = e.src
-                     JOIN warren.id_map('t', NULL::bigint) d ON d.node_id = e.src
-                     WHERE m.m IS NOT NULL GROUP BY e.dst ORDER BY e.dst"
-                ))?;
-                let found = rows(&format!(
-                    "SELECT node_id || ':' || value::text
-                     FROM warren.gather('t', 'SELECT id, {column} FROM t_texts ORDER BY ord',
-                                        NULL::bigint, NULL::{value_type}{array}, '{combiner}')
-                     ORDER BY node_id"
-                ))?;
-                assert_eq!(found, expected, "{combiner} of {column}");
+                // Equal as text, and as binary images (`*=`: the same bytes).
+                let compared = rows(&format!(
+                    "WITH expected AS (
+                         SELECT e.dst AS node_id, {aggregate} AS value
+                         FROM t_edges e
+                         JOIN (SELECT ord, id, {column}::{sql} AS m FROM t_texts) m ON m.id = e.src
+                         JOIN warren.id_map('t', NULL::bigint) d ON d.node_id = e.src
+                         WHERE m.m IS NOT NULL GROUP BY e.dst),
+                     found AS (
+                         SELECT * FROM warren.gather('t', 'SELECT id, {column} FROM t_texts ORDER BY ord',
+                                                     NULL::bigint, NULL::{value_type}{array}, '{combiner}'))
+                     SELECT node_id || ':' || f.value::text || ':' || (row(f.value)::record *= row(e.value)::record)
+                     FROM found f FULL JOIN expected e USING (node_id) ORDER BY node_id"
+                ))?
+                .unwrap_or_default();
+                assert_eq!(
+                    compared.matches(":true").count(),
+                    5,
+                    "{combiner} of {column}: {compared}"
+                );
             }
         }
         Ok(())
