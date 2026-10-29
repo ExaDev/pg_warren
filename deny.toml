@@ -1,0 +1,58 @@
+# cargo-deny's policy for the workspace's dependency tree (CI's `deny` job;
+# CONTRIBUTING.md, "Supply chain"). Run it with `cargo deny check`.
+# Every target platform is checked, dev-dependencies and build-dependencies
+# included: what a provider vendors (`cargo vendor`) is all of it.
+
+[graph]
+all-features = true
+
+[advisories]
+# RustSec (https://rustsec.org): a vulnerability, or an unmaintained, unsound
+# or yanked crate in Cargo.lock, fails the check. Exempt one only in
+# `ignore`, by its advisory id, with a comment saying why it cannot reach
+# pg_warren and what would end the exemption.
+yanked = "deny"
+unmaintained = "all"
+unsound = "all"
+ignore = [
+    # serde_cbor is unmaintained (no vulnerability): pgrx 0.19.3 depends on
+    # it directly, for its SQL entity metadata, and no pgrx release we can
+    # pin (pgrx =0.19.3, CLAUDE.md) drops it. Remove when a pgrx upgrade does.
+    { id = "RUSTSEC-2021-0127", reason = "unmaintained, not vulnerable; pgrx 0.19.3's own dependency" },
+]
+
+[licenses]
+# The licences the dependency tree actually uses, all permissive and
+# compatible with pg_warren's Apache-2.0. A crate with several licences
+# (`MIT OR Apache-2.0`) passes when one of them is here. A new licence is a
+# reviewed change to this list, not an exception.
+allow = [
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.93
+# pg_warren and warren-core are this repository's own (Apache-2.0); fuzz/
+# is outside the workspace and unpublished.
+private = { ignore = false }
+
+[bans]
+# Two versions of one crate cost build time, not correctness: a warning,
+# not a failure. Duplicates come from upstream (pgrx's and proptest's
+# trees); fix one here only when a `cargo update -p` within the locked
+# requirements removes it.
+multiple-versions = "warn"
+wildcards = "deny"
+# pg_warren's path dependency on warren-core has no version requirement:
+# allowed because pg_warren is not published to crates.io (`publish = false`).
+allow-wildcard-paths = true
+
+[sources]
+# crates.io only: no git dependencies, no other registries.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

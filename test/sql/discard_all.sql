@@ -2,7 +2,8 @@
 -- PgBouncer runs between clients (server_reset_query), frees this
 -- backend's transient vectors, of every role, and forgets last_stats(),
 -- so the next client never sees the last one's. Other DISCARDs keep
--- them, and a DISCARD ALL that is refused changes nothing.
+-- them, and a DISCARD ALL that is refused changes nothing. The saved
+-- plans of persisted vector writes are kept, planned again after it.
 CREATE TABLE discard_nodes AS SELECT generate_series(1, 10)::bigint AS id;
 SELECT warren.create_graph('d', 'SELECT id FROM discard_nodes', 'SELECT id, id % 10 + 1 FROM discard_nodes');
 SELECT warren.refresh('d');
@@ -14,6 +15,7 @@ SET ROLE discard_reader;
 SELECT warren.vector_const('d', 'theirs', 1, persist := false);
 RESET ROLE;
 SELECT warren.vector_const('d', 'mine', 1, persist := false);
+SELECT warren.vector_const('d', 'kept', 1);
 SELECT count(*) FROM warren.bfs('d', ARRAY[1::bigint], 2);
 SELECT assert.equal(warren.last_stats() ->> 'function', 'bfs', 'a traversal records its stats');
 
@@ -35,6 +37,9 @@ SELECT assert.that(warren.last_stats() IS NULL, 'DISCARD ALL forgets last_stats(
 SET ROLE discard_reader;
 SELECT assert.raises($$SELECT warren.vector_reduce('d', 'theirs', 'sum')$$, 'another role''s is gone', '42704');
 RESET ROLE;
+SELECT warren.vector_const('d', 'kept', 2);
+SELECT assert.equal(warren.vector_reduce('d', 'kept', 'sum'), 20::float8,
+                    'a persisted write after DISCARD ALL replaces the vector');
 SELECT warren.drop_graph('d');
 REVOKE USAGE ON SCHEMA assert FROM discard_reader;
 DROP ROLE discard_reader;

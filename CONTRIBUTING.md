@@ -333,7 +333,7 @@ format. To benchmark a new function, add a workload with `requires` to
 ```sh
 test/upgrade.py --pg-config "$(command -v pg_config)"   # builds each release from its recorded commit, then checks its path
 test/upgrade.py --no-install --trusted   # the same, installed and updated by a non-superuser
-test/dump.py --pg-config "$(command -v pg_config)"   # pg_dump and restore of graphs (plain, custom, trusted)
+test/dump.py --pg-config "$(command -v pg_config)"   # pg_dump and restore of graphs (plain, custom, trusted, managed: no superuser)
 ```
 
 Robustness under concurrency, crashes, replication and hostile input
@@ -346,8 +346,9 @@ whole run:
 # (default 20 per mode); fails on a read that matches no complete version,
 # an undocumented SQLSTATE, anything left behind, or trouble in the log
 test/concurrent_refresh.py --pg-config "$(command -v pg_config)" --seconds 20
-# Refreshes stopped mid-way by pg_terminate_backend, SIGKILL and an
-# immediate shutdown (--kinds, --points to choose; --edges sizes the graph)
+# Refreshes, pagerank and loads into the shared cache stopped mid-way by
+# pg_terminate_backend, pg_cancel_backend, SIGKILL and an immediate
+# shutdown (--kinds, --points to choose; --edges sizes the graph)
 test/crash_recovery.py --no-install --pg-config "$(command -v pg_config)"
 # A primary, a hot standby (pg_basebackup -R) and a cascading standby:
 # reads answer on the standbys as on the primary, writes are refused with
@@ -371,6 +372,25 @@ test/sql_fuzz.py --no-install --pg-config "$(command -v pg_config)" \
 # leaks, or trouble in the log; samples.csv and summary.json in --out.
 # CI runs 2 minutes on PG 16, preloaded:
 test/pooler_soak.py --no-install --pg-config "$(command -v pg_config)"
+```
+
+What a managed service does to a cluster (DESIGN.md §13, 0.9.0
+"Lifecycle"), the same way. Each builds the replica check's graphs and
+compares every pg_warren catalog table's rows and every read before and
+after, then refreshes and writes vectors:
+
+```sh
+# The preload added to a cluster with graphs and removed, a restart each
+test/preload.py --no-install --pg-config "$(command -v pg_config)"
+# pg_basebackup, then changes, each marked by a restore point; the backup
+# restored and recovered to each restore point and to the archive's end
+test/point_in_time.py --no-install --pg-config "$(command -v pg_config)"
+# pg_upgrade from an older major, with the shared cache loaded, copying the
+# files and then linking them (--transfer copy link, the default). It installs
+# pg_warren into both majors' trees (both in pgrx's config.toml; unset
+# PGRX_PG_CONFIG_PATH, or both builds use its pg_config)
+test/major_upgrade.py --old-pg-config /usr/lib/postgresql/16/bin/pg_config \
+    --pg-config /usr/lib/postgresql/18/bin/pg_config
 ```
 
 A long fuzz run or soak need not hold the lock if it uses a Postgres tree
@@ -416,7 +436,8 @@ Every release is published as (README.md, "Install"):
   (preload, restart, `CREATE EXTENSION`); it never edits `postgresql.conf`.
   Unlike PGDG's offline builds, ours take Rust and cargo-pgrx from rustup
   and crates.io (`packaging/build-deb.sh`, `dpkg-buildpackage -d`); a PGDG
-  submission would vendor the crates.
+  submission would build from the vendored source tarball (below and
+  "Supply chain").
 - **Tarballs** `pg_warren-X.Y.Z-pgNN-linux-{x86_64,aarch64}.tar.gz`, the
   jammy packages' files laid out as `pkglibdir/` and `sharedir/extension/`.
 - **Docker images** `ghcr.io/exadev/pg_warren:X.Y.Z-pgNN` (and `pgNN` for
@@ -431,7 +452,10 @@ Every release is published as (README.md, "Install"):
   bottle for Apple silicon (`arm64_sequoia`, built on macOS 15) and a build
   from the release's source tarball elsewhere.
 - **The source tarball** `pg_warren-X.Y.Z.tar.gz` (`git archive` of the
-  release commit), which the formula builds from, and `SHA256SUMS`.
+  release commit), which the formula builds from; the **vendored source
+  tarball** `pg_warren-X.Y.Z-vendored.tar.gz` (that, with every locked
+  crate, for an offline build); the **SBOM** `pg_warren-X.Y.Z.cdx.json`
+  (CycloneDX); and `SHA256SUMS` of them all ("Supply chain", below).
 
 `release-publish.yml` builds them in jobs that have only `contents: read`
 and no secrets, from the recorded release commit's source with the
@@ -439,8 +463,10 @@ tooling (`release/`, `packaging/`) of the commit that started the run:
 `debs` (one job per distribution and arch, the four majors each, every
 package installed with apt into a clean container with PGDG's PostgreSQL,
 preloaded, restarted and smoke-tested; on trixie, the images made from
-them, each smoke-tested on its own arch) and `homebrew` (`brew style`, `brew audit
---strict`, `brew install --build-bottle`, `brew test`, `brew bottle`). The
+them, each smoke-tested on its own arch), `homebrew` (`brew style`, `brew audit
+--strict`, `brew install --build-bottle`, `brew test`, `brew bottle`) and
+`source-assets` (the vendored source tarball and the SBOM, from the
+source tarball, by `release/source.py`). The
 Docker Hub images they build in and on (`debian`, `ubuntu`, `postgres`)
 are pinned by digest in `release/packages.py`, and rustup-init by version
 and sha256 in `packaging/build-deb.sh`; bump them deliberately, in their
@@ -473,6 +499,11 @@ runs no build code, take what they built, **as data**:
 - it renders the formula again from the source tarball
   (`release/homebrew.py`), taking from the bottle job only a bottle block
   of this release's `root_url` and sha256 lines;
+- it checks the vendored source tarball and the SBOM against the source
+  tarball (`release/assets.py check-vendored`, `check-sbom`: every source
+  file byte for byte and only `Cargo.lock`'s crates, each matching its
+  checksum; a CycloneDX BOM of pg_warren at this version whose crates are
+  `Cargo.lock`'s, with their checksums);
 - it writes `SHA256SUMS` of every asset and signs it, `SHA256SUMS.asc`, with
   `RELEASE_APT_SIGNING_KEY`, after checking that key's fingerprint is the
   one README.md states (`<!-- apt key -->`), and puts the fingerprint in the
@@ -504,16 +535,17 @@ runs no build code, take what they built, **as data**:
   workflow itself no longer deploys to Pages.
 
 Republishing an older release attaches and rebuilds the same way, but moves
-neither the images' `pgNN` tags nor the tap. Later: reproducible builds, so
-that a second, independent build could confirm the published packages
-(DESIGN.md §13).
+neither the images' `pgNN` tags nor the tap. How far a second,
+independent build can confirm the published packages today is in "Supply
+chain", "Reproducible builds" (DESIGN.md §13).
 
 CI keeps the path from rotting: `packages` builds `postgresql-15-pg-warren`
 and `postgresql-16-pg-warren` in one build for bookworm on every pull
 request with the same `release/packages.py`, checks them as the publish
 job does (`release/assets.py check-deb`), installs the PG 16 one with apt
 into a clean container, preloads, restarts and runs `packaging/smoke.sql`,
-makes the tarball, and builds and checks the Docker image;
+makes the tarball, builds and checks the Docker image, and builds the
+packages a second time, which must give the same bytes;
 `packages-release` builds what a release builds, PG 15-18 for every
 distribution and arch, checks and installs each, and on trixie builds and
 checks the images, off the pull-request path (as Miri: on pushes to main,
@@ -708,6 +740,179 @@ Set once in the repository's settings; the workflows assume them.
    checks on a release PR: they have the same names as a
    `pull_request` run's. Keep *Allow merge commits* enabled (Settings →
    General → Pull requests): release PRs are merged with one.
+
+## Supply chain
+
+What a packager or a managed-PostgreSQL provider needs to audit pg_warren,
+rebuild it with its own build system and check a release against its own
+build (DESIGN.md §13, 0.9.0; issue #103).
+
+### Dependencies (cargo-deny)
+
+`deny.toml` is the policy for every crate in `Cargo.lock`, on every target
+platform, dev- and build-dependencies included; CI's `deny` job runs it on
+every push, pull request and night:
+
+- **advisories**: a RustSec vulnerability, or an unmaintained, unsound or
+  yanked crate, fails. An exemption is by advisory id, with the reason and
+  what would end it (today one: `serde_cbor`, unmaintained, which pgrx
+  0.19.3 depends on). Fix by updating within the locked requirements
+  (`cargo update -p CRATE`) where a fixed version exists.
+- **licenses**: an allow-list of the licences the tree uses (Apache-2.0,
+  MIT, BSD-3-Clause, ISC, Unicode-3.0, Zlib). A crate offering a choice
+  passes on any one of them. A new licence is a reviewed change to the
+  list.
+- **bans**: duplicate versions warn (each is two semver-incompatible
+  majors pulled in upstream); a wildcard requirement fails.
+- **sources**: crates.io only; no git dependency, no other registry.
+
+```sh
+cargo install cargo-deny --version 0.20.2 --locked
+cargo deny --locked check
+```
+
+### Building from source
+
+Inputs, all pinned by the release's source:
+
+- **Rust**, the exact toolchain in `rust-toolchain.toml` (1.97.0); rustup
+  installs it from that file.
+- **The crates** in `Cargo.lock` (pgrx `=0.19.3`), all from crates.io; the
+  vendored source tarball carries them.
+- **PostgreSQL's server headers and `pg_config`** for the major
+  (`postgresql-server-dev-NN`), **clang and libclang** (pgrx's bindgen
+  generates the bindings from those headers at build time), and a C
+  toolchain and linker (`cc`, binutils).
+- **cargo-pgrx 0.19.3**, only for `cargo pgrx package`/`install` (README,
+  "From source"; the release's packages use it). The offline build below
+  does without it: each release commit carries its generated install
+  script, `sql/pg_warren--X.Y.Z.sql` (CI checks it is what pgrx generates),
+  and every upgrade script.
+
+Each GitHub Release has `pg_warren-X.Y.Z-vendored.tar.gz`: the source
+tarball's files, `vendor/` with every crate `Cargo.lock` pins (`cargo
+vendor --locked --versioned-dirs`, all platforms') and a
+`.cargo/config.toml` that points crates.io there. It builds with no
+network access:
+
+```sh
+tar -xzf pg_warren-X.Y.Z-vendored.tar.gz && cd pg_warren-X.Y.Z
+rustup toolchain install                     # rust-toolchain.toml, if not already there
+export PGRX_PG_CONFIG_PATH=/usr/lib/postgresql/16/bin/pg_config
+packaging/reproducibly.sh . \
+  cargo rustc --frozen --release -p pg_warren --lib --no-default-features --features pg16 \
+    -- -C link-arg=-Wl,--no-gc-sections
+# Install where that pg_config says:
+install -m 0755 target/release/libpg_warren.so "$("$PGRX_PG_CONFIG_PATH" --pkglibdir)/pg_warren.so"
+ext="$("$PGRX_PG_CONFIG_PATH" --sharedir)/extension"
+sed 's/@CARGO_VERSION@/X.Y.Z/' crates/pg_warren/pg_warren.control >"$ext/pg_warren.control"
+install -m 0644 sql/pg_warren--X.Y.Z.sql sql/pg_warren--*--*.sql "$ext/"
+```
+
+`--frozen` is `--locked --offline`: cargo refuses to touch the network or
+change `Cargo.lock`, and checks every vendored file against its crate's
+`.cargo-checksum.json`, whose package checksum is `Cargo.lock`'s. The
+`cargo rustc` line is the build `cargo pgrx package` runs on Linux
+(cargo-pgrx 0.19.3 links with `--no-gc-sections`). For another major,
+change `pg16` and the `pg_config`. `packaging/reproducibly.sh` only sets
+`RUSTFLAGS` and `CFLAGS` to make the build reproducible (below); the build
+works without it. The files installed are the packages' (the install
+script and the upgrade scripts). To vendor from a checkout instead:
+`cargo vendor --locked --versioned-dirs vendor` and the
+`.cargo/config.toml` that `release/source.py` writes (`CARGO_CONFIG`).
+
+### Verifying a release
+
+Each GitHub Release's `SHA256SUMS` lists every asset, and
+`SHA256SUMS.asc` signs it with the apt repository's key, whose fingerprint
+README.md states (`<!-- apt key -->`) and the Release's notes repeat:
+
+```sh
+gpg --show-keys pg_warren.asc                # the fingerprint README.md states
+gpg --no-default-keyring --keyring ./pg_warren.gpg --import pg_warren.asc
+gpgv --keyring ./pg_warren.gpg SHA256SUMS.asc SHA256SUMS
+sha256sum --check --ignore-missing SHA256SUMS
+```
+
+(`pg_warren.asc` is `https://exadev.github.io/pg_warren/apt/pg_warren.asc`.)
+The signed sums cover:
+
+- `pg_warren-X.Y.Z.tar.gz`, `git archive` of the release commit (its
+  global pax comment names the commit; compare it with the tag);
+- `pg_warren-X.Y.Z-vendored.tar.gz`, that and the locked crates. Check it
+  against the source tarball as the publish job does:
+  `release/assets.py check-vendored pg_warren-X.Y.Z-vendored.tar.gz
+  pg_warren-X.Y.Z.tar.gz` (every source file byte for byte; only
+  `Cargo.lock`'s crates, each matching its checksum; nothing else). Or
+  make it again, `release/source.py vendored pg_warren-X.Y.Z.tar.gz OUT`
+  with the release's toolchain: the same bytes;
+- `pg_warren-X.Y.Z.cdx.json`, pg_warren's **SBOM**: CycloneDX 1.5 JSON
+  from cargo-cyclonedx 0.5.9 (every platform and feature), each crate with
+  its version, licence, purl and `Cargo.lock`'s sha256, dated by the
+  release commit, which it names. CycloneDX rather than SPDX: the Rust
+  ecosystem's maintained generator (the CycloneDX project's own) writes
+  it, it records each crate's purl, checksum and dependency graph, and
+  scanners (Dependency-Track, Grype, Trivy) read it. `release/assets.py
+  check-sbom` checks it against the source tarball; `release/source.py
+  sbom` makes it again, the same bytes;
+- the packages, tarballs and bottle ("Packages", above).
+
+### Reproducible builds
+
+Built with the same inputs (above) through `packaging/reproducibly.sh
+SOURCE`, `pg_warren.so` is the same bytes wherever the source, its target
+directory and `CARGO_HOME` are, and whether the crates come from crates.io
+or from `vendor/`. Compilers write source paths into the library: rustc in
+panic locations, and the C compiler through `__FILE__` in the C shim that
+pgrx-pg-sys builds in its `OUT_DIR`. The script maps the source to
+`/pg_warren` and both crate directories to `/crates`
+(`--remap-path-prefix` in `RUSTFLAGS`, `-ffile-prefix-map` in `CFLAGS`).
+The rest is already deterministic: `codegen-units = 1` and fat LTO in the
+release profile, a GNU build-id that hashes the contents, no timestamps.
+CI's `source-build` job builds the library twice, in the checkout from
+crates.io and elsewhere from the vendored tarball offline, and fails if
+the two differ. (Measured: a PG 16 release build both ways gave the same
+sha256; without the maps the library held the build directory.)
+
+The packages ship the committed install script, `sql/pg_warren--X.Y.Z.sql`
+(frozen in `sql/released.sha256` once released), rather than the one
+`cargo pgrx package` generates: pgrx orders the script's entities
+differently from one build to the next, which alone was enough to make
+every rebuilt `.deb` differ. Measured: two builds of
+`postgresql-16-pg-warren` for bookworm from the same source, back to back,
+gave the same `pg_warren.so` and differed only in that script; with the
+committed script, two more gave the same `.deb`, byte for byte (and the
+same library as the first two). CI's `packages` job builds its packages a
+second time and fails if any byte differs. `sql/schema-drift.sh` checks
+the committed script holds the entities pgrx generates. The Homebrew
+formula ships the committed script too.
+
+The vendored source tarball and the SBOM are the same bytes each time
+they are made from the same source tarball (CI checks both).
+
+Not reproducible, or not yet checked:
+
+- **The same library from different inputs.** Another `rustc`, other
+  PostgreSQL headers (a minor release can change them, and bindgen's
+  output with them), another clang, C compiler or linker give other bytes.
+  A provider's build is comparable with ours only from the same toolchain
+  and headers, and a plain `cargo` build is not the `.deb`'s library even
+  then: the package is built in its distribution's container, with that
+  distribution's C compiler and linker and `dpkg-buildflags`' `CFLAGS`,
+  and `dh_strip` strips the library. To compare with a `.deb`, rebuild the
+  `.deb` (`release/packages.py deb`, "Packages") from the release's
+  source.
+- **The `.deb` packages, rebuilt later.** The build container is pinned
+  by digest, but `packaging/build-deb.sh` installs the current PGDG server
+  headers, debhelper, binutils and clang with apt at build time, and
+  records none of their versions, so a later rebuild may see other
+  headers or tools. Recording them (Debian's `.buildinfo`, or `dpkg -l`
+  of the build container as a release asset) and installing those
+  versions again from snapshot archives is not done yet. CI compares two
+  builds made minutes apart, not a build with a release's.
+- **The Homebrew bottle** (macOS's toolchain, Homebrew's PostgreSQL and
+  its bottle tarball) and **the Docker images** (their layers carry build
+  times) are not checked.
 
 ## Docker
 

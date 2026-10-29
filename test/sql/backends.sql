@@ -73,8 +73,11 @@ SELECT assert.equal(
 SELECT dblink_disconnect('b');
 
 -- A parallel worker reports nothing: it claims no slot.
+-- The setting that runs a query's plan in a worker; PG 16 renamed it.
+SELECT CASE WHEN current_setting('server_version_num')::int >= 160000
+            THEN 'debug_parallel_query' ELSE 'force_parallel_mode' END AS force \gset
 SELECT dblink_connect('c', :'conninfo');
-SELECT dblink_exec('c', 'SET debug_parallel_query = on');
+SELECT dblink_exec('c', format('SET %s = on', :'force'));
 SELECT dblink_send_query('c', $$SELECT sum(warren.degree('g', 1::bigint)) FROM generate_series(1, 30) i
                                 WHERE pg_sleep(0.1) IS NOT NULL$$);
 CREATE TABLE worker_rows (n bigint);
