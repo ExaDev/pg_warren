@@ -25,6 +25,8 @@ SUCCESS = "00000"
 SESSION_SETTINGS = ("client_min_messages = warning", "statement_timeout = '120s'",
                     "client_connection_check_interval = '1s'")
 CLOSE_SECONDS = 10
+CANCELED_BY_REQUEST = ("57014", "canceling statement due to user request")
+SETUP_ATTEMPTS = 5
 
 
 class BackendLost(RuntimeError):
@@ -49,6 +51,12 @@ class Outcome:
         if len(self.rows) != 1:
             raise RuntimeError(f"expected one row, got {self.rows!r}")
         return self.rows[0][0]
+
+
+def canceled_by_request(done):
+    """Whether `done` failed because its backend was asked to cancel
+    (`pg_cancel_backend`), not by a timeout."""
+    return (done.sqlstate, done.message.strip()) == CANCELED_BY_REQUEST
 
 
 def script(sql):
@@ -80,14 +88,29 @@ class Session:
         # Notices go to stderr, which nothing reads: discarded, so it never fills.
         self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                         stderr=subprocess.DEVNULL, text=True, bufsize=1)
+        self.canceled_setup = 0
         for setting in (*SESSION_SETTINGS, *settings):
             self._set(setting)
-        self.pid = int(self.run("SELECT pg_backend_pid()").value())
+        self.pid = int(self._setup("SELECT pg_backend_pid()").value())
 
     def _set(self, setting):
-        done = self.run(f"SET {setting}")
+        done = self._setup(f"SET {setting}")
         if not done.ok:
             raise RuntimeError(f"SET {setting}: {done.message}")
+
+    def _setup(self, sql):
+        """Runs `sql`, one of the session's own setup statements; its
+        outcome. Nothing cancels a setup statement on purpose, but
+        `pg_cancel_backend` cancels a backend, not a statement: through a
+        pooler, a cancel meant for another client's call can stop this
+        client's setup on the same backend. Such a statement is run again,
+        up to `SETUP_ATTEMPTS` times, and counted in `canceled_setup`."""
+        for _ in range(SETUP_ATTEMPTS):
+            done = self.run(sql)
+            if not canceled_by_request(done):
+                break
+            self.canceled_setup += 1
+        return done
 
     def __enter__(self):
         return self

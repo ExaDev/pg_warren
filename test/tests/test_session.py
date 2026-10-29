@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from harness.session import END, MESSAGE, SESSION_SETTINGS, Outcome, Session, outcome, script
+from harness.session import END, MESSAGE, SESSION_SETTINGS, Outcome, Session, canceled_by_request, outcome, script
 
 
 def test_the_script_runs_the_statement_and_then_echoes_both_markers():
@@ -55,3 +55,40 @@ def test_closing_a_session_whose_psql_does_not_end_kills_it():
     session.close(seconds=0.2)
     assert session.process.returncode is not None
     assert time.monotonic() - started < 10
+
+
+CANCELED = Outcome([], "57014", "canceling statement due to user request")
+
+
+def test_only_a_requested_cancel_is_canceled_by_request():
+    assert canceled_by_request(CANCELED)
+    assert not canceled_by_request(Outcome([], "57014", "canceling statement due to statement timeout"))
+    assert not canceled_by_request(Outcome([["1"]], "00000", ""))
+
+
+def scripted_session(outcomes):
+    """A session whose statements answer `outcomes` in turn, then succeed."""
+    session = Session.__new__(Session)
+    session.canceled_setup, session.ran = 0, []
+
+    def run(sql):
+        session.ran.append(sql)
+        return outcomes.pop(0) if outcomes else Outcome([["4242"]], "00000", "")
+    session.run = run
+    return session
+
+
+def test_a_setup_statement_stopped_by_a_cancel_meant_for_another_client_runs_again_and_is_counted():
+    """Through a pooler, a cancel of another client's call can land on this
+    client's setup: pg_cancel_backend cancels a backend, not a statement."""
+    session = scripted_session([CANCELED, CANCELED])
+    session._set("statement_timeout = '120s'")
+    assert session.ran == ["SET statement_timeout = '120s'"] * 3
+    assert session.canceled_setup == 2
+
+
+def test_a_setup_statement_that_fails_otherwise_still_fails_the_session():
+    session = scripted_session([Outcome([], "22023", "invalid value")])
+    with pytest.raises(RuntimeError, match="invalid value"):
+        session._set("statement_timeout = 'x'")
+    assert session.canceled_setup == 0
