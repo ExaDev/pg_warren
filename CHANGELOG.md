@@ -54,6 +54,14 @@
   pgGraph's cells are sourced from its v1.2.1 documentation, and
   `docs/positioning.md` points to the matrix and spells out the nuanced
   differences (row-level security, parallel edge rows).
+- The head-to-head benchmarks now include pgGraph 1.2.1, built in release
+  mode and run with its recommended configuration on BFS, shortest paths
+  and connected components. pg_warren 0.8.0 was faster on all three, on
+  all 12 graphs. igraph's shortest-path pairs now use `get_shortest_path`,
+  which stops at the target without rebuilding the adjacency list. The
+  README's Performance table has a pgGraph column, and
+  `docs/positioning.md` reports the results
+  (`bench/results/corpus/head_to_head/pggraph-1.2.1/`).
 
 ## 0.8.0 — native PageRank and Leiden, leaner calls (2026-10-29)
 

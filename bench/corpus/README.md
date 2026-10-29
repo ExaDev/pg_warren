@@ -90,13 +90,15 @@ neither a match nor a documented difference (clustering at self-loops).
 
 ## The head-to-head (`head-to-head`)
 
-pg_warren timed against python-igraph and Neo4j, with plain Cypher and with
-the Graph Data Science library, on the same machine and the same tables
+pg_warren timed against pgGraph, python-igraph and Neo4j, with plain Cypher
+and with the Graph Data Science library, on the same machine and the same
+tables
 (`head_to_head/`; results and caveats in
 `bench/results/corpus/head_to_head/README.md`). Each engine is an adapter
 behind one port (`head_to_head/engine.py`): it loads the dataset (its
-phases timed: pg_warren's COPY and `refresh`, igraph's CSV read and graph
-build, `neo4j-admin import`, the server start, the id index and GDS's
+phases timed: pg_warren's COPY and `refresh`; pgGraph's COPY, the primary
+key it needs on `edges`, its registration and `graph.build()`; igraph's CSV
+read and graph build; `neo4j-admin import`, the server start, the id index and GDS's
 projections), then `timing.py` runs each workload of `workloads.py` cold
 once and warm up to `--repeat` times (5; fewer once `--budget`, 120 s, is
 spent), each run bounded by `--timeout`. A time counts only when the
@@ -107,6 +109,7 @@ computes, `pagerank.py`); otherwise the report shows why not.
 | Engine | Cold run | Threads |
 |---|---|---|
 | `pg_warren` | after `warren.evict`: the version loaded from its segments | `warren.threads` (`--threads`, 4) |
+| `pggraph` | after `graph.unload_graph`: the graph loaded from its persisted artifact | 1 (a query runs on its backend's thread) |
 | `igraph` | the first call (igraph keeps nothing between calls) | 1 (igraph's algorithms are sequential) |
 | `neo4j-cypher` | after a server restart (empty page cache, plan cache and JIT) | 1 (Community runs a query on one thread) |
 | `neo4j-gds` | after a server restart and new projections | GDS `concurrency` (`--threads`, 4; Community's maximum) |
@@ -117,7 +120,8 @@ hops (or Dijkstra cost when weighted) between the correctness suite's 25
 seeded pairs; 20 PageRank propagation steps; weak components; triangles;
 Louvain and Leiden (held to the correctness suite's quality bound);
 exact betweenness where N·M ≤ 5·10⁸. Cypher runs what one query can
-express and records why it cannot run the rest.
+express, and pgGraph what its SQL API offers (reach, depths, paths and
+components); each records why it cannot run the rest.
 
 Neo4j Community 2026.10.1 and GDS 2026.10.1 (the pair GDS's
 `versions.json` names) are downloaded into `<cache>/head-to-head` and
@@ -128,7 +132,30 @@ heap and page cache from `--neo4j-heap` (4g) and `--neo4j-pagecache` (2g),
 auth off and Bolt on 127.0.0.1:7687; each dataset's database is deleted
 once measured. The runner's logic is tested against a fake engine, and
 the igraph engine end to end, in `bench/tests/test_corpus_head_to_head.py`;
-Neo4j itself never runs in CI.
+Neo4j itself never runs in CI, and neither does pgGraph.
+
+pgGraph 1.2.1 is built from source, as `head_to_head/pins.json` records
+(its tag and commit, Rust 1.96.0 and cargo-pgrx 0.19.1, release profile),
+and installed into the same private PostgreSQL tree as pg_warren. Its
+cargo-pgrx goes into a separate `CARGO_INSTALL_ROOT` with its own
+`PGRX_HOME`, so the repository's cargo-pgrx 0.19.3 is untouched:
+
+```sh
+H=/var/tmp/warren-corpus/head-to-head
+git clone --branch v1.2.1 https://github.com/Evokoa/pgGraph $H/pggraph-src
+rustup toolchain install 1.96.0 --profile minimal
+CARGO_INSTALL_ROOT=$H/cargo-pgrx-0.19.1 cargo +1.96.0 install cargo-pgrx --version 0.19.1 --locked
+mkdir -p $H/pgrx-home
+printf '[configs]\npg16 = "/usr/lib/postgresql/16/bin/pg_config"\n' > $H/pgrx-home/config.toml
+(cd $H/pggraph-src/graph && PATH=$H/cargo-pgrx-0.19.1/bin:$PATH PGRX_HOME=$H/pgrx-home \
+    cargo pgrx package --no-default-features --features pg16 \
+    --pg-config /usr/lib/postgresql/16/bin/pg_config --out-dir $H/pggraph-pkg)
+cp -r $H/pggraph-pkg/usr/* $T/usr/   # $T: the private tree pg_warren is installed in
+```
+
+When `pggraph` runs, the cluster also gets pgGraph's recommended settings
+(`pggraph_engine.CLUSTER_SETTINGS`: `shared_preload_libraries = 'graph'`
+and a 4 GB `graph.memory_limit_mb`, with manual sync).
 
 ## The nightly job (`.github/workflows/corpus.yml`)
 

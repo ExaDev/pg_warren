@@ -1,0 +1,473 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "head-to-head",
+   "lesmis",
+   "polblogs",
+   "facebook",
+   "wn18rr",
+   "cit-hepth",
+   "email-enron",
+   "fb15k-237",
+   "ss-gleich-usroads-48",
+   "dblp",
+   "yago3-10",
+   "hetionet",
+   "roadnet-tx",
+   "--engine",
+   "pg_warren",
+   "--engine",
+   "pggraph",
+   "--engine",
+   "igraph",
+   "--workload",
+   "paths",
+   "--pg-config",
+   "/var/tmp/warren-corpus/head-to-head/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "8dd426c",
+   "--extension-profile",
+   "release",
+   "--timeout",
+   "300",
+   "--results",
+   "/var/tmp/warren-corpus/head-to-head/run-paths"
+  ],
+  "harness": {
+   "revision": "794b65a672a8337ad21fc5555b9a8a607bfcf1e0",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "8dd426c",
+   "profile": "release",
+   "library": "/var/tmp/warren-corpus/head-to-head/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "b720e538f278899d8846e017d0f2667f71a0163d3552bf8ce48c3ff3af5bfde0"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v185",
+  "load_average": [
+   0.91943359375,
+   1.36962890625,
+   1.923828125
+  ]
+ },
+ "dataset": "yago3-10",
+ "tier": "medium",
+ "fetched": {
+  "tables": {
+   "nodes": 123182,
+   "edges": 1089040,
+   "ids": "text",
+   "relations": 37,
+   "self_loops": 0
+  },
+  "sha256": {
+   "nodes.csv": "015ea97dee714fd4df108253c635baec24e2fb503bfbd960f066249e1ef86ac0",
+   "edges.csv": "235bf7f260957a63069f544c86e9744be77bc703fb834a0ccd3d447453d4f5e2"
+  },
+  "provenance": {
+   "entryId": "yago3-10",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-26T05:49:30.630Z",
+   "source": {
+    "url": "https://web.informatik.uni-mannheim.de/pi1/kge-datasets/yago3-10.tar.gz",
+    "status": "live"
+   },
+   "fetchedUrl": "https://web.informatik.uni-mannheim.de/pi1/kge-datasets/yago3-10.tar.gz",
+   "sha256": "f2fc0a6e5e47f09b8435c52cefcf0735f62b103f274725c4ae4c0a45a8357159",
+   "byteLength": 19314355,
+   "members": [
+    "yago3-10/train.txt",
+    "yago3-10/valid.txt",
+    "yago3-10/test.txt"
+   ]
+  }
+ },
+ "repeat": 5,
+ "budget_seconds": 120,
+ "timeout_seconds": 300,
+ "workloads": [
+  {
+   "name": "shortest paths",
+   "kind": "paths",
+   "source": null,
+   "depth": null,
+   "pairs": [
+    [
+     "Carlos_El\u00edas",
+     "Michael_Brady"
+    ],
+    [
+     "Tom_Soares",
+     "Stj\u00f8rdal"
+    ],
+    [
+     "Sendai_University",
+     "Arne_Selmosson"
+    ],
+    [
+     "Evgeny_Korolev_(ice_hockey)",
+     "Brown_County,_Kansas"
+    ],
+    [
+     "Leandro_Alvarez",
+     "Sean_Prunty"
+    ],
+    [
+     "Julien_Rodriguez",
+     "Kieu_Chinh"
+    ],
+    [
+     "Param_Vir_Chakra",
+     "Igor_Shitov"
+    ],
+    [
+     "Spanish_Netherlands",
+     "Devasuram"
+    ],
+    [
+     "Bert_Kalmar",
+     "Ladislav_Nov\u00e1k"
+    ],
+    [
+     "Alex_Band",
+     "War_in_Somalia_(2009\u2013present)"
+    ],
+    [
+     "The_Women_(2008_film)",
+     "Ivailo_Dimitrov"
+    ],
+    [
+     "John_VI,_Duke_of_Brittany",
+     "Nathan_Sinkala"
+    ],
+    [
+     "Sebasti\u00e3o_Miranda_da_Silva_Filho",
+     "Serhiy_Pohodin"
+    ],
+    [
+     "A.S._Gualdo_Casacastalda",
+     "Rafael_Olarra"
+    ],
+    [
+     "Jo\u00ebl_Veltman",
+     "Fabrizio_Cacciatore"
+    ],
+    [
+     "Robert_Sean_Leonard",
+     "Stewart_Talbot"
+    ],
+    [
+     "EB/Streymur",
+     "Montenegro_national_under-21_football_team"
+    ],
+    [
+     "Blerim_D\u017eemaili",
+     "Whiteout_(2009_film)"
+    ],
+    [
+     "Gmina_Grabowiec",
+     "Alexander_Pushkin"
+    ],
+    [
+     "Albert_Aldridge",
+     "Aleksandar_Jevti\u0107"
+    ],
+    [
+     "Palm_Coast,_Florida",
+     "Maria_Anna_of_Bavaria_(1574\u20131616)"
+    ],
+    [
+     "Adam_Arthur",
+     "\u017burrieq_F.C."
+    ],
+    [
+     "Villain_(1971_film)",
+     "Illiasu_Shilla"
+    ],
+    [
+     "Princeton,_Indiana",
+     "Djalma_Santos"
+    ],
+    [
+     "Jock_Ferguson",
+     "Rodrigo_Defendi"
+    ]
+   ],
+   "weighted": false,
+   "iterations": null
+  }
+ ],
+ "engines": {
+  "pg_warren": {
+   "describe": {
+    "version": "0.8.0",
+    "threads": 4,
+    "settings": [
+     "fsync=off",
+     "full_page_writes=off",
+     "jit=on",
+     "maintenance_work_mem=1GB",
+     "max_parallel_workers_per_gather=2",
+     "max_wal_size=1GB",
+     "shared_buffers=1GB",
+     "shared_preload_libraries=graph",
+     "statement_timeout=5min",
+     "synchronous_commit=off",
+     "wal_level=minimal",
+     "warren.max_build_memory=4GB",
+     "warren.max_cache_memory=4GB",
+     "warren.max_compute_memory=4GB",
+     "warren.shared_cache_memory=4GB",
+     "warren.threads=4",
+     "work_mem=64MB"
+    ],
+    "graph": {
+     "node_count": 123182,
+     "edge_count": 1089040,
+     "dropped_edges": 0,
+     "bytes": 27322738
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.8797545329998684
+     ],
+     "median_seconds": 0.8797545329998684
+    },
+    "build": {
+     "seconds": [
+      0.6575716240004112,
+      0.6279270790000737,
+      0.6020625330002076
+     ],
+     "median_seconds": 0.6279270790000737
+    }
+   },
+   "workloads": {
+    "shortest paths": {
+     "cold_seconds": 0.04403058199932275,
+     "warm_seconds": [
+      0.0015842869997868547,
+      0.0013026870001340285,
+      0.0012391390000630054,
+      0.0012107549991924316,
+      0.0011666599993986893
+     ],
+     "warm_median_seconds": 0.0012391390000630054,
+     "cold_phases": {
+      "evict": 0.0007329600002776715
+     },
+     "check": {
+      "check": "shortest paths",
+      "status": "match",
+      "compared": 25,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    }
+   }
+  },
+  "pggraph": {
+   "describe": {
+    "version": "1.2.1",
+    "threads": 1,
+    "pin": {
+     "version": "1.2.1",
+     "repository": "https://github.com/Evokoa/pgGraph",
+     "licence": "Apache-2.0",
+     "tag": "v1.2.1",
+     "tag_object": "502e50290793726d0b1e2df8d161d4ecb44f519b",
+     "commit": "1bbe30149100b49fc4a1494bd3afbeba82070092",
+     "latest": "the latest release tag on 2026-10-29",
+     "rust": "1.96.0, as graph/rust-toolchain.toml pins it",
+     "cargo_pgrx": "0.19.1, as graph/Cargo.toml pins pgrx; installed into its own CARGO_INSTALL_ROOT, with its own PGRX_HOME",
+     "profile": "release (graph/Cargo.toml: opt-level 3, fat LTO, one codegen unit), as its Makefile's install builds it",
+     "build": "cd graph && cargo pgrx package --no-default-features --features pg16 --pg-config /usr/lib/postgresql/16/bin/pg_config",
+     "install": "the package's usr/ copied into the private PostgreSQL 16 tree that holds pg_warren (CONTRIBUTING.md, as for the soak)"
+    },
+    "library": {
+     "path": "/var/tmp/warren-corpus/head-to-head/pgtree/usr/lib/postgresql/16/lib/graph.so",
+     "sha256": "7cb8900debd93f77f8df88fc52bddf21581723432400200d2f110a882e5535ba"
+    },
+    "settings": [
+     "graph.allow_rls_tables=off",
+     "graph.auto_load=on",
+     "graph.build_batch_size=10000",
+     "graph.build_scan_mode=",
+     "graph.compaction_threshold=50000",
+     "graph.data_dir=",
+     "graph.default_case_sensitive=off",
+     "graph.default_hydrate=on",
+     "graph.default_max_depth=5",
+     "graph.default_projection_mode=",
+     "graph.default_search_mode=",
+     "graph.edge_buffer_size=100000",
+     "graph.enabled=on",
+     "graph.enforce_tenant_scope=on",
+     "graph.hot_eager_load=off",
+     "graph.idle_unload_secs=0",
+     "graph.low_memory_build=off",
+     "graph.maintenance_memory_mb=4096",
+     "graph.max_exact_path_count=100000",
+     "graph.max_frontier=10000000",
+     "graph.max_loaded_graphs_per_backend=1",
+     "graph.max_nodes=10000000",
+     "graph.max_overlay_memory_mb=256",
+     "graph.max_tx_delta_edges=100000",
+     "graph.max_tx_delta_nodes=100000",
+     "graph.memory_limit_mb=4096",
+     "graph.mutable_enabled=off",
+     "graph.oom_action=",
+     "graph.operation_timeout_ms=0",
+     "graph.persist_on_build=on",
+     "graph.projection_retention_generations=2",
+     "graph.query_freshness=",
+     "graph.query_memory_mb=4096",
+     "graph.query_work_limit=2000000000",
+     "graph.rls_mode=",
+     "graph.spill_disk_limit_mb=4096",
+     "graph.sync_batch_size=1000",
+     "graph.sync_mode=manual",
+     "graph.tenant_setting=",
+     "graph.vacuum_interval_secs=60",
+     "shared_preload_libraries=graph",
+     "statement_timeout=300000"
+    ],
+    "session": [
+     "SET graph.max_nodes = 10000000",
+     "SET graph.max_frontier = 10000000",
+     "SET graph.query_work_limit = 2000000000",
+     "SET graph.query_memory_mb = 4096"
+    ],
+    "depth_bounds": {},
+    "graph": {
+     "node_count": 123182,
+     "edge_count": 1089040,
+     "memory_used_mb": 50.28462791442871
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.7897520159995111
+     ],
+     "median_seconds": 0.7897520159995111
+    },
+    "key": {
+     "seconds": [
+      0.6845386160002818
+     ],
+     "median_seconds": 0.6845386160002818
+    },
+    "register": {
+     "seconds": [
+      0.005865550999260449
+     ],
+     "median_seconds": 0.005865550999260449
+    },
+    "build": {
+     "seconds": [
+      10.294649591000052,
+      9.843225677000191,
+      9.716619114999958
+     ],
+     "median_seconds": 9.843225677000191
+    }
+   },
+   "workloads": {
+    "shortest paths": {
+     "cold_seconds": 0.572156573999564,
+     "warm_seconds": [
+      0.10567189000084909,
+      0.10654803200031893,
+      0.10537526400003117,
+      0.1306740689997241,
+      0.1092994649998218
+     ],
+     "warm_median_seconds": 0.10654803200031893,
+     "cold_phases": {
+      "unload": 0.008039180999730888
+     },
+     "check": {
+      "check": "shortest paths",
+      "status": "match",
+      "compared": 25,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    }
+   }
+  },
+  "igraph": {
+   "describe": {
+    "version": "1.0.0",
+    "threads": 1,
+    "settings": {
+     "pagerank": "PRPACK (solved)",
+     "louvain": "community_multilevel",
+     "leiden": "community_leiden, modularity, 2 iterations",
+     "seed": 1,
+     "paths": "get_shortest_path per pair (BFS or Dijkstra, stopping at the target)"
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      1.5006614710000576
+     ],
+     "median_seconds": 1.5006614710000576
+    },
+    "build": {
+     "seconds": [
+      0.7985284810001758
+     ],
+     "median_seconds": 0.7985284810001758
+    }
+   },
+   "workloads": {
+    "shortest paths": {
+     "cold_seconds": 0.018677310999919428,
+     "warm_seconds": [
+      0.016730706000089413,
+      0.016914363000068988,
+      0.015719906999947852,
+      0.017315336000137904,
+      0.015503863000049023
+     ],
+     "warm_median_seconds": 0.016730706000089413,
+     "cold_phases": {},
+     "check": {
+      "check": "shortest paths",
+      "status": "match",
+      "compared": 25,
+      "mismatches": 0,
+      "max_error": 0.0,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0
+     },
+     "counted": true
+    }
+   }
+  }
+ }
+}

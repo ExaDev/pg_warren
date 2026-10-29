@@ -207,6 +207,10 @@ def test_reach_counts_the_nodes_within_the_depth(chain):
     assert chain.check(Workload("r", "reach", source="1", depth=1), 3)["status"] == "mismatch"
 
 
+def test_the_eccentricity_is_the_most_hops_to_a_reached_node(chain):
+    assert chain.eccentricity("1") == 3
+
+
 def test_depths_and_paths_are_compared_exactly(chain):
     assert chain.check(Workload("d", "depths", source="1"), {"1": 0, "2": 1, "3": 2, "4": 3})["status"] == "match"
     pairs = (("1", "4"), ("4", "1"))
@@ -429,3 +433,56 @@ def test_gds_single_source_depths_mutate_rather_than_stream_every_path():
     timed, answer = gds_engine.stream_call(Workload("d", "depths", source="1"), dataset(), 4)
     assert "gds.allShortestPaths.delta.mutate" in timed and "mutateRelationshipType: 'depths'" in timed
     assert "gds.graph.relationshipProperty.stream('g', 'totalCost', ['depths'])" in answer
+
+
+def test_pggraph_registers_an_undirected_graph_both_ways_and_a_directed_one_one_way():
+    from corpus.head_to_head import pggraph_engine
+    assert "bidirectional := false" in pggraph_engine.register_sql(dataset())
+    assert "bidirectional := true" in pggraph_engine.register_sql(dataset(directed=False))
+    typed = pggraph_engine.register_sql(dataset(weighted=True, relations=True))
+    assert "weight_column := 'weight'" in typed and "label_column := 'rel'" in typed
+    assert "weight_column" not in pggraph_engine.register_sql(dataset())
+
+
+def test_pggraph_traverses_out_edges_without_hydration_or_a_row_limit():
+    from corpus.head_to_head import pggraph_engine
+    reach = pggraph_engine.run_sql(Workload("bfs depth 6", "reach", source="it's", depth=6))
+    assert reach.startswith("SELECT count(*) FROM graph.traverse('nodes'::regclass, 'it''s', 6, ")
+    assert "direction := 'out'" in reach and "hydrate := false" in reach and "max_rows := 2147483647" in reach
+    depths = pggraph_engine.run_sql(Workload("bfs depths", "depths", source="1"), depth_bound=21)
+    assert depths.startswith("SELECT count(*), max(depth) FROM graph.traverse('nodes'::regclass, '1', 21, ")
+
+
+def test_pggraph_paths_count_steps_or_sum_weights_with_no_depth_bound():
+    from corpus.head_to_head import pggraph_engine
+    hops = pggraph_engine.paths_sql(Workload("p", "paths", pairs=(("1", "2"),)))
+    assert "max(step) FROM graph.shortest_path('nodes'::regclass, p.s, 'nodes'::regclass, p.t, 2147483647, false)" in hops
+    cost = pggraph_engine.paths_sql(Workload("p", "paths", pairs=(("1", "2"),), weighted=True))
+    assert "max(total_cost) FROM graph.weighted_shortest_path(" in cost
+
+
+def test_pggraph_runs_only_what_its_sql_api_offers(tmp_path):
+    from corpus.head_to_head import pggraph_engine
+    (tmp_path / "edges.csv").write_text("1,2,1\n2,3,2.5\n")
+    engine = pggraph_engine.PgGraphEngine(None, dataset(weighted=True), tmp_path, 60, {}, {}, None)
+    for kind in ("degree", "pagerank", "triangles", "louvain", "leiden", "betweenness"):
+        assert engine.unsupported(Workload(kind, kind))
+    for kind in ("reach", "depths", "components"):
+        assert engine.unsupported(Workload(kind, kind)) is None
+    assert engine.unsupported(Workload("p", "paths", weighted=True)) == pggraph_engine.FRACTIONAL_WEIGHTS
+    (tmp_path / "edges.csv").write_text("1,2,1\n2,3,2.0\n")
+    whole = pggraph_engine.PgGraphEngine(None, dataset(weighted=True), tmp_path, 60, {}, {}, None)
+    assert whole.unsupported(Workload("p", "paths", weighted=True)) is None
+
+
+def test_pggraph_is_pinned_to_a_release_commit():
+    from corpus.head_to_head import pggraph_engine
+    pin = pggraph_engine.pin()
+    assert pin["version"] == "1.2.1" and pin["tag"] == "v1.2.1" and len(pin["commit"]) == 40
+
+
+def test_the_cluster_preloads_pggraph_only_when_it_runs():
+    from corpus.head_to_head import pggraph_engine
+    assert pggraph_engine.cluster_settings(("fsync = off",), ["pg_warren", "igraph"]) == ("fsync = off",)
+    both = pggraph_engine.cluster_settings(("fsync = off",), ["pg_warren", "pggraph"])
+    assert both[0] == "fsync = off" and "shared_preload_libraries = 'graph'" in both
