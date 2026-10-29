@@ -513,15 +513,32 @@ How to run each locally is in [CONTRIBUTING.md](../CONTRIBUTING.md).
   GitHub Pages behind its own approval.
 - **What is published**: `.deb` packages for PG 15–18 on Debian 12 and 13 and
   Ubuntu 22.04 and 24.04 (amd64, arm64), tarballs, Docker images on GHCR, a
-  Homebrew formula and the source tarball (README, "Install").
+  Homebrew formula, the source tarball, a vendored source tarball and an
+  SBOM (README, "Install"), all listed in the signed `SHA256SUMS`.
+- **Dependency checks.** `cargo-deny` runs in CI (`deny.toml`): RustSec
+  advisories (an exemption is by advisory id, with its reason), an
+  allow-list of permissive licences, and crates.io as the only source.
+- **SBOM.** Each release attaches `pg_warren-X.Y.Z.cdx.json`, a CycloneDX
+  1.5 SBOM of pg_warren and every crate it uses, with licences and
+  `Cargo.lock`'s checksums; the publish job checks it against the source.
+- **Offline build.** Each release attaches
+  `pg_warren-X.Y.Z-vendored.tar.gz`, the source with every locked crate,
+  which builds with `cargo build --frozen` and no network; the publish job
+  checks it is the source tarball plus `Cargo.lock`'s crates and nothing
+  else (CONTRIBUTING.md, "Supply chain").
+- **Reproducible builds.** With the same toolchain and PostgreSQL
+  headers, `pg_warren.so` is the same bytes wherever it is built and
+  whether its crates come from crates.io or the vendored tarball, and two
+  builds of a `.deb` from the same source give the same bytes; CI checks
+  both. The packages ship the reviewed install script that
+  `sql/released.sha256` freezes (CONTRIBUTING.md, "Reproducible builds").
 
 **Not yet:**
 
-- Reproducible builds: rebuilding a release does not give the same bytes, so
-  a provider building from source cannot compare its build with ours.
-- An SBOM attached to releases, and licence and advisory checks of
-  dependencies in CI (`cargo-deny`). Dependencies are not vendored, and the
-  package build fetches crates from crates.io.
+- Reproducible packages: the `.deb` build installs the current PGDG
+  headers and Debian build tools without recording their versions, so a
+  later rebuild of a release need not give the same `.deb` bytes; the
+  Homebrew bottle and the Docker images are not checked either.
 - RPM packages, a PGXN release, and inclusion in the PGDG repositories.
 - macOS as a supported platform.
 
@@ -547,4 +564,5 @@ private channel for reporting vulnerabilities. This is a known gap.
 - A role can learn that a graph name exists, and its owner's role name, by
   calling a function on it.
 - Small Rust allocations are not fallible; only graph-sized buffers are.
-- No reproducible builds, SBOM, dependency audit or security policy yet.
+- No security policy yet, and the packages are not yet reproducible on a
+  later rebuild (the library is, from the same toolchain and headers).
