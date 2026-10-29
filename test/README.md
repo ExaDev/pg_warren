@@ -25,6 +25,12 @@ recursive CTEs / NetworkX on generated fixtures, and the Appendix A use cases
   checks every read against the oracle of the source generation its
   version was built from, every failure's SQLSTATE, what is left once
   they disconnect, and the server log (DESIGN.md §13, M11).
+- `compute_threads.py` runs several backends computing at once and
+  measures their compute threads' CPU time from `/proc`, without a cap and
+  under `warren.cluster_threads_limit`, preloaded and not; it also cancels
+  and times out a wait for threads, terminates a backend holding the
+  cap's thread mid-kernel, and checks the per-call limits (DESIGN.md §14
+  item 52).
 - `crash_recovery.py` stops refreshes mid-way (waiting to read edges,
   writing segments, before commit) by `pg_terminate_backend`, SIGKILL
   and an immediate shutdown, and checks that each recovery leaves the

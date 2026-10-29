@@ -412,6 +412,12 @@ jobs:
         # DESIGN.md §13, M11: readers, refreshers and a vector churner for
         # 20 s, preloaded and at the default configuration.
         run: python test/concurrent_refresh.py --no-install --seconds 20 --pg-config "$PG_CONFIG"
+      - name: Compute threads across backends (test/compute_threads.py)
+        # DESIGN.md §14 item 52: four backends computing at once use more
+        # than two cores uncapped and at most one under
+        # warren.cluster_threads_limit = 1; waits are cancelled, and the
+        # per-call limits hold; preloaded and at the default configuration.
+        run: python test/compute_threads.py --no-install --pg-config "$PG_CONFIG"
       - name: Crash recovery during refresh (test/crash_recovery.py)
         # DESIGN.md §13, M11: refreshes stopped by pg_terminate_backend,
         # SIGKILL and an immediate shutdown, preloaded and not.

@@ -346,6 +346,12 @@ whole run:
 # (default 20 per mode); fails on a read that matches no complete version,
 # an undocumented SQLSTATE, anything left behind, or trouble in the log
 test/concurrent_refresh.py --pg-config "$(command -v pg_config)" --seconds 20
+# Four backends computing at once (--sessions, --threads), their compute
+# threads' CPU time measured from /proc: more than twice --cap cores
+# uncapped, at most --cap under warren.cluster_threads_limit; a wait for
+# threads cancelled and timed out, a holder terminated mid-kernel, and the
+# per-call limits (DESIGN.md §14 item 52). Needs at least 3 cores.
+test/compute_threads.py --no-install --pg-config "$(command -v pg_config)"
 # Refreshes stopped mid-way by pg_terminate_backend, SIGKILL and an
 # immediate shutdown (--kinds, --points to choose; --edges sizes the graph)
 test/crash_recovery.py --no-install --pg-config "$(command -v pg_config)"
