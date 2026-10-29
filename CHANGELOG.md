@@ -53,6 +53,12 @@
 
 ### Documentation
 
+- **CI runs in two tiers** (CONTRIBUTING.md, "What CI runs, and when").
+  Pull requests run the lint, the core tests, the pgrx tests on PG 15-18,
+  the SQL harness and cargo-deny (advisories reported, not blocking), with
+  Lifecycle, pg_upgrade (16 to 17) and the beside-managed guide on PG 16
+  only. Pushes to main, the nightly run, dispatches and release PRs run
+  everything, as before.
 - **Dumps and restores without a superuser** (DESIGN.md §14 item 51,
   [#103](https://github.com/ExaDev/pg_warren/issues/103)): a role granted
   `pg_read_all_data` dumps graphs, versions and vectors, and a role with

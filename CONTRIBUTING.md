@@ -71,6 +71,25 @@ pgrx harness, so always use `cargo pgrx test pgNN` for that crate.
 `cargo pgrx init` or by setting `PGRX_PG_CONFIG_PATH=/path/to/pg_config`
 (CI's lint job uses the latter and skips installing cargo-pgrx).
 
+### What CI runs, and when
+
+`ci.yml` has two tiers. **Pull requests** run the lighter one: fmt,
+clippy, rustdoc, actionlint, the warren-core tests, the core-isolation
+check, the pgrx tests (with `test/upgrade.py` and `test/dump.py`) on PG
+15-18, the SQL harness job, the Docker build, the `packages` job without
+its second build, and cargo-deny, whose advisories check reports but does
+not block (bans, licences and sources do block). Lifecycle, pg_upgrade and
+the beside-managed guide run on PG 16 only (pg_upgrade 16 to 17).
+
+**Pushes to main, the nightly schedule, dispatches and release PRs** (head
+branch `release-*`) run everything: those three matrices on every major
+(and pg_upgrade 15 to 18 and 17 to 18), the second `.deb` build, the
+vendored source build (`source-build`), the decoder fuzzing, the arm64 and
+macOS jobs, `packages-release`, and cargo-deny advisories as a blocking
+check. Miri runs nightly, on dispatches and on release PRs, not on pushes
+to main. A failure that only the full tier catches is fixed on main before
+anything else merges.
+
 ### Running pgrx tests as root (containers, cloud dev boxes)
 
 `cargo pgrx test` runs `initdb` and `postgres`, and both refuse to run as root
@@ -548,8 +567,9 @@ and `postgresql-16-pg-warren` in one build for bookworm on every pull
 request with the same `release/packages.py`, checks them as the publish
 job does (`release/assets.py check-deb`), installs the PG 16 one with apt
 into a clean container, preloads, restarts and runs `packaging/smoke.sql`,
-makes the tarball, builds and checks the Docker image, and builds the
-packages a second time, which must give the same bytes;
+makes the tarball, builds and checks the Docker image, and (off the
+pull-request path, as below) builds the packages a second time, which must
+give the same bytes;
 `packages-release` builds what a release builds, PG 15-18 for every
 distribution and arch, checks and installs each, and on trixie builds and
 checks the images, off the pull-request path (as Miri: on pushes to main,
@@ -755,7 +775,8 @@ build (DESIGN.md §13, 0.9.0; issue #103).
 
 `deny.toml` is the policy for every crate in `Cargo.lock`, on every target
 platform, dev- and build-dependencies included; CI's `deny` job runs it on
-every push, pull request and night:
+every push, pull request and night (on pull requests other than release
+PRs the advisories check reports without blocking):
 
 - **advisories**: a RustSec vulnerability, or an unmaintained, unsound or
   yanked crate, fails. An exemption is by advisory id, with the reason and

@@ -10,6 +10,17 @@ on:
   schedule:
     - cron: "23 2 * * *"
 
+# Two tiers (CONTRIBUTING.md, "What CI runs, and when"). A pull request
+# runs the lint, the core tests, the pgrx tests on every major, the SQL
+# harness, the packages job's first build, the Docker build and cargo-deny
+# (advisories reported, not blocking), with Lifecycle, pg_upgrade and the
+# beside-managed guide on PG 16 alone. Everything else, and every cell of
+# those matrices, runs on the full tier: pushes to main, the nightly
+# schedule, dispatches (release-prepare.yml dispatches each release branch)
+# and release PRs (head branch release-*). The full tier's test is
+#   github.event_name != 'pull_request' || startsWith(github.head_ref, 'release-')
+# repeated where needed, since a job's `if:` and `strategy` cannot read env.
+
 concurrency:
   # By event, so a push to main does not cancel the nightly run.
   group: ci-${{ github.event_name }}-${{ github.ref }}
@@ -61,6 +72,9 @@ jobs:
     # its own failure, not as a licence or source problem.
     name: cargo-deny (${{ matrix.checks }})
     runs-on: ubuntu-latest
+    # Advisories report on pull requests (a new RustSec advisory is not the
+    # PR's doing) and block on the full tier.
+    continue-on-error: ${{ matrix.checks == 'advisories' && !(github.event_name != 'pull_request' || startsWith(github.head_ref, 'release-')) }}
     strategy:
       fail-fast: false
       matrix:
@@ -124,6 +138,8 @@ jobs:
 
   fuzz:
     name: Segment decoder fuzzing (pinned nightly, 30 s per target)
+    # Full tier only (above).
+    if: github.event_name != 'pull_request' || startsWith(github.head_ref, 'release-')
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -265,6 +281,8 @@ jobs:
     # arch-independent safe Rust), test/upgrade.py and test/dump.py (catalog
     # paths, covered on x86_64 for every major), clippy and rustdoc.
     name: arm64 pgrx tests + SQL harness (PG ${{ matrix.pg }})
+    # Full tier only (above).
+    if: github.event_name != 'pull_request' || startsWith(github.head_ref, 'release-')
     runs-on: ubuntu-24.04-arm
     strategy:
       fail-fast: false
@@ -318,6 +336,8 @@ jobs:
     # checks). It runs everything and reports; until macOS is supported it
     # does not fail the workflow (continue-on-error), so read its result.
     name: macOS arm64 pgrx tests + SQL harness (Homebrew PG 18)
+    # Full tier only (above).
+    if: github.event_name != 'pull_request' || startsWith(github.head_ref, 'release-')
     runs-on: macos-15
     continue-on-error: true
     env:
@@ -500,7 +520,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg: ["15", "16", "17", "18"]
+        # Every major on the full tier, PG 16 alone on pull requests.
+        pg: ${{ fromJSON((github.event_name != 'pull_request' || startsWith(github.head_ref, 'release-')) && '["15", "16", "17", "18"]' || '["16"]') }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install pinned Rust toolchain (rust-toolchain.toml)
@@ -571,10 +592,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { old: "15", new: "18" }
-          - { old: "16", new: "17" }
-          - { old: "17", new: "18" }
+        # All three pairs on the full tier; 16 to 17 alone on pull requests.
+        include: >-
+          ${{ fromJSON((github.event_name != 'pull_request' || startsWith(github.head_ref, 'release-'))
+          && '[{"old": "15", "new": "18"}, {"old": "16", "new": "17"}, {"old": "17", "new": "18"}]'
+          || '[{"old": "16", "new": "17"}]') }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install pinned Rust toolchain (rust-toolchain.toml)
@@ -692,6 +714,8 @@ jobs:
       # CONTRIBUTING.md, "Reproducible builds": the same source, built again
       # in a fresh container straight after, gives the same .deb bytes.
       - name: A second build gives the same packages
+        # Full tier only (above): it doubles the job's build time.
+        if: github.event_name != 'pull_request' || startsWith(github.head_ref, 'release-')
         run: |
           set -euo pipefail
           python3 release/packages.py deb bookworm . "$RUNNER_TEMP/again" --majors 15 16
@@ -752,6 +776,8 @@ jobs:
     # vendored tarball unpacked elsewhere, offline with an empty
     # CARGO_HOME. The two libraries must be the same bytes.
     name: Vendored offline build, SBOM, reproducible pg_warren.so (PG 16)
+    # Full tier only (above).
+    if: github.event_name != 'pull_request' || startsWith(github.head_ref, 'release-')
     runs-on: ubuntu-24.04
     env:
       # Not -D warnings: only packaging/reproducibly.sh's flags, as a
@@ -835,7 +861,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg: ["15", "16", "17", "18"]
+        # Every major on the full tier, PG 16 alone on pull requests.
+        pg: ${{ fromJSON((github.event_name != 'pull_request' || startsWith(github.head_ref, 'release-')) && '["15", "16", "17", "18"]' || '["16"]') }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install pinned Rust toolchain (rust-toolchain.toml)
