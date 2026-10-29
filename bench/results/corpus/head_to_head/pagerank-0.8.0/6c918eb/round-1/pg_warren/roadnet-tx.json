@@ -1,0 +1,166 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "head-to-head",
+   "roadnet-tx",
+   "--engine",
+   "pg_warren",
+   "--workload",
+   "pagerank",
+   "--threads",
+   "4",
+   "--pg-config",
+   "/var/tmp/pr-bench/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "6c918eb",
+   "--extension-profile",
+   "release",
+   "--results",
+   "/var/tmp/pr-bench/results/r1/pg_warren"
+  ],
+  "harness": {
+   "revision": "6c918eb2f498486cec47c0207ac2d6f4ead73c3c",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "6c918eb",
+   "profile": "release",
+   "library": "/var/tmp/pr-bench/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "a59481d01fe533b8bb9f81663f8b40dbcfb2279efbbb62accb62bb6a8f103bd3"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v185",
+  "load_average": [
+   1.00830078125,
+   0.45166015625,
+   0.625
+  ]
+ },
+ "dataset": "roadnet-tx",
+ "tier": "medium",
+ "fetched": {
+  "tables": {
+   "nodes": 1379917,
+   "edges": 3843320,
+   "ids": "integer",
+   "relations": 0,
+   "self_loops": 0
+  },
+  "sha256": {
+   "nodes.csv": "5be403bd662e47012fdfcfe5948004ea5153a18a4a213074089a0bf7dd3f7d44",
+   "edges.csv": "f3c08202e30653b17f6384d4c486f9f56042db61a800e3705dcfd6f036822b11"
+  },
+  "provenance": {
+   "entryId": "roadnet-tx",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-24T19:52:57.324Z",
+   "source": {
+    "url": "https://snap.stanford.edu/data/roadNet-TX.txt.gz",
+    "status": "live"
+   },
+   "fetchedUrl": "https://snap.stanford.edu/data/roadNet-TX.txt.gz",
+   "sha256": "1bc0ce058546ae66101d57af7c16de37225e37778ad2e3781b4f7bf3a28cb41f",
+   "byteLength": 12442024
+  }
+ },
+ "repeat": 5,
+ "budget_seconds": 120,
+ "timeout_seconds": 600,
+ "workloads": [
+  {
+   "name": "pagerank 20 iterations",
+   "kind": "pagerank",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": 20
+  }
+ ],
+ "engines": {
+  "pg_warren": {
+   "describe": {
+    "version": "0.8.0",
+    "threads": 4,
+    "settings": [
+     "fsync=off",
+     "full_page_writes=off",
+     "jit=on",
+     "maintenance_work_mem=1GB",
+     "max_parallel_workers_per_gather=2",
+     "max_wal_size=1GB",
+     "shared_buffers=1GB",
+     "shared_preload_libraries=",
+     "statement_timeout=10min",
+     "synchronous_commit=off",
+     "wal_level=minimal",
+     "warren.max_build_memory=4GB",
+     "warren.max_cache_memory=4GB",
+     "warren.max_compute_memory=4GB",
+     "warren.shared_cache_memory=4GB",
+     "warren.threads=4",
+     "work_mem=64MB"
+    ],
+    "graph": {
+     "node_count": 1379917,
+     "edge_count": 3843320,
+     "dropped_edges": 0,
+     "bytes": 75076532
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      2.263154045000192
+     ],
+     "median_seconds": 2.263154045000192
+    },
+    "build": {
+     "seconds": [
+      1.3084776010000496,
+      1.1487650699982623,
+      1.1521656519998942
+     ],
+     "median_seconds": 1.1521656519998942
+    }
+   },
+   "workloads": {
+    "pagerank 20 iterations": {
+     "cold_seconds": 0.3626509330006229,
+     "warm_seconds": [
+      0.22716943099840137,
+      0.22535399900152697,
+      0.2237191790009092,
+      0.22534429500046826,
+      0.2230971770004544
+     ],
+     "warm_median_seconds": 0.22534429500046826,
+     "cold_phases": {
+      "evict": 0.0008047890005400404
+     },
+     "check": {
+      "check": "pagerank 20 iterations",
+      "status": "match",
+      "compared": 1379917,
+      "mismatches": 0,
+      "max_error": 6.352747104407253e-22,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0,
+      "convention": "normalised"
+     },
+     "counted": true
+    }
+   }
+  }
+ }
+}

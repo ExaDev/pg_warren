@@ -1,0 +1,173 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "head-to-head",
+   "lesmis",
+   "--engine",
+   "pg_warren",
+   "--workload",
+   "pagerank",
+   "--threads",
+   "4",
+   "--pg-config",
+   "/var/tmp/pr-bench/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "6c918eb",
+   "--extension-profile",
+   "release",
+   "--results",
+   "/var/tmp/pr-bench/results/r2/pg_warren"
+  ],
+  "harness": {
+   "revision": "6c918eb2f498486cec47c0207ac2d6f4ead73c3c",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "6c918eb",
+   "profile": "release",
+   "library": "/var/tmp/pr-bench/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "a59481d01fe533b8bb9f81663f8b40dbcfb2279efbbb62accb62bb6a8f103bd3"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v185",
+  "load_average": [
+   1.20654296875,
+   0.57080078125,
+   0.6591796875
+  ]
+ },
+ "dataset": "lesmis",
+ "tier": "tiny",
+ "fetched": {
+  "tables": {
+   "nodes": 77,
+   "edges": 254,
+   "ids": "integer",
+   "relations": 0,
+   "self_loops": 0
+  },
+  "sha256": {
+   "nodes.csv": "257ce17f87934e67fa44b89368c0d03d90477324b198651ccb9d2ad1217365d4",
+   "edges.csv": "67f504339314cb3a02caaef574771298d13c0404f170806daa079697cecf0beb"
+  },
+  "provenance": {
+   "entryId": "lesmis",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-26T05:47:57.765Z",
+   "source": {
+    "url": "http://konect.cc/files/download.tsv.moreno_lesmis.tar.bz2",
+    "status": "live",
+    "snapshot": {
+     "url": "https://web.archive.org/web/20230323100419/http://konect.cc/files/download.tsv.moreno_lesmis.tar.bz2",
+     "timestamp": "20230323100419",
+     "sha256": "04f8ed2c517fbda9c60d244041837a08328ee13c3102efe847e911dc97a27fbe",
+     "byteLength": 2301
+    }
+   },
+   "fetchedUrl": "http://konect.cc/files/download.tsv.moreno_lesmis.tar.bz2",
+   "sha256": "04f8ed2c517fbda9c60d244041837a08328ee13c3102efe847e911dc97a27fbe",
+   "byteLength": 2301,
+   "member": "moreno_lesmis/out.moreno_lesmis_lesmis"
+  }
+ },
+ "repeat": 5,
+ "budget_seconds": 120,
+ "timeout_seconds": 600,
+ "workloads": [
+  {
+   "name": "pagerank 20 iterations",
+   "kind": "pagerank",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": 20
+  }
+ ],
+ "engines": {
+  "pg_warren": {
+   "describe": {
+    "version": "0.8.0",
+    "threads": 4,
+    "settings": [
+     "fsync=off",
+     "full_page_writes=off",
+     "jit=on",
+     "maintenance_work_mem=1GB",
+     "max_parallel_workers_per_gather=2",
+     "max_wal_size=1GB",
+     "shared_buffers=1GB",
+     "shared_preload_libraries=",
+     "statement_timeout=10min",
+     "synchronous_commit=off",
+     "wal_level=minimal",
+     "warren.max_build_memory=4GB",
+     "warren.max_cache_memory=4GB",
+     "warren.max_compute_memory=4GB",
+     "warren.shared_cache_memory=4GB",
+     "warren.threads=4",
+     "work_mem=64MB"
+    ],
+    "graph": {
+     "node_count": 77,
+     "edge_count": 508,
+     "dropped_edges": 0,
+     "bytes": 14836
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.010533004000535584
+     ],
+     "median_seconds": 0.010533004000535584
+    },
+    "build": {
+     "seconds": [
+      0.004358406000392279,
+      0.0019330289997014916,
+      0.0025105989989242516
+     ],
+     "median_seconds": 0.0025105989989242516
+    }
+   },
+   "workloads": {
+    "pagerank 20 iterations": {
+     "cold_seconds": 0.003965322999647469,
+     "warm_seconds": [
+      0.0028617910011234926,
+      0.0028308159999141935,
+      0.0031252749995474005,
+      0.0032365060014853952,
+      0.004009308000604506
+     ],
+     "warm_median_seconds": 0.0031252749995474005,
+     "cold_phases": {
+      "evict": 0.00041606400009186473
+     },
+     "check": {
+      "check": "pagerank 20 iterations",
+      "status": "match",
+      "compared": 77,
+      "mismatches": 0,
+      "max_error": 2.7755575615628914e-17,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0,
+      "convention": "normalised"
+     },
+     "counted": true
+    }
+   }
+  }
+ }
+}

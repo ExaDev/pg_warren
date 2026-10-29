@@ -1,0 +1,167 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "head-to-head",
+   "polblogs",
+   "--engine",
+   "pg_warren",
+   "--workload",
+   "pagerank",
+   "--threads",
+   "4",
+   "--pg-config",
+   "/var/tmp/pr-bench/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "6c918eb",
+   "--extension-profile",
+   "release",
+   "--results",
+   "/var/tmp/pr-bench/results/r2/pg_warren"
+  ],
+  "harness": {
+   "revision": "6c918eb2f498486cec47c0207ac2d6f4ead73c3c",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "6c918eb",
+   "profile": "release",
+   "library": "/var/tmp/pr-bench/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "a59481d01fe533b8bb9f81663f8b40dbcfb2279efbbb62accb62bb6a8f103bd3"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v185",
+  "load_average": [
+   1.20654296875,
+   0.57080078125,
+   0.6591796875
+  ]
+ },
+ "dataset": "polblogs",
+ "tier": "tiny",
+ "fetched": {
+  "tables": {
+   "nodes": 1490,
+   "edges": 19090,
+   "ids": "integer",
+   "relations": 0,
+   "self_loops": 3
+  },
+  "sha256": {
+   "nodes.csv": "b9fa4d13e216ff6ee0b68c39156210df25f25e84d8aa03e5345e9c1b4c610b2c",
+   "edges.csv": "7af17b18caf4e382209b1369daf319e1f2bb12142f17ff176b15c79d62df1066"
+  },
+  "provenance": {
+   "entryId": "polblogs",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-26T05:47:59.599Z",
+   "source": {
+    "url": "https://websites.umich.edu/~mejn/netdata/polblogs.zip",
+    "status": "live"
+   },
+   "fetchedUrl": "https://websites.umich.edu/~mejn/netdata/polblogs.zip",
+   "sha256": "e047df21736fef9037f0450f7d3756ecb16a8e347417723181c0f7e493021ddb",
+   "byteLength": 94090,
+   "member": "polblogs.gml"
+  }
+ },
+ "repeat": 5,
+ "budget_seconds": 120,
+ "timeout_seconds": 600,
+ "workloads": [
+  {
+   "name": "pagerank 20 iterations",
+   "kind": "pagerank",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": 20
+  }
+ ],
+ "engines": {
+  "pg_warren": {
+   "describe": {
+    "version": "0.8.0",
+    "threads": 4,
+    "settings": [
+     "fsync=off",
+     "full_page_writes=off",
+     "jit=on",
+     "maintenance_work_mem=1GB",
+     "max_parallel_workers_per_gather=2",
+     "max_wal_size=1GB",
+     "shared_buffers=1GB",
+     "shared_preload_libraries=",
+     "statement_timeout=10min",
+     "synchronous_commit=off",
+     "wal_level=minimal",
+     "warren.max_build_memory=4GB",
+     "warren.max_cache_memory=4GB",
+     "warren.max_compute_memory=4GB",
+     "warren.shared_cache_memory=4GB",
+     "warren.threads=4",
+     "work_mem=64MB"
+    ],
+    "graph": {
+     "node_count": 1490,
+     "edge_count": 19025,
+     "dropped_edges": 0,
+     "bytes": 200204
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.024212570999225136
+     ],
+     "median_seconds": 0.024212570999225136
+    },
+    "build": {
+     "seconds": [
+      0.00931898900125816,
+      0.006935338000403135,
+      0.006598413001484005
+     ],
+     "median_seconds": 0.006935338000403135
+    }
+   },
+   "workloads": {
+    "pagerank 20 iterations": {
+     "cold_seconds": 0.00590871500025969,
+     "warm_seconds": [
+      0.0038805320000392385,
+      0.003842475000055856,
+      0.0036363950002851197,
+      0.003756024998438079,
+      0.0036533410002448363
+     ],
+     "warm_median_seconds": 0.003756024998438079,
+     "cold_phases": {
+      "evict": 0.0003714280010171933
+     },
+     "check": {
+      "check": "pagerank 20 iterations",
+      "status": "match",
+      "compared": 1490,
+      "mismatches": 0,
+      "max_error": 2.42861286636753e-17,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0,
+      "convention": "normalised"
+     },
+     "counted": true
+    }
+   }
+  }
+ }
+}

@@ -1,0 +1,144 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "head-to-head",
+   "polblogs",
+   "--engine",
+   "igraph",
+   "--workload",
+   "pagerank",
+   "--threads",
+   "4",
+   "--pg-config",
+   "/var/tmp/pr-bench/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "6c918eb",
+   "--extension-profile",
+   "release",
+   "--results",
+   "/var/tmp/pr-bench/results/r3/igraph"
+  ],
+  "harness": {
+   "revision": "6c918eb2f498486cec47c0207ac2d6f4ead73c3c",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "6c918eb",
+   "profile": "release",
+   "library": "/var/tmp/pr-bench/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "a59481d01fe533b8bb9f81663f8b40dbcfb2279efbbb62accb62bb6a8f103bd3"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v185",
+  "load_average": [
+   1.07275390625,
+   0.8017578125,
+   0.74072265625
+  ]
+ },
+ "dataset": "polblogs",
+ "tier": "tiny",
+ "fetched": {
+  "tables": {
+   "nodes": 1490,
+   "edges": 19090,
+   "ids": "integer",
+   "relations": 0,
+   "self_loops": 3
+  },
+  "sha256": {
+   "nodes.csv": "b9fa4d13e216ff6ee0b68c39156210df25f25e84d8aa03e5345e9c1b4c610b2c",
+   "edges.csv": "7af17b18caf4e382209b1369daf319e1f2bb12142f17ff176b15c79d62df1066"
+  },
+  "provenance": {
+   "entryId": "polblogs",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-26T05:47:59.599Z",
+   "source": {
+    "url": "https://websites.umich.edu/~mejn/netdata/polblogs.zip",
+    "status": "live"
+   },
+   "fetchedUrl": "https://websites.umich.edu/~mejn/netdata/polblogs.zip",
+   "sha256": "e047df21736fef9037f0450f7d3756ecb16a8e347417723181c0f7e493021ddb",
+   "byteLength": 94090,
+   "member": "polblogs.gml"
+  }
+ },
+ "repeat": 5,
+ "budget_seconds": 120,
+ "timeout_seconds": 600,
+ "workloads": [
+  {
+   "name": "pagerank 20 iterations",
+   "kind": "pagerank",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": 20
+  }
+ ],
+ "engines": {
+  "igraph": {
+   "describe": {
+    "version": "1.0.0",
+    "threads": 1,
+    "settings": {
+     "pagerank": "PRPACK (solved)",
+     "louvain": "community_multilevel",
+     "leiden": "community_leiden, modularity, 2 iterations",
+     "seed": 1
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.006146059999082354
+     ],
+     "median_seconds": 0.006146059999082354
+    },
+    "build": {
+     "seconds": [
+      0.0073530909994588
+     ],
+     "median_seconds": 0.0073530909994588
+    }
+   },
+   "workloads": {
+    "pagerank 20 iterations": {
+     "cold_seconds": 0.002204492999226204,
+     "warm_seconds": [
+      0.001411569999618223,
+      0.0014207900003384566,
+      0.0014806220005993964,
+      0.00138070299908577,
+      0.001405581999279093
+     ],
+     "warm_median_seconds": 0.001411569999618223,
+     "cold_phases": {},
+     "check": {
+      "check": "pagerank 20 iterations",
+      "status": "match",
+      "compared": 1490,
+      "mismatches": 0,
+      "max_error": 2.996387860054739e-14,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0,
+      "convention": "fixed point"
+     },
+     "counted": true
+    }
+   }
+  }
+ }
+}

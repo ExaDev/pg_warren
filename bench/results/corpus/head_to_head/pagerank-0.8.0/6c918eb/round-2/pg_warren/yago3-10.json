@@ -1,0 +1,171 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "head-to-head",
+   "yago3-10",
+   "--engine",
+   "pg_warren",
+   "--workload",
+   "pagerank",
+   "--threads",
+   "4",
+   "--pg-config",
+   "/var/tmp/pr-bench/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "6c918eb",
+   "--extension-profile",
+   "release",
+   "--results",
+   "/var/tmp/pr-bench/results/r2/pg_warren"
+  ],
+  "harness": {
+   "revision": "6c918eb2f498486cec47c0207ac2d6f4ead73c3c",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "6c918eb",
+   "profile": "release",
+   "library": "/var/tmp/pr-bench/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "a59481d01fe533b8bb9f81663f8b40dbcfb2279efbbb62accb62bb6a8f103bd3"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v185",
+  "load_average": [
+   1.33740234375,
+   0.72705078125,
+   0.70947265625
+  ]
+ },
+ "dataset": "yago3-10",
+ "tier": "medium",
+ "fetched": {
+  "tables": {
+   "nodes": 123182,
+   "edges": 1089040,
+   "ids": "text",
+   "relations": 37,
+   "self_loops": 0
+  },
+  "sha256": {
+   "nodes.csv": "015ea97dee714fd4df108253c635baec24e2fb503bfbd960f066249e1ef86ac0",
+   "edges.csv": "235bf7f260957a63069f544c86e9744be77bc703fb834a0ccd3d447453d4f5e2"
+  },
+  "provenance": {
+   "entryId": "yago3-10",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-26T05:49:30.630Z",
+   "source": {
+    "url": "https://web.informatik.uni-mannheim.de/pi1/kge-datasets/yago3-10.tar.gz",
+    "status": "live"
+   },
+   "fetchedUrl": "https://web.informatik.uni-mannheim.de/pi1/kge-datasets/yago3-10.tar.gz",
+   "sha256": "f2fc0a6e5e47f09b8435c52cefcf0735f62b103f274725c4ae4c0a45a8357159",
+   "byteLength": 19314355,
+   "members": [
+    "yago3-10/train.txt",
+    "yago3-10/valid.txt",
+    "yago3-10/test.txt"
+   ]
+  }
+ },
+ "repeat": 5,
+ "budget_seconds": 120,
+ "timeout_seconds": 600,
+ "workloads": [
+  {
+   "name": "pagerank 20 iterations",
+   "kind": "pagerank",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": 20
+  }
+ ],
+ "engines": {
+  "pg_warren": {
+   "describe": {
+    "version": "0.8.0",
+    "threads": 4,
+    "settings": [
+     "fsync=off",
+     "full_page_writes=off",
+     "jit=on",
+     "maintenance_work_mem=1GB",
+     "max_parallel_workers_per_gather=2",
+     "max_wal_size=1GB",
+     "shared_buffers=1GB",
+     "shared_preload_libraries=",
+     "statement_timeout=10min",
+     "synchronous_commit=off",
+     "wal_level=minimal",
+     "warren.max_build_memory=4GB",
+     "warren.max_cache_memory=4GB",
+     "warren.max_compute_memory=4GB",
+     "warren.shared_cache_memory=4GB",
+     "warren.threads=4",
+     "work_mem=64MB"
+    ],
+    "graph": {
+     "node_count": 123182,
+     "edge_count": 1089040,
+     "dropped_edges": 0,
+     "bytes": 27322738
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.8081513450015336
+     ],
+     "median_seconds": 0.8081513450015336
+    },
+    "build": {
+     "seconds": [
+      0.673520541000471,
+      0.5952200150004501,
+      0.6174873420004587
+     ],
+     "median_seconds": 0.6174873420004587
+    }
+   },
+   "workloads": {
+    "pagerank 20 iterations": {
+     "cold_seconds": 0.08435864100101753,
+     "warm_seconds": [
+      0.05197982900062925,
+      0.04422333000002254,
+      0.041401406000659335,
+      0.04404777299896523,
+      0.041780333000133396
+     ],
+     "warm_median_seconds": 0.04404777299896523,
+     "cold_phases": {
+      "evict": 0.0008233010012190789
+     },
+     "check": {
+      "check": "pagerank 20 iterations",
+      "status": "match",
+      "compared": 123182,
+      "mismatches": 0,
+      "max_error": 3.514549762329011e-15,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0,
+      "convention": "normalised"
+     },
+     "counted": true
+    }
+   }
+  }
+ }
+}

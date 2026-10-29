@@ -1,0 +1,172 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "head-to-head",
+   "facebook",
+   "--engine",
+   "pg_warren",
+   "--workload",
+   "pagerank",
+   "--threads",
+   "4",
+   "--pg-config",
+   "/var/tmp/pr-bench/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "6c918eb",
+   "--extension-profile",
+   "release",
+   "--results",
+   "/var/tmp/pr-bench/results/r3/pg_warren"
+  ],
+  "harness": {
+   "revision": "6c918eb2f498486cec47c0207ac2d6f4ead73c3c",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "6c918eb",
+   "profile": "release",
+   "library": "/var/tmp/pr-bench/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "a59481d01fe533b8bb9f81663f8b40dbcfb2279efbbb62accb62bb6a8f103bd3"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v185",
+  "load_average": [
+   1.07275390625,
+   0.8017578125,
+   0.74072265625
+  ]
+ },
+ "dataset": "facebook",
+ "tier": "tiny",
+ "fetched": {
+  "tables": {
+   "nodes": 4039,
+   "edges": 88234,
+   "ids": "integer",
+   "relations": 0,
+   "self_loops": 0
+  },
+  "sha256": {
+   "nodes.csv": "3eb7cd6f93a4c6a76b39de12ec1723f6816dddecde4b0e18deaaf5ca6a4bf77a",
+   "edges.csv": "e8564ec56a3ab526999cbc6e5642890ccfe76f5ddff3ffa5ff5b8a680303fa61"
+  },
+  "provenance": {
+   "entryId": "facebook",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-26T05:48:05.111Z",
+   "source": {
+    "url": "https://snap.stanford.edu/data/facebook_combined.txt.gz",
+    "status": "live",
+    "snapshot": {
+     "url": "https://web.archive.org/web/20261004065942/https://snap.stanford.edu/data/facebook_combined.txt.gz",
+     "timestamp": "20261004065942",
+     "sha256": "125e84db872eeba443d270c70315c256b0af43a502fcfe51f50621166ad035d7",
+     "byteLength": 218576
+    }
+   },
+   "fetchedUrl": "https://snap.stanford.edu/data/facebook_combined.txt.gz",
+   "sha256": "125e84db872eeba443d270c70315c256b0af43a502fcfe51f50621166ad035d7",
+   "byteLength": 218576
+  }
+ },
+ "repeat": 5,
+ "budget_seconds": 120,
+ "timeout_seconds": 600,
+ "workloads": [
+  {
+   "name": "pagerank 20 iterations",
+   "kind": "pagerank",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": 20
+  }
+ ],
+ "engines": {
+  "pg_warren": {
+   "describe": {
+    "version": "0.8.0",
+    "threads": 4,
+    "settings": [
+     "fsync=off",
+     "full_page_writes=off",
+     "jit=on",
+     "maintenance_work_mem=1GB",
+     "max_parallel_workers_per_gather=2",
+     "max_wal_size=1GB",
+     "shared_buffers=1GB",
+     "shared_preload_libraries=",
+     "statement_timeout=10min",
+     "synchronous_commit=off",
+     "wal_level=minimal",
+     "warren.max_build_memory=4GB",
+     "warren.max_cache_memory=4GB",
+     "warren.max_compute_memory=4GB",
+     "warren.shared_cache_memory=4GB",
+     "warren.threads=4",
+     "work_mem=64MB"
+    ],
+    "graph": {
+     "node_count": 4039,
+     "edge_count": 176468,
+     "dropped_edges": 0,
+     "bytes": 1541636
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.04803776100015966
+     ],
+     "median_seconds": 0.04803776100015966
+    },
+    "build": {
+     "seconds": [
+      0.030874253001456964,
+      0.02599963300053787,
+      0.02582899800108862
+     ],
+     "median_seconds": 0.02599963300053787
+    }
+   },
+   "workloads": {
+    "pagerank 20 iterations": {
+     "cold_seconds": 0.01069016400106193,
+     "warm_seconds": [
+      0.00700163300098211,
+      0.006864943999971729,
+      0.006877052999698208,
+      0.007111553999493481,
+      0.006920396999703371
+     ],
+     "warm_median_seconds": 0.006920396999703371,
+     "cold_phases": {
+      "evict": 0.00041316500028187875
+     },
+     "check": {
+      "check": "pagerank 20 iterations",
+      "status": "match",
+      "compared": 4039,
+      "mismatches": 0,
+      "max_error": 2.168404344971009e-18,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0,
+      "convention": "normalised"
+     },
+     "counted": true
+    }
+   }
+  }
+ }
+}
