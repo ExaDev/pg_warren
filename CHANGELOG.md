@@ -4,9 +4,14 @@
 
 ### Upgrading
 
+- The activity table's shared memory changes format
+  (`pg_warren.activity.2`): on PostgreSQL 17 and 18 backends still running
+  the old library keep using the old table until the server restarts.
 - **Run `ALTER EXTENSION pg_warren UPDATE;` in every database that has
   the extension**, after installing the new build. The update adds the
-  two functions below; it changes no table.
+  two functions below and `warren.backends()`'s `compute_threads` column
+  (the function is dropped and created again, keeping its privileges); it
+  changes no table. Until then the old definitions run, without them.
 
 ### Behaviour changes
 
@@ -29,6 +34,36 @@
 
 ### New
 
+- **Limits that an administrator sets for a shared instance** (DESIGN.md
+  §14 item 52; docs/limits.md, "Limits for a shared instance"):
+  `warren.threads_limit`, `warren.compute_memory_limit`,
+  `warren.cache_memory_limit`, `warren.build_memory_limit` and
+  `warren.walk_paths_limit` bound `warren.threads`,
+  `warren.max_compute_memory`, `warren.max_cache_memory`,
+  `warren.max_build_memory` and `warren.max_walk_paths`, and
+  `warren.cluster_threads_limit` the compute threads of all backends
+  together. They are set in the server's configuration (or a managed
+  service's parameter group), not per session. A call uses the lower of
+  its session's setting and the limit; an error that names a setting
+  names the limit where the limit was the lower. The defaults set no
+  limit.
+- **Under `warren.cluster_threads_limit`** a call runs on as many of the
+  threads it asks for (`warren.threads`) as are free, and waits only while
+  none is, shown in `pg_stat_activity` as the wait event
+  `WarrenComputeThreads` (`Extension` on PostgreSQL 15 and 16); a cancel
+  or `statement_timeout` ends the wait. Results do not depend on the
+  thread count. On PostgreSQL 15 and 16 the cap needs
+  `shared_preload_libraries = 'pg_warren'`; without it the cap is not
+  enforced and the server log says so.
+- docs/limits.md suggests `warren.shared_cache_memory` and the memory
+  limits per instance size.
+- **`warren.backends()` shows the compute threads in use**, in a new last
+  column, `compute_threads`: on a backend's row the threads its running
+  call holds (0 between calls), on the `cluster` row the threads all
+  backends' calls hold, which `warren.cluster_threads_limit` bounds, so an
+  administrator without a shell sees the cap work. It is counted whether
+  or not a cap is set, and shown under the same privacy rule as the other
+  sizes (DESIGN.md §5.7, §14 item 52; docs/limits.md).
 - **Graphs from keys.** `warren.queries_from_keys(tables regclass[])`
   returns the `node_query`, `edge_query` and `has_relations` that the
   listed tables' primary and foreign keys give, for `create_graph`, and

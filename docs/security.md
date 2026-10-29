@@ -27,13 +27,15 @@ something is planned rather than built, it says so.
   `ERROR`, not the backend.
 - **Writes are refused on standbys** with SQLSTATE 25006, and every read
   works there.
+- **An administrator bounds what sessions ask for** with `sighup` limits
+  on threads, memory and walk paths, and a cap on compute threads across
+  the cluster.
 - **Dumps without a superuser use Postgres's predefined roles**:
   `pg_read_all_data` to dump graphs, `pg_write_all_data` to restore them.
   On Amazon RDS (PG 15 and later) the master user has both. A graph a
   superuser owns runs its source queries only for a superuser, so the
   catalog writes `pg_write_all_data` allows lead to no superuser's rights.
-- **Known gaps** are listed at the end: per-session resource settings that
-  any role can raise, and supply-chain items
+- **Known gaps** are listed at the end: chiefly supply-chain items
   (reproducible builds, an SBOM, dependency audits, a security policy).
 
 ## What it installs
@@ -71,7 +73,7 @@ anything outside schema `warren` other than the cast. The optional
 
 ### Settings
 
-Six GUCs, registered when the library loads (`_PG_init` in
+Twelve GUCs, registered when the library loads (`_PG_init` in
 `crates/pg_warren/src/lib.rs`). Sizes are in kB.
 
 | Setting | Context | Default | Range | Bounds |
@@ -82,6 +84,12 @@ Six GUCs, registered when the library loads (`_PG_init` in
 | `warren.max_build_memory` | `user` | `4GB` | `1MB` up | what one `refresh` or `contract` holds |
 | `warren.threads` | `user` | half the cores, at least 1 | 1–1024 | compute threads per backend |
 | `warren.max_walk_paths` | `user` | `10000000` | 1 up | rows a path-per-row `walk` may be asked for |
+| `warren.threads_limit` | `sighup` | `-1` (none) | −1–1024 | the most `warren.threads` a call uses |
+| `warren.compute_memory_limit` | `sighup` | `-1` (none) | −1 up | the most `warren.max_compute_memory` a call uses |
+| `warren.cache_memory_limit` | `sighup` | `-1` (none) | −1 up | the most `warren.max_cache_memory` a backend uses |
+| `warren.build_memory_limit` | `sighup` | `-1` (none) | −1 up | the most `warren.max_build_memory` a build uses |
+| `warren.walk_paths_limit` | `sighup` | `-1` (none) | −1 up | the most `warren.max_walk_paths` a walk uses |
+| `warren.cluster_threads_limit` | `sighup` | `-1` (none) | −1–65536 | compute threads of all backends together |
 
 `sighup` settings are changed in the server's configuration and take effect
 on reload. `user` settings can be changed by any role, per session or
@@ -450,21 +458,27 @@ Today's behaviour:
   idle cluster can hold up to the cap. In containers, `/dev/shm` must be
   sized for it (Docker's default is 64 MB); pg_warren falls back to private
   copies rather than fail when it is short.
-- The other five settings are `user` settings: **any role can raise them for
-  its own sessions**, up to 1,024 threads per backend and about 2 TB of
-  memory per setting. `ALTER ROLE … SET` and `ALTER DATABASE … SET` set
-  defaults, not ceilings. So on a shared instance one role can run many
-  threads, or large computations, in each of its connections. Postgres's own
-  limits (`max_connections`, `statement_timeout`, the operating system's
-  memory limits) still apply.
+- The other five settings are `user` settings, so any role can tune them
+  for its own sessions. Each has a `sighup` limit beside it
+  (`warren.threads_limit`, `warren.compute_memory_limit`, …): a call uses
+  the lower of the session's setting and the limit, and an error names the
+  limit when the limit was the lower. The limits default to none.
+- `warren.cluster_threads_limit` caps compute threads across all backends
+  (no cap by default; the server's cores is a good value). A call runs with the threads that
+  are free and waits, cancellably, while none is (wait event
+  `WarrenComputeThreads`). The cap needs the activity table in shared
+  memory, so on PG 15 and 16 it is enforced only when pg_warren is
+  preloaded; without it each backend logs once that the cap is off.
+  `warren.backends()`'s `compute_threads` shows the threads each backend's
+  call holds and, in the `cluster` row, all of them, which the cap bounds.
+- Postgres's own limits (`max_connections`, `statement_timeout`, the
+  operating system's memory limits) still apply.
 - Per-database shares of the shared cache do not exist: one database's
   loads can evict another's unpinned versions.
 
-Administrator-set ceilings on these settings and a cap on compute threads
-across backends are planned for 0.9.0
-([#103](https://github.com/ExaDev/pg_warren/issues/103), "Resource
-governance across the instance"). Sizing guidance is in
-[limits.md](limits.md#the-shared-cache).
+Suggested starting values per instance size are in
+[limits.md, "Limits for a shared instance"](limits.md#limits-for-a-shared-instance);
+the reasons are DESIGN.md §14 item 52.
 
 ## Test evidence
 
@@ -554,8 +568,8 @@ private channel for reporting vulnerabilities. This is a known gap.
 
 ## Known gaps, together
 
-- Resource settings other than `warren.shared_cache_memory` can be raised by
-  any role; instance-wide ceilings are planned for 0.9.0.
+- The cluster-wide thread cap is not enforced on PG 15 and 16 unless
+  pg_warren is preloaded.
 - Dumping and restoring graphs without a superuser needs
   `pg_read_all_data` and `pg_write_all_data`, which reach every graph
   directly; there is no narrower grant (§14 item 51). A holder of

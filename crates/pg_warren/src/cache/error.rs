@@ -23,12 +23,11 @@ pub(crate) enum CacheError {
     #[error(transparent)]
     Load(#[from] LoadError),
     /// Keeping a transient vector would take transient vectors past
-    /// `warren.max_cache_memory`.
+    /// `warren.max_cache_memory` (or `warren.cache_memory_limit`, if lower).
     #[error(
         "cache memory limit exceeded: a transient vector of {requested} bytes would bring \
-         transient vectors to {after} bytes, over warren.max_cache_memory ({limit} bytes); \
-         {in_use} are in use, {own} of them this role's; persist it, drop transient vectors or \
-         raise warren.max_cache_memory"
+         transient vectors to {after} bytes, over {setting} ({limit} bytes); {in_use} are in \
+         use, {own} of them this role's; persist it, drop transient vectors or raise {setting}"
     )]
     TransientOverLimit {
         /// The vector's bytes.
@@ -41,16 +40,19 @@ pub(crate) enum CacheError {
         own: u64,
         /// The cap, in bytes.
         limit: u64,
+        /// The setting it comes from.
+        setting: &'static str,
     },
     /// Loading versions would take what the statement holds in the cache,
     /// which cannot be evicted until it ends, past `warren.max_cache_memory`
-    /// and `warren.max_compute_memory` together.
+    /// and `warren.max_compute_memory` together (or their administrator's
+    /// limits, where lower).
     #[error(
         "memory limit exceeded: loading {} ({expected} bytes) would bring what this statement \
-         holds in the cache to {} bytes, over warren.max_cache_memory ({cache_limit} bytes) \
-         and warren.max_compute_memory ({compute_limit} bytes) together; {held} bytes are held \
-         already, by transient vectors and what the statement has read; raise \
-         warren.max_cache_memory or warren.max_compute_memory",
+         holds in the cache to {} bytes, over {cache_setting} ({cache_limit} bytes) and \
+         {compute_setting} ({compute_limit} bytes) together; {held} bytes are held already, by \
+         transient vectors and what the statement has read; raise {cache_setting} or \
+         {compute_setting}",
         versions_named(versions),
         held.saturating_add(*expected)
     )]
@@ -63,8 +65,12 @@ pub(crate) enum CacheError {
         held: u64,
         /// `warren.max_cache_memory`, in bytes.
         cache_limit: u64,
+        /// The setting `cache_limit` comes from.
+        cache_setting: &'static str,
         /// `warren.max_compute_memory`, in bytes.
         compute_limit: u64,
+        /// The setting `compute_limit` comes from.
+        compute_setting: &'static str,
     },
     /// An SPI call failed.
     #[error(transparent)]

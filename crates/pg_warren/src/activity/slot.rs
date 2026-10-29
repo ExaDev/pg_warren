@@ -1,7 +1,8 @@
 //! What a backend's slot of the activity table holds (DESIGN.md §5.7):
 //! who the backend is, what its private cache holds and the shared bytes it
-//! maps, its cache counters and its progress (`frame`), as plain values (the backend's own copy)
-//! and as the words its slot stores them in.
+//! maps, the compute threads its call holds, its cache counters and its
+//! progress (`frame`), as plain values (the backend's own copy) and as the
+//! words its slot stores them in.
 
 use pgrx::pg_sys::Oid;
 
@@ -184,6 +185,9 @@ impl Holder {
 pub(crate) struct Values {
     pub(crate) holder: Holder,
     pub(crate) memory: Memory,
+    /// The compute threads the backend's running call holds (DESIGN.md
+    /// §14 item 52), 0 between calls.
+    pub(crate) compute_threads: u32,
     pub(crate) counters: Counters,
     /// The statement's command, from `warren.report_progress`.
     pub(crate) command: Frame,
@@ -196,6 +200,7 @@ impl Values {
     pub(crate) const FREE: Self = Self {
         holder: Holder::NONE,
         memory: Memory::ZERO,
+        compute_threads: 0,
         counters: Counters::ZERO,
         command: Frame::NONE,
         operation: Operation::NONE,
@@ -215,6 +220,7 @@ impl Values {
             transients,
             entries,
             mapped,
+            u64::from(self.compute_threads),
         ];
         words[..HEAD_WORDS].copy_from_slice(&head);
         words[HEAD_WORDS..COMMAND_AT].copy_from_slice(&self.counters.encode());
@@ -241,6 +247,7 @@ impl Values {
                 entries: words[7],
                 mapped: words[8],
             },
+            compute_threads: words[9] as u32,
             counters: Counters::decode(&counters),
             command: Frame::decode(&words[COMMAND_AT..OPERATION_AT]),
             operation: Operation::decode(&words[OPERATION_AT..]),
@@ -268,8 +275,8 @@ impl Counters {
     };
 }
 
-/// The words of the holder and the memory.
-const HEAD_WORDS: usize = 9;
+/// The words of the holder, the memory and the compute threads.
+const HEAD_WORDS: usize = 10;
 
 /// Where the frames start.
 const COMMAND_AT: usize = HEAD_WORDS + COUNTER_WORDS;
@@ -298,6 +305,7 @@ mod tests {
         Values {
             holder: Holder { pid: 4321, database: Oid::from(5), role: Oid::from(10), started: -3 },
             memory: Memory { versions: 1, vectors: 2, transients: 3, entries: 4, mapped: 5 },
+            compute_threads: 6,
             counters,
             command,
             operation,

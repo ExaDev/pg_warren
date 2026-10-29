@@ -26,16 +26,19 @@ pub(crate) enum TraversalSqlError {
     /// `mode` is not `ends`, `count` or `paths`.
     #[error("mode must be 'ends', 'count' or 'paths', not '{0}'")]
     Mode(String),
-    /// `max_results` is above the `warren.max_walk_paths` ceiling.
+    /// `max_results` is above the `warren.max_walk_paths` ceiling (or the
+    /// administrator's `warren.walk_paths_limit`, if lower).
     #[error(
-        "max_results {requested} is above warren.max_walk_paths ({ceiling}) for a walk that \
-         reports a row per walk"
+        "max_results {requested} is above {setting} ({ceiling}) for a walk that reports a row \
+         per walk"
     )]
     WalkRowCeiling {
         /// The `max_results` asked for.
         requested: i64,
         /// The ceiling.
         ceiling: i64,
+        /// The setting it comes from.
+        setting: &'static str,
     },
     /// A walk count does not fit `bigint`.
     #[error("walk count {0} exceeds the range of bigint")]
