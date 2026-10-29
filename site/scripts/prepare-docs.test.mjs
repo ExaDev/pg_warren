@@ -14,7 +14,7 @@ const sqlBlocks = (text) => [...text.matchAll(/^```sql\n[\s\S]*?^```/gm)].map(([
 
 test('covers all canonical guides, README sections, changelog, benchmarks, and contributing', () => {
   assert.deepEqual(generatedPages.map(({ slug }) => slug), [
-    'semantics', 'traversal', 'compute', 'communities', 'change-detection', 'limits',
+    'semantics', 'traversal', 'compute', 'communities', 'change-detection', 'limits', 'security',
     'installation', 'quickstart', 'performance', 'positioning', 'changelog', 'benchmarks', 'contributing',
     ...examplePages.map(({ slug }) => slug),
   ]);
