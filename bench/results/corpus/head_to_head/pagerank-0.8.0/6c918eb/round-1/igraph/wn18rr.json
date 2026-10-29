@@ -1,0 +1,148 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "head-to-head",
+   "wn18rr",
+   "--engine",
+   "igraph",
+   "--workload",
+   "pagerank",
+   "--threads",
+   "4",
+   "--pg-config",
+   "/var/tmp/pr-bench/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "6c918eb",
+   "--extension-profile",
+   "release",
+   "--results",
+   "/var/tmp/pr-bench/results/r1/igraph"
+  ],
+  "harness": {
+   "revision": "6c918eb2f498486cec47c0207ac2d6f4ead73c3c",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "6c918eb",
+   "profile": "release",
+   "library": "/var/tmp/pr-bench/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "a59481d01fe533b8bb9f81663f8b40dbcfb2279efbbb62accb62bb6a8f103bd3"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v185",
+  "load_average": [
+   0.23193359375,
+   0.11572265625,
+   0.53955078125
+  ]
+ },
+ "dataset": "wn18rr",
+ "tier": "tiny",
+ "fetched": {
+  "tables": {
+   "nodes": 40943,
+   "edges": 93003,
+   "ids": "text",
+   "relations": 11,
+   "self_loops": 9
+  },
+  "sha256": {
+   "nodes.csv": "ceeaf46e4b4f46265535b05d55934499150189f4fae6e33a00f7a341bc9d7bfa",
+   "edges.csv": "fb2e41b00f3fed639f9611d25d3f06701fe0293b9fdc96c255fd55893dadd2b4"
+  },
+  "provenance": {
+   "entryId": "wn18rr",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-26T05:48:09.864Z",
+   "source": {
+    "url": "https://web.informatik.uni-mannheim.de/pi1/kge-datasets/wnrr.tar.gz",
+    "status": "live"
+   },
+   "fetchedUrl": "https://web.informatik.uni-mannheim.de/pi1/kge-datasets/wnrr.tar.gz",
+   "sha256": "db1f5ce41e3d753c902f52af4e6e75dfe1890eb67ecacec8eea346013c596aa8",
+   "byteLength": 1297906,
+   "members": [
+    "wnrr/train.txt",
+    "wnrr/valid.txt",
+    "wnrr/test.txt"
+   ]
+  }
+ },
+ "repeat": 5,
+ "budget_seconds": 120,
+ "timeout_seconds": 600,
+ "workloads": [
+  {
+   "name": "pagerank 20 iterations",
+   "kind": "pagerank",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": 20
+  }
+ ],
+ "engines": {
+  "igraph": {
+   "describe": {
+    "version": "1.0.0",
+    "threads": 1,
+    "settings": {
+     "pagerank": "PRPACK (solved)",
+     "louvain": "community_multilevel",
+     "leiden": "community_leiden, modularity, 2 iterations",
+     "seed": 1
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.07979084199905628
+     ],
+     "median_seconds": 0.07979084199905628
+    },
+    "build": {
+     "seconds": [
+      0.05649798800004646
+     ],
+     "median_seconds": 0.05649798800004646
+    }
+   },
+   "workloads": {
+    "pagerank 20 iterations": {
+     "cold_seconds": 0.01575408700045955,
+     "warm_seconds": [
+      0.014521339000566513,
+      0.015098595000381465,
+      0.01488398000037705,
+      0.01438931600023352,
+      0.014867654999761726
+     ],
+     "warm_median_seconds": 0.014867654999761726,
+     "cold_phases": {},
+     "check": {
+      "check": "pagerank 20 iterations",
+      "status": "match",
+      "compared": 40943,
+      "mismatches": 0,
+      "max_error": 5.74280206722122e-14,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0,
+      "convention": "fixed point"
+     },
+     "counted": true
+    }
+   }
+  }
+ }
+}

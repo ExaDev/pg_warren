@@ -1,0 +1,167 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "head-to-head",
+   "ss-gleich-usroads-48",
+   "--engine",
+   "pg_warren",
+   "--workload",
+   "pagerank",
+   "--threads",
+   "4",
+   "--pg-config",
+   "/var/tmp/pr-bench/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "6c918eb",
+   "--extension-profile",
+   "release",
+   "--results",
+   "/var/tmp/pr-bench/results/r1/pg_warren"
+  ],
+  "harness": {
+   "revision": "6c918eb2f498486cec47c0207ac2d6f4ead73c3c",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "6c918eb",
+   "profile": "release",
+   "library": "/var/tmp/pr-bench/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "a59481d01fe533b8bb9f81663f8b40dbcfb2279efbbb62accb62bb6a8f103bd3"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v185",
+  "load_average": [
+   0.642578125,
+   0.2099609375,
+   0.564453125
+  ]
+ },
+ "dataset": "ss-gleich-usroads-48",
+ "tier": "medium",
+ "fetched": {
+  "tables": {
+   "nodes": 126146,
+   "edges": 161950,
+   "ids": "integer",
+   "relations": 0,
+   "self_loops": 0
+  },
+  "sha256": {
+   "nodes.csv": "1e6fc5275b2fb3611ddb77da40fb0f007b53b6404ebdf0863377a510095c57d5",
+   "edges.csv": "c8d23e2b36126ee89807b70236b00a9175cde754790c7fccf048bd4c49b17ea2"
+  },
+  "provenance": {
+   "entryId": "ss-gleich-usroads-48",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-24T19:52:53.378Z",
+   "source": {
+    "url": "https://www.cise.ufl.edu/research/sparse/MM/Gleich/usroads-48.tar.gz",
+    "status": "live"
+   },
+   "fetchedUrl": "https://www.cise.ufl.edu/research/sparse/MM/Gleich/usroads-48.tar.gz",
+   "sha256": "7118d65446f868f6803f77dcd422935b0c480e2445d25e37f2cf05aa269d2d0e",
+   "byteLength": 990717,
+   "member": "usroads-48/usroads-48.mtx"
+  }
+ },
+ "repeat": 5,
+ "budget_seconds": 120,
+ "timeout_seconds": 600,
+ "workloads": [
+  {
+   "name": "pagerank 20 iterations",
+   "kind": "pagerank",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": 20
+  }
+ ],
+ "engines": {
+  "pg_warren": {
+   "describe": {
+    "version": "0.8.0",
+    "threads": 4,
+    "settings": [
+     "fsync=off",
+     "full_page_writes=off",
+     "jit=on",
+     "maintenance_work_mem=1GB",
+     "max_parallel_workers_per_gather=2",
+     "max_wal_size=1GB",
+     "shared_buffers=1GB",
+     "shared_preload_libraries=",
+     "statement_timeout=10min",
+     "synchronous_commit=off",
+     "wal_level=minimal",
+     "warren.max_build_memory=4GB",
+     "warren.max_cache_memory=4GB",
+     "warren.max_compute_memory=4GB",
+     "warren.shared_cache_memory=4GB",
+     "warren.threads=4",
+     "work_mem=64MB"
+    ],
+    "graph": {
+     "node_count": 126146,
+     "edge_count": 323900,
+     "dropped_edges": 0,
+     "bytes": 6643780
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.1639166610002576
+     ],
+     "median_seconds": 0.1639166610002576
+    },
+    "build": {
+     "seconds": [
+      0.08208725799886452,
+      0.07568722500036529,
+      0.08238146399889956
+     ],
+     "median_seconds": 0.08208725799886452
+    }
+   },
+   "workloads": {
+    "pagerank 20 iterations": {
+     "cold_seconds": 0.0678627109991794,
+     "warm_seconds": [
+      0.040393699000560446,
+      0.036353122000946314,
+      0.036780495998755214,
+      0.036655206999057555,
+      0.03600812500008033
+     ],
+     "warm_median_seconds": 0.036655206999057555,
+     "cold_phases": {
+      "evict": 0.0004957940000167582
+     },
+     "check": {
+      "check": "pagerank 20 iterations",
+      "status": "match",
+      "compared": 126146,
+      "mismatches": 0,
+      "max_error": 1.0164395367051604e-20,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0,
+      "convention": "normalised"
+     },
+     "counted": true
+    }
+   }
+  }
+ }
+}

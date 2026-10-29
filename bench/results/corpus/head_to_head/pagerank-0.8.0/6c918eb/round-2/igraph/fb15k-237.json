@@ -1,0 +1,148 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "head-to-head",
+   "fb15k-237",
+   "--engine",
+   "igraph",
+   "--workload",
+   "pagerank",
+   "--threads",
+   "4",
+   "--pg-config",
+   "/var/tmp/pr-bench/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "6c918eb",
+   "--extension-profile",
+   "release",
+   "--results",
+   "/var/tmp/pr-bench/results/r2/igraph"
+  ],
+  "harness": {
+   "revision": "6c918eb2f498486cec47c0207ac2d6f4ead73c3c",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "6c918eb",
+   "profile": "release",
+   "library": "/var/tmp/pr-bench/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "a59481d01fe533b8bb9f81663f8b40dbcfb2279efbbb62accb62bb6a8f103bd3"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v185",
+  "load_average": [
+   1.3701171875,
+   0.6484375,
+   0.68310546875
+  ]
+ },
+ "dataset": "fb15k-237",
+ "tier": "medium",
+ "fetched": {
+  "tables": {
+   "nodes": 14541,
+   "edges": 310116,
+   "ids": "text",
+   "relations": 237,
+   "self_loops": 1806
+  },
+  "sha256": {
+   "nodes.csv": "388311a4d3eb10b614d702ce55d09e73bc76e9b866e09b9dbdedead28f5796ba",
+   "edges.csv": "bb64c0468d9fbae25dca3b0c15e8f336d7aa8f20a732e1a8e3bd881b7ec09ae4"
+  },
+  "provenance": {
+   "entryId": "fb15k-237",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-26T05:48:27.098Z",
+   "source": {
+    "url": "https://web.informatik.uni-mannheim.de/pi1/kge-datasets/fb15k-237.tar.gz",
+    "status": "live"
+   },
+   "fetchedUrl": "https://web.informatik.uni-mannheim.de/pi1/kge-datasets/fb15k-237.tar.gz",
+   "sha256": "eb851e61cac226db18ab251f0e52df43dfa8701c1d5f16eb34fb28de968e474c",
+   "byteLength": 3899580,
+   "members": [
+    "fb15k-237/train.txt",
+    "fb15k-237/valid.txt",
+    "fb15k-237/test.txt"
+   ]
+  }
+ },
+ "repeat": 5,
+ "budget_seconds": 120,
+ "timeout_seconds": 600,
+ "workloads": [
+  {
+   "name": "pagerank 20 iterations",
+   "kind": "pagerank",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": 20
+  }
+ ],
+ "engines": {
+  "igraph": {
+   "describe": {
+    "version": "1.0.0",
+    "threads": 1,
+    "settings": {
+     "pagerank": "PRPACK (solved)",
+     "louvain": "community_multilevel",
+     "leiden": "community_leiden, modularity, 2 iterations",
+     "seed": 1
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.2594049859999359
+     ],
+     "median_seconds": 0.2594049859999359
+    },
+    "build": {
+     "seconds": [
+      0.17787813100039784
+     ],
+     "median_seconds": 0.17787813100039784
+    }
+   },
+   "workloads": {
+    "pagerank 20 iterations": {
+     "cold_seconds": 0.013412062999123009,
+     "warm_seconds": [
+      0.012106362999475095,
+      0.012022267999782343,
+      0.011923475998628419,
+      0.01189991599858331,
+      0.011796596001659054
+     ],
+     "warm_median_seconds": 0.011923475998628419,
+     "cold_phases": {},
+     "check": {
+      "check": "pagerank 20 iterations",
+      "status": "match",
+      "compared": 14541,
+      "mismatches": 0,
+      "max_error": 3.358606795456076e-13,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0,
+      "convention": "fixed point"
+     },
+     "counted": true
+    }
+   }
+  }
+ }
+}

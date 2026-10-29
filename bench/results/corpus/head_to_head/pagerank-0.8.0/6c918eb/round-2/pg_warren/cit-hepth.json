@@ -1,0 +1,166 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "head-to-head",
+   "cit-hepth",
+   "--engine",
+   "pg_warren",
+   "--workload",
+   "pagerank",
+   "--threads",
+   "4",
+   "--pg-config",
+   "/var/tmp/pr-bench/pgtree/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "6c918eb",
+   "--extension-profile",
+   "release",
+   "--results",
+   "/var/tmp/pr-bench/results/r2/pg_warren"
+  ],
+  "harness": {
+   "revision": "6c918eb2f498486cec47c0207ac2d6f4ead73c3c",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "6c918eb",
+   "profile": "release",
+   "library": "/var/tmp/pr-bench/pgtree/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "a59481d01fe533b8bb9f81663f8b40dbcfb2279efbbb62accb62bb6a8f103bd3"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v185",
+  "load_average": [
+   1.31494140625,
+   0.62548828125,
+   0.67578125
+  ]
+ },
+ "dataset": "cit-hepth",
+ "tier": "medium",
+ "fetched": {
+  "tables": {
+   "nodes": 27770,
+   "edges": 352807,
+   "ids": "integer",
+   "relations": 0,
+   "self_loops": 39
+  },
+  "sha256": {
+   "nodes.csv": "7c9deb299348bbc22945e04d55d8f035991908fca954acd14bd6f913573f9d6e",
+   "edges.csv": "2152386f21edc37938eaad6ee910faa46a2f088bc077b5ccd423a94b44a2798d"
+  },
+  "provenance": {
+   "entryId": "cit-hepth",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-26T05:48:15.241Z",
+   "source": {
+    "url": "https://snap.stanford.edu/data/cit-HepTh.txt.gz",
+    "status": "live"
+   },
+   "fetchedUrl": "https://snap.stanford.edu/data/cit-HepTh.txt.gz",
+   "sha256": "7df944b502bd7b687b0e7e94ba9b0a87f202693254558ae5f8ea45657697eb32",
+   "byteLength": 1317497
+  }
+ },
+ "repeat": 5,
+ "budget_seconds": 120,
+ "timeout_seconds": 600,
+ "workloads": [
+  {
+   "name": "pagerank 20 iterations",
+   "kind": "pagerank",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": 20
+  }
+ ],
+ "engines": {
+  "pg_warren": {
+   "describe": {
+    "version": "0.8.0",
+    "threads": 4,
+    "settings": [
+     "fsync=off",
+     "full_page_writes=off",
+     "jit=on",
+     "maintenance_work_mem=1GB",
+     "max_parallel_workers_per_gather=2",
+     "max_wal_size=1GB",
+     "shared_buffers=1GB",
+     "shared_preload_libraries=",
+     "statement_timeout=10min",
+     "synchronous_commit=off",
+     "wal_level=minimal",
+     "warren.max_build_memory=4GB",
+     "warren.max_cache_memory=4GB",
+     "warren.max_compute_memory=4GB",
+     "warren.shared_cache_memory=4GB",
+     "warren.threads=4",
+     "work_mem=64MB"
+    ],
+    "graph": {
+     "node_count": 27770,
+     "edge_count": 352807,
+     "dropped_edges": 0,
+     "bytes": 3714700
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.1404946189995826
+     ],
+     "median_seconds": 0.1404946189995826
+    },
+    "build": {
+     "seconds": [
+      0.08769728200059035,
+      0.1014669430005597,
+      0.1104821869994339
+     ],
+     "median_seconds": 0.1014669430005597
+    }
+   },
+   "workloads": {
+    "pagerank 20 iterations": {
+     "cold_seconds": 0.023234828000568086,
+     "warm_seconds": [
+      0.01756867800031614,
+      0.01633080399915343,
+      0.016333840998413507,
+      0.019787986999290297,
+      0.017925104999449104
+     ],
+     "warm_median_seconds": 0.01756867800031614,
+     "cold_phases": {
+      "evict": 0.0008517360001860652
+     },
+     "check": {
+      "check": "pagerank 20 iterations",
+      "status": "match",
+      "compared": 27770,
+      "mismatches": 0,
+      "max_error": 9.107298248878237e-18,
+      "examples": [],
+      "only_warren": 0,
+      "only_oracle": 0,
+      "convention": "normalised"
+     },
+     "counted": true
+    }
+   }
+  }
+ }
+}
