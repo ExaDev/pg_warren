@@ -26,3 +26,8 @@ def problems(text, allowed=frozenset(), expected=()):
         if (unexpected_state or TROUBLE.search(line)) and not any(p.search(line) for p in exempt):
             found.append(line)
     return found
+
+# What a clean shutdown logs through PG 16: the logical replication
+# launcher's exit with code 1. For runs that stop or restart a server
+# before reading its log.
+CLEAN_SHUTDOWN = (r'background worker "logical replication launcher" \(PID \d+\) exited with exit code 1',)

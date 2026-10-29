@@ -16,13 +16,19 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 
 use pgrx::pg_sys;
+use pgrx::pg_sys::panic::ErrorReport;
 
-use pgrx::{ereport, PgSqlErrorCode};
+use pgrx::{PgLogLevel, PgSqlErrorCode};
 
 /// An error a `warren.*` function reports to its caller as a SQL error.
 pub(crate) trait SqlError: std::fmt::Display {
     /// The SQLSTATE to report.
     fn sqlstate(&self) -> PgSqlErrorCode;
+
+    /// The remedy to report as the error's hint, if there is one.
+    fn hint(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 /// Unwraps `result`, or raises its error as a SQL `ERROR` (which does not
@@ -31,7 +37,13 @@ fn or_raise<T, E: SqlError>(result: Result<T, E>) -> T {
     match result {
         Ok(value) => value,
         Err(error) => {
-            ereport!(ERROR, error.sqlstate(), error.to_string());
+            let report = ErrorReport::new(error.sqlstate(), error.to_string(), "or_raise");
+            match error.hint() {
+                Some(hint) => report.set_hint(hint),
+                None => report,
+            }
+            .report(PgLogLevel::ERROR);
+            unreachable!("an ERROR does not return")
         }
     }
 }

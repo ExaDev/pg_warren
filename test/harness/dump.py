@@ -13,7 +13,19 @@ The trusted variant (DESIGN.md §7): a non-superuser that owns the database
 installed pg_warren, so it may not read the catalog. A plain pg_dump fails
 for it; with --exclude-table-data='warren.*' it dumps cleanly, without
 graphs, which create_graph and refresh then build again. Its restore fails
-only at the event trigger, which only a superuser may create."""
+only at the event trigger, which only a superuser may create.
+
+The managed variant (DESIGN.md §14 item 51): no superuser at all, as on
+Amazon RDS. The administrator is a CREATEROLE, CREATEDB non-superuser in a
+role that holds pg_read_all_data and pg_write_all_data with the admin option,
+as RDS's rds_superuser does from PG 15. It installs pg_warren, seeds the
+graphs, dumps them (and so does a role granted only pg_read_all_data),
+restores both dumps into databases it creates, and gets the same answers.
+A restore into a cluster that lacks a role the catalog names fails, naming
+the role. A graph whose row the administrator rewrites to a superuser owner
+(pg_write_all_data allows it) is refused to its refresh. Then the
+administrator drops a role's graphs and vectors with warren.drop_owned, and
+drops the extension."""
 
 import difflib
 import re
@@ -31,7 +43,8 @@ TRIGGER = """
 # Roles are cluster-wide; `check` creates them once.
 ROLES = ("dump_owner", "dump_reader")
 
-SEED = """
+# Graphs of two roles over tables of the role that seeds them.
+GRAPHS = """
     CREATE TABLE public.nodes AS SELECT generate_series(1, 8)::bigint AS id;
     CREATE TABLE public.edges AS
         SELECT id AS src, id % 8 + 1 AS dst, CASE WHEN id % 2 = 0 THEN 'a' ELSE 'b' END AS rel,
@@ -81,7 +94,8 @@ SEED = """
     END $$;
     INSERT INTO public.nodes VALUES (8);
     SELECT warren.refresh('g', promote := false, label := 'staged');
-""" + TRIGGER
+"""
+SEED = GRAPHS + TRIGGER
 
 # What pg_warren answers, as sorted text rows. Staleness (now() - built_at)
 # changes between the two reads, so it is left out.
@@ -373,3 +387,137 @@ def check_cross_encoding(cluster, directory):
         elif (found := restored.query("SELECT warren.degree('ascii', 'node-1'::text)")) != [["1"]]:
             failures.append(f"UTF8: the restored text graph gives degree {found}, not 1")
     return failures
+
+
+# A managed service's administrator, emulated (DESIGN.md §14 item 51): on
+# Amazon RDS from PG 15, rds_superuser holds pg_read_all_data and
+# pg_write_all_data WITH ADMIN OPTION, and the master user is a LOGIN,
+# CREATEROLE, CREATEDB non-superuser that inherits it. The cluster superuser
+# stands in for rdsadmin, which customers never log in as.
+MANAGED_ADMIN = "warren_master"
+MANAGED_DUMPER = "warren_dumper"
+MANAGED_ROLES = f"""
+    CREATE ROLE warren_rds_superuser NOLOGIN;
+    GRANT pg_read_all_data, pg_write_all_data TO warren_rds_superuser WITH ADMIN OPTION;
+    CREATE ROLE {MANAGED_ADMIN} LOGIN NOSUPERUSER CREATEROLE CREATEDB;
+    GRANT warren_rds_superuser TO {MANAGED_ADMIN};
+"""
+# The administrator would have created the roles that own and read graphs;
+# `check` created them as the superuser, so it is made a member here.
+MANAGED_MEMBERSHIPS = f"GRANT {', '.join(ROLES)} TO {MANAGED_ADMIN}"
+# What the administrator grants, with its admin option, to a role that only
+# dumps.
+MANAGED_DUMPER_SQL = f"CREATE ROLE {MANAGED_DUMPER} LOGIN; GRANT pg_read_all_data TO {MANAGED_DUMPER}"
+
+MISSING_ROLE = re.compile(r'ERROR:  role "([^"]+)" does not exist')
+
+
+def missing_roles(stderr):
+    """The roles a restore reported missing, once each, in order."""
+    return list(dict.fromkeys(MISSING_ROLE.findall(stderr)))
+
+
+# After the round trip, the administrator's lifecycle: a role's graphs and
+# vectors dropped as DROP OWNED would, then the extension.
+MANAGED_LIFECYCLE = """
+    SELECT warren.drop_owned('dump_reader');
+    DROP EXTENSION pg_warren;
+"""
+MANAGED_AFTER_LIFECYCLE = """
+    SELECT (SELECT count(*) FROM pg_namespace WHERE nspname = 'warren'),
+           (SELECT count(*) FROM pg_extension WHERE extname = 'pg_warren')"""
+
+# What pg_write_all_data allows (DESIGN.md §7, §14 item 51): the
+# administrator rewrites a graph's row to make the bootstrap superuser
+# (rdsadmin, on RDS) its owner, with a source query of its choosing. Its
+# refresh must be refused (42501) before the query runs as that superuser;
+# if it ran, the division by zero would fail the block instead.
+MANAGED_SUPERUSER_OWNER = """
+    UPDATE warren.graphs SET owner = 10::oid::regrole, node_query = 'SELECT 1 / 0'
+    WHERE name = 'g';
+    DO $$ BEGIN
+        PERFORM warren.refresh('g');
+        RAISE EXCEPTION 'the administrator refreshed a graph a superuser owns';
+    EXCEPTION WHEN insufficient_privilege THEN NULL;
+    END $$;
+"""
+
+
+def check_managed(cluster, directory):
+    """Checks dump, restore and the extension's lifecycle with no superuser;
+    returns the failures."""
+    admin = cluster.database()
+    admin.execute(MANAGED_ROLES + MANAGED_MEMBERSHIPS)
+    master = cluster.database("postgres", MANAGED_ADMIN)
+    master.execute(MANAGED_DUMPER_SQL)
+    master.execute("CREATE DATABASE dump_managed")
+    source = cluster.database("dump_managed", MANAGED_ADMIN)
+    source.execute("CREATE EXTENSION pg_warren")
+    source.execute(GRAPHS)
+    expected = describe(source)
+    failures = []
+    if (owner := source.query("SELECT extowner::regrole::text FROM pg_extension WHERE extname = 'pg_warren'")) \
+            != [[MANAGED_ADMIN]]:
+        failures.append(f"managed: the extension's owner is {owner}")
+    dumps = (("plain", False, MANAGED_DUMPER), ("custom", True, MANAGED_ADMIN))
+    for label, custom, dumper in dumps:
+        path = directory / f"managed.{label}"
+        warnings = []
+        error = _run(dump_command(cluster, "dump_managed", path, "-Fc" if custom else "-Fp", user=dumper), warnings)
+        if error:
+            failures.append(f"managed {label} dump by {dumper}: {error}")
+            continue
+        failures += [f"managed {label} dump by {dumper}: {warning}" for warning in warnings]
+        name = f"dump_managed_{label}"
+        master.execute(f"CREATE DATABASE {name}")
+        warnings = []
+        error = _run(restore_command(cluster, name, path, custom, user=MANAGED_ADMIN), warnings)
+        if error:
+            failures.append(f"managed {label} restore: {error}")
+            continue
+        failures += [f"managed {label} restore: {warning}" for warning in warnings]
+        restored = cluster.database(name, MANAGED_ADMIN)
+        diff = differences(expected, describe(restored), f"managed restore from {label}")
+        if diff:
+            failures.append(f"managed {label}: the restored database answers differently\n{diff}")
+        error = _run(restored.command("-c", AFTER_RESTORE))
+        if error:
+            failures.append(f"managed {label}: a new build after the restore failed: {error}")
+    return failures + _missing_role(cluster, directory / "managed.custom") + _superuser_owner(cluster) \
+        + _lifecycle(cluster)
+
+
+def _superuser_owner(cluster):
+    """The administrator, rewriting a graph's row to a superuser owner,
+    still cannot run SQL as that superuser through the graph."""
+    restored = cluster.database("dump_managed_plain", MANAGED_ADMIN)
+    error = _run(restored.command("-c", MANAGED_SUPERUSER_OWNER))
+    return [f"managed: a graph re-owned to a superuser: {error}"] if error else []
+
+
+def _missing_role(cluster, path):
+    """Restores `path` while a role it names is missing (renamed away, as
+    if on another cluster); the restore must fail, naming it."""
+    admin = cluster.database()
+    cluster.database("postgres", MANAGED_ADMIN).execute("CREATE DATABASE dump_managed_missing")
+    admin.execute("ALTER ROLE dump_reader RENAME TO dump_reader_elsewhere")
+    try:
+        done = subprocess.run(restore_command(cluster, "dump_managed_missing", path, True, user=MANAGED_ADMIN),
+                              capture_output=True, text=True)
+    finally:
+        admin.execute("ALTER ROLE dump_reader_elsewhere RENAME TO dump_reader")
+    if done.returncode == 0:
+        return ["managed: a restore without the role dump_reader succeeded"]
+    if missing_roles(done.stderr) != ["dump_reader"]:
+        return [f"managed: a restore without dump_reader failed otherwise: {done.stderr}"]
+    return []
+
+
+def _lifecycle(cluster):
+    restored = cluster.database("dump_managed_custom", MANAGED_ADMIN)
+    error = _run(restored.command("-c", MANAGED_LIFECYCLE))
+    if error:
+        return [f"managed lifecycle: {error}"]
+    if (left := restored.query(MANAGED_AFTER_LIFECYCLE)) != [["0", "0"]]:
+        return [f"managed lifecycle: schema warren and the extension remain: {left}"]
+    return []

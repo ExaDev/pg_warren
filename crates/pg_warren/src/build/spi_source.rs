@@ -9,7 +9,7 @@ use warren_core::graph::BuildMemory;
 
 use super::error::BuildError;
 use super::source::{EdgeRow, EdgeSink, SourceReader};
-use crate::access::{as_role, with_read_only, with_search_path};
+use crate::access::{as_graph_owner, with_read_only, with_search_path};
 use crate::activity::{self, Units};
 use crate::catalog::GraphDefinition;
 use crate::source::{
@@ -31,7 +31,7 @@ impl<'g> SpiSource<'g> {
 impl<E: IdDatum> SourceReader<E> for SpiSource<'_> {
     fn node_ids(&mut self, memory: &BuildMemory) -> Result<E::Ids, BuildError> {
         let graph = self.graph;
-        as_role(graph.owner, || {
+        as_graph_owner(graph.owner, &graph.name, || {
             with_search_path(&graph.search_path, || {
                 with_read_only(|| {
                     Spi::connect(|client| {
@@ -59,7 +59,7 @@ impl<E: IdDatum> SourceReader<E> for SpiSource<'_> {
     fn edges(&mut self, sink: &mut dyn EdgeSink<E::Key>) -> Result<(), BuildError> {
         let graph = self.graph;
         let weight_column = if graph.has_relations { 4 } else { 3 };
-        as_role(graph.owner, || {
+        as_graph_owner(graph.owner, &graph.name, || {
             with_search_path(&graph.search_path, || {
                 with_read_only(|| {
                     Spi::connect(|client| {
@@ -113,7 +113,7 @@ mod tests {
     use crate::build::error::BuildError;
     use crate::build::source::{EdgeRow, EdgeSink, SourceReader};
     use crate::catalog::GraphDefinition;
-    use crate::fixture::allocated;
+    use crate::fixture::{allocated, failure, failure_as, ring};
     use crate::source::with_pinned_snapshot;
 
     /// An edge sink that records the most Postgres memory allocated since
@@ -172,6 +172,100 @@ mod tests {
             probe.peak,
             probe.first_batch
         );
+        Ok(())
+    }
+
+    /// Why a non-superuser may not refresh graph `su` (DESIGN.md §7, §14
+    /// item 51).
+    const REFUSED: &str = "42501: only a superuser may run the source queries of graph \"su\" \
+                           as superuser \"sr_super\"";
+
+    /// The remedy the refusal hints at.
+    const HINT: &str = "A superuser must do it in its own session (not through SET ROLE or a \
+                        SECURITY DEFINER function), or give the graph to a role that is not a \
+                        superuser with warren.set_owner or warren.reassign_owned.";
+
+    /// Graph `sr`, a ring of 4 owned by `sr_owner`, and graph `su` over the
+    /// same tables, owned by superuser `sr_super`, of which `sr_member` (not
+    /// a superuser) is a member and `sr_reader` a reader; `sr_nobody` owns
+    /// nothing.
+    fn graphs() -> Result<(), Error> {
+        ring("sr", 4, 2)?;
+        Spi::run(
+            "CREATE ROLE sr_super SUPERUSER; CREATE ROLE sr_member; GRANT sr_super TO sr_member;
+             CREATE ROLE sr_reader; CREATE ROLE sr_nobody;
+             SET ROLE sr_super;
+             SELECT warren.create_graph('su', 'SELECT id FROM sr_nodes',
+                                        'SELECT src, dst FROM sr_edges');
+             RESET ROLE;
+             SELECT warren.grant('su', 'sr_reader')",
+        )
+    }
+
+    #[pg_test]
+    fn a_superuser_refreshes_a_graph_a_superuser_owns() -> Result<(), Error> {
+        graphs()?;
+        assert_eq!(failure("warren.refresh('su')")?, None);
+        assert_eq!(failure_as("sr_super", "warren.refresh('su')")?, None);
+        Ok(())
+    }
+
+    /// Superuser is not inherited: a member of a superuser role is not a
+    /// superuser, and may not run SQL as one through a graph.
+    #[pg_test]
+    fn only_a_superuser_refreshes_a_graph_a_superuser_owns() -> Result<(), Error> {
+        graphs()?;
+        assert_eq!(failure_as("sr_member", "warren.refresh('su')")?.as_deref(), Some(REFUSED));
+        for role in ["sr_reader", "sr_nobody", "sr_owner"] {
+            let refused = failure_as(role, "warren.refresh('su')")?.unwrap_or_default();
+            assert!(refused.starts_with("42501: "), "{role}: {refused}");
+        }
+        assert_eq!(failure_as("sr_owner", "warren.refresh('sr')")?, None);
+        Ok(())
+    }
+
+    /// A holder of `pg_write_all_data` (a restore, DESIGN.md §14 item 51)
+    /// can rewrite a graph's owner and source queries in `warren.graphs`:
+    /// the queries must not then run as a superuser for a non-superuser.
+    #[pg_test]
+    fn a_row_rewritten_to_a_superuser_owner_is_refused_before_its_queries_run() -> Result<(), Error>
+    {
+        graphs()?;
+        Spi::run(
+            "UPDATE warren.graphs SET owner = 'sr_super'::regrole, node_query = 'SELECT 1 / 0'
+             WHERE name = 'sr'",
+        )?;
+        let refused = REFUSED.replace("\"su\"", "\"sr\"");
+        assert_eq!(failure_as("sr_member", "warren.refresh('sr')")?, Some(refused));
+        assert_eq!(
+            failure("warren.refresh('sr')")?.as_deref(),
+            Some("22012: division by zero"),
+            "a superuser runs what the row holds"
+        );
+        Ok(())
+    }
+
+    /// The session user must be a superuser too: a superuser's `SECURITY
+    /// DEFINER` function does not let a non-superuser's session through.
+    #[pg_test]
+    fn a_superusers_security_definer_function_does_not_refresh_for_others() -> Result<(), Error> {
+        graphs()?;
+        Spi::run(
+            "CREATE FUNCTION sr_refresh() RETURNS bigint SECURITY DEFINER LANGUAGE sql
+                 AS $$ SELECT warren.refresh('su') $$;
+             CREATE TEMP TABLE refusal (what text, hint text); GRANT ALL ON refusal TO PUBLIC;
+             SET SESSION AUTHORIZATION sr_nobody;
+             DO $do$ DECLARE hint text; BEGIN PERFORM sr_refresh();
+             EXCEPTION WHEN OTHERS THEN
+                 GET STACKED DIAGNOSTICS hint = PG_EXCEPTION_HINT;
+                 INSERT INTO refusal VALUES (SQLSTATE || ': ' || SQLERRM, hint);
+             END $do$;
+             RESET SESSION AUTHORIZATION",
+        )?;
+        let refused = Spi::get_one::<String>("SELECT max(what) FROM refusal")?;
+        assert_eq!(refused.as_deref(), Some(REFUSED));
+        let hint = Spi::get_one::<String>("SELECT max(hint) FROM refusal")?;
+        assert_eq!(hint.as_deref(), Some(HINT));
         Ok(())
     }
 }

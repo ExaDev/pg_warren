@@ -16,11 +16,13 @@ name: Release (publish)
 # with no secrets build them from the recorded commit's source with the
 # tooling of github.sha, and test each: the .deb packages of the apt
 # repository (each distribution x arch in its own container, against
-# PGDG), the Docker images made from them and the Homebrew bottle and
-# formula. After approval the publish job, which runs no build code,
-# treats what they built as data: it checks each .deb (release/assets.py:
-# only pg_warren's files, root's and 0644 in 0755 directories, our postinst,
-# control.in's fields, this release's version), makes the tarballs and the
+# PGDG), the Docker images made from them, the Homebrew bottle and
+# formula, and the vendored source tarball and CycloneDX SBOM. After
+# approval the publish job, which runs no build code, treats what they
+# built as data: it checks each .deb (release/assets.py: only pg_warren's
+# files, root's and 0644 in 0755 directories, our postinst, control.in's
+# fields, this release's version), checks the vendored source and the SBOM
+# against the source tarball, makes the tarballs and the
 # Docker images again from the checked packages (unpacking them; the
 # image's build runs nothing), renders the formula again keeping only the
 # bottle block, signs SHA256SUMS, attaches them to the GitHub Release, and
@@ -198,6 +200,53 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  source-assets:
+    # Read-only and without secrets: from the source tarball, the vendored
+    # source tarball (every crate Cargo.lock pins, for an offline build)
+    # and pg_warren's CycloneDX SBOM (release/source.py), each the same
+    # bytes every time. cargo vendor and cargo-cyclonedx read the
+    # manifests and the index; neither runs a build script. The publish
+    # job checks both against the source tarball (release/assets.py).
+    name: Vendored source and SBOM
+    needs: verify
+    if: needs.verify.outputs.published == 'false'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: source
+          path: ${{ runner.temp }}/source
+      - name: The release's toolchain (its rust-toolchain.toml)
+        run: |
+          set -euo pipefail
+          tar -xzf "$RUNNER_TEMP/source/pg_warren-$VERSION.tar.gz" -C "$RUNNER_TEMP" "pg_warren-$VERSION/rust-toolchain.toml"
+          (cd "$RUNNER_TEMP/pg_warren-$VERSION" && rustup toolchain install)
+      # The release binary, checked against the sha256 in the action's
+      # manifest; CI's source-build job uses the same version.
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-cyclonedx@0.5.9
+      - name: pg_warren-${{ env.VERSION }}-vendored.tar.gz and pg_warren-${{ env.VERSION }}.cdx.json
+        run: |
+          set -euo pipefail
+          tarball="$RUNNER_TEMP/source/pg_warren-$VERSION.tar.gz"
+          python3 release/source.py vendored "$tarball" "$RUNNER_TEMP/source-assets"
+          python3 release/source.py sbom "$tarball" "$RUNNER_TEMP/source-assets"
+          ls -l "$RUNNER_TEMP/source-assets"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: source-assets
+          path: ${{ runner.temp }}/source-assets
+          if-no-files-found: error
+          retention-days: 7
+
   homebrew:
     # Read-only and without secrets: the tap's formula rendered for the
     # release (release/homebrew.py), built from the source tarball as a
@@ -225,6 +274,9 @@ jobs:
           set -euo pipefail
           tarball="$RUNNER_TEMP/source/pg_warren-$VERSION.tar.gz"
           brew tap-new --no-git exadev/tap
+          # Newer Homebrew loads formulae only from trusted taps; older brews
+          # have no `brew trust` and trust every tap.
+          if brew trust --help >/dev/null 2>&1; then brew trust exadev/tap; fi
           formula="$(brew --repo exadev/tap)/Formula/pg_warren.rb"
           python3 release/homebrew.py "$tarball" >"$formula"
           brew style exadev/tap/pg_warren
@@ -253,13 +305,14 @@ jobs:
 
   publish:
     name: Tag v${{ needs.verify.outputs.version }} → ${{ needs.verify.outputs.commit }}
-    needs: [verify, debs, homebrew]
+    needs: [verify, debs, homebrew, source-assets]
     # The builds are skipped for a release already published, and then
     # only for one.
     if: >-
       !cancelled() && needs.verify.result == 'success' &&
       (needs.verify.outputs.published == 'true' ||
-       (needs.debs.result == 'success' && needs.homebrew.result == 'success'))
+       (needs.debs.result == 'success' && needs.homebrew.result == 'success' &&
+        needs.source-assets.result == 'success'))
     runs-on: ubuntu-24.04
     environment: release
     # No packages: write: this repository's GITHUB_TOKEN cannot push the
@@ -315,7 +368,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          names=(source homebrew)
+          names=(source source-assets homebrew)
           for codename in bookworm trixie jammy noble; do
             for arch in amd64 arm64; do names+=("debs-$codename-$arch"); done
           done
@@ -349,6 +402,16 @@ jobs:
           count="$(find "$assets" -name 'pg_warren-*-linux-*.tar.gz' | wc -l)"
           [[ "$count" == 8 ]] || { echo "::error::$count tarballs, not 8 (2 arches x PG 15-18)"; exit 1; }
           cp -- "$artifacts/source/pg_warren-$VERSION.tar.gz" "$assets/"
+          # The vendored source and the SBOM, each checked against the
+          # source tarball: its files byte for byte and only Cargo.lock's
+          # crates, each matching its checksum; a BOM of pg_warren at this
+          # version listing only Cargo.lock's crates.
+          for name in "pg_warren-$VERSION-vendored.tar.gz" "pg_warren-$VERSION.cdx.json"; do
+            cp -- "$artifacts/source-assets/$name" "$assets/"
+          done
+          python3 release/assets.py check-vendored "$assets/pg_warren-$VERSION-vendored.tar.gz" \
+            "$assets/pg_warren-$VERSION.tar.gz"
+          python3 release/assets.py check-sbom "$assets/pg_warren-$VERSION.cdx.json" "$assets/pg_warren-$VERSION.tar.gz"
           bottles=("$artifacts"/homebrew/pg_warren-"$VERSION".arm64_*.bottle.tar.gz)
           [[ "${#bottles[@]}" == 1 && -f "${bottles[0]}" ]] || { echo "::error::not one arm64 bottle"; exit 1; }
           cp -- "${bottles[0]}" "$assets/"

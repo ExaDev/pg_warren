@@ -8,6 +8,25 @@
   the extension**, after installing the new build. The update adds the
   two functions below; it changes no table.
 
+### Behaviour changes
+
+- **A graph owned by a superuser runs its source queries only for a
+  superuser** (DESIGN.md §7, §14 item 51, decided by the owner
+  2026-10-29). `warren.refresh` of such a graph, and `warren.set_owner`
+  to a superuser (which opens the source queries as the new owner), now
+  require the caller to be a superuser as both the current user and the
+  session user; otherwise they fail with `insufficient_privilege` (42501,
+  "only a superuser may run the source queries of graph … as superuser
+  …") and a hint, before any of the graph's SQL runs. Until now a
+  non-superuser member of the superuser owner role, or any session
+  through a superuser's `SECURITY DEFINER` function, could refresh it.
+  The reason is the restore route: `pg_write_all_data` (which RDS's master
+  user holds) can rewrite a graph's owner and source queries, and a
+  `refresh` would then have run that SQL as a superuser. Graphs owned by
+  non-superusers are unaffected. To let non-superusers refresh a
+  superuser's graph, give it to a non-superuser with `set_owner` or
+  `reassign_owned`. No SQL surface changes.
+
 ### Added
 
 - **Graphs from keys.** `warren.queries_from_keys(tables regclass[])`
@@ -22,6 +41,20 @@
   composite key as its row literal (`shop.shipments:(10,2)`). Only the
   listed tables are read, and foreign keys to other tables are ignored
   (docs/semantics.md, "Graphs from keys"; DESIGN.md §14 item 53).
+
+### Documentation
+
+- **Dumps and restores without a superuser** (DESIGN.md §14 item 51,
+  [#103](https://github.com/ExaDev/pg_warren/issues/103)): a role granted
+  `pg_read_all_data` dumps graphs, versions and vectors, and a role with
+  `CREATE` on the target database and `pg_write_all_data` restores them.
+  On Amazon RDS from PG 15 the master user has both. pg_warren itself
+  grants no role access to its catalog, and nothing in the SQL surface
+  changes. The roles named in the catalog must exist on the target first:
+  a missing one makes the restore fail, naming it. docs/security.md says
+  what the two predefined roles also allow. `test/dump.py` now checks the
+  whole round trip with no superuser, as on RDS, then `warren.drop_owned`
+  and `DROP EXTENSION` by the same non-superuser.
 
 ## 0.8.0 — native PageRank and Leiden, leaner calls (2026-10-29)
 
@@ -66,6 +99,32 @@
   `char` messages no longer depend on `client_encoding`**: a message it
   could not represent failed with 22P05 ("has no equivalent in
   encoding"), since each message passed through `textsend`.
+
+### Supply chain
+
+- **Each release has a vendored source tarball and an SBOM**, both covered
+  by the signed `SHA256SUMS`: `pg_warren-X.Y.Z-vendored.tar.gz`, the source
+  with every crate `Cargo.lock` pins, which builds with `cargo build
+  --frozen` and no network; and `pg_warren-X.Y.Z.cdx.json`, a CycloneDX 1.5
+  SBOM of pg_warren and its crates with their licences and checksums. Both
+  are the same bytes each time they are made, and the publish job checks
+  both against the source tarball. CONTRIBUTING.md, "Supply chain", says
+  how to build offline and how to verify a release.
+- **Builds are reproducible from the same inputs.** The packages ship the
+  committed install script, `sql/pg_warren--X.Y.Z.sql`, instead of the one
+  `cargo pgrx package` generates, whose entity order changed from build to
+  build: that alone made every rebuilt `.deb` differ. Two builds of a
+  package from the same source now give the same bytes (CI checks it), and
+  `pg_warren.so` is the same bytes wherever it is built and whether its
+  crates come from crates.io or the vendored tarball
+  (`packaging/reproducibly.sh`; CI builds it both ways and compares). A
+  rebuild long after a release can still differ, since the build
+  container installs the current PostgreSQL headers and build tools; what
+  is and is not reproducible is in CONTRIBUTING.md, "Reproducible builds".
+- **Dependency checks in CI** (`cargo-deny`): RustSec advisories, a licence
+  allow-list, crates.io as the only source. They found two advisories,
+  fixed by updating `crossbeam-epoch` (in the library, through rayon) to
+  0.9.21 and a test dependency's `ctutils` to 0.4.7.
 
 ### Performance
 
@@ -129,6 +188,29 @@
   0.07–0.11 ms against 0.04 ms for `SELECT 1`, on PG 16 and 18. Half of
   the server's share is the one catalog read that resolves the graph
   (DESIGN.md §13, "After 0.7.0"). Nothing in traversal changed.
+- **Persisted vector writes reuse saved plans.** The statements that lock
+  the graph and version and write a vector's row and chunks are planned
+  once per backend and kept, instead of parsed and planned on every call
+  (DESIGN.md §6.2). On a 77-node graph a persisted `vector_const` takes
+  0.22 ms instead of 0.28 ms and `pagerank` 0.43 ms instead of 0.53 ms
+  (pgbench, one connection, `synchronous_commit = off`, PG 18). They are
+  planned again after `DISCARD ALL` or a change to the catalog's tables,
+  and a standby still refuses the write with 25006.
+
+### Documentation
+
+- DESIGN.md §5.1 says what a managed service's lifecycle needs of
+  pg_warren: nothing. A base backup restored and recovered to a point in
+  time holds the graphs, versions and vectors committed at the target.
+  `pg_upgrade` to a later major, copying the files or hard-linking them
+  (`--link`, as managed services upgrade), keeps them byte for byte, and
+  they read the same afterwards. Adding pg_warren to
+  `shared_preload_libraries` on a cluster with graphs, or removing it, changes only where versions are
+  cached. New tests check each of these (`test/point_in_time.py`,
+  `test/major_upgrade.py`, `test/preload.py`), as does a terminate,
+  cancel, kill or crash during `pagerank` and during a load into the
+  shared cache (`test/crash_recovery.py`). CI runs them, with the whole
+  SQL suite with and without the preload, on PG 15–18.
 
 ## 0.7.0 — proven on real graphs and real deployments (2026-10-27)
 

@@ -132,7 +132,8 @@ SELECT warren.refresh('churn');
 # Versions the reads name, read on the primary: social's compacted version
 # and the one refreshed after it, and kg's current version.
 VERSIONS_SQL = (
-    "SELECT (SELECT max(version_id) FROM warren.versions WHERE compacted_from IS NOT NULL), "
+    "SELECT (SELECT max(version_id) FROM warren.versions JOIN warren.graphs USING (graph_id) "
+    "WHERE name = 'social' AND compacted_from IS NOT NULL), "
     "(warren.info('social') ->> 'current_version'), (warren.info('kg') ->> 'current_version')")
 
 
@@ -372,10 +373,10 @@ def wait_for_replay(s, lsn, seconds=REPLAY_SECONDS):
         time.sleep(0.05)
 
 
-def shared_cache_works(standby, database):
-    """On standby `standby`: one backend loads social's current version, a
-    second reads it (from the shared cache, where the cluster shares
-    versions), both are listed by `warren.backends()`, `warren.progress()`
+def shared_cache_works(standby, database, server="the standby"):
+    """On standby `standby` (or any server, which failures call `server`):
+    one backend loads social's current version, a second reads it (from
+    the shared cache, where the cluster shares versions), both are listed by `warren.backends()`, `warren.progress()`
     and `warren.cache()` answer, and after `evict` in each nothing is
     pinned."""
     failures = []
@@ -383,7 +384,7 @@ def shared_cache_works(standby, database):
         for sql in ("SELECT warren.prewarm('social')", "SELECT count(*) FROM warren.cache()"):
             done = loader.run(sql)
             if not done.ok:
-                failures.append(f"{sql} on the standby: {done.sqlstate} {done.message}")
+                failures.append(f"{sql} on {server}: {done.sqlstate} {done.message}")
         read = reader.run("SELECT count(*) FROM warren.reachable_set('social', ARRAY[1::bigint], 3)")
         if not read.ok:
             failures.append(f"a read after another backend's prewarm: {read.sqlstate} {read.message}")
@@ -391,25 +392,25 @@ def shared_cache_works(standby, database):
         listed = loader.run(f"SELECT count(*) FROM warren.backends() WHERE pid IN ({loader.pid}, {reader.pid})")
         progress = loader.run("SELECT count(*) FROM warren.progress()")
         if not progress.ok:
-            failures.append(f"warren.progress() on the standby: {progress.sqlstate} {progress.message}")
+            failures.append(f"warren.progress() on {server}: {progress.sqlstate} {progress.message}")
         if loader.run(shared_cache.SHARES).value() == "t":
             if listed.value() != "2":
-                failures.append(f"warren.backends() lists {listed.value()} of the standby's 2 backends")
+                failures.append(f"warren.backends() lists {listed.value()} of {server}'s 2 backends")
             shared = loader.run(f"SELECT count(*) FROM warren.shared_cache() "
                                 f"WHERE kind = 'version' AND version = {current}").value()
             hits = loader.run(f"SELECT shared_hits FROM warren.backends() WHERE pid = {reader.pid}").value()
             if shared != "1" or int(hits) < 1:
-                failures.append(f"the standby's shared cache lists the current version {shared} times "
+                failures.append(f"{server}'s shared cache lists the current version {shared} times "
                                 f"and the second backend's shared hits are {hits}")
         elif not listed.ok:
-            failures.append(f"warren.backends() on the standby: {listed.sqlstate} {listed.message}")
+            failures.append(f"warren.backends() on {server}: {listed.sqlstate} {listed.message}")
         for s in (loader, reader):
             done = s.run("SELECT warren.evict('social')")
             if not done.ok:
-                failures.append(f"evict on the standby: {done.sqlstate} {done.message}")
+                failures.append(f"evict on {server}: {done.sqlstate} {done.message}")
         pinned = loader.run("SELECT count(*) FROM warren.shared_cache() WHERE pins <> 0").value()
         if pinned != "0":
-            failures.append(f"after evict, {pinned} shared entries are pinned on the standby")
+            failures.append(f"after evict, {pinned} shared entries are pinned on {server}")
     return failures
 
 

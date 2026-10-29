@@ -6,16 +6,34 @@ import threading
 import pytest
 
 from harness import crash_recovery
-from harness.crash_recovery import (EDGE_QUERY, GATE, KINDS, POINTS, SNAPSHOT, Interrupted, Scenario, differences,
-                                    log_problems, refresh_builds_the_source, setup_sql)
+from harness.crash_recovery import (EDGE_QUERY, GATE, KINDS, POINTS, SNAPSHOT, Interrupted, Scenario, applies,
+                                    cancel_failures, differences, log_problems, refresh_builds_the_source, setup_sql,
+                                    statement)
 from harness.session import BackendLost, Outcome
 
 PREFIX = "2026-10-25 10:00:00.001 UTC [7]"
 
 
 def test_every_point_is_tried_in_every_way():
-    assert POINTS == ("reading edges", "writing segments", "before commit")
-    assert KINDS == ("terminate", "kill", "immediate")
+    assert POINTS == ("reading edges", "writing segments", "before commit", "computing", "loading")
+    assert KINDS == ("terminate", "cancel", "kill", "immediate")
+
+
+def test_a_cancel_is_tried_wherever_a_statement_runs():
+    """A cancel interrupts a running statement; an idle transaction, as
+    before commit, ignores it."""
+    assert not applies("before commit", "cancel")
+    assert [point for point in POINTS if applies(point, "cancel")] == [
+        "reading edges", "writing segments", "computing", "loading"]
+    assert all(applies(point, kind) for point in POINTS for kind in KINDS if kind != "cancel")
+
+
+def test_each_point_stops_its_own_statement():
+    for point in ("reading edges", "writing segments", "before commit"):
+        assert statement(point) == "SELECT warren.refresh('big')"
+    assert "warren.pagerank('big', 'rank'" in statement("computing"), "a compute that persists its vector"
+    assert "tol := 0" in statement("computing"), "and runs until it is stopped"
+    assert "warren.reachable_set('big'" in statement("loading")
 
 
 def test_the_edge_query_waits_on_the_gate_shared():
@@ -48,6 +66,26 @@ def test_a_crash_explains_the_backends_it_ends_and_the_connections_it_refuses():
     assert log_problems(lines[0], "terminate") == [f"server log: {lines[0]}"]
 
 
+def test_a_cancelled_statements_error_is_expected_but_no_crash():
+    cancelled = f"{PREFIX} 57014 ERROR:  canceling statement due to user request"
+    crash = f"{PREFIX} 00000 LOG:  server process (PID 9) was terminated by signal 9: Killed"
+    assert log_problems(cancelled, "cancel") == []
+    assert log_problems(crash, "cancel") == [f"server log: {crash}"]
+    assert log_problems(cancelled, "terminate") == [f"server log: {cancelled}"]
+
+
+def test_a_cancelled_call_fails_with_57014_and_its_backend_goes_on():
+    cancelled = Outcome([], "57014", "canceling statement due to user request")
+    read = Outcome([["1"]], "00000", "")
+    assert cancel_failures(cancelled, read, progress="0") == []
+    assert cancel_failures(Outcome([], "XX000", "boom"), read, progress="0") == [
+        "the cancelled call failed with XX000 boom, not 57014"]
+    assert cancel_failures(cancelled, Outcome([], "XX000", "broken"), progress="0") == [
+        "a read in the cancelled call's session failed: XX000 broken"]
+    assert cancel_failures(cancelled, read, progress="1") == [
+        "warren.progress() still lists the cancelled call"]
+
+
 def test_no_way_of_stopping_explains_an_internal_error_or_a_panic():
     for line in (f"{PREFIX} XX000 ERROR:  pg_warren's shared cache: broken", f"{PREFIX} XX000 PANIC:  oops"):
         for kind in KINDS:
@@ -69,6 +107,13 @@ def test_a_refresh_stopped_before_commit_shows_no_progress():
     assert scenario("before commit").point_reached(Interrupted(1, None, None)) == []
     assert scenario("before commit").point_reached(Interrupted(1, "writing", "4")) == [
         "stopped at 'writing', not at before commit"]
+
+
+def test_a_stopped_compute_was_iterating_and_a_stopped_load_loading():
+    assert scenario("computing").point_reached(Interrupted(1, "iterating", None)) == []
+    assert scenario("loading").point_reached(Interrupted(1, "loading", None)) == []
+    assert scenario("loading").point_reached(Interrupted(1, "iterating", None)) == [
+        "stopped at 'iterating', not at loading"]
 
 
 def test_where_another_backends_progress_does_not_show_the_point_is_not_checked():
@@ -146,3 +191,32 @@ def test_a_source_count_that_fails_says_how():
     timeout = Outcome([], "57014", "canceling statement due to statement timeout")
     assert refresh_builds_the_source(SourceSession(timeout)) == [
         "counting the source after recovery failed: 57014 canceling statement due to statement timeout"]
+
+
+class CountingSession:
+    """A session after recovery in which every count is 0 but that of
+    versions, which is 1."""
+
+    def run(self, sql):
+        return Outcome([["1" if "FROM warren.versions" in sql else "0"]], "00000", "")
+
+
+def test_the_version_a_stopped_refresh_was_building_must_be_gone():
+    assert scenario("writing segments").leftovers(CountingSession(), Interrupted(1, "writing", "4")) == [
+        "the interrupted version 4 is recorded"]
+
+
+def test_the_version_a_stopped_load_or_compute_was_reading_stays():
+    for point in ("computing", "loading"):
+        assert scenario(point).leftovers(CountingSession(), Interrupted(1, "loading", "4")) == []
+
+
+def test_a_crash_restart_is_over_once_the_server_has_reinitialized_and_is_ready():
+    noticed = "LOG:  server process (PID 7) was terminated by signal 9: Killed\n"
+    reinitializing = "LOG:  all server processes terminated; reinitializing\n"
+    ready = "LOG:  database system is ready to accept connections\n"
+    assert not crash_recovery.restarted("")
+    assert not crash_recovery.restarted(noticed)
+    assert not crash_recovery.restarted(noticed + reinitializing)
+    assert not crash_recovery.restarted(ready + noticed + reinitializing)
+    assert crash_recovery.restarted(noticed + reinitializing + ready)

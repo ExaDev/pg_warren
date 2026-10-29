@@ -149,6 +149,29 @@ pub(crate) fn require_adopter(graph: &str) -> Result<(), AccessError> {
     }
 }
 
+/// Checks that the caller may have graph `graph`'s source queries run as
+/// role `owner`: if `owner` is a superuser (its own `rolsuper`; superuser
+/// is not inherited), only when the current user and the session user are
+/// both superusers, so neither `SET ROLE` to a superuser role nor a
+/// superuser's `SECURITY DEFINER` function lets a non-superuser's session
+/// through (DESIGN.md §7, §14 item 51).
+pub(crate) fn require_source_runner(owner: pg_sys::Oid, graph: &str) -> Result<(), AccessError> {
+    // SAFETY: syscache lookups and the backend's user ids, on the main
+    // thread; `superuser_arg` is false for a role that does not exist.
+    let refused = unsafe {
+        pg_sys::superuser_arg(owner)
+            && !(pg_sys::superuser_arg(pg_sys::GetUserId())
+                && pg_sys::superuser_arg(pg_sys::GetSessionUserId()))
+    };
+    match refused {
+        true => Err(AccessError::SuperuserSources {
+            graph: graph.to_owned(),
+            owner: role_name(owner).unwrap_or_default(),
+        }),
+        false => Ok(()),
+    }
+}
+
 /// `pg_extension.extowner` of pg_warren.
 fn extension_owner() -> Result<pg_sys::Oid, AccessError> {
     read_one::<pg_sys::Oid>(

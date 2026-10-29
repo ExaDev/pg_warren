@@ -395,6 +395,19 @@ SELECT warren.revoke('social', 'analyst');
 Everyone else gets `insufficient_privilege` (42501). The `warren.*` tables
 are revoked from `PUBLIC`; all access goes through the functions.
 
+**A graph a superuser owns is refreshed only by a superuser.** Its source
+queries would run as that superuser, so `refresh` requires that the caller
+is a superuser, both as the current user and as the session user: a
+member of the superuser role (superuser is not inherited, even after `SET
+ROLE`) and a superuser's `SECURITY DEFINER` function called from another
+role's session are refused with 42501, with a hint. The same holds for
+`set_owner` to a superuser, which opens the queries as the new owner. To
+let other roles refresh such a graph, give it to a role that is not a
+superuser (`set_owner`, `reassign_owned`). This keeps a role that can
+write the catalog directly (`pg_write_all_data`, as a restore uses) from
+running SQL as a superuser through a graph (docs/security.md, "Dumps and
+restores"; DESIGN.md §7).
+
 **Ownership transfer.** `set_owner` gives a graph a new owner, as `ALTER
 MATERIALIZED VIEW … OWNER TO` does a materialised view:
 
@@ -580,7 +593,7 @@ SELECT * FROM warren.vector_usage('social');                     -- (role, vecto
 
 | SQL | Runs as | `search_path` |
 |---|---|---|
-| `node_query`, `edge_query` (in `refresh`) | the graph owner | the creator's, captured at `create_graph` (`info() ->> 'search_path'`) |
+| `node_query`, `edge_query` (in `refresh`) | the graph owner (a superuser only for a superuser) | the creator's, captured at `create_graph` (`info() ->> 'search_path'`) |
 | `vector_from_query` and `gather` queries | the caller | the caller's |
 | `vector_map` expressions (on the executor path) | the caller | the caller's |
 | pg_warren's own catalog SQL | the catalog owner: the role that owns the `warren.*` tables (the installing superuser, or the bootstrap superuser in a trusted install) | pinned to `pg_catalog, pg_temp` |
