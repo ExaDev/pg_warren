@@ -204,7 +204,9 @@ RPM packages (RHEL, Fedora) and PGXN are planned, not built yet.
 
 **Managed PostgreSQL** (Amazon RDS and Aurora, Cloud SQL, Azure, Supabase,
 Neon and the like) installs only the extensions the provider ships, so
-pg_warren cannot be used there until a provider adopts it.
+pg_warren cannot be installed there until a provider adopts it. You can run
+it on a server of your own beside the managed database, fed by logical
+replication: [docs/beside-managed.md](docs/beside-managed.md).
 
 **From source**, with Rust (the toolchain pinned in `rust-toolchain.toml`),
 the server headers (`postgresql-server-dev-NN`), `clang`/`libclang-dev`, and
@@ -329,6 +331,9 @@ Signatures are in `\df warren.*` and in DESIGN.md (§6, §8, §9.3).
   change before you commit it, in one transaction or with a shadow graph.
 - [docs/limits.md](docs/limits.md): settings, memory, measured performance,
   known limitations.
+- [docs/beside-managed.md](docs/beside-managed.md): pg_warren on a server of
+  your own beside a managed database (RDS and the like), fed by logical
+  replication or `postgres_fdw`.
 - [DESIGN.md](DESIGN.md): the full design and the reasons for it.
 
 Every SQL example in the README and `docs/` runs in CI, in
