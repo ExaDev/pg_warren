@@ -19,3 +19,17 @@ CREATE OR REPLACE FUNCTION warren.pagerank(graph text, "out" text, damping float
                                            per_relation boolean DEFAULT false)
 RETURNS int
 VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'pagerank_wrapper';
+
+-- warren.leiden is native (DESIGN.md §6.7): its levels are held in memory,
+-- each contracted from the one before, rather than written as level
+-- graphs. Its signature is unchanged, so it is replaced in place, keeping
+-- any privileges set on it; it no longer sets search_path, which
+-- access::entry pins for the call as for every native function.
+CREATE OR REPLACE FUNCTION warren.leiden(graph text, "out" text, resolution double precision DEFAULT 1.0,
+                              seed bigint DEFAULT 0, max_levels integer DEFAULT 100,
+                              tolerance double precision DEFAULT 1e-7,
+                              randomness double precision DEFAULT 0.01, iterations integer DEFAULT 2,
+                              weighted boolean DEFAULT NULL, levels_prefix text DEFAULT NULL,
+                              version bigint DEFAULT NULL, per_relation boolean DEFAULT false)
+RETURNS double precision
+VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'leiden_wrapper';

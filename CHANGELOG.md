@@ -6,9 +6,10 @@
 
 - **Run `ALTER EXTENSION pg_warren UPDATE;` in every database that has
   the extension**, after installing the new build. The update replaces
-  `warren.pagerank`'s PL/pgSQL definition with the native kernel (under
-  Performance), keeping its privileges; it changes no table. Until the
-  update, 0.7.0's definition still runs with the new library, as it did.
+  the PL/pgSQL definitions of `warren.pagerank` and `warren.leiden` with
+  native ones (under Performance), keeping their privileges; it changes
+  no table. Until the update, 0.7.0's definitions still run with the new
+  library, as they did.
 
 ### Behaviour changes
 
@@ -22,6 +23,15 @@
   bit, iteration counts, SQLSTATEs, progress, parallel label and
   privileges, including a NULL `tol` never stopping it early and a NULL
   `max_iter` running no iteration.
+- `leiden` checks that the caller may write `out` before it runs, not
+  after. The error is the same (42501). The function no longer sets its
+  own `search_path`; like every other `warren.*` function, it pins it for
+  the call.
+- On graphs with fractional weights, `leiden` sums a level's edge weights
+  in a different order from 0.7.0's `contract`. A weight may differ in its
+  last bit, and a tie between moves that it decides may then go the other
+  way. On unweighted and integer-weighted graphs the partitions, kept
+  levels and modularity are 0.7.0's, to the bit.
 
 ### Performance
 
@@ -36,6 +46,21 @@
   `warren.threads = 4`): lesmis 34.7 → 1.6 ms, facebook 47.3 → 6.3 ms,
   email-enron 74.9 → 22.6 ms, cit-hepth 65.7 → 18.6 ms and DBLP
   318 → 113 ms, as fast as igraph or faster except on the smallest graph.
+- `leiden` is native (DESIGN.md §6.7, "Leiden's levels"). Each level's
+  graph is contracted from the level below, not from the whole graph, and
+  is held in memory, charged to `warren.max_compute_memory`. Only `out`
+  and the levels `levels_prefix` asks for are written. No level graph,
+  segment or WAL is written for a level, and the disk a run needed grew
+  with its levels before.
+  - It finds the same partitions as before. A pg_test runs the frozen
+    0.7.0 function beside it.
+  - On the head-to-head's real graphs it is 1.3–21× faster:
+    fb15k-237 1.44 → 0.21 s, yago3-10 2.26 → 0.73 s, roadnet-tx
+    7.9 → 3.8 s, lesmis 25 → 1.2 ms.
+  - It takes 0.76–1.6× igraph's time on the medium tier, where it was
+    1.9–180×, and is faster than igraph on ss-gleich-usroads-48, dblp,
+    yago3-10 and roadnet-tx (`bench/results/corpus/head_to_head/`,
+    "Leiden in 0.8.0").
 
 ## 0.7.0 — proven on real graphs and real deployments (2026-10-27)
 

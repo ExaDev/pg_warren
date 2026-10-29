@@ -1,0 +1,224 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "head-to-head",
+   "facebook",
+   "--engine",
+   "pg_warren",
+   "--engine",
+   "igraph",
+   "--workload",
+   "leiden",
+   "--threads",
+   "4",
+   "--pg-config",
+   "/var/tmp/leiden-perf/new/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "99aeb74",
+   "--extension-profile",
+   "release",
+   "--results",
+   "/var/tmp/leiden-perf/results-new"
+  ],
+  "harness": {
+   "revision": "99aeb74c0aa9216449d88c9f757a9eabb483b548",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "99aeb74",
+   "profile": "release",
+   "library": "/var/tmp/leiden-perf/new/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "228d3318c18afde3cd0512e833ceb5969f6063e06fb89c282016658d09181c44"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v185",
+  "load_average": [
+   6.57861328125,
+   5.4208984375,
+   3.833984375
+  ]
+ },
+ "dataset": "facebook",
+ "tier": "tiny",
+ "fetched": {
+  "tables": {
+   "nodes": 4039,
+   "edges": 88234,
+   "ids": "integer",
+   "relations": 0,
+   "self_loops": 0
+  },
+  "sha256": {
+   "nodes.csv": "3eb7cd6f93a4c6a76b39de12ec1723f6816dddecde4b0e18deaaf5ca6a4bf77a",
+   "edges.csv": "e8564ec56a3ab526999cbc6e5642890ccfe76f5ddff3ffa5ff5b8a680303fa61"
+  },
+  "provenance": {
+   "entryId": "facebook",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-26T05:48:05.111Z",
+   "source": {
+    "url": "https://snap.stanford.edu/data/facebook_combined.txt.gz",
+    "status": "live",
+    "snapshot": {
+     "url": "https://web.archive.org/web/20261004065942/https://snap.stanford.edu/data/facebook_combined.txt.gz",
+     "timestamp": "20261004065942",
+     "sha256": "125e84db872eeba443d270c70315c256b0af43a502fcfe51f50621166ad035d7",
+     "byteLength": 218576
+    }
+   },
+   "fetchedUrl": "https://snap.stanford.edu/data/facebook_combined.txt.gz",
+   "sha256": "125e84db872eeba443d270c70315c256b0af43a502fcfe51f50621166ad035d7",
+   "byteLength": 218576
+  }
+ },
+ "repeat": 5,
+ "budget_seconds": 120,
+ "timeout_seconds": 600,
+ "workloads": [
+  {
+   "name": "leiden",
+   "kind": "leiden",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": null
+  }
+ ],
+ "engines": {
+  "pg_warren": {
+   "describe": {
+    "version": "0.8.0",
+    "threads": 4,
+    "settings": [
+     "fsync=off",
+     "full_page_writes=off",
+     "jit=on",
+     "maintenance_work_mem=1GB",
+     "max_parallel_workers_per_gather=2",
+     "max_wal_size=1GB",
+     "shared_buffers=1GB",
+     "shared_preload_libraries=",
+     "statement_timeout=10min",
+     "synchronous_commit=off",
+     "wal_level=minimal",
+     "warren.max_build_memory=4GB",
+     "warren.max_cache_memory=4GB",
+     "warren.max_compute_memory=4GB",
+     "warren.shared_cache_memory=4GB",
+     "warren.threads=4",
+     "work_mem=64MB"
+    ],
+    "graph": {
+     "node_count": 4039,
+     "edge_count": 176468,
+     "dropped_edges": 0,
+     "bytes": 1541636
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.06787902999985818
+     ],
+     "median_seconds": 0.06787902999985818
+    },
+    "build": {
+     "seconds": [
+      0.032659894000062195,
+      0.027349606999905518,
+      0.029312830999970174
+     ],
+     "median_seconds": 0.029312830999970174
+    }
+   },
+   "workloads": {
+    "leiden": {
+     "cold_seconds": 0.03721867199965345,
+     "warm_seconds": [
+      0.03152095499990537,
+      0.030117834000066068,
+      0.027838281000185816,
+      0.028566884999690956,
+      0.029841417000170622
+     ],
+     "warm_median_seconds": 0.029841417000170622,
+     "cold_phases": {
+      "evict": 0.0006052090002413024
+     },
+     "check": {
+      "check": "leiden",
+      "status": "match",
+      "warren": 0.8358226582948485,
+      "oracle": 0.8338084762650534,
+      "difference": 0.0020141820297950863,
+      "slack": 0.02,
+      "modularity": 0.8358226582948485,
+      "communities": 17
+     },
+     "counted": true
+    }
+   }
+  },
+  "igraph": {
+   "describe": {
+    "version": "1.0.0",
+    "threads": 1,
+    "settings": {
+     "pagerank": "PRPACK (solved)",
+     "louvain": "community_multilevel",
+     "leiden": "community_leiden, modularity, 2 iterations",
+     "seed": 1
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.024905063999995036
+     ],
+     "median_seconds": 0.024905063999995036
+    },
+    "build": {
+     "seconds": [
+      0.01508321299979798
+     ],
+     "median_seconds": 0.01508321299979798
+    }
+   },
+   "workloads": {
+    "leiden": {
+     "cold_seconds": 0.01938883499997246,
+     "warm_seconds": [
+      0.01981776799993895,
+      0.02087263300018094,
+      0.020179825000013807,
+      0.019874658999924577,
+      0.020180470000013884
+     ],
+     "warm_median_seconds": 0.020179825000013807,
+     "cold_phases": {},
+     "check": {
+      "check": "leiden",
+      "status": "match",
+      "warren": 0.8356740214917566,
+      "oracle": 0.8338084762650534,
+      "difference": 0.0018655452267032357,
+      "slack": 0.02,
+      "modularity": 0.8356740214917566,
+      "communities": 16
+     },
+     "counted": true
+    }
+   }
+  }
+ }
+}

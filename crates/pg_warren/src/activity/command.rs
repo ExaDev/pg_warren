@@ -95,7 +95,7 @@ pub(crate) fn reported(frame: &Frame, report: Report<'_>, now: i64) -> Frame {
 
 /// Sets the command frame to `report` for the rest of the statement, as
 /// `warren.report_progress` does: also for a library function that runs
-/// as one native call (`pagerank`) and reports as the PL/pgSQL library
+/// as one native call (`pagerank`, `leiden`) and reports as the PL/pgSQL library
 /// does, its graph resolved and its read access checked by the call. On
 /// the main thread, inside a call that has claimed this backend's slot.
 pub(crate) fn report(report: Report<'_>) {

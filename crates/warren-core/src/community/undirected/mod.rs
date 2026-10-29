@@ -12,7 +12,8 @@
 //!
 //! Both forms are closed under contraction (§6.6): the `B` of a quotient
 //! is `PᵀBP`, so a partition's modularity on a graph is that of the
-//! singletons on its quotient.
+//! singletons on its quotient, and a quotient's view can be contracted
+//! from the view itself (`contraction`), as Leiden's levels are.
 
 use std::mem::size_of;
 
@@ -22,6 +23,8 @@ use super::CommunityError;
 use crate::compute::{ComputeError, ComputeMemory, Matrix, MemoryCharge};
 use crate::graph::{DenseId, GraphCsr, RelationSelection};
 use crate::interrupts::{Cancellation, Cancelled};
+
+mod contraction;
 
 /// The rows one task folds; small under test, so tests cross tasks.
 const NODES_PER_TASK: usize = if cfg!(test) { 3 } else { 4096 };
@@ -102,7 +105,19 @@ impl Undirected {
             return Err(CommunityError::NegativeWeight { from: source, to: target, weight });
         }
         fold_rows(memory, &mut offsets, &mut entries, cancellation)?;
-        let (mut degrees, degrees_charge) = memory.filled(len, 0.0)?;
+        Self::from_rows(memory, (offsets, offsets_charge), (entries, entries_charge))
+    }
+
+    /// The view whose rows `offsets` delimits in `entries` (each row
+    /// ascending and distinct), with each node's degree, its row's sum
+    /// in order, and their total, charged to `memory` beside the rows'
+    /// own charges.
+    fn from_rows(
+        memory: &ComputeMemory,
+        (offsets, offsets_charge): (Vec<u64>, MemoryCharge),
+        (entries, entries_charge): (Vec<(DenseId, f64)>, MemoryCharge),
+    ) -> Result<Self, CommunityError> {
+        let (mut degrees, degrees_charge) = memory.filled(offsets.len() - 1, 0.0)?;
         for (node, degree) in degrees.iter_mut().enumerate() {
             let row = &entries[offsets[node] as usize..offsets[node + 1] as usize];
             *degree = row.iter().map(|&(_, weight)| weight).sum();
