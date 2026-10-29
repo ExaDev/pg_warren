@@ -346,8 +346,9 @@ whole run:
 # (default 20 per mode); fails on a read that matches no complete version,
 # an undocumented SQLSTATE, anything left behind, or trouble in the log
 test/concurrent_refresh.py --pg-config "$(command -v pg_config)" --seconds 20
-# Refreshes stopped mid-way by pg_terminate_backend, SIGKILL and an
-# immediate shutdown (--kinds, --points to choose; --edges sizes the graph)
+# Refreshes, pagerank and loads into the shared cache stopped mid-way by
+# pg_terminate_backend, pg_cancel_backend, SIGKILL and an immediate
+# shutdown (--kinds, --points to choose; --edges sizes the graph)
 test/crash_recovery.py --no-install --pg-config "$(command -v pg_config)"
 # A primary, a hot standby (pg_basebackup -R) and a cascading standby:
 # reads answer on the standbys as on the primary, writes are refused with
@@ -371,6 +372,24 @@ test/sql_fuzz.py --no-install --pg-config "$(command -v pg_config)" \
 # leaks, or trouble in the log; samples.csv and summary.json in --out.
 # CI runs 2 minutes on PG 16, preloaded:
 test/pooler_soak.py --no-install --pg-config "$(command -v pg_config)"
+```
+
+What a managed service does to a cluster (DESIGN.md §13, 0.9.0
+"Lifecycle"), the same way. Each builds the replica check's graphs and
+compares every pg_warren catalog table's rows and every read before and
+after, then refreshes and writes vectors:
+
+```sh
+# The preload added to a cluster with graphs and removed, a restart each
+test/preload.py --no-install --pg-config "$(command -v pg_config)"
+# pg_basebackup, then changes, each marked by a restore point; the backup
+# restored and recovered to each restore point and to the archive's end
+test/point_in_time.py --no-install --pg-config "$(command -v pg_config)"
+# pg_upgrade from an older major, with the shared cache loaded. It installs
+# pg_warren into both majors' trees (both in pgrx's config.toml; unset
+# PGRX_PG_CONFIG_PATH, or both builds use its pg_config)
+test/major_upgrade.py --old-pg-config /usr/lib/postgresql/16/bin/pg_config \
+    --pg-config /usr/lib/postgresql/18/bin/pg_config
 ```
 
 A long fuzz run or soak need not hold the lock if it uses a Postgres tree
