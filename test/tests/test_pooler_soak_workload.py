@@ -92,3 +92,39 @@ def test_a_timeout_call_that_finishes_in_time_is_rolled_back_so_its_vector_keeps
     workload._timeout(session, random.Random(1), 0)
     assert session.ran[-1] == "ROLLBACK"
     assert "COMMIT" not in session.ran
+
+
+STRAY = Outcome([], "57014", "canceling statement due to user request")
+
+
+def test_a_cancel_that_stops_begin_or_rollback_is_an_event_and_the_statement_runs_again():
+    """Chaos cancels a backend whose pg_warren call may just have ended: the
+    cancel then stops the next statement there, perhaps no pg_warren call."""
+    tally = Tally()
+    workload = Workload(None, "transaction", "soak_transaction", 1, 0, 100, 1, tally, None, 0, 0)
+    session = ScriptedSession({"BEGIN": [STRAY], "ROLLBACK": [STRAY]})
+    workload._timeout(session, random.Random(1), 0)
+    assert session.ran[:2] == ["BEGIN", "BEGIN"]
+    assert session.ran[-2:] == ["ROLLBACK", "ROLLBACK"]
+    assert tally.chaos[("transaction", "cancel stopped a statement outside pg_warren")] == 2
+    assert tally.unexpected == [] and tally.mismatches == []
+
+
+def test_a_transaction_whose_begin_never_succeeds_runs_none_of_its_statements():
+    tally = Tally()
+    workload = Workload(None, "session", "soak_session", 1, 0, 100, 1, tally, None, 0, 0)
+    session = ScriptedSession({"BEGIN": [Outcome([], "25001", "odd")]})
+    assert workload._transaction(session, "stats", ["SELECT warren.last_stats()"]) is None
+    assert session.ran == ["BEGIN"]
+    assert tally.unexpected == [("session", "stats", "25001", "odd")]
+
+
+def test_a_canceled_commit_is_the_operations_outcome_and_its_transaction_is_rolled_back():
+    """A COMMIT is not run again: once canceled, its transaction is aborted
+    and a second COMMIT would roll it back and succeed."""
+    tally = Tally()
+    workload = Workload(None, "session", "soak_session", 1, 0, 100, 1, tally, None, 0, 0)
+    session = ScriptedSession({"COMMIT": [STRAY]})
+    assert workload._transaction(session, "stats", ["SELECT 1"]) is None
+    assert session.ran == ["BEGIN", "SELECT 1", "COMMIT", "ROLLBACK"]
+    assert tally.outcomes[("session", "stats", "57014")] == 1

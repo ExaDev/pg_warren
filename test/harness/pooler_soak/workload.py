@@ -19,7 +19,15 @@ now and then compacts (`write`), so versions are retired all the time.
 Chaos (`Chaos`), once per period per pool: `pg_cancel_backend` of a
 pooled backend running a pg_warren call, or a client that disconnects in
 a transaction, idle or in a call (the pooler then closes that server
-connection). Every failure must be `allowed` for its operation."""
+connection). Every failure must be `allowed` for its operation.
+
+A cancel acts on a backend, not a statement: the call chaos found can end
+before the cancel arrives, which then stops whatever that backend runs
+next, under transaction pooling perhaps another client's. Where that is a
+statement of the client's own that calls no pg_warren function and can be
+run again (its session's setup, `BEGIN`, `ROLLBACK`), the cancel is a
+chaos event and the statement runs again; anywhere else it is the
+operation's outcome, as before."""
 
 import random
 import re
@@ -29,7 +37,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from ..concurrent_refresh import LOCK_TIMED_OUT, MOVED, RETIRED, SUPERSEDED, WRITTEN_MEANWHILE, joined
-from ..session import BackendLost, Session
+from ..session import BackendLost, Session, canceled_by_request
 from .fixture import DATABASE, edit_sql
 
 CANCELED = ("57014", r"^canceling statement due to (user request|statement timeout)$")
@@ -48,6 +56,8 @@ JOIN_SECONDS = 180
 CARELESS = 0.3
 PERSISTED_NAMES_PER_CLIENT = 2  # p<mode><n> and to<n>; a client reuses them
 STAGED_DROP_ATTEMPTS = 10
+STRAY_CANCEL = "cancel stopped a statement outside pg_warren"
+STRAY_CANCEL_ATTEMPTS = 5
 
 
 def allowed(operation, sqlstate, message):
@@ -153,6 +163,8 @@ class Workload:
     def _connection(self, rng, number):
         """One client connection: a few dozen transactions, or fewer if chaos asks it to abandon one."""
         s = Session(self.pooler, DATABASE, user=self.role)
+        for _ in range(s.canceled_setup):
+            self.tally.event(self.mode, STRAY_CANCEL)
         prepared = False
         try:
             for _ in range(rng.randint(10, 60)):
@@ -182,19 +194,37 @@ class Workload:
     def _transaction(self, s, operation, statements, end="COMMIT"):
         """Runs `statements` in one transaction, ended by `end`; their
         outcomes, or None if one failed (recorded; the transaction rolled
-        back)."""
-        s.run("BEGIN")
+        back). A COMMIT is not run again: once canceled, its transaction
+        is aborted, and a second COMMIT would roll it back and succeed."""
+        begun = self._again(s, "BEGIN")
+        if not begun.ok:
+            self._record(operation, begun)
+            return None
         outcomes = []
         for sql in statements:
             done = s.run(sql)
             if not done.ok:
                 self._record(operation, done)
-                s.run("ROLLBACK")
+                self._again(s, "ROLLBACK")
                 return None
             outcomes.append(done)
-        done = s.run(end)
+        done = self._again(s, end) if end == "ROLLBACK" else s.run(end)
         self._record(operation, done)
+        if not done.ok:
+            self._again(s, "ROLLBACK")
         return outcomes if done.ok else None
+
+    def _again(self, s, sql):
+        """Runs `sql`, a statement of the client's own that calls no
+        pg_warren function and can be run again; its outcome. A cancel
+        meant for an earlier call on the same backend can stop it: that is
+        a chaos event, and `sql` runs again (up to `STRAY_CANCEL_ATTEMPTS` times)."""
+        for _ in range(STRAY_CANCEL_ATTEMPTS):
+            done = s.run(sql)
+            if not canceled_by_request(done):
+                break
+            self.tally.event(self.mode, STRAY_CANCEL)
+        return done
 
     def _current(self, s, operation, graph="g"):
         done = s.run(f"SELECT warren.info('{graph}') ->> 'current_version'")
