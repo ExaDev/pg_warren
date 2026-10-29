@@ -1,5 +1,7 @@
 # pg_warren
 
+[![GitHub](https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white)](https://github.com/ExaDev/pg_warren) [![Release](https://img.shields.io/github/v/release/ExaDev/pg_warren)](https://github.com/ExaDev/pg_warren/releases/latest) [![CI](https://img.shields.io/github/actions/workflow/status/ExaDev/pg_warren/ci.yml?branch=main)](https://github.com/ExaDev/pg_warren/actions)
+
 Deep traversal and whole-graph computation for PostgreSQL, over graphs whose
 nodes and edges live in your ordinary tables.
 
