@@ -34,7 +34,7 @@
 - docs/limits.md suggests `warren.shared_cache_memory` and the memory
   limits per instance size.
 
-## 0.8.0 — in development
+## 0.8.0 — native PageRank and Leiden, leaner calls (2026-10-29)
 
 ### Upgrading
 
