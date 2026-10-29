@@ -2,7 +2,8 @@
 //! traversals and compute kernels make on the main thread (DESIGN.md §6.9,
 //! §9.3), and the compute pool whose jobs it polls for (`pool`); and of
 //! its `Progress` port, which writes what they report to the open
-//! operation's frame (`activity`, §5.7). Builds, traversal and compute
+//! operation's frame, or for a library function that reports as the
+//! PL/pgSQL library does, to the command frame (`activity`, §5.7). Builds, traversal and compute
 //! bindings use it; it depends only on `activity`.
 
 mod pool;
@@ -45,6 +46,61 @@ impl Progress for PostgresInterrupts {
     fn detail(&mut self, name: &'static str, value: f64) {
         activity::detail(name, value);
     }
+}
+
+/// Polls as [`PostgresInterrupts`] does, but reports to the command frame,
+/// as `warren.report_progress` would, rather than to an operation: for a
+/// library function that runs as one native call (`pagerank`) and reports
+/// as the PL/pgSQL library does, its command and phase shown until the
+/// statement ends (DESIGN.md §5.7). A command frame has no counters, so
+/// details are not shown.
+pub(crate) struct CommandInterrupts {
+    command: &'static str,
+    graph: i32,
+    phase: &'static str,
+    total: Option<u64>,
+}
+
+impl CommandInterrupts {
+    /// Reports as command `command` on graph `graph` (resolved, and its
+    /// read access checked, by the call).
+    pub(crate) fn new(command: &'static str, graph: i32) -> Self {
+        Self { command, graph, phase: "", total: None }
+    }
+
+    fn report(&self, done: u64) {
+        activity::report(activity::Report {
+            command: self.command,
+            graph: Some(self.graph),
+            phase: self.phase,
+            done: Some(done),
+            total: self.total,
+        });
+    }
+}
+
+impl Interrupts for CommandInterrupts {
+    fn check(&mut self) -> Result<(), Cancelled> {
+        PostgresInterrupts.check()
+    }
+
+    fn progress(&mut self) -> Option<&mut dyn Progress> {
+        Some(self)
+    }
+}
+
+impl Progress for CommandInterrupts {
+    fn phase(&mut self, name: &'static str, total: Option<u64>) {
+        self.phase = name;
+        self.total = total;
+        self.report(0);
+    }
+
+    fn done(&mut self, done: u64) {
+        self.report(done);
+    }
+
+    fn detail(&mut self, _name: &'static str, _value: f64) {}
 }
 
 #[cfg(any(test, feature = "pg_test"))]

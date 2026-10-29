@@ -169,21 +169,37 @@ impl<I: Interrupts> Run<'_, '_, I> {
     ) -> Result<(), ComputeError> {
         let x = E::vector(x)
             .ok_or(ComputeError::DtypeMismatch { expected: E::DTYPE, found: x.dtype() })?;
-        let (matrix, semiring) = (self.matrix, self.product.semiring);
-        let write = Write::new(self.product);
         let y = y.values_mut()?;
-        match matrix.form() {
-            Form::Pull => self.workers.run(self.interrupts, |cancellation| {
-                kernel::pull(semiring, cancellation, matrix, x, y, &write)
-            }),
-            Form::Push => {
-                let (mut sums, _sums) = self.memory.filled(y.len(), E::default())?;
-                let (mut present, _present) = self.memory.filled(x.id_space() as usize, false)?;
-                let scratch = PushScratch { sums: &mut sums, present: &mut present };
-                self.workers.run(self.interrupts, |cancellation| {
-                    kernel::push(semiring, cancellation, matrix, x, y, scratch, &write)
-                })
-            }
+        multiply_into(self.workers, self.memory, self.interrupts, self.matrix, self.product, x, y)
+    }
+}
+
+/// `y = A ⊗ x` over `matrix`, already oriented for `product` and checked
+/// against `x` and `y`: what [`spmv`] and [`spmm`] run once their operands
+/// are checked, for a kernel that multiplies by one matrix many times
+/// (`pagerank`) without building it again.
+pub(crate) fn multiply_into<E: SemiringElement, I: Interrupts>(
+    workers: &Workers,
+    memory: &ComputeMemory,
+    interrupts: &mut I,
+    matrix: &Matrix<'_>,
+    product: &Product<'_>,
+    x: &Vector<E>,
+    y: &mut [E],
+) -> Result<(), ComputeError> {
+    let semiring = product.semiring;
+    let write = Write::new(product);
+    match matrix.form() {
+        Form::Pull => workers.run(interrupts, |cancellation| {
+            kernel::pull(semiring, cancellation, matrix, x, y, &write)
+        }),
+        Form::Push => {
+            let (mut sums, _sums) = memory.filled(y.len(), E::default())?;
+            let (mut present, _present) = memory.filled(x.id_space() as usize, false)?;
+            let scratch = PushScratch { sums: &mut sums, present: &mut present };
+            workers.run(interrupts, |cancellation| {
+                kernel::push(semiring, cancellation, matrix, x, y, scratch, &write)
+            })
         }
     }
 }

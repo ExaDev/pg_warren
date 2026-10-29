@@ -17,6 +17,7 @@ mod map;
 mod mask;
 pub(crate) mod memory;
 mod message;
+mod pagerank;
 mod product;
 pub(crate) mod random;
 mod ranking;
@@ -54,7 +55,8 @@ pub use map::{
 pub use mask::Mask;
 pub use memory::{ComputeMemory, MemoryCharge, Reclaim};
 pub use message::{Bytes, Message, MessageBuffer, MessageKind, PackedBytes};
-pub(crate) use product::Matrix;
+pub use pagerank::{pagerank, PageRank, Ranks};
+pub(crate) use product::{multiply_into, Matrix};
 pub use product::{spmm, spmv, Product};
 pub use ranking::top_k;
 pub use reduce::{norm_diff, reduce, reduce_live, Norm, Reduction};

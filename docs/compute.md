@@ -318,8 +318,11 @@ different sizes, send their elements as separate messages
 ## The algorithm library
 
 PL/pgSQL functions over the primitives above (read their source with `\sf
-warren.pagerank`; it doubles as a template). Each pins one version, keeps its
-intermediates transient, and persists only `out`.
+warren.katz_centrality`; it doubles as a template), and native kernels.
+Each pins one version, keeps its intermediates transient, and persists only
+`out`. `pagerank` was PL/pgSQL through 0.7.0 and is now one native call: it
+computes the same ranks to the bit, without an iteration's eleven calls
+(`my_pagerank` above is the shape the PL/pgSQL version had).
 
 | Function | Computes | Returns |
 |---|---|---|
