@@ -203,6 +203,12 @@ engine reached is `check.modularity` in each file.
   against 28 µs. igraph's PRPACK also solves a linear system instead of
   iterating. GDS was faster than pg_warren on yago3-10 (0.15 s against
   0.17 s) and on roadnet-tx (0.62 s against 1.0 s).
+  *Since addressed* (0.8.0): `pagerank` is a native kernel, to the bit of the
+  loop (DESIGN.md §6.7). Re-timed against igraph alone ("PageRank in
+  0.8.0", below): 2.9–9.3× faster than this run, faster than igraph on 7
+  of 12 datasets (roadnet-tx 0.22 s against 0.81 s, dblp 0.11 s against
+  0.25 s) and slower on 5 (lesmis 3.1 ms against 29 µs, polblogs, wn18rr,
+  cit-hepth and yago3-10 by 1.2–3.1×).
 - *Triangles.* igraph, on one thread, was 1.4–13× faster on every graph
   except the road networks and wn18rr: facebook 12 ms against 154 ms, email-enron 23 ms against
   185 ms, and hetionet 0.49 s against 4.17 s. GDS was also faster on five
@@ -481,3 +487,67 @@ of the time.
 GDS was not re-run. Against its warm times in the table above, the new
 `leiden` is faster on seven of the eleven datasets GDS ran. It is slower
 on dblp, yago3-10, hetionet and roadnet-tx.
+
+## PageRank in 0.8.0 (re-timed against igraph alone)
+
+`pagerank-0.8.0/6c918eb/` holds the run: `round-N/<engine>/<dataset>.json`,
+three rounds, one file per dataset for each engine. pg_warren is a release
+build of 6c918eb (main with the native `pagerank` and `leiden`;
+`cargo pgrx package`, PostgreSQL 16.15, the settings above,
+`warren.threads = 4`; `pg_warren.so` sha256
+`a59481d01fe533b8bb9f81663f8b40dbcfb2279efbbb62accb62bb6a8f103bd3`). igraph
+is python-igraph 1.0.0 (PRPACK, one thread), as above.
+
+Each round ran, per dataset, the two engines one after the other, pg_warren
+first in rounds 1 and 3 and igraph first in round 2:
+`suite.py head-to-head <dataset> --engine <engine> --workload pagerank --threads 4 --extension-profile release`,
+with the defaults `--repeat 5 --budget 120`. Nothing else ran on the
+machine: the load average at the start of each run was 0.1–1.4, most of it
+the runs themselves. Every answer of every round matched the reference
+(within 10⁻⁹, each engine under its own convention, as above).
+
+| Dataset | M11 (ae51d77) | 0.8.0 cold | 0.8.0 warm | igraph warm | 0.8.0 / igraph | speed-up on M11 |
+| --- | --- | --- | --- | --- | --- | --- |
+| lesmis | 0.029 | 3.97 ms | 3.13 ms (2.75–3.60) | 29 µs (28–33 µs) | 108 | 9.3× |
+| polblogs | 0.035 | 5.84 ms | 4.31 ms (3.76–4.35) | 1.41 ms (1.36–1.59) | 3.1 | 8.1× |
+| facebook | 0.040 | 0.011 | 6.92 ms (6.77–8.07) | 0.010 (0.010–0.013) | 0.67 | 5.8× |
+| wn18rr | 0.089 | 0.031 | 0.021 (0.020–0.023) | 0.012 (0.012–0.015) | 1.8 | 4.2× |
+| cit-hepth | 0.077 | 0.023 | 0.018 (0.018–0.018) | 0.011 (0.011–0.011) | 1.6 | 4.3× |
+| email-enron | 0.096 | 0.027 | 0.021 (0.020–0.021) | 0.032 (0.027–0.037) | 0.66 | 4.6× |
+| fb15k-237 | 0.069 | 0.078 | 0.011 (0.010–0.012) | 0.012 (0.012–0.014) | 0.90 | 6.4× |
+| ss-gleich-usroads-48 | 0.161 | 0.053 | 0.037 (0.036–0.040) | 0.074 (0.073–0.081) | 0.50 | 4.4× |
+| dblp | 0.306 | 0.140 | 0.105 (0.101–0.112) | 0.251 (0.239–0.261) | 0.42 | 2.9× |
+| yago3-10 | 0.169 | 0.081 | 0.043 (0.039–0.044) | 0.036 (0.035–0.038) | 1.2 | 3.9× |
+| hetionet | 0.103 | 0.081 | 0.031 (0.031–0.032) | 0.052 (0.049–0.057) | 0.60 | 3.3× |
+| roadnet-tx | 0.998 | 0.363 | 0.224 (0.224–0.225) | 0.810 (0.806–0.819) | 0.28 | 4.4× |
+
+Seconds, with ms and µs where marked. A warm cell is the median of the
+three rounds' warm medians, with the lowest and highest of them in
+brackets (each round's median is of 5 warm runs); the cold cell is the
+median of the three cold runs. M11 is pg_warren's warm median in the main
+table above (0.7.0's PL/pgSQL loop). The ratio and speed-up columns use
+the warm medians.
+
+pg_warren is faster than igraph on 7 of the 12 datasets, by up to 3.6×
+(roadnet-tx), and the brackets do not overlap on any of them. It is
+slower on 5:
+
+- *lesmis* (77 nodes) and *polblogs* (1,490 nodes): the call's fixed cost.
+  An SQL statement, the cache lookup and persisting the output vector to
+  the catalog take about 3 ms however small the graph, where igraph
+  answers lesmis in 29 µs. An earlier before-and-after run of the kernel
+  (DESIGN.md §13) measured 1.6 ms on lesmis; this run's three rounds took
+  2.75–3.60 ms. The difference was not investigated.
+- *wn18rr*, *cit-hepth* and *yago3-10*, by 1.2–1.8×. These are not
+  fixed cost (a few ms of 18–43 ms) and were not profiled. pg_warren runs
+  20 iterations; PRPACK solves for the fixed point, so the two do
+  different amounts of work, and how much differs by graph.
+
+The ratios move with the graph more than with the run. An engine's
+highest round median is within 1.2× of its lowest on 20 of the 24
+engine-dataset pairs; the others are pg_warren on lesmis (1.31×) and
+igraph on wn18rr (1.24×), facebook (1.35×) and email-enron (1.36×).
+
+GDS was not re-run. Against its warm times in the main table above, which
+are from the M11 run, the new `pagerank` is faster on all 12 datasets: on
+roadnet-tx 0.22 s against 0.62 s, on yago3-10 0.043 s against 0.146 s.

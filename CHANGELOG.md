@@ -45,7 +45,12 @@
   Twenty iterations, head to head before and after (median warm times,
   `warren.threads = 4`): lesmis 34.7 → 1.6 ms, facebook 47.3 → 6.3 ms,
   email-enron 74.9 → 22.6 ms, cit-hepth 65.7 → 18.6 ms and DBLP
-  318 → 113 ms, as fast as igraph or faster except on the smallest graph.
+  318 → 113 ms. Against igraph on the 12 head-to-head datasets (three
+  interleaved rounds, `bench/results/corpus/head_to_head/README.md`,
+  "PageRank in 0.8.0"): faster on 7 (roadNet-TX 0.22 s against 0.81 s,
+  DBLP 105 ms against 251 ms) and slower on 5 (WN18RR, cit-hepth and
+  YAGO3-10 by 1.2–1.8×, polblogs by 3.1×, and lesmis, 3.1 ms against
+  29 µs, by a call's fixed cost).
 - `leiden` is native (DESIGN.md §6.7, "Leiden's levels"). Each level's
   graph is contracted from the level below, not from the whole graph, and
   is held in memory, charged to `warren.max_compute_memory`. Only `out`

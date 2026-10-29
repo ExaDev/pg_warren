@@ -92,7 +92,7 @@ Times are warm medians.
 | Louvain communities (dblp) | **1.16 s** | 5.49 s | 12.7 s | 🟢 Faster than GDS on every graph, than igraph on 7 of 12 |
 | Triangles (hetionet) | **0.12 s** | 0.49 s | 2.88 s | 🟢 Faster than igraph on 10 of 12 graphs |
 | Time to first query | **0.01–3.5 s** | about the same | 13–18 s | 🟢 No server to start or data to import |
-| PageRank, 20 iterations (roadNet-TX) | 1.0 s | 0.88 s | **0.62 s** | 🟡 Close on large graphs, slower on small ones |
+| PageRank, 20 iterations (roadNet-TX) | **0.22 s** | 0.81 s | 0.62 s | 🟢 Faster than igraph on 7 of 12 graphs; slower on 5, by 1.2–3× and on the tiny lesmis 100× (a call's fixed cost); faster than GDS on all 12 |
 | BFS and connected components | 🟡 | **fastest** | slower | 🟡 Ahead of GDS; igraph 1.2–60× faster |
 | Leiden communities (FB15k-237) | 0.21 s | **0.14 s** | 0.46 s | 🟡 Within 1.6× of igraph on medium graphs, faster on 4 of 12; faster than GDS on 7 of 11 |
 
@@ -100,13 +100,15 @@ Plain Cypher is not in the table. It cannot express PageRank, components,
 Louvain, Leiden or betweenness. On the larger graphs, its traversal and
 triangle queries ran past a 300-second timeout.
 
-**Caveats.** This is one run on a shared 4-vCPU VM. pg_warren and GDS used
+**Caveats.** Most rows are one run on a shared 4-vCPU VM. pg_warren and GDS used
 4 threads; igraph and Cypher are single-threaded. Every time includes the
 client round trip. pg_warren pays a fixed 0.2–2 ms per call, which dominates
-on tiny graphs. The PageRank, Louvain, GDS and loading figures predate two
-later optimisations, so pg_warren's times there may now be lower. The
-triangles and Leiden rows were re-timed after those optimisations, against
-igraph only; the Leiden row is 0.8.0's native `leiden`. Full tables, settings and caveats are in
+on tiny graphs. The Louvain and loading figures predate two later
+optimisations, so pg_warren's times there may now be lower. The triangles
+row was re-timed after them, and the PageRank and Leiden rows on 0.8.0's
+native `pagerank` and `leiden`, against igraph only (PageRank in three
+interleaved rounds on all 12 graphs). GDS was not re-run: every GDS figure
+is from the earlier run, against 0.7.0. Full tables, settings and caveats are in
 [bench/results/corpus/head_to_head](bench/results/corpus/head_to_head/README.md).
 
 ## The principle: meet Postgres users where they are
