@@ -209,3 +209,14 @@ def test_the_version_a_stopped_refresh_was_building_must_be_gone():
 def test_the_version_a_stopped_load_or_compute_was_reading_stays():
     for point in ("computing", "loading"):
         assert scenario(point).leftovers(CountingSession(), Interrupted(1, "loading", "4")) == []
+
+
+def test_a_crash_restart_is_over_once_the_server_has_reinitialized_and_is_ready():
+    noticed = "LOG:  server process (PID 7) was terminated by signal 9: Killed\n"
+    reinitializing = "LOG:  all server processes terminated; reinitializing\n"
+    ready = "LOG:  database system is ready to accept connections\n"
+    assert not crash_recovery.restarted("")
+    assert not crash_recovery.restarted(noticed)
+    assert not crash_recovery.restarted(noticed + reinitializing)
+    assert not crash_recovery.restarted(ready + noticed + reinitializing)
+    assert crash_recovery.restarted(noticed + reinitializing + ready)

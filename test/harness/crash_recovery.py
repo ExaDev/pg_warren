@@ -139,6 +139,15 @@ def differences(before, after):
     return [f"{part} changed: {before[part]} → {after[part]}" for part in SNAPSHOT if before[part] != after[part]]
 
 
+def restarted(text):
+    """Whether the server log `text`, from before a backend was killed,
+    shows the crash restart over: the postmaster reinitialized and then
+    accepted connections. Until then a connection can still reach the old
+    server, which the restart then ends."""
+    reinitialized = text.find("all server processes terminated; reinitializing")
+    return reinitialized >= 0 and "database system is ready to accept connections" in text[reinitialized:]
+
+
 def log_problems(text, kind):
     allowed, expected = LOG[kind]
     return [f"server log: {line}" for line in server_log.problems(text, allowed, expected)]
@@ -161,6 +170,7 @@ class Scenario:
         self.cluster, self.database, self.point, self.kind = cluster, database, point, kind
         self.interrupted = None
         self.found = []  # what the interruption itself found wrong
+        self.killed_from = None  # where the server log stood when a backend was killed
 
     def session(self):
         return Session(self.cluster, self.database)
@@ -280,6 +290,7 @@ class Scenario:
         elif self.kind == "cancel":
             monitor.run(f"SELECT pg_cancel_backend({pid})").value()
         elif self.kind == "kill":
+            self.killed_from = self.cluster.log.stat().st_size
             os.kill(pid, signal.SIGKILL)
         else:
             self.cluster.stop_immediately()
@@ -288,6 +299,10 @@ class Scenario:
         if not self.cluster.running():
             self.cluster.start()
         deadline = time.monotonic() + RECOVERY_SECONDS
+        while self.killed_from is not None and not self.restarted():
+            if time.monotonic() > deadline:
+                raise RuntimeError(f"the server did not restart {RECOVERY_SECONDS} s after {self.kind}")
+            time.sleep(0.2)
         while True:
             try:
                 with self.session() as s:
@@ -298,6 +313,11 @@ class Scenario:
             if time.monotonic() > deadline:
                 raise RuntimeError(f"the server did not accept connections {RECOVERY_SECONDS} s after {self.kind}")
             time.sleep(0.2)
+
+    def restarted(self):
+        with open(self.cluster.log) as log:
+            log.seek(self.killed_from)
+            return restarted(log.read())
 
     def leftovers(self, s, interrupted):
         failures = []
