@@ -27,7 +27,7 @@
   superuser's graph, give it to a non-superuser with `set_owner` or
   `reassign_owned`. No SQL surface changes.
 
-### Added
+### New
 
 - **Graphs from keys.** `warren.queries_from_keys(tables regclass[])`
   returns the `node_query`, `edge_query` and `has_relations` that the
@@ -41,6 +41,15 @@
   composite key as its row literal (`shop.shipments:(10,2)`). Only the
   listed tables are read, and foreign keys to other tables are ignored
   (docs/semantics.md, "Graphs from keys"; DESIGN.md §14 item 53).
+- **A guide to running pg_warren beside a managed database**
+  (`docs/beside-managed.md`), for Amazon RDS, Aurora and other services
+  that cannot install it: a server of your own with pg_warren, fed by
+  logical replication from the managed primary and refreshed on a
+  schedule, with results read back on the primary through `postgres_fdw`
+  (or the graph's sources read through it), how stale and how consistent
+  each version is, security and limitations. Its SQL runs in CI, on a
+  primary without pg_warren and a graph server
+  (`test/logical_replication.py`).
 
 ### Documentation
 
