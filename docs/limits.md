@@ -919,7 +919,10 @@ by itself: see docs/semantics.md, "Dropping a role".)
   on a machine whose RAM could not grant that much (Appendix A.2 at 10M,
   `bench/results/appendix_a/`). Within one graph, `edit` aligns by dense
   id and rebuilds nothing.
-- `gather` with `text` (or any non-numeric) messages sends each through
-  its type's binary send and receive functions (DESIGN.md §6.4): at 10M
-  nodes and 11.5M messages a `collect` superstep took 29 s, against 12 s
-  for the same messages as `bigint` (Appendix A.3 at 10M).
+- `gather` with messages of a type other than the numbers, `boolean`,
+  `text`, `varchar`, `char` and `bytea` (`jsonb`, `numeric`, arrays...)
+  sends each through its type's binary send and receive functions
+  (DESIGN.md §6.4). Text and `bytea` travel as their bytes: at 10M nodes
+  and 11.5M messages a `collect` of cheap text messages takes 14.5 s,
+  against 13.5 s as `bigint` (Appendix A.3 at 10M); the message query's
+  own cost comes on top.

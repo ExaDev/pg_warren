@@ -8,6 +8,20 @@
   character** for `collect` and `first`: their query was cast to
   `character`, which is `character(1)`; it is now cast to `bpchar`, as
   `array_agg` keeps them.
+- **`gather`'s `collect`, `first` and `count` over `text`, `varchar` or
+  `char` messages no longer depend on `client_encoding`**: a message it
+  could not represent failed with 22P05 ("has no equivalent in
+  encoding"), since each message passed through `textsend`.
+
+### Performance
+
+- **`gather` over `text`, `varchar`, `char` and `bytea` messages** keeps
+  them as their bytes, as `concat` did, instead of each going through its
+  type's send and receive functions, and lays a collected array out
+  straight from them: at 10M nodes and 11.5M messages, a `collect` of
+  cheap text messages takes 14.5 s rather than 16.7 s (13.5 s as
+  `bigint`). Appendix A.3's first superstep goes from 30.8 s to 29.5 s;
+  most of it is its message query (DESIGN.md §13, "After 0.7.0").
 
 ## 0.7.0 — proven on real graphs and real deployments (2026-10-27)
 

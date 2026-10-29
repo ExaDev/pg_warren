@@ -166,11 +166,13 @@ def use_case(scale):
         Step("refresh", "SELECT warren.refresh('er')"),
         Step("version", "SELECT warren.info('er') -> 'versions' -> 0", kind="measure", key="version"),
         # Superstep 1's time without the version's first load; its message
-        # query (two SQL functions an identifier) on its own; and the same
-        # messages as bigint, which take the fixed-width path where text
-        # takes the binary send and receive (DESIGN.md §6.4).
+        # query (two SQL functions an identifier) on its own, each message
+        # made (a bare count(*) would plan the functions away; ident_value is
+        # not inlined, its `||` of a bigint being stable, so it runs as a SQL
+        # function call a row); and the same messages as bigint, which take
+        # the fixed-width path where text travels as its bytes (DESIGN.md §6.4).
         Step("prewarm", "SELECT warren.prewarm('er')"),
-        Step("identifier messages", "SELECT count(*) FROM (SELECT id, kind || ':' || value FROM identifiers) m"),
+        Step("identifier messages", "SELECT sum(length(kind || ':' || value)) FROM identifiers"),
         Step("superstep 1 as bigint", "CREATE TABLE idents_bigint AS SELECT node_id, value "
                                       "FROM warren.gather('er', 'SELECT id, id FROM identifiers', "
                                       "NULL::bigint, NULL::bigint[]); DROP TABLE idents_bigint"),
