@@ -102,8 +102,10 @@ triangle queries ran past a 300-second timeout.
 
 **Caveats.** Most rows are one run on a shared 4-vCPU VM. pg_warren and GDS used
 4 threads; igraph and Cypher are single-threaded. Every time includes the
-client round trip. pg_warren pays a fixed 0.2–2 ms per call, which dominates
-on tiny graphs. The Louvain and loading figures predate two later
+client round trip. A warm pg_warren traversal call costs 25–70 µs more than
+`SELECT 1`. A function that writes a vector costs about 1 ms more, to persist
+it and commit. These fixed costs dominate on tiny graphs; the table's
+0.2–2 ms rows were measured on 0.7.0. The Louvain and loading figures predate two later
 optimisations, so pg_warren's times there may now be lower. The triangles
 row was re-timed after them, and the PageRank and Leiden rows on 0.8.0's
 native `pagerank` and `leiden`, against igraph only (PageRank in three
@@ -458,7 +460,7 @@ Every SQL example in the README and `docs/` runs in CI, in
   (53400) by an over-estimate of its memory, and `eigen` on A.2's dense
   bridge takes 1,332 s against 10 minutes; A.1 and A.3 ran at 7M and
   11.5M edges rather than 100M and 50M, for the disk. Head to head,
-  pg_warren loses on PageRank, Leiden and a fixed cost of 0.2–2 ms a call.
+  pg_warren loses on PageRank, Leiden and a fixed cost of 25 µs to 1 ms a call.
   The caveats: the corpus's large tier and a multi-day soak behind a
   pooler have not run (M12); macOS is not a supported platform; and RPM
   packages and PGXN are not built yet

@@ -85,6 +85,18 @@
   cheap text messages takes 14.5 s rather than 16.7 s (13.5 s as
   `bigint`). Appendix A.3's first superstep goes from 30.8 s to 29.5 s;
   most of it is its message query (DESIGN.md §13, "After 0.7.0").
+- **A short kernel step no longer waits to be woken.** The calling thread
+  spins for up to 50 µs before it parks while the compute pool runs a job,
+  so a job over a small graph returns in 2–4 µs instead of the 20–40 µs
+  the operating system took to wake the caller (DESIGN.md §6.9).
+  PageRank runs three jobs an iteration: on lesmis a call takes
+  1.3–1.4 ms instead of 3.5–3.7 ms (on a 3-node graph 1.0–1.2 ms instead
+  of 2.8–3.0 ms), and larger graphs are unchanged or slightly faster.
+- **Measured: a traversal call's fixed cost is 25–70 µs, not 0.2–2 ms.**
+  Warm, with the round trip, `bfs`, `shortest_path` and `walk` take
+  0.07–0.11 ms against 0.04 ms for `SELECT 1`, on PG 16 and 18. Half of
+  the server's share is the one catalog read that resolves the graph
+  (DESIGN.md §13, "After 0.7.0"). Nothing in traversal changed.
 
 ## 0.7.0 — proven on real graphs and real deployments (2026-10-27)
 
