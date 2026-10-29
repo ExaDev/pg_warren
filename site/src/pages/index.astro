@@ -29,13 +29,13 @@ SELECT warren.refresh('social');`;
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="Deep graph traversal and whole-graph computation inside PostgreSQL, over nodes and edges in ordinary tables." />
     <meta name="theme-color" content="#f7f6ef" />
-    <meta property="og:title" content="pg_warren — Deep graph traversal inside PostgreSQL" />
+    <meta property="og:title" content="pg_warren — Fast graph analytics inside PostgreSQL" />
     <meta property="og:description" content="Deep traversal and whole-graph computation, inside PostgreSQL, over your ordinary tables." />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://exadev.github.io/pg_warren/" />
     <link rel="canonical" href="https://exadev.github.io/pg_warren/" />
     <link rel="icon" type="image/svg+xml" href={mark.src} />
-    <title>pg_warren — Deep graph traversal inside PostgreSQL</title>
+    <title>pg_warren — Fast graph analytics inside PostgreSQL</title>
     <script is:inline>
       try {
         const saved = localStorage.getItem('starlight-theme');
@@ -60,7 +60,7 @@ SELECT warren.refresh('social');`;
       <section class="hero wrap" aria-labelledby="hero-title">
         <div class="hero-copy">
           <a class="eyebrow release-note" href={`${base}/docs/changelog/`}><span class="status-dot"></span> PRE-1.0 · IN DEVELOPMENT <span aria-hidden="true">↗</span></a>
-          <h1 id="hero-title">Deep graph traversal<br />inside PostgreSQL.</h1>
+          <h1 id="hero-title">Fast graph analytics<br />inside PostgreSQL.</h1>
           <p class="hero-description">A graph engine inside Postgres. Find paths, rank what matters, spot communities, and test changes before you commit them. All in SQL, on the tables you already have.</p>
           <div class="hero-actions"><a class="button primary" href={`${base}/docs/installation/`}>Installation <span aria-hidden="true">↗</span></a><a class="button comparison-cta" href={`${base}/docs/positioning/`}>How is this different from pgGraph? <span aria-hidden="true">→</span></a></div>
           <p class="hero-performance">In our benchmarks over 12 real graphs, pg_warren was faster than pgGraph 1.2.1 on every workload both support (2.4–89× on shortest paths, 1.7–14× on connected components) and outperformed Neo4j + GDS on shortest-path and Louvain workloads, running entirely inside PostgreSQL. <a href={`${base}/docs/performance/`}>See results and methodology</a> for the warm medians, shared 4-vCPU setup, and workloads where other engines are faster.</p>
