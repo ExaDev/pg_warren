@@ -1,17 +1,19 @@
 //! `aligned_edit_distance` allocates nothing graph-sized and charges
 //! nothing (DESIGN.md §8): it reads both versions where they are, so what
 //! it allocates is its result, the same for a graph of any size with the
-//! same relations. Measured with a counting global allocator. An
-//! integration test, so the allocator is this test binary's alone; one
-//! `#[test]`, so no other test allocates while it measures.
+//! same relations. Measured with a counting global allocator that counts
+//! only the measuring thread's allocations, while it measures: the compute
+//! pools of earlier measurements may still be winding their threads down.
+//! An integration test, so the allocator is this test binary's alone.
 
 // Not under Miri: graph-sized allocations are far too slow there, and the
 // resources hold the compute pool (see compute::workers).
 #![cfg(not(miri))]
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 use std::error::Error;
-use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+use std::sync::atomic::{AtomicIsize, Ordering::SeqCst};
 
 use warren_core::compute::{ComputeMemory, Workers};
 use warren_core::graph::{DenseId, EdgeList, GraphCsr, IdMap, RelationDictionary, RelationIndex};
@@ -19,38 +21,49 @@ use warren_core::interrupts::Uninterrupted;
 use warren_core::spectral::{align_ids, aligned_edit_distance, Resources};
 use warren_core::version::GraphVersion;
 
-/// The system allocator, counting the bytes live now and at the peak.
+/// The system allocator, counting the bytes the measuring thread has
+/// allocated since it started measuring, now and at the peak (negative
+/// when it frees more than it allocates).
 struct Counting;
 
-static LIVE: AtomicUsize = AtomicUsize::new(0);
-static PEAK: AtomicUsize = AtomicUsize::new(0);
+static LIVE: AtomicIsize = AtomicIsize::new(0);
+static PEAK: AtomicIsize = AtomicIsize::new(0);
 
-fn grew(bytes: usize) {
-    let live = LIVE.fetch_add(bytes, SeqCst) + bytes;
-    PEAK.fetch_max(live, SeqCst);
+thread_local! {
+    /// Whether this thread is measuring.
+    static MEASURING: Cell<bool> = const { Cell::new(false) };
+}
+
+fn changed(bytes: isize) {
+    if MEASURING.try_with(Cell::get).unwrap_or(false) {
+        let live = LIVE.fetch_add(bytes, SeqCst) + bytes;
+        PEAK.fetch_max(live, SeqCst);
+    }
+}
+
+/// `bytes` as a change in the live count.
+fn signed(bytes: usize) -> isize {
+    isize::try_from(bytes).unwrap_or(isize::MAX)
 }
 
 // SAFETY: every call is forwarded unchanged to `System`, which upholds the
 // `GlobalAlloc` contract; the counters only observe sizes.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        grew(layout.size());
+        changed(signed(layout.size()));
         // SAFETY: the caller's `layout` obligations pass through to `System`.
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        LIVE.fetch_sub(layout.size(), SeqCst);
+        changed(-signed(layout.size()));
         // SAFETY: `pointer` came from `System` with `layout`, as the caller
         // guarantees for this allocator.
         unsafe { System.dealloc(pointer, layout) }
     }
 
     unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        match size >= layout.size() {
-            true => grew(size - layout.size()),
-            false => _ = LIVE.fetch_sub(layout.size() - size, SeqCst),
-        }
+        changed(signed(size) - signed(layout.size()));
         // SAFETY: the caller's obligations pass through to `System`.
         unsafe { System.realloc(pointer, layout, size) }
     }
@@ -104,11 +117,14 @@ fn charged_and_peak(nodes: u64, weighted: bool, reverse: bool) -> Outcome<(u64, 
         Resources { workers: &workers, memory: &memory, interrupts: &mut Uninterrupted };
     let alignment = align_ids(&mut resources, &this, &other)?;
     let charged_before = memory.in_use();
-    let live_before = LIVE.load(SeqCst);
-    PEAK.store(live_before, SeqCst);
-    let distance = aligned_edit_distance(&mut Uninterrupted, &this, &other, &alignment)?;
+    LIVE.store(0, SeqCst);
+    PEAK.store(0, SeqCst);
+    MEASURING.set(true);
+    let distance = aligned_edit_distance(&mut Uninterrupted, &this, &other, &alignment);
+    MEASURING.set(false);
+    let distance = distance?;
     let charged = memory.in_use() - charged_before;
-    let peak = (PEAK.load(SeqCst) - live_before) as u64;
+    let peak = u64::try_from(PEAK.load(SeqCst)).unwrap_or(0);
     assert!(distance.overall.union > 0);
     drop(distance);
     Ok((charged, peak))
