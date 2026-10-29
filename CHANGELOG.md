@@ -4,12 +4,25 @@
 
 ### Upgrading
 
-- `ALTER EXTENSION pg_warren UPDATE;` replaces `warren.leiden`, a PL/pgSQL
-  function in 0.7.0, with the native one (under Performance). The
-  signature, defaults and privileges are unchanged.
+- **Run `ALTER EXTENSION pg_warren UPDATE;` in every database that has
+  the extension**, after installing the new build. The update replaces
+  the PL/pgSQL definitions of `warren.pagerank` and `warren.leiden` with
+  native ones (under Performance), keeping their privileges; it changes
+  no table. Until the update, 0.7.0's definitions still run with the new
+  library, as they did.
 
 ### Behaviour changes
 
+- `warren.pagerank` refuses a NULL `out` or `damping` before it runs, as
+  `out must not be NULL` and `damping must not be NULL` (SQLSTATE 22004,
+  as before; 0.7.0 ran first and then named `y`, or `value`). An empty
+  or unwritable `out` is refused before the run, too. Its intermediates
+  (`_warren_pagerank_*`) no longer exist, even during a run, and it no
+  longer carries `SET search_path`: the access guard pins it for the call
+  (DESIGN.md §7). Everything else is kept: its signature, ranks to the
+  bit, iteration counts, SQLSTATEs, progress, parallel label and
+  privileges, including a NULL `tol` never stopping it early and a NULL
+  `max_iter` running no iteration.
 - `leiden` checks that the caller may write `out` before it runs, not
   after. The error is the same (42501). The function no longer sets its
   own `search_path`; like every other `warren.*` function, it pins it for
@@ -22,6 +35,17 @@
 
 ### Performance
 
+- `warren.pagerank` is a native kernel, not a PL/pgSQL loop over the
+  compute primitives (DESIGN.md §6.7). The loop made eleven calls an
+  iteration, about 1.5 ms of overhead an iteration however small the
+  graph; the kernel makes two parallel passes and one product an
+  iteration, and holds four vectors of the id space (five with a seed)
+  where the loop held eleven: 0.32 GB of scratch at 10M nodes instead of
+  0.88 GB.
+  Twenty iterations, head to head before and after (median warm times,
+  `warren.threads = 4`): lesmis 34.7 → 1.6 ms, facebook 47.3 → 6.3 ms,
+  email-enron 74.9 → 22.6 ms, cit-hepth 65.7 → 18.6 ms and DBLP
+  318 → 113 ms, as fast as igraph or faster except on the smallest graph.
 - `leiden` is native (DESIGN.md §6.7, "Leiden's levels"). Each level's
   graph is contracted from the level below, not from the whole graph, and
   is held in memory, charged to `warren.max_compute_memory`. Only `out`

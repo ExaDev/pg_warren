@@ -14,7 +14,7 @@ use super::super::modularity::require_resolution;
 use super::super::partition::undirected;
 use super::super::CommunitySqlError;
 use crate::access::entry;
-use crate::activity::{report_command, Report, Running};
+use crate::activity::{report, Report, Running};
 use crate::cache::{resolve, CachedIds};
 use crate::compute_sql::Vectors;
 use crate::interrupts::{workers, PostgresInterrupts};
@@ -177,7 +177,7 @@ impl<E: CachedIds> Multilevel for Levels<'_, E> {
     }
 
     fn level(&mut self, iteration: u32, level: u32) -> Result<(), CommunitySqlError> {
-        report_command(Report {
+        report(Report {
             command: "leiden",
             graph: Some(self.graph),
             phase: &format!("iteration {iteration}, level {level}"),

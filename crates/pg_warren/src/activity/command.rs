@@ -93,6 +93,17 @@ pub(crate) fn reported(frame: &Frame, report: Report<'_>, now: i64) -> Frame {
     }
 }
 
+/// Sets the command frame to `report` for the rest of the statement, as
+/// `warren.report_progress` does: also for a library function that runs
+/// as one native call (`pagerank`, `leiden`) and reports as the PL/pgSQL library
+/// does, its graph resolved and its read access checked by the call. On
+/// the main thread, inside a call that has claimed this backend's slot.
+pub(crate) fn report(report: Report<'_>) {
+    register();
+    let now = now();
+    record(|values| values.command = reported(&values.command, report, now));
+}
+
 /// Clears the command frame when dropped, by the reset or deletion of the
 /// memory context it was registered on, and clears that registration.
 /// Pure Rust: it runs inside `AtCommit_Memory` at a transaction's end.
@@ -118,17 +129,6 @@ fn register() {
             registered.set(true);
         }
     }
-}
-
-/// Sets the command frame to `report`, cleared when the statement or its
-/// transaction ends: what `warren.report_progress` sets for PL/pgSQL, and
-/// what a native algorithm of levels and iterations (`warren.leiden`)
-/// sets itself, on a graph whose access it has checked.
-pub(crate) fn report_command(report: Report<'_>) {
-    claim();
-    register();
-    let now = now();
-    record(|values| values.command = reported(&values.command, report, now));
 }
 
 /// The id of graph `name`, which the caller must be able to read.
@@ -191,7 +191,7 @@ fn report_progress(
         // remembers is forgotten when the statement ends.
         register();
         let graph = graph.map(graph_id).transpose()?;
-        report_command(Report { command, graph, phase: phase.unwrap_or_default(), done, total });
+        report(Report { command, graph, phase: phase.unwrap_or_default(), done, total });
         Ok::<_, ReportError>(())
     })
 }

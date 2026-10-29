@@ -9,7 +9,8 @@
 //! (`backends`), under `pg_stat_activity`'s privacy rule (`visibility`).
 //! Each slot also holds two progress frames (`frame`): the operation, the
 //! native call running now (`operation`), and the command around it, set
-//! by `warren.report_progress` (`command`); `warren.progress()` lists them
+//! by `warren.report_progress` or a library function that reports as
+//! it does (`command`); `warren.progress()` lists them
 //! (`progress`).
 //!
 //! It depends on `access`, `shared_memory` and `catalog` (a report's
@@ -32,7 +33,7 @@ mod visibility;
 pub(crate) use backend::claim;
 #[cfg(test)]
 pub(crate) use backend::own;
-pub(crate) use command::{report_command, Report};
+pub(crate) use command::{report, Report};
 pub(crate) use counters::{
     count_private_evictions, count_read, count_refusal, count_shared_evictions, count_wait,
     record_mapped, record_private, Read,
