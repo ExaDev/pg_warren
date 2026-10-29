@@ -1,0 +1,218 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "head-to-head",
+   "roadnet-tx",
+   "--engine",
+   "pg_warren",
+   "--engine",
+   "igraph",
+   "--workload",
+   "leiden",
+   "--threads",
+   "4",
+   "--pg-config",
+   "/var/tmp/leiden-perf/new/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "99aeb74",
+   "--extension-profile",
+   "release",
+   "--results",
+   "/var/tmp/leiden-perf/results-new"
+  ],
+  "harness": {
+   "revision": "99aeb74c0aa9216449d88c9f757a9eabb483b548",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "99aeb74",
+   "profile": "release",
+   "library": "/var/tmp/leiden-perf/new/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "228d3318c18afde3cd0512e833ceb5969f6063e06fb89c282016658d09181c44"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v185",
+  "load_average": [
+   2.5361328125,
+   3.27197265625,
+   3.33642578125
+  ]
+ },
+ "dataset": "roadnet-tx",
+ "tier": "medium",
+ "fetched": {
+  "tables": {
+   "nodes": 1379917,
+   "edges": 3843320,
+   "ids": "integer",
+   "relations": 0,
+   "self_loops": 0
+  },
+  "sha256": {
+   "nodes.csv": "5be403bd662e47012fdfcfe5948004ea5153a18a4a213074089a0bf7dd3f7d44",
+   "edges.csv": "f3c08202e30653b17f6384d4c486f9f56042db61a800e3705dcfd6f036822b11"
+  },
+  "provenance": {
+   "entryId": "roadnet-tx",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-24T19:52:57.324Z",
+   "source": {
+    "url": "https://snap.stanford.edu/data/roadNet-TX.txt.gz",
+    "status": "live"
+   },
+   "fetchedUrl": "https://snap.stanford.edu/data/roadNet-TX.txt.gz",
+   "sha256": "1bc0ce058546ae66101d57af7c16de37225e37778ad2e3781b4f7bf3a28cb41f",
+   "byteLength": 12442024
+  }
+ },
+ "repeat": 5,
+ "budget_seconds": 120,
+ "timeout_seconds": 600,
+ "workloads": [
+  {
+   "name": "leiden",
+   "kind": "leiden",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": null
+  }
+ ],
+ "engines": {
+  "pg_warren": {
+   "describe": {
+    "version": "0.8.0",
+    "threads": 4,
+    "settings": [
+     "fsync=off",
+     "full_page_writes=off",
+     "jit=on",
+     "maintenance_work_mem=1GB",
+     "max_parallel_workers_per_gather=2",
+     "max_wal_size=1GB",
+     "shared_buffers=1GB",
+     "shared_preload_libraries=",
+     "statement_timeout=10min",
+     "synchronous_commit=off",
+     "wal_level=minimal",
+     "warren.max_build_memory=4GB",
+     "warren.max_cache_memory=4GB",
+     "warren.max_compute_memory=4GB",
+     "warren.shared_cache_memory=4GB",
+     "warren.threads=4",
+     "work_mem=64MB"
+    ],
+    "graph": {
+     "node_count": 1379917,
+     "edge_count": 3843320,
+     "dropped_edges": 0,
+     "bytes": 75076532
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      2.3644420109999373
+     ],
+     "median_seconds": 2.3644420109999373
+    },
+    "build": {
+     "seconds": [
+      1.488562075000118,
+      1.2098413140001867,
+      1.20440113199993
+     ],
+     "median_seconds": 1.2098413140001867
+    }
+   },
+   "workloads": {
+    "leiden": {
+     "cold_seconds": 3.2665559590000157,
+     "warm_seconds": [
+      3.0327597209998203,
+      3.142773583000235,
+      3.8480532789999415,
+      4.57553664299985,
+      3.8038704209998286
+     ],
+     "warm_median_seconds": 3.8038704209998286,
+     "cold_phases": {
+      "evict": 0.0014994410003055236
+     },
+     "check": {
+      "check": "leiden",
+      "status": "match",
+      "warren": 0.9920194447279912,
+      "oracle": 0.9913405108248997,
+      "difference": 0.0006789339030914832,
+      "slack": 0.02,
+      "modularity": 0.9920194447279912,
+      "communities": 752
+     },
+     "counted": true
+    }
+   }
+  },
+  "igraph": {
+   "describe": {
+    "version": "1.0.0",
+    "threads": 1,
+    "settings": {
+     "pagerank": "PRPACK (solved)",
+     "louvain": "community_multilevel",
+     "leiden": "community_leiden, modularity, 2 iterations",
+     "seed": 1
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      2.5781811870001548
+     ],
+     "median_seconds": 2.5781811870001548
+    },
+    "build": {
+     "seconds": [
+      0.9252306250000402
+     ],
+     "median_seconds": 0.9252306250000402
+    }
+   },
+   "workloads": {
+    "leiden": {
+     "cold_seconds": 5.317184129999987,
+     "warm_seconds": [
+      5.143443384999955,
+      5.101511920999656,
+      4.990510641000128,
+      4.70357851000017,
+      4.817149227999835
+     ],
+     "warm_median_seconds": 4.990510641000128,
+     "cold_phases": {},
+     "check": {
+      "check": "leiden",
+      "status": "match",
+      "warren": 0.9920462759179945,
+      "oracle": 0.9913405108248997,
+      "difference": 0.0007057650930948345,
+      "slack": 0.02,
+      "modularity": 0.9920462759179945,
+      "communities": 758
+     },
+     "counted": true
+    }
+   }
+  }
+ }
+}

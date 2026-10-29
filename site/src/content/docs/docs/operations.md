@@ -134,8 +134,8 @@ results; functions that would write the catalog fail in its read-only
 transaction state.
 
 Algorithms that always persist their output cannot run on a standby just
-because their input is already cached. The PL/pgSQL library functions
-such as `pagerank` and `louvain` persist their output.
+because their input is already cached. The library functions such as
+`pagerank` and `louvain` persist their output.
 
 Standby queries can conflict with cleanup replay when a version is retired
 on the primary. This follows PostgreSQL's snapshot and recovery-conflict

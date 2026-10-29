@@ -1,0 +1,223 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "head-to-head",
+   "wn18rr",
+   "--engine",
+   "pg_warren",
+   "--engine",
+   "igraph",
+   "--workload",
+   "leiden",
+   "--threads",
+   "4",
+   "--pg-config",
+   "/var/tmp/leiden-perf/new/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "99aeb74",
+   "--extension-profile",
+   "release",
+   "--results",
+   "/var/tmp/leiden-perf/results-new"
+  ],
+  "harness": {
+   "revision": "99aeb74c0aa9216449d88c9f757a9eabb483b548",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "99aeb74",
+   "profile": "release",
+   "library": "/var/tmp/leiden-perf/new/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "228d3318c18afde3cd0512e833ceb5969f6063e06fb89c282016658d09181c44"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v185",
+  "load_average": [
+   5.87451171875,
+   5.3076171875,
+   3.8134765625
+  ]
+ },
+ "dataset": "wn18rr",
+ "tier": "tiny",
+ "fetched": {
+  "tables": {
+   "nodes": 40943,
+   "edges": 93003,
+   "ids": "text",
+   "relations": 11,
+   "self_loops": 9
+  },
+  "sha256": {
+   "nodes.csv": "ceeaf46e4b4f46265535b05d55934499150189f4fae6e33a00f7a341bc9d7bfa",
+   "edges.csv": "fb2e41b00f3fed639f9611d25d3f06701fe0293b9fdc96c255fd55893dadd2b4"
+  },
+  "provenance": {
+   "entryId": "wn18rr",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-26T05:48:09.864Z",
+   "source": {
+    "url": "https://web.informatik.uni-mannheim.de/pi1/kge-datasets/wnrr.tar.gz",
+    "status": "live"
+   },
+   "fetchedUrl": "https://web.informatik.uni-mannheim.de/pi1/kge-datasets/wnrr.tar.gz",
+   "sha256": "db1f5ce41e3d753c902f52af4e6e75dfe1890eb67ecacec8eea346013c596aa8",
+   "byteLength": 1297906,
+   "members": [
+    "wnrr/train.txt",
+    "wnrr/valid.txt",
+    "wnrr/test.txt"
+   ]
+  }
+ },
+ "repeat": 5,
+ "budget_seconds": 120,
+ "timeout_seconds": 600,
+ "workloads": [
+  {
+   "name": "leiden",
+   "kind": "leiden",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": null
+  }
+ ],
+ "engines": {
+  "pg_warren": {
+   "describe": {
+    "version": "0.8.0",
+    "threads": 4,
+    "settings": [
+     "fsync=off",
+     "full_page_writes=off",
+     "jit=on",
+     "maintenance_work_mem=1GB",
+     "max_parallel_workers_per_gather=2",
+     "max_wal_size=1GB",
+     "shared_buffers=1GB",
+     "shared_preload_libraries=",
+     "statement_timeout=10min",
+     "synchronous_commit=off",
+     "wal_level=minimal",
+     "warren.max_build_memory=4GB",
+     "warren.max_cache_memory=4GB",
+     "warren.max_compute_memory=4GB",
+     "warren.shared_cache_memory=4GB",
+     "warren.threads=4",
+     "work_mem=64MB"
+    ],
+    "graph": {
+     "node_count": 40943,
+     "edge_count": 93003,
+     "dropped_edges": 0,
+     "bytes": 4863928
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.1538271699996585
+     ],
+     "median_seconds": 0.1538271699996585
+    },
+    "build": {
+     "seconds": [
+      0.07294946000001801,
+      0.0655780639999648,
+      0.06608245799998258
+     ],
+     "median_seconds": 0.06608245799998258
+    }
+   },
+   "workloads": {
+    "leiden": {
+     "cold_seconds": 0.11064112800022485,
+     "warm_seconds": [
+      0.0976235840003028,
+      0.09598113999982161,
+      0.09940424499973233,
+      0.09515194800042082,
+      0.09408540499998708
+     ],
+     "warm_median_seconds": 0.09598113999982161,
+     "cold_phases": {
+      "evict": 0.0006929149999450601
+     },
+     "check": {
+      "check": "leiden",
+      "status": "match",
+      "warren": 0.8440143875119323,
+      "oracle": 0.8374212815559854,
+      "difference": 0.006593105955946865,
+      "slack": 0.02,
+      "modularity": 0.8440143875119323,
+      "communities": 76
+     },
+     "counted": true
+    }
+   }
+  },
+  "igraph": {
+   "describe": {
+    "version": "1.0.0",
+    "threads": 1,
+    "settings": {
+     "pagerank": "PRPACK (solved)",
+     "louvain": "community_multilevel",
+     "leiden": "community_leiden, modularity, 2 iterations",
+     "seed": 1
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.0707728849997693
+     ],
+     "median_seconds": 0.0707728849997693
+    },
+    "build": {
+     "seconds": [
+      0.050794386000234226
+     ],
+     "median_seconds": 0.050794386000234226
+    }
+   },
+   "workloads": {
+    "leiden": {
+     "cold_seconds": 0.09587665200024276,
+     "warm_seconds": [
+      0.09532373199999711,
+      0.09527375400011806,
+      0.10431162199984101,
+      0.10798110700034158,
+      0.09514196000009179
+     ],
+     "warm_median_seconds": 0.09532373199999711,
+     "cold_phases": {},
+     "check": {
+      "check": "leiden",
+      "status": "match",
+      "warren": 0.84410732754519,
+      "oracle": 0.8374212815559854,
+      "difference": 0.0066860459892046364,
+      "slack": 0.02,
+      "modularity": 0.84410732754519,
+      "communities": 73
+     },
+     "counted": true
+    }
+   }
+  }
+ }
+}

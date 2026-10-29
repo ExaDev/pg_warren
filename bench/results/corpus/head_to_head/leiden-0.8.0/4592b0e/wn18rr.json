@@ -1,0 +1,170 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "head-to-head",
+   "wn18rr",
+   "--engine",
+   "pg_warren",
+   "--workload",
+   "leiden",
+   "--threads",
+   "4",
+   "--pg-config",
+   "/var/tmp/leiden-perf/base/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "4592b0e",
+   "--extension-profile",
+   "release",
+   "--results",
+   "/var/tmp/leiden-perf/results-base"
+  ],
+  "harness": {
+   "revision": "99aeb74c0aa9216449d88c9f757a9eabb483b548",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "4592b0e",
+   "profile": "release",
+   "library": "/var/tmp/leiden-perf/base/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "1a22b9c2ebfe174a351f1aaa7e8dabbae8caae24ccc9fe8fde1cc4f3b4452ff6"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v185",
+  "load_average": [
+   6.2119140625,
+   5.36376953125,
+   3.82373046875
+  ]
+ },
+ "dataset": "wn18rr",
+ "tier": "tiny",
+ "fetched": {
+  "tables": {
+   "nodes": 40943,
+   "edges": 93003,
+   "ids": "text",
+   "relations": 11,
+   "self_loops": 9
+  },
+  "sha256": {
+   "nodes.csv": "ceeaf46e4b4f46265535b05d55934499150189f4fae6e33a00f7a341bc9d7bfa",
+   "edges.csv": "fb2e41b00f3fed639f9611d25d3f06701fe0293b9fdc96c255fd55893dadd2b4"
+  },
+  "provenance": {
+   "entryId": "wn18rr",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-26T05:48:09.864Z",
+   "source": {
+    "url": "https://web.informatik.uni-mannheim.de/pi1/kge-datasets/wnrr.tar.gz",
+    "status": "live"
+   },
+   "fetchedUrl": "https://web.informatik.uni-mannheim.de/pi1/kge-datasets/wnrr.tar.gz",
+   "sha256": "db1f5ce41e3d753c902f52af4e6e75dfe1890eb67ecacec8eea346013c596aa8",
+   "byteLength": 1297906,
+   "members": [
+    "wnrr/train.txt",
+    "wnrr/valid.txt",
+    "wnrr/test.txt"
+   ]
+  }
+ },
+ "repeat": 5,
+ "budget_seconds": 120,
+ "timeout_seconds": 600,
+ "workloads": [
+  {
+   "name": "leiden",
+   "kind": "leiden",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": null
+  }
+ ],
+ "engines": {
+  "pg_warren": {
+   "describe": {
+    "version": "0.8.0",
+    "threads": 4,
+    "settings": [
+     "fsync=off",
+     "full_page_writes=off",
+     "jit=on",
+     "maintenance_work_mem=1GB",
+     "max_parallel_workers_per_gather=2",
+     "max_wal_size=1GB",
+     "shared_buffers=1GB",
+     "shared_preload_libraries=",
+     "statement_timeout=10min",
+     "synchronous_commit=off",
+     "wal_level=minimal",
+     "warren.max_build_memory=4GB",
+     "warren.max_cache_memory=4GB",
+     "warren.max_compute_memory=4GB",
+     "warren.shared_cache_memory=4GB",
+     "warren.threads=4",
+     "work_mem=64MB"
+    ],
+    "graph": {
+     "node_count": 40943,
+     "edge_count": 93003,
+     "dropped_edges": 0,
+     "bytes": 4863928
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.16804825100007292
+     ],
+     "median_seconds": 0.16804825100007292
+    },
+    "build": {
+     "seconds": [
+      0.07121792099997037,
+      0.06538589000001593,
+      0.06894127399982608
+     ],
+     "median_seconds": 0.06894127399982608
+    }
+   },
+   "workloads": {
+    "leiden": {
+     "cold_seconds": 0.42062604500006273,
+     "warm_seconds": [
+      0.4130120629997691,
+      0.3942618759997458,
+      0.40100648500038005,
+      0.40315477100011776,
+      0.3997612369998933
+     ],
+     "warm_median_seconds": 0.40100648500038005,
+     "cold_phases": {
+      "evict": 0.0008732090000194148
+     },
+     "check": {
+      "check": "leiden",
+      "status": "match",
+      "warren": 0.8440143875119323,
+      "oracle": 0.8374212815559854,
+      "difference": 0.006593105955946865,
+      "slack": 0.02,
+      "modularity": 0.8440143875119323,
+      "communities": 76
+     },
+     "counted": true
+    }
+   }
+  }
+ }
+}

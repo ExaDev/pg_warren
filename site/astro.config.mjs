@@ -16,6 +16,7 @@ export default defineConfig({
       { label: 'pg_warren home', link: '/' },
       { label: 'Start here', items: [
         { label: 'Documentation overview', link: '/docs/' },
+        { slug: 'docs/positioning' },
         { slug: 'docs/installation' },
         { slug: 'docs/quickstart' },
       ] },

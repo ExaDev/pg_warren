@@ -10,6 +10,7 @@
 mod contraction;
 mod error;
 mod labels;
+mod leiden;
 mod local_moving;
 mod modularity;
 mod projection;
@@ -20,6 +21,7 @@ mod undirected;
 pub use contraction::{contract, Contraction};
 pub use error::CommunityError;
 pub use labels::Labels;
+pub use leiden::{leiden, Found, Leiden, Multilevel, MOST_ITERATIONS};
 pub use local_moving::{local_moving, LocalMoving, Moved};
 pub use modularity::modularity;
 pub use projection::{lift, project, Aggregate};

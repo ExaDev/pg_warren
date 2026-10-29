@@ -24,6 +24,9 @@ pub(crate) enum CommunitySqlError {
     /// An argument is out of its range.
     #[error("{0}")]
     InvalidArgument(String),
+    /// The library's output vectors cannot take its intermediates' names.
+    #[error("vector names beginning with _warren_ are reserved for the library's intermediates")]
+    ReservedForIntermediates,
     /// Modularity needs weights of at least 0: the edge between these
     /// external ids is not.
     #[error("the edge {from} → {to} weighs {weight}: modularity needs weights of at least 0")]
@@ -138,6 +141,7 @@ impl SqlError for CommunitySqlError {
     fn sqlstate(&self) -> PgSqlErrorCode {
         match self {
             Self::NullArgument(_) => PgSqlErrorCode::ERRCODE_NULL_VALUE_NOT_ALLOWED,
+            Self::ReservedForIntermediates => PgSqlErrorCode::ERRCODE_RESERVED_NAME,
             Self::InvalidArgument(_)
             | Self::OtherParent { .. }
             | Self::NotContractedFrom { .. } => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
@@ -169,7 +173,8 @@ fn community_sqlstate(error: &CommunityError) -> PgSqlErrorCode {
         CommunityError::LabelWidth(_)
         | CommunityError::NotIntegral { .. }
         | CommunityError::UnknownAggregate(_)
-        | CommunityError::NegativeWeight { .. } => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+        | CommunityError::NegativeWeight { .. }
+        | CommunityError::Randomness(_) => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
         CommunityError::LabelLength { .. } | CommunityError::UnknownLabel { .. } => {
             PgSqlErrorCode::ERRCODE_INTERNAL_ERROR
         }

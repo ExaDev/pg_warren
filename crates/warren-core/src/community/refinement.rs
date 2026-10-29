@@ -55,7 +55,8 @@ pub struct Refined {
 const DRAWS: u64 = 1;
 
 /// Refines the partition `communities` labels (one label per node) of the
-/// live nodes of `graph`. Refined communities are labelled by the smallest
+/// live nodes of `graph`; refuses a randomness that is not a finite number
+/// of at least 0. Refined communities are labelled by the smallest
 /// of their members' `keys` (dense ids if `None`).
 #[allow(clippy::too_many_arguments)] // a kernel's inputs, as the other kernels take them
 pub fn refine<I: Interrupts>(
@@ -68,6 +69,9 @@ pub fn refine<I: Interrupts>(
     keys: Option<&[i64]>,
     options: Refinement,
 ) -> Result<Refined, CommunityError> {
+    if !(options.randomness.is_finite() && options.randomness >= 0.0) {
+        return Err(CommunityError::Randomness(options.randomness));
+    }
     let nodes = graph.id_space();
     for vector in [Some(communities), keys].into_iter().flatten() {
         if vector.len() as u64 != nodes {
@@ -573,6 +577,33 @@ mod tests {
             matches!(refused, Err(CommunityError::Compute(ComputeError::MemoryLimit { .. }))),
             "{refused:?}"
         );
+    }
+
+    #[test]
+    fn a_randomness_that_is_not_a_finite_number_of_at_least_0_is_refused() {
+        let graph = undirected(2, &vec![(0, 0, 1, 1.0)]);
+        let tombstones = Tombstones::new(2).unwrap();
+        let memory = ComputeMemory::new(u64::MAX);
+        for randomness in [-1.0, f64::NAN, f64::INFINITY] {
+            let options = Refinement { randomness, ..OPTIONS };
+            let refused = refine(
+                workers(),
+                &memory,
+                &mut Uninterrupted,
+                &graph,
+                &tombstones,
+                &[0, 0],
+                None,
+                options,
+            );
+            assert!(
+                matches!(refused, Err(CommunityError::Randomness(r)) if r.to_bits() == randomness.to_bits())
+            );
+            assert_eq!(
+                refused.map(|_| ()).unwrap_err().to_string(),
+                format!("randomness must be a finite number of at least 0, not {randomness}")
+            );
+        }
     }
 
     #[test]

@@ -306,6 +306,110 @@ mod tests {
         Ok(())
     }
 
+    /// `warren.leiden` as 0.7.0 shipped it, PL/pgSQL building every level
+    /// as a graph contracted from the graph, from the frozen install
+    /// script, as `public.leiden_0_7_0`.
+    fn leiden_as_released() -> Result<(), Error> {
+        let script = include_str!("../../../sql/pg_warren--0.7.0.sql");
+        let start = script.find("CREATE FUNCTION warren.leiden(").unwrap_or(0);
+        let length = script[start..].find("END $$;").unwrap_or(0) + "END $$;".len();
+        assert!(start > 0 && length > "END $$;".len(), "0.7.0 shipped warren.leiden");
+        let released = script[start..start + length]
+            .replacen("warren.leiden(", "public.leiden_0_7_0(", 1)
+            .replace("'leiden', graph", "'leiden_0_7_0', graph");
+        Spi::run(&released)
+    }
+
+    /// Whether `leiden` and the 0.7.0 PL/pgSQL, called with `arguments`
+    /// on graph `graph`, agree: on the modularity (to the bit), on every
+    /// node's label, and on every level kept.
+    fn agree_with_the_release(graph: &str, arguments: &str) -> Result<(), Error> {
+        let of_graph =
+            format!("graph_id = (SELECT graph_id FROM warren.graphs WHERE name = '{graph}')");
+        Spi::run(&format!(
+            "SELECT warren.drop_vector('{graph}', name) FROM warren.vectors
+             WHERE (name LIKE 'lnew%' OR name LIKE 'lold%') AND {of_graph}"
+        ))?;
+        let sep = if arguments.is_empty() { "" } else { ", " };
+        let new = Spi::get_one::<f64>(&format!(
+            "SELECT warren.leiden('{graph}', 'new', levels_prefix := 'lnew'{sep}{arguments})"
+        ))?;
+        let old = Spi::get_one::<f64>(&format!(
+            "SELECT public.leiden_0_7_0('{graph}', 'old', levels_prefix := 'lold'{sep}{arguments})"
+        ))?;
+        let bits = |q: Option<f64>| q.map(f64::to_bits);
+        assert_eq!(bits(new), bits(old), "{graph} ({arguments}): {new:?} against {old:?}");
+        let pairs = format!(
+            "SELECT 'new', 'old' UNION ALL
+             SELECT n.name, 'lold' || substr(n.name, 5) FROM warren.vectors n
+             WHERE n.name LIKE 'lnew\\_%' AND n.{of_graph}"
+        );
+        let differing = Spi::get_one::<i64>(&format!(
+            "SELECT count(*) FROM ({pairs}) p(a, b),
+                    LATERAL (SELECT count(*) AS c FROM warren.vector_values('{graph}', a, NULL::bigint) x
+                             FULL JOIN warren.vector_values('{graph}', b, NULL::bigint) y USING (node_id)
+                             WHERE x.value IS DISTINCT FROM y.value) d
+             WHERE d.c > 0"
+        ))?;
+        assert_eq!(differing, Some(0), "{graph} ({arguments}): partitions differ");
+        let levels = |prefix: &str| {
+            Spi::get_one::<i64>(&format!(
+                "SELECT count(*) FROM warren.vectors WHERE name LIKE '{prefix}\\_%' AND {of_graph}"
+            ))
+        };
+        let kept = levels("lnew")?;
+        assert!(kept.is_some_and(|kept| kept > 0), "{graph} ({arguments}): no level kept");
+        assert_eq!(kept, levels("lold")?, "{graph} ({arguments}): levels kept");
+        Ok(())
+    }
+
+    /// Levels held in memory, each contracted from the one before, find
+    /// what 0.7.0's levels, each a graph contracted from the graph, found:
+    /// on undirected and directed graphs, with deleted nodes, with
+    /// relations counted either way, weighted or not, and however a run
+    /// stops.
+    #[pg_test]
+    fn leiden_finds_what_the_released_library_found() -> Result<(), Error> {
+        leiden_as_released()?;
+        ring_of_cliques()?;
+        Spi::run("DELETE FROM rc_nodes WHERE id = 3; DELETE FROM rc_edges WHERE 3 IN (src, dst)")?;
+        Spi::run("SELECT warren.refresh('rc')")?;
+        for arguments in ["", "iterations := 1", "iterations := -1", "resolution := 3, seed := 7"] {
+            agree_with_the_release("rc", arguments)?;
+        }
+        planted_blocks()?;
+        for arguments in ["", "iterations := 1", "max_levels := 2", "randomness := 1, seed := 5"] {
+            agree_with_the_release("pb", arguments)?;
+        }
+        // Directed, weighted with integers, in three relations, some
+        // pairs in several of them.
+        Spi::run(
+            "CREATE TABLE dw_nodes AS SELECT generate_series(1, 3000)::bigint AS id;
+             CREATE TABLE dw_edges AS
+             SELECT DISTINCT ON (src, dst, rel) * FROM (
+               SELECT n.id AS src,
+                      CASE WHEN abs(hashint8(n.id * 8 + k)) % 10 < 8
+                           THEN (n.id - 1) / 100 * 100 + 1 + abs(hashint8(-(n.id * 8 + k))) % 100
+                           ELSE 1 + abs(hashint8(-(n.id * 8 + k))) % 3000 END AS dst,
+                      (1 + abs(hashint8(n.id * 16 + k)) % 4)::float8 AS w,
+                      'r' || abs(hashint8(n.id * 32 + k)) % 3 AS rel
+               FROM dw_nodes n, generate_series(1, 6) k) e;
+             SELECT warren.create_graph('dw', 'SELECT id FROM dw_nodes', 'SELECT src, dst, rel, w FROM dw_edges',
+                                        weighted := true, has_relations := true);
+             SELECT warren.refresh('dw')",
+        )?;
+        for arguments in [
+            "",
+            "weighted := false",
+            "weighted := false, per_relation := true",
+            "per_relation := true, iterations := 3",
+            "resolution := 0.5, max_levels := 3, tolerance := 0.001",
+        ] {
+            agree_with_the_release("dw", arguments)?;
+        }
+        Ok(())
+    }
+
     /// The library's intermediates on `rc`, and its level graphs.
     fn leftovers() -> Result<Option<String>, Error> {
         rows(

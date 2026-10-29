@@ -46,7 +46,12 @@ def start(source):
     return min(out, key=lambda node: (-out[node], node))
 
 
-def plan(source, betweenness_work=BETWEENNESS_WORK):
+KINDS = ("degree", "reach", "depths", "paths", "pagerank", "components", "triangles", "louvain", "leiden",
+         "betweenness")
+
+
+def plan(source, betweenness_work=BETWEENNESS_WORK, kinds=None):
+    """The workloads `source` runs, only those of `kinds` if given."""
     begin = start(source)
     pairs = tuple(checks.path_pairs(sorted(source.nodes), PATH_PAIRS, checks.PATH_SEED))
     planned = [
@@ -62,4 +67,4 @@ def plan(source, betweenness_work=BETWEENNESS_WORK):
     ]
     if len(source.nodes) * len(source.edges) <= betweenness_work:
         planned.append(Workload("betweenness", "betweenness"))
-    return planned
+    return [w for w in planned if kinds is None or w.kind in kinds]

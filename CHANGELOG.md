@@ -2,6 +2,37 @@
 
 ## 0.8.0 — in development
 
+### Upgrading
+
+- **Run `ALTER EXTENSION pg_warren UPDATE;` in every database that has
+  the extension**, after installing the new build. The update replaces
+  the PL/pgSQL definitions of `warren.pagerank` and `warren.leiden` with
+  native ones (under Performance), keeping their privileges; it changes
+  no table. Until the update, 0.7.0's definitions still run with the new
+  library, as they did.
+
+### Behaviour changes
+
+- `warren.pagerank` refuses a NULL `out` or `damping` before it runs, as
+  `out must not be NULL` and `damping must not be NULL` (SQLSTATE 22004,
+  as before; 0.7.0 ran first and then named `y`, or `value`). An empty
+  or unwritable `out` is refused before the run, too. Its intermediates
+  (`_warren_pagerank_*`) no longer exist, even during a run, and it no
+  longer carries `SET search_path`: the access guard pins it for the call
+  (DESIGN.md §7). Everything else is kept: its signature, ranks to the
+  bit, iteration counts, SQLSTATEs, progress, parallel label and
+  privileges, including a NULL `tol` never stopping it early and a NULL
+  `max_iter` running no iteration.
+- `leiden` checks that the caller may write `out` before it runs, not
+  after. The error is the same (42501). The function no longer sets its
+  own `search_path`; like every other `warren.*` function, it pins it for
+  the call.
+- On graphs with fractional weights, `leiden` sums a level's edge weights
+  in a different order from 0.7.0's `contract`. A weight may differ in its
+  last bit, and a tie between moves that it decides may then go the other
+  way. On unweighted and integer-weighted graphs the partitions, kept
+  levels and modularity are 0.7.0's, to the bit.
+
 ### Fixes
 
 - **`gather` over `char(n)` messages no longer truncates them to one
@@ -15,6 +46,32 @@
 
 ### Performance
 
+- `warren.pagerank` is a native kernel, not a PL/pgSQL loop over the
+  compute primitives (DESIGN.md §6.7). The loop made eleven calls an
+  iteration, about 1.5 ms of overhead an iteration however small the
+  graph; the kernel makes two parallel passes and one product an
+  iteration, and holds four vectors of the id space (five with a seed)
+  where the loop held eleven: 0.32 GB of scratch at 10M nodes instead of
+  0.88 GB.
+  Twenty iterations, head to head before and after (median warm times,
+  `warren.threads = 4`): lesmis 34.7 → 1.6 ms, facebook 47.3 → 6.3 ms,
+  email-enron 74.9 → 22.6 ms, cit-hepth 65.7 → 18.6 ms and DBLP
+  318 → 113 ms, as fast as igraph or faster except on the smallest graph.
+- `leiden` is native (DESIGN.md §6.7, "Leiden's levels"). Each level's
+  graph is contracted from the level below, not from the whole graph, and
+  is held in memory, charged to `warren.max_compute_memory`. Only `out`
+  and the levels `levels_prefix` asks for are written. No level graph,
+  segment or WAL is written for a level, and the disk a run needed grew
+  with its levels before.
+  - It finds the same partitions as before. A pg_test runs the frozen
+    0.7.0 function beside it.
+  - On the head-to-head's real graphs it is 1.3–21× faster:
+    fb15k-237 1.44 → 0.21 s, yago3-10 2.26 → 0.73 s, roadnet-tx
+    7.9 → 3.8 s, lesmis 25 → 1.2 ms.
+  - It takes 0.76–1.6× igraph's time on the medium tier, where it was
+    1.9–180×, and is faster than igraph on ss-gleich-usroads-48, dblp,
+    yago3-10 and roadnet-tx (`bench/results/corpus/head_to_head/`,
+    "Leiden in 0.8.0").
 - **`gather` over `text`, `varchar`, `char` and `bytea` messages** keeps
   them as their bytes, as `concat` did, instead of each going through its
   type's send and receive functions, and lays a collected array out

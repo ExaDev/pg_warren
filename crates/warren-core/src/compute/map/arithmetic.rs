@@ -9,7 +9,7 @@ use crate::compute::ArithmeticError;
 
 /// `f32` or `f64`, as Postgres's `float4` and `float8` operators treat
 /// them.
-pub(super) trait SqlFloat:
+pub(in crate::compute) trait SqlFloat:
     Copy
     + PartialOrd
     + Add<Output = Self>
@@ -46,7 +46,11 @@ sql_float!(f64);
 
 /// `a op b` on floats (`float8_pl`, `float8_mi`, `float8_mul`,
 /// `float8_div` and their `float4` twins).
-pub(super) fn float<F: SqlFloat>(op: Arithmetic, a: F, b: F) -> Result<F, ArithmeticError> {
+pub(in crate::compute) fn float<F: SqlFloat>(
+    op: Arithmetic,
+    a: F,
+    b: F,
+) -> Result<F, ArithmeticError> {
     if op == Arithmetic::Divide && b == F::ZERO && !a.is_nan() {
         return Err(ArithmeticError::DivisionByZero);
     }

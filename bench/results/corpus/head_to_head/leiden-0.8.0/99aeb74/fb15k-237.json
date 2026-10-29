@@ -1,0 +1,223 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "head-to-head",
+   "fb15k-237",
+   "--engine",
+   "pg_warren",
+   "--engine",
+   "igraph",
+   "--workload",
+   "leiden",
+   "--threads",
+   "4",
+   "--pg-config",
+   "/var/tmp/leiden-perf/new/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "99aeb74",
+   "--extension-profile",
+   "release",
+   "--results",
+   "/var/tmp/leiden-perf/results-new"
+  ],
+  "harness": {
+   "revision": "99aeb74c0aa9216449d88c9f757a9eabb483b548",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "99aeb74",
+   "profile": "release",
+   "library": "/var/tmp/leiden-perf/new/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "228d3318c18afde3cd0512e833ceb5969f6063e06fb89c282016658d09181c44"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v185",
+  "load_average": [
+   3.91796875,
+   4.875,
+   3.72998046875
+  ]
+ },
+ "dataset": "fb15k-237",
+ "tier": "medium",
+ "fetched": {
+  "tables": {
+   "nodes": 14541,
+   "edges": 310116,
+   "ids": "text",
+   "relations": 237,
+   "self_loops": 1806
+  },
+  "sha256": {
+   "nodes.csv": "388311a4d3eb10b614d702ce55d09e73bc76e9b866e09b9dbdedead28f5796ba",
+   "edges.csv": "bb64c0468d9fbae25dca3b0c15e8f336d7aa8f20a732e1a8e3bd881b7ec09ae4"
+  },
+  "provenance": {
+   "entryId": "fb15k-237",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-26T05:48:27.098Z",
+   "source": {
+    "url": "https://web.informatik.uni-mannheim.de/pi1/kge-datasets/fb15k-237.tar.gz",
+    "status": "live"
+   },
+   "fetchedUrl": "https://web.informatik.uni-mannheim.de/pi1/kge-datasets/fb15k-237.tar.gz",
+   "sha256": "eb851e61cac226db18ab251f0e52df43dfa8701c1d5f16eb34fb28de968e474c",
+   "byteLength": 3899580,
+   "members": [
+    "fb15k-237/train.txt",
+    "fb15k-237/valid.txt",
+    "fb15k-237/test.txt"
+   ]
+  }
+ },
+ "repeat": 5,
+ "budget_seconds": 120,
+ "timeout_seconds": 600,
+ "workloads": [
+  {
+   "name": "leiden",
+   "kind": "leiden",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": null
+  }
+ ],
+ "engines": {
+  "pg_warren": {
+   "describe": {
+    "version": "0.8.0",
+    "threads": 4,
+    "settings": [
+     "fsync=off",
+     "full_page_writes=off",
+     "jit=on",
+     "maintenance_work_mem=1GB",
+     "max_parallel_workers_per_gather=2",
+     "max_wal_size=1GB",
+     "shared_buffers=1GB",
+     "shared_preload_libraries=",
+     "statement_timeout=10min",
+     "synchronous_commit=off",
+     "wal_level=minimal",
+     "warren.max_build_memory=4GB",
+     "warren.max_cache_memory=4GB",
+     "warren.max_compute_memory=4GB",
+     "warren.shared_cache_memory=4GB",
+     "warren.threads=4",
+     "work_mem=64MB"
+    ],
+    "graph": {
+     "node_count": 14541,
+     "edge_count": 310116,
+     "dropped_edges": 0,
+     "bytes": 8011789
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.2831234489999588
+     ],
+     "median_seconds": 0.2831234489999588
+    },
+    "build": {
+     "seconds": [
+      0.1944683389997408,
+      0.17618328600019595,
+      0.18125154400013344
+     ],
+     "median_seconds": 0.18125154400013344
+    }
+   },
+   "workloads": {
+    "leiden": {
+     "cold_seconds": 0.2889684740002849,
+     "warm_seconds": [
+      0.22586778699997012,
+      0.2068355229998815,
+      0.2058644179996918,
+      0.20637432499961506,
+      0.20393643699981112
+     ],
+     "warm_median_seconds": 0.20637432499961506,
+     "cold_phases": {
+      "evict": 0.0006629740000789752
+     },
+     "check": {
+      "check": "leiden",
+      "status": "match",
+      "warren": 0.5472390300464179,
+      "oracle": 0.5324442467706967,
+      "difference": 0.014794783275721257,
+      "slack": 0.02,
+      "modularity": 0.5472390300464179,
+      "communities": 19
+     },
+     "counted": true
+    }
+   }
+  },
+  "igraph": {
+   "describe": {
+    "version": "1.0.0",
+    "threads": 1,
+    "settings": {
+     "pagerank": "PRPACK (solved)",
+     "louvain": "community_multilevel",
+     "leiden": "community_leiden, modularity, 2 iterations",
+     "seed": 1
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      0.26374261099999785
+     ],
+     "median_seconds": 0.26374261099999785
+    },
+    "build": {
+     "seconds": [
+      0.1836880440000641
+     ],
+     "median_seconds": 0.1836880440000641
+    }
+   },
+   "workloads": {
+    "leiden": {
+     "cold_seconds": 0.1443180129999746,
+     "warm_seconds": [
+      0.14311569600022267,
+      0.14338915700000143,
+      0.14506799600030718,
+      0.14308893499992337,
+      0.14470026599974517
+     ],
+     "warm_median_seconds": 0.14338915700000143,
+     "cold_phases": {},
+     "check": {
+      "check": "leiden",
+      "status": "match",
+      "warren": 0.5345101797191683,
+      "oracle": 0.5324442467706967,
+      "difference": 0.0020659329484715716,
+      "slack": 0.02,
+      "modularity": 0.5345101797191683,
+      "communities": 17
+     },
+     "counted": true
+    }
+   }
+  }
+ }
+}

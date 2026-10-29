@@ -218,6 +218,12 @@ engine reached is `check.modularity` in each file.
   datasets (roadnet-tx 2.5 s against 8.1 s). pg_warren's Leiden runs a
   level at a time through `warren.contract`, persisting each quotient graph
   as a version in the catalog. igraph and GDS keep every level in memory.
+  *Since fixed* (0.8.0): `leiden` is native, contracting each level from
+  the one below and keeping the levels in memory, for the same partitions
+  (DESIGN.md §6.7, *Leiden's levels*). Re-timed against igraph alone
+  ("Leiden in 0.8.0", below): 1.3–21× faster than main before the change,
+  and within 0.76–1.63× of igraph on the medium tier (faster on
+  ss-gleich-usroads-48, dblp, yago3-10 and roadnet-tx).
 - *Louvain and Leiden on graphs with relations have slowed down since the
   timed run.* `suite.py time` at 1ffdcd9 took 0.78 s and 1.94 s on
   fb15k-237; this run at ae51d77 took 1.32 s and 4.42 s. yago3-10 went from
@@ -432,3 +438,46 @@ Findings. Betweenness ran only where N·M ≤ 5·10⁸.
 - louvain: a heuristic optimisation over the whole graph: not expressible in Cypher
 - leiden: a heuristic optimisation over the whole graph: not expressible in Cypher
 - betweenness: needs every pair's shortest paths counted (Brandes): not a practical Cypher query
+
+## Leiden in 0.8.0 (re-timed against igraph alone)
+
+`leiden-0.8.0/` holds one file per dataset for each side. Both sides
+are release builds (`cargo pgrx package`, PostgreSQL 16.15, the settings
+above, `warren.threads = 4`). `4592b0e` is main before the change: 0.7.0
+with the community regression fixed, so faster than the ae51d77 column
+above. `99aeb74` is native `leiden` with its levels in memory; rebased onto main's later commits (examples and the website, none to the extension) it is f618847.
+
+The command line, per dataset, alternated the two builds so they shared
+the machine's load:
+`suite.py head-to-head <dataset> --engine pg_warren [--engine igraph] --workload leiden --threads 4 --extension-profile release`.
+The machine was busier than in the M11 run, with a load average of 2.2–7.0
+at the start of each dataset from other agents' builds and tests. Read
+the ratios rather than the absolute times. Both builds found the same
+partition on every dataset: the same number of communities, and the same
+modularity to the last bit.
+
+| Dataset | before (4592b0e) | after (99aeb74) | speed-up | igraph | after / igraph |
+| --- | --- | --- | --- | --- | --- |
+| lesmis | 0.032 / 0.025 | 2.28 ms / 1.17 ms | 21× | 282 µs / 177 µs | 6.6 |
+| polblogs | 0.080 / 0.081 | 0.014 / 0.012 | 6.7× | 5.84 ms / 5.74 ms | 2.1 |
+| facebook | 0.096 / 0.082 | 0.037 / 0.030 | 2.7× | 0.019 / 0.020 | 1.5 |
+| wn18rr | 0.421 / 0.401 | 0.111 / 0.096 | 4.2× | 0.096 / 0.095 | 1.0 |
+| cit-hepth | 0.483 / 0.451 | 0.315 / 0.299 | 1.5× | 0.206 / 0.204 | 1.5 |
+| email-enron | 0.420 / 0.340 | 0.184 / 0.169 | 2.0× | 0.121 / 0.120 | 1.4 |
+| fb15k-237 | 1.45 / 1.44 | 0.289 / 0.206 | 7.0× | 0.144 / 0.143 | 1.4 |
+| ss-gleich-usroads-48 | 0.682 / 0.645 | 0.263 / 0.238 | 2.7× | 0.294 / 0.283 | 0.84 |
+| dblp | 2.81 / 2.70 | 1.33 / 1.26 | 2.1× | 1.33 / 1.30 | 0.97 |
+| yago3-10 | 2.35 / 2.26 | 0.819 / 0.731 | 3.1× | 0.930 / 0.933 | 0.78 |
+| hetionet | 3.07 / 2.95 | 2.27 / 2.22 | 1.3× | 1.35 / 1.36 | 1.6 |
+| roadnet-tx | 7.73 / 7.91 | 3.27 / 3.80 | 2.1× | 5.32 / 4.99 | 0.76 |
+
+Each cell is cold / warm median in seconds, with ms and µs where marked.
+The speed-up and ratio columns use the warm medians.
+
+Every level now costs the level below it, not the whole graph. What is
+left is level 1: the undirected view, the colouring and the sweeps over
+the whole graph, twice by default. On hetionet and cit-hepth that is most
+of the time.
+GDS was not re-run. Against its warm times in the table above, the new
+`leiden` is faster on seven of the eleven datasets GDS ran. It is slower
+on dblp, yago3-10, hetionet and roadnet-tx.

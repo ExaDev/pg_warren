@@ -93,6 +93,11 @@ pub(crate) enum ComputeSqlError {
          are only ever transient: \"{0}\""
     )]
     ReservedName(String),
+    /// `pagerank`'s seed is `bool`: it multiplies the seed by a `double
+    /// precision`, which no operator does for `boolean` (42883, the
+    /// SQLSTATE the PL/pgSQL library raised).
+    #[error("operator does not exist: boolean * double precision (seed vector \"{0}\" is bool)")]
+    BooleanSeed(String),
     /// A vector name must not be empty.
     #[error("a vector name must not be empty")]
     EmptyName,
@@ -151,6 +156,7 @@ impl SqlError for ComputeSqlError {
             }
             Self::AmbiguousMessages { .. } => PgSqlErrorCode::ERRCODE_AMBIGUOUS_FUNCTION,
             Self::ReservedName(_) => PgSqlErrorCode::ERRCODE_RESERVED_NAME,
+            Self::BooleanSeed(_) => PgSqlErrorCode::ERRCODE_UNDEFINED_FUNCTION,
             Self::EmptyName | Self::InvalidArgument(_) | Self::Version(_) => {
                 PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE
             }

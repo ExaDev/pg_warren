@@ -93,6 +93,17 @@ pub(crate) fn reported(frame: &Frame, report: Report<'_>, now: i64) -> Frame {
     }
 }
 
+/// Sets the command frame to `report` for the rest of the statement, as
+/// `warren.report_progress` does: also for a library function that runs
+/// as one native call (`pagerank`, `leiden`) and reports as the PL/pgSQL library
+/// does, its graph resolved and its read access checked by the call. On
+/// the main thread, inside a call that has claimed this backend's slot.
+pub(crate) fn report(report: Report<'_>) {
+    register();
+    let now = now();
+    record(|values| values.command = reported(&values.command, report, now));
+}
+
 /// Clears the command frame when dropped, by the reset or deletion of the
 /// memory context it was registered on, and clears that registration.
 /// Pure Rust: it runs inside `AtCommit_Memory` at a transaction's end.
@@ -180,9 +191,7 @@ fn report_progress(
         // remembers is forgotten when the statement ends.
         register();
         let graph = graph.map(graph_id).transpose()?;
-        let report = Report { command, graph, phase: phase.unwrap_or_default(), done, total };
-        let now = now();
-        record(|values| values.command = reported(&values.command, report, now));
+        report(Report { command, graph, phase: phase.unwrap_or_default(), done, total });
         Ok::<_, ReportError>(())
     })
 }

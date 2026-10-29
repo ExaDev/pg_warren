@@ -22,6 +22,7 @@ mod eval;
 mod expr;
 mod not_null;
 
+pub(super) use arithmetic::float;
 pub use expr::{
     AnyExpr, Arithmetic, BoolOp, Comparands, Comparison, Expr, F32Op, F64Op, Function, I64Op, Value,
 };

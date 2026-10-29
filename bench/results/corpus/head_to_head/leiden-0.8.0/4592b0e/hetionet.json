@@ -1,0 +1,171 @@
+{
+ "provenance": {
+  "argv": [
+   "bench/corpus/suite.py",
+   "head-to-head",
+   "hetionet",
+   "--engine",
+   "pg_warren",
+   "--workload",
+   "leiden",
+   "--threads",
+   "4",
+   "--pg-config",
+   "/var/tmp/leiden-perf/base/usr/lib/postgresql/16/bin/pg_config",
+   "--extension-revision",
+   "4592b0e",
+   "--extension-profile",
+   "release",
+   "--results",
+   "/var/tmp/leiden-perf/results-base"
+  ],
+  "harness": {
+   "revision": "99aeb74c0aa9216449d88c9f757a9eabb483b548",
+   "dirty": false
+  },
+  "extension": {
+   "revision": "4592b0e",
+   "profile": "release",
+   "library": "/var/tmp/leiden-perf/base/usr/lib/postgresql/16/lib/pg_warren.so",
+   "library_sha256": "1a22b9c2ebfe174a351f1aaa7e8dabbae8caae24ccc9fe8fde1cc4f3b4452ff6"
+  }
+ },
+ "hardware": {
+  "cpus": 4,
+  "model": "Intel(R) Xeon(R) Processor",
+  "memory_bytes": 16872808448,
+  "kernel": "6.18.44-fc-v185",
+  "load_average": [
+   2.1943359375,
+   3.76318359375,
+   3.48193359375
+  ]
+ },
+ "dataset": "hetionet",
+ "tier": "medium",
+ "fetched": {
+  "tables": {
+   "nodes": 45158,
+   "edges": 2250197,
+   "ids": "text",
+   "relations": 24,
+   "self_loops": 0
+  },
+  "sha256": {
+   "nodes.csv": "25f91a49480a558b0eceac486bec5289f4dfef3ee19e08f7cd156b83006a9dbd",
+   "edges.csv": "c4d86b3a2fdee1e9911c190e843a028ec6613f8622d1b9d6aec5f740c4d83733"
+  },
+  "provenance": {
+   "entryId": "hetionet",
+   "catalogue": {
+    "id": "keepset",
+    "version": "1.33.0"
+   },
+   "category": "graph/v1",
+   "retrievedAt": "2026-10-26T05:48:52.818Z",
+   "source": {
+    "url": "https://media.githubusercontent.com/media/hetio/hetionet/main/hetnet/tsv/hetionet-v1.0-edges.sif.gz",
+    "status": "live",
+    "snapshot": {
+     "url": "https://web.archive.org/web/20261022011839/https://media.githubusercontent.com/media/hetio/hetionet/main/hetnet/tsv/hetionet-v1.0-edges.sif.gz",
+     "timestamp": "20261022011839",
+     "sha256": "611f0411ac666be4e0270e54bbca67407e14720bfc3099311f0f5eec25c5a947",
+     "byteLength": 12401407
+    }
+   },
+   "fetchedUrl": "https://media.githubusercontent.com/media/hetio/hetionet/main/hetnet/tsv/hetionet-v1.0-edges.sif.gz",
+   "sha256": "611f0411ac666be4e0270e54bbca67407e14720bfc3099311f0f5eec25c5a947",
+   "byteLength": 12401407
+  }
+ },
+ "repeat": 5,
+ "budget_seconds": 120,
+ "timeout_seconds": 600,
+ "workloads": [
+  {
+   "name": "leiden",
+   "kind": "leiden",
+   "source": null,
+   "depth": null,
+   "pairs": [],
+   "weighted": false,
+   "iterations": null
+  }
+ ],
+ "engines": {
+  "pg_warren": {
+   "describe": {
+    "version": "0.8.0",
+    "threads": 4,
+    "settings": [
+     "fsync=off",
+     "full_page_writes=off",
+     "jit=on",
+     "maintenance_work_mem=1GB",
+     "max_parallel_workers_per_gather=2",
+     "max_wal_size=1GB",
+     "shared_buffers=1GB",
+     "shared_preload_libraries=",
+     "statement_timeout=10min",
+     "synchronous_commit=off",
+     "wal_level=minimal",
+     "warren.max_build_memory=4GB",
+     "warren.max_cache_memory=4GB",
+     "warren.max_compute_memory=4GB",
+     "warren.shared_cache_memory=4GB",
+     "warren.threads=4",
+     "work_mem=64MB"
+    ],
+    "graph": {
+     "node_count": 45158,
+     "edge_count": 2250197,
+     "dropped_edges": 0,
+     "bytes": 42070240
+    }
+   },
+   "load": {
+    "ingest": {
+     "seconds": [
+      1.0137111039998672
+     ],
+     "median_seconds": 1.0137111039998672
+    },
+    "build": {
+     "seconds": [
+      1.1149066869998023,
+      1.022929191000003,
+      1.002436237999973
+     ],
+     "median_seconds": 1.022929191000003
+    }
+   },
+   "workloads": {
+    "leiden": {
+     "cold_seconds": 3.070487903999947,
+     "warm_seconds": [
+      2.98999708700012,
+      3.0523706690000836,
+      2.9544283489999543,
+      2.9346608769997147,
+      2.93644961300015
+     ],
+     "warm_median_seconds": 2.9544283489999543,
+     "cold_phases": {
+      "evict": 0.0005587189998550457
+     },
+     "check": {
+      "check": "leiden",
+      "status": "match",
+      "warren": 0.35230301060387736,
+      "oracle": 0.34736690954896565,
+      "difference": 0.004936101054911712,
+      "slack": 0.02,
+      "modularity": 0.35230301060387736,
+      "communities": 10
+     },
+     "counted": true
+    }
+   }
+  }
+ }
+}

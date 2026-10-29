@@ -32,6 +32,11 @@ when installing or upgrading.
 
 ## Choose the right query
 
+For the architectural comparison with pgGraph, Apache AGE, OneSparse and
+pgRouting, read [where pg_warren fits](/pg_warren/docs/positioning/).
+The principal distinction from pgGraph is whole-graph computation over
+explicit, transactional graph versions.
+
 For a shallow query with a small frontier, indexed joins or a recursive CTE
 are usually the right starting point. pg_warren is useful when a traversal
 touches many rows, or when a computation repeatedly processes the graph.

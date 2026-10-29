@@ -17,7 +17,7 @@ use crate::interrupts::{Cancelled, Interrupts};
 
 /// The elements each parallel task reduces; small under test, so tests
 /// combine several partial results.
-const CHUNK: usize = if cfg!(test) { 4 } else { 1 << 16 };
+pub(super) const CHUNK: usize = if cfg!(test) { 4 } else { 1 << 16 };
 
 /// A reduction of every element of a vector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

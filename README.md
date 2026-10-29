@@ -94,7 +94,7 @@ Times are warm medians.
 | Time to first query | **0.01–3.5 s** | about the same | 13–18 s | 🟢 No server to start or data to import |
 | PageRank, 20 iterations (roadNet-TX) | 1.0 s | 0.88 s | **0.62 s** | 🟡 Close on large graphs, slower on small ones |
 | BFS and connected components | 🟡 | **fastest** | slower | 🟡 Ahead of GDS; igraph 1.2–60× faster |
-| Leiden communities (FB15k-237) | 1.49 s | **0.14 s** | 0.46 s | 🔴 igraph and GDS faster; improvement planned |
+| Leiden communities (FB15k-237) | 0.21 s | **0.14 s** | 0.46 s | 🟡 Within 1.6× of igraph on medium graphs, faster on 4 of 12; faster than GDS on 7 of 11 |
 
 Plain Cypher is not in the table. It cannot express PageRank, components,
 Louvain, Leiden or betweenness. On the larger graphs, its traversal and
@@ -106,7 +106,7 @@ client round trip. pg_warren pays a fixed 0.2–2 ms per call, which dominates
 on tiny graphs. The PageRank, Louvain, GDS and loading figures predate two
 later optimisations, so pg_warren's times there may now be lower. The
 triangles and Leiden rows were re-timed after those optimisations, against
-igraph only. Full tables, settings and caveats are in
+igraph only; the Leiden row is 0.8.0's native `leiden`. Full tables, settings and caveats are in
 [bench/results/corpus/head_to_head](bench/results/corpus/head_to_head/README.md).
 
 ## The principle: meet Postgres users where they are
@@ -504,8 +504,8 @@ pg_warren's contribution is different:
   expressions.
 - Contraction gives community-level computation: a quotient graph per
   partition, a real graph version with its own vectors, and `project` /
-  `lift` between the levels. Louvain and Leiden are short PL/pgSQL
-  programs over it.
+  `lift` between the levels. Louvain is a short PL/pgSQL program over
+  it; Leiden runs the same steps natively, its levels held in memory.
 
 pg_warren takes no code from either project. Ideas adopted from them are
 credited in [NOTICE](NOTICE) and in comments where they are used; the reading

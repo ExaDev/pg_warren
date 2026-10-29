@@ -178,15 +178,29 @@ The steps are SQL functions too, for programs of your own:
 tolerance, weighted, persist, version, per_relation)` (one level's moving, from the
 partition `initial` or from each node alone; returns the number of
 communities) and `leiden_refine(graph, communities, out, keys, resolution,
-seed, randomness, weighted, persist, version, per_relation)`. `louvain` and `leiden` are
+seed, randomness, weighted, persist, version, per_relation)`. `louvain` is
 PL/pgSQL over them, `contract`, `project` and `lift`
-(`crates/pg_warren/src/community_sql/library/`). Graph names beginning
-with `_warren_` are reserved for their levels (42939): `contract(graph,
+(`crates/pg_warren/src/community_sql/library/louvain.sql`), a template
+for programs of your own. `leiden` runs the same steps natively, in the
+same order with the same seeds, so it finds the partitions 0.7.0's
+PL/pgSQL `leiden` found (to the last bit on unweighted and
+integer-weighted graphs), but holds its levels in memory: each level's
+graph is contracted from the level below, and nothing but `out` and the
+levels `levels_prefix` asks for is written. Graph names beginning
+with `_warren_` are reserved for the library's levels (42939): `contract(graph,
 labels, NULL)` makes a new graph of the caller's named
 `_warren_level_<version id>`, after the id it returns. A level graph
 stores each relation's forward CSR only, whatever the input's layout (no
 reverse or merged CSR): the levels read nothing else, and on a directed
 graph that halves what each level writes.
+
+Since 0.8.0 `leiden` writes no level and needs no disk beyond `out`'s
+vector (and the levels it is asked to keep); its levels are charged to
+`warren.max_compute_memory`. On the head-to-head's real graphs it is
+1.3–21× faster than before, and within 0.76–1.6× of igraph's
+`community_leiden` on the medium ones
+(`bench/results/corpus/head_to_head/README.md`, "Leiden in 0.8.0").
+The 0.4.0 figures below are `leiden`'s before it.
 
 At 1M nodes and 5M undirected edges on 4 vCPUs, `louvain` takes 5.8 s and
 `leiden` 8.3 s for one iteration; at 10M nodes, 93 s and 119 s. The default
@@ -208,10 +222,11 @@ input: on a uniform random graph of 10M nodes and 100M directed edges
 before level graphs stored forward CSRs only (at 1M nodes that halved its
 level segments, 536 MB to 293 MB), and `leiden` was refused there at the
 default limits (53400), before its refinement charged its real peak (see
-[limits.md](limits.md#known-limitations)). The planned fix for the disk is
-for `contract` to keep a quotient in memory for the rest of the statement
-(DESIGN.md §6.7, §13).
-A failed or cancelled run rolls its level graphs back, but their segment
+[limits.md](limits.md#known-limitations)). The planned fix for
+`louvain`'s disk is for `contract` to keep a quotient in memory for the
+rest of the statement (DESIGN.md §6.7, §13); `leiden` no longer writes
+any.
+A failed or cancelled `louvain` rolls its level graphs back, but their segment
 rows, already written, also stay as dead tuples until `VACUUM`.
 
 ## Lineage, retention and access
