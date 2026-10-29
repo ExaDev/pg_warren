@@ -1,5 +1,5 @@
 //! `warren.queries_from_keys` and `warren.create_graph_from_keys`
-//! (DESIGN.md §9.3, §14 item 52).
+//! (DESIGN.md §9.3, §14 item 53).
 
 use pgrx::prelude::*;
 

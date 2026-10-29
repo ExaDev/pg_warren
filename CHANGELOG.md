@@ -21,7 +21,7 @@
   key as the id; otherwise ids are text, `schema.table:key`, with a
   composite key as its row literal (`shop.shipments:(10,2)`). Only the
   listed tables are read, and foreign keys to other tables are ignored
-  (docs/semantics.md, "Graphs from keys"; DESIGN.md §14 item 52).
+  (docs/semantics.md, "Graphs from keys"; DESIGN.md §14 item 53).
 
 ## 0.8.0 — native PageRank and Leiden, leaner calls (2026-10-29)
 

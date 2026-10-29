@@ -1,4 +1,4 @@
--- Graphs from keys (DESIGN.md §9.3, §14 item 52): a shop's customers,
+-- Graphs from keys (DESIGN.md §9.3, §14 item 53): a shop's customers,
 -- orders and products, order_items a junction of orders and products,
 -- shipments keyed by (order_id, seq) and parcels referencing them, made a
 -- graph by create_graph_from_keys, refreshed, traversed, and joined back

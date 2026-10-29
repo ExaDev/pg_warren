@@ -7,7 +7,7 @@
 -- exact-match pg_catalog operators and functions in what runs here.
 \echo Use "ALTER EXTENSION pg_warren UPDATE TO '0.9.0'" to load this file. \quit
 
--- Graphs from keys (DESIGN.md §9.3, §14 item 52): the node and edge
+-- Graphs from keys (DESIGN.md §9.3, §14 item 53): the node and edge
 -- queries a list of tables' primary and foreign keys gives, and a graph
 -- created from them. Two new functions; no table changes.
 CREATE FUNCTION warren."queries_from_keys"(tables regclass[])

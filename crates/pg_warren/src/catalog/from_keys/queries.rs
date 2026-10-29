@@ -1,5 +1,5 @@
 //! The node and edge queries a description of the listed tables' keys
-//! gives (DESIGN.md §9.3, §14 item 52): SQL text out, nothing read or run.
+//! gives (DESIGN.md §9.3, §14 item 53): SQL text out, nothing read or run.
 //!
 //! Every name is quoted and schema-qualified, operators included, so the
 //! queries mean the same under any `search_path`. An edge joins the row
