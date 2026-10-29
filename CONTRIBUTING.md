@@ -334,6 +334,10 @@ format. To benchmark a new function, add a workload with `requires` to
 test/upgrade.py --pg-config "$(command -v pg_config)"   # builds each release from its recorded commit, then checks its path
 test/upgrade.py --no-install --trusted   # the same, installed and updated by a non-superuser
 test/dump.py --pg-config "$(command -v pg_config)"   # pg_dump and restore of graphs (plain, custom, trusted)
+# docs/beside-managed.md as written: a primary without pg_warren, a graph
+# server subscribed to it (logical replication) and postgres_fdw both ways;
+# graphs on the graph server answer as one built from the primary's rows
+test/logical_replication.py --no-install --pg-config "$(command -v pg_config)"
 ```
 
 Robustness under concurrency, crashes, replication and hostile input

@@ -30,6 +30,14 @@ recursive CTEs / NetworkX on generated fixtures, and the Appendix A use cases
   and an immediate shutdown, and checks that each recovery leaves the
   catalog and the graph's answers as before, the shared cache working
   and a new refresh succeeding (DESIGN.md §13, M11).
+- `logical_replication.py` runs the SQL of `docs/beside-managed.md` as
+  written on two clusters, a primary without pg_warren and a graph server
+  that subscribes to its node and edge tables, and checks that graphs
+  over the subscribed tables and over `postgres_fdw` foreign tables answer
+  traversals and PageRank as a graph built directly from the primary's
+  rows, before and after the primary's rows change, and that the results
+  read back on the primary through `postgres_fdw` match
+  (`harness/guide.py` runs a guide's blocks on the server each names).
 - `replicas.py` starts a primary, a physical streaming hot standby of it
   (`pg_basebackup -R`) and a cascading standby of the standby, builds
   graphs, versions and vectors on the primary, and checks on each
