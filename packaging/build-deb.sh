@@ -40,11 +40,17 @@ cp /meta/changelog "$build/debian/changelog"
 cd "$build"
 rustup toolchain install   # rust-toolchain.toml
 cargo install cargo-pgrx --version "$PGRX_VERSION" --locked --quiet
+# Fetched first, so that packaging/reproducibly.sh (below) maps CARGO_HOME's
+# crates.io sources.
+cargo fetch --locked --quiet
 
 # One major a line (supported-versions splits it with xargs -n1).
 export PG_SUPPORTED_VERSIONS="$PG_MAJORS"
 pg_buildext updatecontrol
-# -d: rustc and cargo-pgrx come from rustup, not Build-Depends.
-dpkg-buildpackage -b -us -uc -d
+# -d: rustc and cargo-pgrx come from rustup, not Build-Depends. The
+# library's source paths are mapped to fixed ones, as in any reproducible
+# build of pg_warren.so (CONTRIBUTING.md, "Reproducible builds"); the C
+# shim's CFLAGS are dpkg-buildflags', which map the build directory too.
+/packaging/reproducibly.sh "$build" dpkg-buildpackage -b -us -uc -d
 cp ../*.deb /out/
 ls -l /out
