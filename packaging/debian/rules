@@ -5,6 +5,14 @@
 # toolchain and cargo-pgrx come from rustup and cargo, not from the
 # archive (packaging/build-deb.sh); CONTRIBUTING.md, "Packages".
 
+# The install script shipped is the committed sql/pg_warren--VERSION.sql
+# (frozen in sql/released.sha256 once released), not the one cargo pgrx
+# package generates: pgrx orders its entities differently from build to
+# build, which made every rebuilt package's bytes differ (CONTRIBUTING.md,
+# "Reproducible builds"). sql/schema-drift.sh checks the two hold the same
+# entities.
+VERSION := $(shell sed -n 's/^version = "\(.*\)"$$/\1/p' Cargo.toml | head -n 1)
+
 %:
 	dh $@
 
@@ -17,6 +25,8 @@ override_dh_auto_install:
 	      --pg-config /usr/lib/postgresql/$$v/bin/pg_config \
 	      --no-default-features --features pg$$v \
 	      --out-dir debian/postgresql-$$v-pg-warren; \
+	  install -m 0644 sql/pg_warren--$(VERSION).sql \
+	    debian/postgresql-$$v-pg-warren/usr/share/postgresql/$$v/extension/pg_warren--$(VERSION).sql; \
 	  sed "s/PGVERSION/$$v/g" debian/pg-warren.postinst.in > debian/postgresql-$$v-pg-warren.postinst; \
 	done
 

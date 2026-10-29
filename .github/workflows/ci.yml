@@ -550,6 +550,14 @@ jobs:
         run: python3 release/packages.py tarball dist/postgresql-16-pg-warren_*.deb dist
       - name: Docker image from it, and its smoke test
         run: python3 release/packages.py image dist/postgresql-16-pg-warren_*.deb pg_warren:ci-pg16
+      # CONTRIBUTING.md, "Reproducible builds": the same source, built again
+      # in a fresh container straight after, gives the same .deb bytes.
+      - name: A second build gives the same packages
+        run: |
+          set -euo pipefail
+          python3 release/packages.py deb bookworm . "$RUNNER_TEMP/again" --majors 15 16
+          (cd dist && sha256sum ./*.deb) | tee "$RUNNER_TEMP/first.sha256"
+          (cd "$RUNNER_TEMP/again" && sha256sum --check "$RUNNER_TEMP/first.sha256")
 
   packages-release:
     # What a release builds (release-publish.yml's debs job), off the
