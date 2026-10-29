@@ -61,9 +61,9 @@ SELECT warren.refresh('social');`;
         <div class="hero-copy">
           <a class="eyebrow release-note" href={`${base}/docs/changelog/`}><span class="status-dot"></span> PRE-1.0 · IN DEVELOPMENT <span aria-hidden="true">↗</span></a>
           <h1 id="hero-title">Deep graph traversal<br />inside PostgreSQL.</h1>
-          <p class="hero-description">Think pgvector, but for graphs: a graph index and compute engine beside your data. Run deep traversal and whole-graph algorithms over ordinary Postgres tables, then join the results back with SQL.</p>
+          <p class="hero-description">A graph index and compute engine beside your Postgres tables. Traverse relationships, run PageRank or Louvain, and build graph versions inside the transaction that changes your data. Query, compare, and join the results with SQL.</p>
+          <div class="hero-actions"><a class="button primary" href={`${base}/docs/installation/`}>Installation <span aria-hidden="true">↗</span></a><a class="button comparison-cta" href={`${base}/docs/positioning/`}>Isn’t this just pgGraph? <span aria-hidden="true">→</span></a></div>
           <p class="hero-performance">In our benchmarks over 12 real graphs, pg_warren outperformed Neo4j + GDS on shortest-path and Louvain workloads, running entirely inside PostgreSQL. <a href={`${base}/docs/performance/`}>See results and methodology</a> for the warm medians, shared 4-vCPU setup, and workloads where other engines are faster.</p>
-          <div class="hero-actions"><a class="button primary" href={`${base}/docs/installation/`}>Installation <span aria-hidden="true">↗</span></a><a class="text-link" href={`${base}/docs/`}>Read the docs <span aria-hidden="true">→</span></a></div>
         </div>
         <div class="hero-art">
           <svg class="warren-map" viewBox="0 0 580 540" role="img" aria-labelledby="map-title map-desc">

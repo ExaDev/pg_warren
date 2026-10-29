@@ -18,6 +18,7 @@ export const generatedPages = [
   { slug: 'installation', source: 'README.md', section: 'Install', title: 'Installation', description: 'Install pg_warren, configure PostgreSQL, and upgrade an existing installation.' },
   { slug: 'quickstart', source: 'README.md', section: 'A ten-line example', title: 'Your first graph', description: 'Create a graph from ordinary tables, traverse it, and compute PageRank.' },
   { slug: 'performance', source: 'README.md', section: 'How it compares', title: 'Performance and comparisons', description: 'Feature comparisons and measured graph workloads, with their caveats.' },
+  { slug: 'positioning', source: 'docs/positioning.md', title: 'Where pg_warren fits', description: 'How pg_warren compares with pgGraph and the wider PostgreSQL graph landscape, and when to choose each.' },
   { slug: 'changelog', source: 'CHANGELOG.md', title: 'Changelog', description: 'Development changes, release history, and upgrade instructions.' },
   { slug: 'benchmarks', source: 'bench/results/corpus/head_to_head/README.md', title: 'Benchmark methodology', description: 'Head-to-head benchmark provenance, settings, results, and caveats.' },
   { slug: 'contributing', source: 'CONTRIBUTING.md', title: 'Contributing', description: 'Build, test, benchmark, and contribute to pg_warren.' },
