@@ -138,7 +138,7 @@ export function workspaceVersion(toml) {
 }
 
 const groups = [
-  ['Graphs', 'Define a graph from SQL queries and manage its lifetime.', 'semantics', 'create_graph drop_graph info'],
+  ['Graphs', 'Define a graph from SQL queries or from tables\' keys, and manage its lifetime.', 'semantics', 'create_graph create_graph_from_keys queries_from_keys drop_graph info'],
   ['Versions', 'Build, stage, promote, compare, and compact immutable graph versions.', 'change-detection', 'refresh promote drop_version compact diff'],
   ['Traversal', 'Lookups, breadth-first search, reachability, paths, components, and typed walk steps.', 'traversal', 'bfs neighbours degree has_edge reachable reachable_set shortest_path dijkstra components walk s steps last_stats'],
   ['Vectors and matrices', 'Construct, inspect, and remove named per-node vectors and matrices.', 'compute', 'vector_from_query vector_const vector_degree vector_dense_id vector_values matrix_rows vector_topk vector_stats id_map drop_vector'],

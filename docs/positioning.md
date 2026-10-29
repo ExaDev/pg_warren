@@ -112,8 +112,10 @@ pgGraph provides schema and relationship discovery, trigger-based sync,
 source-row hydration, query-time source RLS, and bounded GQL/openCypher
 profiles. Those are useful capabilities if your priority is an application
 querying a changing relational network. pg_warren uses explicit node and
-edge SQL, graph grants, and refreshes; it does not offer a Cypher or GQL
-query language. Review its [access model](semantics.md#access) before
+edge SQL, graph grants, and refreshes; `create_graph_from_keys` writes that
+SQL from the primary and foreign keys of the tables you list
+([graphs from keys](semantics.md#graphs-from-keys)), but it searches no
+schema for them. It does not offer a Cypher or GQL query language. Review its [access model](semantics.md#access) before
 assuming the authorization behaviour is interchangeable.
 [pgGraph supported features](https://github.com/Evokoa/pgGraph/blob/v1.2.1/docs/user_guide/supported_features.mdx),
 [limits and fit](https://github.com/Evokoa/pgGraph/blob/v1.2.1/docs/user_guide/limitations-and-fit.mdx).

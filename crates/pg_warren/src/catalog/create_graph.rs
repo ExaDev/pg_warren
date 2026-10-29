@@ -72,7 +72,7 @@ fn create_graph(
     });
 }
 
-fn record(graph: &NewGraph<'_>) -> Result<(), CatalogError> {
+pub(super) fn record(graph: &NewGraph<'_>) -> Result<(), CatalogError> {
     require_unreserved(graph.name)?;
     if graph.retain_versions < 1 {
         return Err(CatalogError::RetainVersions(graph.retain_versions));

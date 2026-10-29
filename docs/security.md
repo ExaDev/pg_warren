@@ -162,7 +162,9 @@ SQL suite and the upgrade test with pg_warren installed by a non-superuser
 
 ### Graphs and their access
 
-Any role can call `warren.create_graph`; it becomes the graph's owner.
+Any role can call `warren.create_graph` (or `create_graph_from_keys`,
+which writes the source queries from the listed tables' keys and checks
+them the same way, as the caller); it becomes the graph's owner.
 A graph exposes what its owner could see when it was built, like a
 materialised view, so source-table row-level security does not apply to
 what a traversal returns. Access is per graph
@@ -186,7 +188,7 @@ after taking the graph's row lock (DESIGN.md §7). Others get
 
 | SQL | Runs as | `search_path` |
 |---|---|---|
-| a graph's `node_query` and `edge_query`, at `refresh` | the graph's owner | the one captured at `create_graph` |
+| a graph's `node_query` and `edge_query`, at `refresh` | the graph's owner | the one captured at `create_graph`; `pg_catalog, pg_temp` for `create_graph_from_keys`, whose queries qualify every name |
 | `vector_from_query`'s and `gather`'s queries, `vector_map` expressions | the caller | the caller's |
 | pg_warren's own statements on its catalog | the catalog owner (the role that owns the `warren.*` tables) | `pg_catalog, pg_temp` |
 

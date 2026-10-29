@@ -63,7 +63,10 @@ The graph's ids are `bigint`, so id arguments are cast (`1::bigint`), and
 functions with no id argument take a type witness (`NULL::bigint`) for their
 result type. A traversal reads the version, not the tables: rows inserted
 after `refresh` appear after the next `refresh`
-([docs/semantics.md](docs/semantics.md)).
+([docs/semantics.md](docs/semantics.md)). Tables linked by foreign keys
+need no queries: `warren.create_graph_from_keys('shop', ARRAY['customers',
+'orders']::regclass[])` makes their rows nodes and their foreign keys edges
+([graphs from keys](docs/semantics.md#graphs-from-keys)).
 
 ## How it compares
 
@@ -318,7 +321,7 @@ reads the graph, an optional `version` (default: the current version).
 
 | Area | Functions |
 |---|---|
-| Graphs and versions | `create_graph`, `refresh`, `promote`, `drop_version`, `compact`, `diff`, `info`, `drop_graph`, `grant`, `revoke`, `prewarm`, `evict` |
+| Graphs and versions | `create_graph`, `create_graph_from_keys`, `queries_from_keys`, `refresh`, `promote`, `drop_version`, `compact`, `diff`, `info`, `drop_graph`, `grant`, `revoke`, `prewarm`, `evict` |
 | Traversal | `bfs`, `neighbours`, `degree`, `has_edge`, `reachable`, `reachable_set`, `shortest_path`, `dijkstra`, `components`, `walk`, `last_stats` |
 | Walk steps | `s` and `steps` (jsonb), which build the composite type `warren.step`; the cast `jsonb::warren.step[]` |
 | Vectors | `vector_from_query`, `vector_const`, `vector_degree`, `vector_dense_id`, `vector_values`, `matrix_rows`, `vector_topk`, `vector_stats`, `id_map`, `drop_vector` |

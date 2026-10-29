@@ -2,6 +2,27 @@
 
 ## 0.9.0 — in development
 
+### Upgrading
+
+- **Run `ALTER EXTENSION pg_warren UPDATE;` in every database that has
+  the extension**, after installing the new build. The update adds the
+  two functions below; it changes no table.
+
+### Added
+
+- **Graphs from keys.** `warren.queries_from_keys(tables regclass[])`
+  returns the `node_query`, `edge_query` and `has_relations` that the
+  listed tables' primary and foreign keys give, for `create_graph`, and
+  `warren.create_graph_from_keys(name, tables, ...)` creates the graph
+  from them in one call. Each listed table's rows are nodes, each foreign
+  key between listed tables a relation, and a junction table (its primary
+  key two foreign keys, and no other column) an edge per row. One table of
+  nodes keyed by an `integer`, `bigint`, `uuid` or `text` column keeps its
+  key as the id; otherwise ids are text, `schema.table:key`, with a
+  composite key as its row literal (`shop.shipments:(10,2)`). Only the
+  listed tables are read, and foreign keys to other tables are ignored
+  (docs/semantics.md, "Graphs from keys"; DESIGN.md §14 item 52).
+
 ## 0.8.0 — native PageRank and Leiden, leaner calls (2026-10-29)
 
 ### Upgrading
