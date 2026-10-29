@@ -195,6 +195,53 @@ mod tests {
         Ok(())
     }
 
+    /// `text`, `varchar`, `char(n)` and a domain over `text` (DESIGN.md
+    /// §6.4): every combiner that takes them equals its SQL aggregate over
+    /// the same edges, in collect order (ascending sender dense id, then
+    /// message order), for empty, multibyte, padded and toasted messages.
+    #[pg_test]
+    fn text_messages_equal_their_sql_aggregates() -> Result<(), Error> {
+        small("t")?;
+        Spi::run(
+            "CREATE DOMAIN t_label AS text;
+             CREATE TABLE t_texts (ord int, id bigint, t text, v varchar(8), c char(6), d t_label);
+             INSERT INTO t_texts
+             SELECT row_number() OVER (), id, m, left(m, 8), left(m, 6), m
+             FROM t_nodes, LATERAL (VALUES ('n' || id), (''), (NULL), ('é€' || id || ' '),
+                                           (repeat(md5(id::text), 200))) x(m)",
+        )?;
+        let combiners = [
+            ("collect", "[]", "array_agg(m ORDER BY d.dense_id, m.ord)::text"),
+            ("first", "", "(array_agg(m ORDER BY d.dense_id, m.ord))[1]::text"),
+            ("count", "", "count(*)::text"),
+            ("concat", "", "string_agg(m::text, '' ORDER BY d.dense_id, m.ord)"),
+        ];
+        for (column, sql) in [("t", "text"), ("v", "varchar"), ("c", "bpchar"), ("d", "text")] {
+            for (combiner, array, aggregate) in combiners {
+                let value_type = match combiner {
+                    "count" => "bigint",
+                    "concat" => "text",
+                    _ => sql,
+                };
+                let expected = rows(&format!(
+                    "SELECT e.dst || ':' || {aggregate}
+                     FROM t_edges e
+                     JOIN (SELECT ord, id, {column} AS m FROM t_texts) m ON m.id = e.src
+                     JOIN warren.id_map('t', NULL::bigint) d ON d.node_id = e.src
+                     WHERE m.m IS NOT NULL GROUP BY e.dst ORDER BY e.dst"
+                ))?;
+                let found = rows(&format!(
+                    "SELECT node_id || ':' || value::text
+                     FROM warren.gather('t', 'SELECT id, {column} FROM t_texts ORDER BY ord',
+                                        NULL::bigint, NULL::{value_type}{array}, '{combiner}')
+                     ORDER BY node_id"
+                ))?;
+                assert_eq!(found, expected, "{combiner} of {column}");
+            }
+        }
+        Ok(())
+    }
+
     #[pg_test]
     fn several_messages_per_sender_keep_their_order_and_nulls_are_skipped() -> Result<(), Error> {
         small("t")?;

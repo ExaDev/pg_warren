@@ -2,6 +2,13 @@
 
 ## 0.8.0 — in development
 
+### Fixes
+
+- **`gather` over `char(n)` messages no longer truncates them to one
+  character** for `collect` and `first`: their query was cast to
+  `character`, which is `character(1)`; it is now cast to `bpchar`, as
+  `array_agg` keeps them.
+
 ## 0.7.0 — proven on real graphs and real deployments (2026-10-27)
 
 Milestone M11 of DESIGN.md §13: proven on real graphs and in real

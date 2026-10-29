@@ -97,11 +97,13 @@ fn base_type(oid: pg_sys::Oid) -> pg_sys::Oid {
     }
 }
 
-/// The qualified SQL name of a type.
+/// The qualified SQL name of a type, without a type modifier: `bpchar`
+/// for `char`, whose bare name `character` means `character(1)`.
 fn qualified(oid: pg_sys::Oid) -> String {
-    // SAFETY: format_type_be_qualified returns a palloc'd NUL-terminated
-    // string for any type oid.
-    unsafe { std::ffi::CStr::from_ptr(pg_sys::format_type_be_qualified(oid)) }
+    const FLAGS: u32 = pg_sys::FORMAT_TYPE_FORCE_QUALIFY | pg_sys::FORMAT_TYPE_TYPEMOD_GIVEN;
+    // SAFETY: format_type_extended returns a palloc'd NUL-terminated string
+    // for any type oid; typmod -1 is no modifier.
+    unsafe { std::ffi::CStr::from_ptr(pg_sys::format_type_extended(oid, -1, FLAGS as u16)) }
         .to_string_lossy()
         .into_owned()
 }
