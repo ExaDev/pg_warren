@@ -274,6 +274,9 @@ jobs:
           set -euo pipefail
           tarball="$RUNNER_TEMP/source/pg_warren-$VERSION.tar.gz"
           brew tap-new --no-git exadev/tap
+          # Newer Homebrew loads formulae only from trusted taps; older brews
+          # have no `brew trust` and trust every tap.
+          if brew trust --help >/dev/null 2>&1; then brew trust exadev/tap; fi
           formula="$(brew --repo exadev/tap)/Formula/pg_warren.rb"
           python3 release/homebrew.py "$tarball" >"$formula"
           brew style exadev/tap/pg_warren

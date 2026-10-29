@@ -366,6 +366,9 @@ jobs:
         run: |
           set -euo pipefail
           brew tap-new --no-git exadev/tap
+          # Newer Homebrew loads formulae only from trusted taps; older brews
+          # have no `brew trust` and trust every tap.
+          if brew trust --help >/dev/null 2>&1; then brew trust exadev/tap; fi
           git archive --format=tar.gz --prefix=pg_warren-0.0.0/ -o "$RUNNER_TEMP/pg_warren-0.0.0.tar.gz" HEAD
           python3 release/homebrew.py "$RUNNER_TEMP/pg_warren-0.0.0.tar.gz" \
             >"$(brew --repo exadev/tap)/Formula/pg_warren.rb"
