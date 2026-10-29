@@ -98,7 +98,8 @@ real graphs from the benchmark corpus, from 77 nodes up to 1.4M nodes and
 | Graph stored in WAL-logged PostgreSQL tables | ✅ | ❌ (validated files under `$PGDATA`) | — | — | — |
 | Replicated to streaming standbys | ✅ | ❌ (documented: no standby support) | ❌ | Enterprise | Enterprise |
 | **Querying and algorithms** | | | | | |
-| Graph query language, pattern matching | ❌ (SQL functions) | ✅ (bounded GQL and openCypher subsets) | ❌ | ✅ | ✅ |
+| Path pattern matching: multi-step paths by relation, direction, node filter and hop range | ✅ (`warren.walk`) | ✅ (GQL and openCypher `MATCH`) | partial (subgraph isomorphism) | ✅ | ✅ |
+| Graph query language (Cypher, GQL): variables and joins inside a pattern | ❌ (SQL functions; join walks in SQL) | ✅ (bounded GQL and openCypher subsets) | ❌ | ✅ | ✅ |
 | Traversals (BFS, reach, k-hop, paths) | ✅ | ✅ (BFS, DFS, weighted paths) | ✅ | ✅ | ✅ |
 | Connected components | ✅ | ✅ | ✅ | ❌ | ✅ |
 | PageRank and centralities | ✅ (core set) | ❌ | ✅ (very broad) | ❌ | ✅ (broad) |

@@ -116,7 +116,11 @@ map. pgGraph also provides schema and relationship discovery from keys,
 trigger-based sync, and bounded GQL/openCypher profiles. Those are useful
 capabilities if your priority is an application querying a changing
 relational network. pg_warren uses explicit node and edge SQL, graph
-grants, and refreshes, and it does not offer a Cypher or GQL query language.
+grants, and refreshes. It matches path patterns with
+[`warren.walk`](traversal.md#walk-typed-path-patterns): steps by relation,
+direction, node filter and hop range, evaluated inside the engine. It has no
+Cypher or GQL query language, so variables and joins across a pattern are
+written in SQL around the walks.
 
 Both apply source-table row-level security, at different times. pg_warren
 applies it once, when a graph is built, as the graph's owner, like a
