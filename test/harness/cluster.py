@@ -11,7 +11,13 @@ standby's `primary` may itself be a standby (cascading replication).
 initdb and postgres refuse to run as root; as root the cluster runs as
 `runas` (default `postgres`) through sudo, as in CONTRIBUTING.md. `parent`
 puts the cluster directory somewhere other than the system temporary
-directory, and `settings` adds postgresql.conf lines."""
+directory, and `settings` adds postgresql.conf lines.
+
+Given a cluster to `upgrade`, the cluster is a new cluster of its own
+binaries' major that `pg_upgrade` moves the old one's databases into, by
+`transfer`: "copy" copies the old cluster's files, "link" hard-links them
+(`--link`, as managed services upgrade a major). The old cluster then
+shares its files with the new one and refuses to start again."""
 
 import os
 import pwd
@@ -25,12 +31,14 @@ from pathlib import Path
 from .database import Database
 
 PORT = "5432"
+# pg_upgrade's options for each transfer mode: copy is its default.
+TRANSFERS = {"copy": (), "link": ("--link",)}
 SUPERUSER = "postgres"
 
 
 class Cluster:
     def __init__(self, pg_config, runas="postgres", keep=False, parent=None, settings=(), primary=None,
-                 upgrade=None, backup=None):
+                 upgrade=None, transfer="copy", backup=None):
         self.pg_config = pg_config
         self.bindir = Path(_pg_config(pg_config, "--bindir"))
         self.runas = runas if os.geteuid() == 0 else None
@@ -39,7 +47,9 @@ class Cluster:
         self.settings = tuple(settings)
         self.primary = primary
         self.upgrade = upgrade
+        self.transfer = transfer
         self.backup = backup
+        self.linked = False
         self.directory = None
 
     def __enter__(self):
@@ -89,13 +99,20 @@ class Cluster:
 
     def _upgrade(self):
         """Stops `upgrade` and moves its databases into this cluster's
-        (stopped) data directory with pg_upgrade, after its `--check`."""
+        (stopped) data directory with pg_upgrade by `transfer`, after its
+        `--check`. Linked, the old cluster is marked so that it never starts
+        again: its files are the new cluster's. pg_upgrade renames its
+        `global/pg_control` once it links, which shows that it did."""
         if self.upgrade.running():
             self.upgrade.stop()
         arguments = ("-b", self.upgrade.bindir, "-B", self.bindir, "-d", self.upgrade.directory / "data",
-                     "-D", self.directory / "data", "-s", self.directory, "-U", SUPERUSER)
+                     "-D", self.directory / "data", "-s", self.directory, "-U", SUPERUSER, *TRANSFERS[self.transfer])
         self._run("pg_upgrade", "--check", *arguments)
+        self.upgrade.linked = self.transfer == "link"
         self._run("pg_upgrade", *arguments)
+        disabled = (self.upgrade.directory / "data" / "global" / "pg_control.old").exists()
+        if self.upgrade.linked and not disabled:
+            raise RuntimeError("pg_upgrade --link left the old cluster's pg_control: its files were not linked")
 
     def _restore(self, data):
         """Copies `backup` into `data`, owned by the cluster's user, to start
@@ -130,11 +147,18 @@ class Cluster:
         return self.directory / "server.log"
 
     def start(self):
+        self._refuse_if_linked()
         self._run("pg_ctl", "-D", self.directory / "data", "-l", self.log, "-w", "start")
 
     def restart(self):
         """Restarts the server, for a setting that needs it or a clean shared memory."""
+        self._refuse_if_linked()
         self._run("pg_ctl", "-D", self.directory / "data", "-l", self.log, "-m", "fast", "-w", "restart")
+
+    def _refuse_if_linked(self):
+        """Raises if pg_upgrade --link has given the cluster's files to another cluster."""
+        if self.linked:
+            raise RuntimeError(f"cluster {self.directory} was linked into an upgraded cluster: it must not start")
 
     def configure(self, settings):
         """Appends `settings` to postgresql.conf, where they override the

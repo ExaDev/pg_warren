@@ -48,8 +48,10 @@ recursive CTEs / NetworkX on generated fixtures, and the Appendix A use cases
   "Lifecycle"): add pg_warren to `shared_preload_libraries` and remove
   it; restore a base backup (`pg_basebackup`) and recover it to each
   restore point marked after it and to the end of the WAL archive; and
-  `pg_upgrade` it to a later major. Each builds the replica check's
-  graphs and checks, after the change, that every pg_warren catalog
+  `pg_upgrade` it to a later major, copying its files and, as managed
+  services do, hard-linking them (`--link`, after which only the new
+  cluster is checked: the old one must not start again). Each builds
+  the replica check's graphs and checks, after the change, that every pg_warren catalog
   table holds the rows and every read gives the answers they had then
   (`harness/graph_state.py`), that the shared cache works, and that
   refreshes and vector writes succeed.

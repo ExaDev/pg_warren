@@ -529,7 +529,10 @@ jobs:
     # the shared cache, as managed services upgrade a major version; every
     # catalog table and every read as before, then refreshes and vector
     # writes; preloaded and not. Each major is upgraded from or to once,
-    # and 15 to 18 is the longest jump.
+    # and 15 to 18 is the longest jump. Each cell upgrades by copying the
+    # files and then by linking them (--link, as managed services such as
+    # RDS do): the build into both trees is most of the job, so both
+    # modes share it rather than a matrix dimension building it twice.
     name: pg_upgrade (PG ${{ matrix.old }} to ${{ matrix.new }})
     runs-on: ubuntu-latest
     timeout-minutes: 60

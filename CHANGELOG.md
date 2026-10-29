@@ -112,9 +112,10 @@
 - DESIGN.md §5.1 says what a managed service's lifecycle needs of
   pg_warren: nothing. A base backup restored and recovered to a point in
   time holds the graphs, versions and vectors committed at the target.
-  `pg_upgrade` to a later major keeps them byte for byte, and they read
-  the same afterwards. Adding pg_warren to `shared_preload_libraries` on
-  a cluster with graphs, or removing it, changes only where versions are
+  `pg_upgrade` to a later major, copying the files or hard-linking them
+  (`--link`, as managed services upgrade), keeps them byte for byte, and
+  they read the same afterwards. Adding pg_warren to
+  `shared_preload_libraries` on a cluster with graphs, or removing it, changes only where versions are
   cached. New tests check each of these (`test/point_in_time.py`,
   `test/major_upgrade.py`, `test/preload.py`), as does a terminate,
   cancel, kill or crash during `pagerank` and during a load into the

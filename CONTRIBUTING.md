@@ -385,7 +385,8 @@ test/preload.py --no-install --pg-config "$(command -v pg_config)"
 # pg_basebackup, then changes, each marked by a restore point; the backup
 # restored and recovered to each restore point and to the archive's end
 test/point_in_time.py --no-install --pg-config "$(command -v pg_config)"
-# pg_upgrade from an older major, with the shared cache loaded. It installs
+# pg_upgrade from an older major, with the shared cache loaded, copying the
+# files and then linking them (--transfer copy link, the default). It installs
 # pg_warren into both majors' trees (both in pgrx's config.toml; unset
 # PGRX_PG_CONFIG_PATH, or both builds use its pg_config)
 test/major_upgrade.py --old-pg-config /usr/lib/postgresql/16/bin/pg_config \

@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Major-version upgrade with pg_upgrade (DESIGN.md §5.1, §13 0.9.0
 "Lifecycle"): installs pg_warren into the old and the new major's trees
-(unless --no-install), and for each shared-cache mode (default: preload,
-then on) starts a scratch cluster of the old major, builds graphs,
-versions and vectors there, reads them and loads them into the shared
-cache, upgrades it with pg_upgrade (after `pg_upgrade --check`) to a
-cluster of the new major, and checks there that every catalog table
-holds the same rows and every read answers as before, that the shared
-cache works, that `ALTER EXTENSION ... UPDATE` changes nothing, that the
+(unless --no-install), and for each transfer mode (default: copy, then
+link) and each shared-cache mode (default: preload, then on) starts a
+scratch cluster of the old major, builds graphs, versions and vectors
+there, reads them and loads them into the shared cache, upgrades it with
+pg_upgrade (after `pg_upgrade --check`) to a cluster of the new major,
+copying its files or hard-linking them (`--link`, as managed services
+do; the old cluster is not started again), and checks there that every
+catalog table holds the same rows and every read answers as before, that
+the shared cache works, that `ALTER EXTENSION ... UPDATE` changes nothing, that the
 graphs can be refreshed and vectors written, and the server logs
 (harness/major_upgrade.py). Holds /tmp/pgrx-test.lock for the whole
 run."""
@@ -17,7 +19,7 @@ import os
 import sys
 
 from harness import extension, graph_state, major_upgrade, replicas, server_log, shared_cache
-from harness.cluster import Cluster, major
+from harness.cluster import TRANSFERS, Cluster, major
 from harness.session import Session
 
 DATABASE = "upgraded"
@@ -33,22 +35,25 @@ def main(argv):
     options.add_argument("--keep", action="store_true", help="keep the cluster directories for inspection")
     options.add_argument("--shared-cache", nargs="+", choices=sorted(shared_cache.MODES), default=["preload", "on"],
                          help="the shared-cache modes to run in (default: preload on)")
+    options.add_argument("--transfer", nargs="+", choices=sorted(TRANSFERS), default=["copy", "link"],
+                         help="pg_upgrade's transfer modes to run in (default: copy link)")
     args = options.parse_args(argv)
     failed = False
     with extension.shared_lock():
         if not args.no_install:
             extension.install(args.old_pg_config)
             extension.install(args.pg_config)
-        for mode in args.shared_cache:
-            failures = run_mode(args, mode)
-            failed = failed or bool(failures)
-            for failure in failures:
-                print(f"  {failure}")
-            print(f"major upgrade ({mode}): {'FAILED' if failures else 'ok'}", flush=True)
+        for transfer in args.transfer:
+            for mode in args.shared_cache:
+                failures = run_mode(args, transfer, mode)
+                failed = failed or bool(failures)
+                for failure in failures:
+                    print(f"  {failure}")
+                print(f"major upgrade ({transfer}, {mode}): {'FAILED' if failures else 'ok'}", flush=True)
     return 1 if failed else 0
 
 
-def run_mode(args, mode):
+def run_mode(args, transfer, mode):
     settings = (*shared_cache.settings(mode), *server_log.SETTINGS)
     with Cluster(args.old_pg_config, args.runas, args.keep, settings=settings) as old:
         old.database().execute(f"CREATE DATABASE {DATABASE}")
@@ -60,9 +65,12 @@ def run_mode(args, mode):
             failures = [f"before the upgrade: {f}" for f in replicas.read_failures(before.reads)]
             # Loaded, shared where the old cluster shares, when it stops.
             graph_state.checked(s, "SELECT warren.prewarm('social'), warren.prewarm('kg')")
-        majors = f"PG {old.major()} to {major(args.pg_config)}"
+        majors = f"PG {old.major()} to {major(args.pg_config)} ({transfer})"
         try:
-            with Cluster(args.pg_config, args.runas, args.keep, settings=settings, upgrade=old) as new:
+            # Linked, the old cluster's files are the new one's: it is not
+            # started or read again, only its server log.
+            with Cluster(args.pg_config, args.runas, args.keep, settings=settings, upgrade=old,
+                         transfer=transfer) as new:
                 failures += check(new, before, majors)
                 failures += [f"new {problem}" for problem in major_upgrade.log_problems(new.log.read_text())]
         finally:
