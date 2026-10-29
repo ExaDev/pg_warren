@@ -11,6 +11,7 @@ mod create_graph;
 mod drop;
 mod dropped_roles;
 mod error;
+mod from_keys;
 mod graph;
 mod info;
 mod owner;

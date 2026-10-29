@@ -110,6 +110,71 @@ rest once; `dijkstra` took the cheapest relation, as it still does, but
 `minimum_spanning_forest` summed the weights. See DESIGN.md §5.3 for the
 whole table.
 
+### Graphs from keys
+
+Tables whose rows link by foreign keys can be a graph without writing its
+queries. `warren.queries_from_keys(tables regclass[])` reads the catalog
+(never the tables) and returns the `node_query`, `edge_query` and
+`has_relations` that `create_graph` takes; `create_graph_from_keys`
+creates the graph from them in one call:
+
+```
+SELECT * FROM warren.queries_from_keys(ARRAY['shop.customers', 'shop.orders']::regclass[]);
+SELECT warren.create_graph_from_keys(name, tables regclass[],
+                                     directed := true, build_reverse := true, retain_versions := 2,
+                                     store_merged := true, node_order := 'id');
+```
+
+Only the listed tables are read, so the caller chooses the scope.
+
+- **Nodes** are the listed tables' rows, by primary key. A listed table
+  without one is refused (55000), as are an empty list (22023) and a NULL
+  in it (22004).
+- **Edges**: each foreign key from a listed table to a listed table
+  (composite ones included) is a relation, named after the constraint,
+  from the referencing row to the referenced row. Where two listed tables
+  have constraints of the same name, those relations are named
+  `schema.table.constraint`. A row whose foreign key is NULL in any column
+  is no edge (MATCH SIMPLE). Foreign keys to tables that are not listed
+  are ignored.
+- **Junction tables** are edges, not nodes. A listed table is a junction
+  when it has no column but its primary key, that key is exactly the
+  columns of two foreign keys to other listed tables (and it has no other
+  foreign key to a listed table), no listed table references it, and
+  neither end is itself such a table. Each of its rows is then an edge
+  from the end whose columns come first in its primary key to the other,
+  in a relation named after the table. A junction with any other column
+  (a quantity, a date) stays a table of nodes, with its two foreign keys
+  as relations, so nothing in it is lost.
+- **Ids.** With one table of nodes (junctions aside) whose primary key is
+  one column of an id type (`integer`, `bigint`, `uuid`, `text` or
+  `varchar`, under a deterministic collation), the key is the id: the
+  graph's id type is the column's. Otherwise ids are `text`, unique across
+  tables: `schema.table:key`, where `schema` and `table` are written as is
+  when they are lowercase letters, digits and underscores, otherwise
+  double-quoted, and `key` is the key column's text output, or for a
+  composite key its row literal, as `ROW(a, b)::text` writes it (`(10,2)`;
+  a value holding a comma, a parenthesis, a quote, a backslash or a space
+  is double-quoted inside it). So `'shop.orders:' || o.id` and
+  `'shop.shipments:' || ROW(s.order_id, s.seq)::text` join results back to
+  the rows.
+- `has_relations` is true when there is more than one relation. Graphs from
+  keys are unweighted.
+- An edge joins the row its foreign key references, so its endpoint is
+  that row's own key whatever the referencing columns' types (and
+  whichever unique key the constraint references). A foreign key that is
+  `NOT VALID`, or whose checks were disabled, can reference a row that
+  does not exist: that row is no edge, rather than a dropped one.
+- The queries quote and schema-qualify every name, operators included, so
+  the graph records them with `search_path` `pg_catalog, pg_temp` rather
+  than the caller's, and never raises the writable-schema `NOTICE`.
+- `create_graph_from_keys` checks the queries as `create_graph` does, by
+  opening them as the caller: a role that cannot read a listed table is
+  refused (42501), and the caller owns the graph, whose refreshes read
+  the tables as its owner ([Access](#access)). The queries are fixed when
+  the graph is created; after a schema change, drop the graph and create
+  it again.
+
 | Functions | `per_relation` |
 |---|---|
 | `modularity`, `louvain`, `leiden`, `local_moving`, `leiden_refine` | yes |

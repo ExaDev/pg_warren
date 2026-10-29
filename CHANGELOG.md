@@ -2,6 +2,12 @@
 
 ## 0.9.0 — in development
 
+### Upgrading
+
+- **Run `ALTER EXTENSION pg_warren UPDATE;` in every database that has
+  the extension**, after installing the new build. The update adds the
+  two functions below; it changes no table.
+
 ### Behaviour changes
 
 - **A graph owned by a superuser runs its source queries only for a
@@ -23,6 +29,18 @@
 
 ### New
 
+- **Graphs from keys.** `warren.queries_from_keys(tables regclass[])`
+  returns the `node_query`, `edge_query` and `has_relations` that the
+  listed tables' primary and foreign keys give, for `create_graph`, and
+  `warren.create_graph_from_keys(name, tables, ...)` creates the graph
+  from them in one call. Each listed table's rows are nodes, each foreign
+  key between listed tables a relation, and a junction table (its primary
+  key two foreign keys, and no other column) an edge per row. One table of
+  nodes keyed by an `integer`, `bigint`, `uuid` or `text` column keeps its
+  key as the id; otherwise ids are text, `schema.table:key`, with a
+  composite key as its row literal (`shop.shipments:(10,2)`). Only the
+  listed tables are read, and foreign keys to other tables are ignored
+  (docs/semantics.md, "Graphs from keys"; DESIGN.md §14 item 53).
 - **A guide to running pg_warren beside a managed database**
   (`docs/beside-managed.md`), for Amazon RDS, Aurora and other services
   that cannot install it: a server of your own with pg_warren, fed by
@@ -49,7 +67,7 @@
 - The README's feature matrix (How it compares) puts pgGraph 1.2.1 first,
   as the closest alternative inside PostgreSQL, with rows for the
   differences both ways: where pgGraph has the tick (GQL/openCypher,
-  trigger sync, discovery from keys) and where pg_warren does (versions,
+  trigger sync) and where pg_warren does (versions,
   in-transaction builds, standbys, whole-graph algorithms, semirings).
   pgGraph's cells are sourced from its v1.2.1 documentation, and
   `docs/positioning.md` points to the matrix and spells out the nuanced

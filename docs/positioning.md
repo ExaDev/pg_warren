@@ -116,11 +116,13 @@ for backup permissions, upgrades, pooling and replicas.
 
 Both return results keyed by your own ids, so they join straight to your
 tables: pgGraph by source table and primary key, pg_warren through its id
-map. pgGraph also provides schema and relationship discovery from keys,
-trigger-based sync, and bounded GQL/openCypher profiles. Those are useful
+map. pgGraph also discovers relationships across a whole schema, and
+provides trigger-based sync and bounded GQL/openCypher profiles. Those are useful
 capabilities if your priority is an application querying a changing
-relational network. pg_warren uses explicit node and edge SQL, graph
-grants, and refreshes. It matches path patterns with
+relational network. pg_warren builds from node and edge SQL, which
+`create_graph_from_keys` writes from the primary and foreign keys of the
+tables you list ([graphs from keys](semantics.md#graphs-from-keys)), with
+graph grants and refreshes. It matches path patterns with
 [`warren.walk`](traversal.md#walk-typed-path-patterns): steps by relation,
 direction, node filter and hop range, evaluated inside the engine. It has no
 Cypher or GQL query language, so variables and joins across a pattern are
