@@ -42,10 +42,11 @@
   iteration, and holds four vectors of the id space (five with a seed)
   where the loop held eleven: 0.32 GB of scratch at 10M nodes instead of
   0.88 GB.
-  Twenty iterations, head to head before and after (median warm times,
-  `warren.threads = 4`): lesmis 34.7 → 1.6 ms, facebook 47.3 → 6.3 ms,
+  Twenty iterations, in a first single before-and-after run on a loaded
+  machine (median warm times, `warren.threads = 4`): lesmis 34.7 → 1.6 ms, facebook 47.3 → 6.3 ms,
   email-enron 74.9 → 22.6 ms, cit-hepth 65.7 → 18.6 ms and DBLP
-  318 → 113 ms. Against igraph on the 12 head-to-head datasets (three
+  318 → 113 ms. The later three-round run timed lesmis at 3.1 ms.
+  Against igraph on the 12 head-to-head datasets (three
   interleaved rounds, `bench/results/corpus/head_to_head/README.md`,
   "PageRank in 0.8.0"): faster on 7 (roadNet-TX 0.22 s against 0.81 s,
   DBLP 105 ms against 251 ms) and slower on 5 (WN18RR, cit-hepth and
