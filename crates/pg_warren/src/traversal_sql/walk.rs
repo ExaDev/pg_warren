@@ -13,6 +13,7 @@ use super::step::read_steps;
 use super::walk_rows::{max_walk_paths, DEFAULT_WALK_ROWS};
 use super::{entry, TraversalSqlError};
 use crate::cache::{cached, resolve, CachedIds, LoadedVersion};
+use crate::ceiling::Bound;
 use crate::external_ids::{dense_ids, elements, external, external_array};
 use crate::interrupts::PostgresInterrupts;
 use crate::source::with_id_type;
@@ -109,15 +110,17 @@ fn walk_mode(text: Option<&str>) -> Result<WalkMode, TraversalSqlError> {
 fn row_limit(
     per_walk: bool,
     max_results: Option<i64>,
-    ceiling: i64,
+    ceiling: Bound,
 ) -> Result<Option<u64>, TraversalSqlError> {
     let requested = bound::<u64>("max_results", max_results)?;
     if !per_walk {
         return Ok(requested);
     }
+    let Bound { value, setting } = ceiling;
+    let ceiling = i64::try_from(value).unwrap_or(i64::MAX);
     match max_results {
         Some(requested) if requested > ceiling => {
-            Err(TraversalSqlError::WalkRowCeiling { requested, ceiling })
+            Err(TraversalSqlError::WalkRowCeiling { requested, ceiling, setting })
         }
         Some(_) => Ok(requested),
         None => bound("max_results", Some(DEFAULT_WALK_ROWS.min(ceiling))),
@@ -186,16 +189,24 @@ mod unit {
 
     #[test]
     fn a_walk_reporting_a_row_per_walk_is_always_bounded() {
-        assert_eq!(row_limit(false, None, 10).ok(), Some(None));
-        assert_eq!(row_limit(false, Some(50), 10).ok(), Some(Some(50)));
-        assert_eq!(row_limit(true, None, 10_000_000).ok(), Some(Some(100_000)));
-        assert_eq!(row_limit(true, None, 10).ok(), Some(Some(10)));
-        assert_eq!(row_limit(true, Some(7), 10).ok(), Some(Some(7)));
+        let ceiling = |value| Bound { value, setting: "warren.max_walk_paths" };
+        assert_eq!(row_limit(false, None, ceiling(10)).ok(), Some(None));
+        assert_eq!(row_limit(false, Some(50), ceiling(10)).ok(), Some(Some(50)));
+        assert_eq!(row_limit(true, None, ceiling(10_000_000)).ok(), Some(Some(100_000)));
+        assert_eq!(row_limit(true, None, ceiling(10)).ok(), Some(Some(10)));
+        assert_eq!(row_limit(true, Some(7), ceiling(10)).ok(), Some(Some(7)));
         assert!(matches!(
-            row_limit(true, Some(11), 10),
-            Err(TraversalSqlError::WalkRowCeiling { requested: 11, ceiling: 10 })
+            row_limit(true, Some(11), ceiling(10)),
+            Err(TraversalSqlError::WalkRowCeiling {
+                requested: 11,
+                ceiling: 10,
+                setting: "warren.max_walk_paths"
+            })
         ));
-        assert!(matches!(row_limit(true, Some(-1), 10), Err(TraversalSqlError::Negative(_))));
+        assert!(matches!(
+            row_limit(true, Some(-1), ceiling(10)),
+            Err(TraversalSqlError::Negative(_))
+        ));
     }
 }
 
@@ -206,6 +217,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
+    use crate::ceiling::set_in_configuration;
     use crate::fixture::{failure, held_after_first_row, iri_star, rows, small};
 
     // small: 1 → 2 (a), 2 → 3 (a), 3 → 4 (b), 1 → 4 (b), 4 → 1 (a), 5 → 5 (b).
@@ -305,6 +317,26 @@ mod tests {
              SELECT * FROM warren.walk('t', ARRAY[1::bigint], ARRAY[warren.s(NULL)], 'paths',
                                        max_results := 11)",
         )
+    }
+
+    /// Where `warren.walk_paths_limit` is lower than the session's
+    /// `warren.max_walk_paths`, it bounds the walk, and the refusal names it.
+    #[pg_test]
+    fn per_walk_rows_are_capped_by_the_administrators_limit() -> Result<(), Error> {
+        small("t")?;
+        set_in_configuration(c"warren.walk_paths_limit", c"10");
+        let refused = failure(
+            "warren.walk('t', ARRAY[1::bigint], ARRAY[warren.s(NULL)], 'paths', max_results := 11)",
+        );
+        set_in_configuration(c"warren.walk_paths_limit", c"-1");
+        assert_eq!(
+            refused?.as_deref(),
+            Some(
+                "54000: max_results 11 is above warren.walk_paths_limit (10) for a walk that \
+                 reports a row per walk"
+            )
+        );
+        Ok(())
     }
 
     #[pg_test(error = "mode must be 'ends', 'count' or 'paths', not 'all'")]

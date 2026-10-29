@@ -9,6 +9,7 @@ mod activity;
 mod build;
 mod cache;
 mod catalog;
+mod ceiling;
 mod community_sql;
 mod compute_sql;
 mod discard;
@@ -32,13 +33,15 @@ mod traversal_sql;
 mod vector;
 mod version_sql;
 
-/// Library initialisation: registers the GUCs, the hook that makes
+/// Library initialisation: registers the GUCs (the ceilings first, which
+/// the others' descriptions name), the hook that makes
 /// `DISCARD ALL` free pg_warren's session state and, when preloaded on
 /// PG 15 and 16, the hooks that place the shared cache's registry and the
 /// activity table.
 #[pgrx::pg_guard]
 pub extern "C-unwind" fn _PG_init() {
     activity::request_preload();
+    ceiling::define_ceilings();
     build::define_max_build_memory();
     cache::define_memory_settings();
     cache::define_shared_cache();

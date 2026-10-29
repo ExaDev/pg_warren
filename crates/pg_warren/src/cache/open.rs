@@ -96,9 +96,9 @@ fn load_private<E: CachedIds>(resolved: &Resolved) -> Result<Arc<LoadedVersion<E
     prune_dropped()?;
     let expected = expected_bytes::<E>(version)?;
     admit_load(&[version], expected)?;
-    if let Some((transient, limit)) = unfit(expected) {
+    if let Some((transient, limit, compute)) = unfit(expected) {
         if cache_notice_raised(notice_due()) {
-            notice!("{}", unfit_notice(version, expected, limit, transient));
+            notice!("{}", unfit_notice(version, expected, limit, transient, compute));
         }
     }
     make_room(expected);

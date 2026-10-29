@@ -8,11 +8,12 @@
 //!
 //! | Part | Contents |
 //! |---|---|
-//! | header | format, slot count, creation time, the counters of exited backends; on PG 17 and 18 the LWLock and its tranche (on 15 and 16 the lock is the preload's named tranche's) |
+//! | header | format, slot count, creation time, the counters of exited backends, the compute threads held (since format 2); on PG 17 and 18 the LWLock and its tranche (on 15 and 16 the lock is the preload's named tranche's) |
 //! | slots | one per backend, `MaxBackends` of them |
 
 use std::mem::{align_of, size_of};
 use std::ptr::{addr_of_mut, NonNull};
+use std::sync::atomic::AtomicU32;
 
 use pgrx::pg_sys;
 
@@ -22,11 +23,11 @@ use super::table::{Lock, Table};
 
 /// The table's format, changed whenever its layout does; builds with
 /// different formats use different tables.
-const FORMAT: u32 = 1;
+const FORMAT: u32 = 2;
 
 /// The table's name: its named DSM segment on PG 17 and 18, its
 /// `ShmemInitStruct` entry on PG 15 and 16. It ends with [`FORMAT`].
-const NAME: &std::ffi::CStr = c"pg_warren.activity.1";
+const NAME: &std::ffi::CStr = c"pg_warren.activity.2";
 
 /// The LWLock tranche's name, which each backend registers.
 const TRANCHE: &std::ffi::CStr = c"pg_warren.activity";
@@ -43,6 +44,9 @@ struct Header {
     #[cfg(any(feature = "pg17", feature = "pg18"))]
     lock: pg_sys::LWLock,
     exited: Counted<COUNTER_WORDS>,
+    /// The compute threads every backend's calls hold (DESIGN.md §14 item
+    /// 52), which each backend changes for itself.
+    compute_threads: AtomicU32,
 }
 
 /// The bytes before the first slot.
@@ -95,6 +99,13 @@ impl Located {
         }
     }
 
+    /// The count of compute threads that every backend's calls hold.
+    pub(super) fn compute_threads(&self) -> &'static AtomicU32 {
+        // SAFETY: the header stays mapped for the session; the count is an
+        // atomic, read and written through a shared reference.
+        unsafe { &(*self.header.as_ptr()).compute_threads }
+    }
+
     /// When the table was created, as a `timestamptz`.
     pub(super) fn created(&self) -> i64 {
         // SAFETY: written once, before any backend can find the table.
@@ -117,6 +128,7 @@ unsafe fn initialize(header: *mut Header, slots: usize) {
         addr_of_mut!((*header).slots).write(slots as u64);
         addr_of_mut!((*header).created).write(pg_sys::GetCurrentTimestamp());
         addr_of_mut!((*header).exited).write(Counted::zero());
+        addr_of_mut!((*header).compute_threads).write(AtomicU32::new(0));
         let first = header.cast::<u8>().add(SLOTS_AT).cast::<Slot>();
         for slot in 0..slots {
             first.add(slot).write(Slot::zero());

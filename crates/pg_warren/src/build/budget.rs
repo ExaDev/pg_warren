@@ -1,9 +1,12 @@
 //! `warren.max_build_memory` (DESIGN.md §5.4, §14 item 17): the memory a
 //! build may hold at once, every graph-sized buffer charged to it, and the
 //! most the CSR offsets of the version it builds may take (they grow as
-//! relations × id space).
+//! relations × id space). An administrator's `warren.build_memory_limit`
+//! bounds it (§14 item 52).
 
 use pgrx::{GucContext, GucFlags, GucRegistry, GucSetting};
+
+use crate::ceiling::Ceiling;
 
 /// The default budget: 4 GiB, in kB (DESIGN.md §5.4: a 100M-edge graph
 /// builds in under 4 GB).
@@ -27,9 +30,9 @@ pub(crate) fn define_max_build_memory() {
     );
 }
 
-/// The current budget in bytes.
+/// The current budget in bytes, within `warren.build_memory_limit`.
 pub(crate) fn max_build_memory() -> u64 {
-    u64::try_from(MAX_BUILD_MEMORY.get()).unwrap_or(0) * 1024
+    Ceiling::BuildMemory.bound(u64::try_from(MAX_BUILD_MEMORY.get()).unwrap_or(0) * 1024).value
 }
 
 #[cfg(any(test, feature = "pg_test"))]
@@ -39,6 +42,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
+    use crate::ceiling::set_in_configuration;
     use crate::fixture::{failure, refresh, ring, versions};
 
     #[pg_test]
@@ -60,6 +64,23 @@ mod tests {
              SET LOCAL warren.max_build_memory = '1MB'",
         )?;
         let refused = failure("warren.refresh('budget')")?;
+        assert!(
+            refused.as_deref().is_some_and(|f| f.starts_with("53400: build memory limit exceeded")),
+            "{refused:?}"
+        );
+        Ok(())
+    }
+
+    /// `warren.build_memory_limit` bounds the session's
+    /// `warren.max_build_memory`.
+    #[pg_test]
+    fn a_refresh_over_the_administrators_limit_is_refused() -> Result<(), Error> {
+        ring("budget", 70_000, 2)?;
+        Spi::run("SET LOCAL warren.max_build_memory = '4GB'")?;
+        set_in_configuration(c"warren.build_memory_limit", c"1MB");
+        let refused = failure("warren.refresh('budget')");
+        set_in_configuration(c"warren.build_memory_limit", c"-1");
+        let refused = refused?;
         assert!(
             refused.as_deref().is_some_and(|f| f.starts_with("53400: build memory limit exceeded")),
             "{refused:?}"

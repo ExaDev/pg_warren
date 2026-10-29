@@ -469,26 +469,10 @@ impl SharedVersions for Dsm {
 }
 
 /// The wait event a backend waiting for another's load shows in
-/// `pg_stat_activity` (DESIGN.md §5.7): `WarrenSharedLoad`, of type
-/// `Extension`, on PG 17 and 18, registered once per backend
-/// (`WaitEventExtensionNew` needs no preload); `Extension` on PG 15 and 16.
+/// `pg_stat_activity` (DESIGN.md §5.7): `WarrenSharedLoad` on PG 17 and 18,
+/// `Extension` on PG 15 and 16.
 fn wait_event() -> u32 {
-    #[cfg(any(feature = "pg17", feature = "pg18"))]
-    {
-        thread_local! {
-            static SHARED_LOAD: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
-        }
-        if let Some(event) = SHARED_LOAD.get() {
-            return event;
-        }
-        // SAFETY: on the main thread, with a static name; Postgres returns
-        // the same id in every backend that registers the name.
-        let event = unsafe { pg_sys::WaitEventExtensionNew(c"WarrenSharedLoad".as_ptr()) };
-        SHARED_LOAD.set(Some(event));
-        event
-    }
-    #[cfg(any(feature = "pg15", feature = "pg16"))]
-    pg_sys::PG_WAIT_EXTENSION
+    crate::activity::wait_event(c"WarrenSharedLoad")
 }
 
 /// Unpins the evicted regions whose slots drain: under the registry's

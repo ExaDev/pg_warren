@@ -10,6 +10,7 @@ mod tests {
     use pgrx::prelude::*;
     use pgrx::spi::Error;
 
+    use crate::ceiling::set_in_configuration;
     use crate::fixture::{failure, refresh, ring};
     use crate::interrupts::workers;
     use crate::interrupts::PostgresInterrupts;
@@ -31,6 +32,23 @@ mod tests {
         Spi::run("SELECT warren.spmv('big', 'x', 'y'); SELECT warren.evict('big')")?;
         let refused = failure("warren.vector_map('big', 'z', 'x + y')")?.unwrap_or_default();
         assert!(refused.starts_with("53400: compute memory limit exceeded"), "{refused}");
+        Ok(())
+    }
+
+    /// `warren.compute_memory_limit` bounds the session's
+    /// `warren.max_compute_memory`.
+    #[pg_test]
+    fn the_administrators_compute_memory_limit_bounds_a_call() -> Result<(), Error> {
+        ring("big", 20_000, 2)?;
+        refresh("big", true)?;
+        Spi::run("SET LOCAL warren.max_compute_memory = '4GB'")?;
+        set_in_configuration(c"warren.compute_memory_limit", c"64kB");
+        let refused = failure("warren.vector_const('big', 'x', 1)");
+        set_in_configuration(c"warren.compute_memory_limit", c"-1");
+        assert_eq!(
+            refused?.as_deref(),
+            Some("53400: compute memory limit exceeded: 160000 bytes requested, 0 of 65536 in use")
+        );
         Ok(())
     }
 

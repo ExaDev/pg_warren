@@ -12,7 +12,8 @@
 //! least recently used first, to a load or a charge on the main thread
 //! that needs the room, and not before. So the cache and a call together
 //! stay within the two limits, a traversal's visited set and calls running
-//! at once aside.
+//! at once aside. An administrator's `warren.cache_memory_limit` and
+//! `warren.compute_memory_limit` bound the two (§14 item 52).
 //!
 //! Unpinned reloadable entries (versions and persisted vectors) are
 //! evicted to fit the cap, least recently used first; transient vectors
@@ -31,6 +32,7 @@ use super::versions::{VersionCache, CACHE};
 use super::CacheError;
 use crate::activity::{record_private, Memory};
 use crate::catalog::VersionId;
+use crate::ceiling::{Bound, Ceiling};
 use crate::vector::{
     cached_vector_bytes, cached_vector_count, cached_vectors, forget, role_transient_bytes,
     transient_bytes, transient_count, vector_in_use, VectorId,
@@ -82,14 +84,15 @@ fn bytes(setting: &GucSetting<i32>) -> u64 {
     u64::try_from(setting.get()).unwrap_or(0) * 1024
 }
 
-/// `warren.max_cache_memory`, in bytes.
-pub(super) fn max_cache_memory() -> u64 {
-    bytes(&MAX_CACHE_MEMORY)
+/// `warren.max_cache_memory`, in bytes, within `warren.cache_memory_limit`.
+pub(super) fn max_cache_memory() -> Bound {
+    Ceiling::CacheMemory.bound(bytes(&MAX_CACHE_MEMORY))
 }
 
-/// `warren.max_compute_memory`, in bytes.
-fn max_compute_memory() -> u64 {
-    bytes(&MAX_COMPUTE_MEMORY)
+/// `warren.max_compute_memory`, in bytes, within
+/// `warren.compute_memory_limit`.
+fn max_compute_memory() -> Bound {
+    Ceiling::ComputeMemory.bound(bytes(&MAX_COMPUTE_MEMORY))
 }
 
 /// A fresh call budget of `warren.max_compute_memory`, less what the cache
@@ -102,11 +105,11 @@ fn max_compute_memory() -> u64 {
 /// limits, and a statement alternating between graphs keeps them loaded
 /// while the compute budget has room.
 pub(crate) fn compute_memory() -> ComputeMemory {
-    let cap = max_cache_memory();
+    let cap = max_cache_memory().value;
     let pins = IdlePins::counted();
     let idle = pins.bytes();
     let held = unevictable().saturating_add(idle).saturating_sub(cap);
-    ComputeMemory::reclaiming(max_compute_memory(), held, idle, Box::new(pins))
+    ComputeMemory::reclaiming(max_compute_memory().value, held, idle, Box::new(pins))
 }
 
 /// The reclaim hook of a call's budget: the pinned entries no call was
@@ -232,15 +235,17 @@ fn evict_idle_within(within: u64) {
 /// entries no call is using give way, least recently used first.
 pub(super) fn admit_load(versions: &[VersionId], expected: u64) -> Result<(), CacheError> {
     let held = unevictable();
-    let (cache_limit, compute_limit) = (max_cache_memory(), max_compute_memory());
-    let both = cache_limit.saturating_add(compute_limit);
+    let (cache, compute) = (max_cache_memory(), max_compute_memory());
+    let both = cache.value.saturating_add(compute.value);
     if held.saturating_add(expected) > both {
         return Err(CacheError::StatementOverLimit {
             versions: versions.to_vec(),
             expected,
             held,
-            cache_limit,
-            compute_limit,
+            cache_limit: cache.value,
+            cache_setting: cache.setting,
+            compute_limit: compute.value,
+            compute_setting: compute.setting,
         });
     }
     evict_idle_within(both - expected);
@@ -249,10 +254,15 @@ pub(super) fn admit_load(versions: &[VersionId], expected: u64) -> Result<(), Ca
 
 /// Whether a version of `expected` bytes could never be kept within
 /// `warren.max_cache_memory` beside the transient vectors: the bytes held
-/// by transient vectors and the cap, if so.
-pub(super) fn unfit(expected: u64) -> Option<(u64, u64)> {
+/// by transient vectors, the cap and the setting compute memory is
+/// charged against, if so.
+pub(super) fn unfit(expected: u64) -> Option<(u64, Bound, &'static str)> {
     let (transient, limit) = (transient_bytes(), max_cache_memory());
-    (expected > limit.saturating_sub(transient)).then_some((transient, limit))
+    (expected > limit.value.saturating_sub(transient)).then_some((
+        transient,
+        limit,
+        max_compute_memory().setting,
+    ))
 }
 
 /// Evicts cached versions and persisted vectors that the statement has
@@ -263,14 +273,14 @@ pub(super) fn unfit(expected: u64) -> Option<(u64, u64)> {
 /// Within the cap it returns after summing the bytes held, without
 /// allocating.
 pub(crate) fn trim() {
-    trim_within(max_cache_memory());
+    trim_within(max_cache_memory().value);
 }
 
 /// Before loading a version of about `expected` bytes, evicts as [`trim`]
 /// does until the cache fits the cap with room for it, so the load takes
 /// the cache past the cap only by what the statement cannot evict.
 pub(super) fn make_room(expected: u64) {
-    trim_within(max_cache_memory().saturating_sub(expected));
+    trim_within(max_cache_memory().value.saturating_sub(expected));
 }
 
 /// Evicts as [`trim`] does until the cache fits in `within` bytes, or holds
@@ -326,14 +336,21 @@ impl Reloadable {
 }
 
 /// The notice for version `version`, of `bytes`, which cannot be kept
-/// within `limit` beside `transient` bytes of transient vectors.
-pub(super) fn unfit_notice(version: VersionId, bytes: u64, limit: u64, transient: u64) -> String {
+/// within `limit` beside `transient` bytes of transient vectors, the
+/// excess charged to compute memory under setting `compute`.
+pub(super) fn unfit_notice(
+    version: VersionId,
+    bytes: u64,
+    limit: Bound,
+    transient: u64,
+    compute: &str,
+) -> String {
+    let Bound { value, setting } = limit;
     format!(
-        "version {version} ({bytes} bytes) cannot be kept within warren.max_cache_memory \
-         ({limit} bytes, {transient} of them held by transient vectors), so it is held only \
-         until the statement ends, the bytes past the cap charged to \
-         warren.max_compute_memory, and reloaded by each statement that reads it; raise \
-         warren.max_cache_memory"
+        "version {version} ({bytes} bytes) cannot be kept within {setting} ({value} bytes, \
+         {transient} of them held by transient vectors), so it is held only until the \
+         statement ends, the bytes past the cap charged to {compute}, and reloaded by each \
+         statement that reads it; raise {setting}"
     )
 }
 
@@ -343,7 +360,7 @@ pub(super) fn unfit_notice(version: VersionId, bytes: u64, limit: u64, transient
 /// refusing, it drops the transient vectors of versions that no longer
 /// exist, which may have been dropped without a load since to prune them.
 pub(crate) fn admit_transient(replaced: u64, added: u64) -> Result<(), CacheError> {
-    let limit = max_cache_memory();
+    let Bound { value: limit, setting } = max_cache_memory();
     if admits(transient_bytes(), replaced, added, limit) {
         return Ok(());
     }
@@ -357,6 +374,7 @@ pub(crate) fn admit_transient(replaced: u64, added: u64) -> Result<(), CacheErro
             in_use,
             own: role_transient_bytes(),
             limit,
+            setting,
         }),
     }
 }
@@ -370,6 +388,7 @@ mod tests {
     use warren_core::graph::FixedKeys;
 
     use crate::cache::end_statement;
+    use crate::ceiling::set_in_configuration;
     use crate::fixture::{failure, refresh, ring, segment_reads};
 
     /// Graphs `names`: rings of 2,000 nodes, each about 94 kB loaded.
@@ -511,6 +530,30 @@ mod tests {
         Ok(())
     }
 
+    /// `warren.cache_memory_limit` bounds the session's
+    /// `warren.max_cache_memory`, and the refusal names it.
+    #[pg_test]
+    fn the_administrators_cache_memory_limit_bounds_transient_vectors() -> Result<(), Error> {
+        rings(&["a"])?;
+        Spi::run("SET LOCAL warren.max_cache_memory = '4GB'")?;
+        set_in_configuration(c"warren.cache_memory_limit", c"64kB");
+        let mut refused = Ok(None);
+        for name in ["w", "x", "y", "z", "v"] {
+            refused = failure(&format!("warren.vector_const('a', '{name}', 1, persist := false)"));
+        }
+        set_in_configuration(c"warren.cache_memory_limit", c"-1");
+        assert_eq!(
+            refused?.as_deref(),
+            Some(
+                "53400: cache memory limit exceeded: a transient vector of 16000 bytes would \
+                 bring transient vectors to 80000 bytes, over warren.cache_memory_limit (65536 \
+                 bytes); 64000 are in use, 64000 of them this role's; persist it, drop \
+                 transient vectors or raise warren.cache_memory_limit"
+            )
+        );
+        Ok(())
+    }
+
     #[pg_test]
     fn the_refusal_reports_the_callers_share_of_the_transient_vectors() -> Result<(), Error> {
         rings(&["a"])?;
@@ -603,7 +646,8 @@ mod tests {
 
     #[pg_test]
     fn the_unfit_notice_names_the_entry_and_the_cap() {
-        let notice = super::unfit_notice(12, 94_000, 65_536, 16_000);
+        let cap = super::Bound { value: 65_536, setting: "warren.max_cache_memory" };
+        let notice = super::unfit_notice(12, 94_000, cap, 16_000, "warren.max_compute_memory");
         assert_eq!(
             notice,
             "version 12 (94000 bytes) cannot be kept within warren.max_cache_memory (65536 \

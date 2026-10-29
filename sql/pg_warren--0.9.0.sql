@@ -1308,7 +1308,7 @@ VOLATILE PARALLEL UNSAFE LANGUAGE c AS 'MODULE_PATHNAME', 'harmonic_centrality_w
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/pg_warren/src/activity/backends.rs:120
+-- crates/pg_warren/src/activity/backends.rs:146
 -- pg_warren::activity::backends::backends
 
 CREATE FUNCTION warren."backends"() RETURNS TABLE (
@@ -1330,7 +1330,8 @@ CREATE FUNCTION warren."backends"() RETURNS TABLE (
 	"private_evictions" bigint,
 	"shared_evictions" bigint,
 	"refusals" jsonb,
-	"since" timestamptz
+	"since" timestamptz,
+	"compute_threads" bigint
 )
 VOLATILE PARALLEL SAFE
 LANGUAGE c AS 'MODULE_PATHNAME', 'backends_wrapper';
