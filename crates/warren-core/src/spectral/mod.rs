@@ -22,9 +22,9 @@ mod tests;
 mod working_set;
 
 pub use distance::{
-    align, align_graph, align_ids, degree_distance, edit_distance, embedding_distance,
-    spectral_distance, subspace_distance, AlignedGraph, ComparedRows, DegreeDistance,
-    EdgeSetChange, EditDistance, EmbeddingDistance, IdAlignment, RelationChange, SpectralDistance,
+    align, align_ids, aligned_edit_distance, degree_distance, edit_distance, embedding_distance,
+    spectral_distance, subspace_distance, ComparedRows, DegreeDistance, EdgeSetChange,
+    EditDistance, EmbeddingDistance, IdAlignment, RelationChange, SpectralDistance,
     SubspaceDistance,
 };
 pub use error::SpectralError;
