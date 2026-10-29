@@ -12,6 +12,7 @@ dataset's ids."""
 import csv
 import random
 import time
+import warnings
 
 import igraph as ig
 
@@ -33,7 +34,8 @@ class IGraphEngine:
     def describe(self):
         return {"version": ig.__version__, "threads": 1,
                 "settings": {"pagerank": "PRPACK (solved)", "louvain": "community_multilevel",
-                             "leiden": "community_leiden, modularity, 2 iterations", "seed": LOUVAIN_SEED}}
+                             "leiden": "community_leiden, modularity, 2 iterations", "seed": LOUVAIN_SEED,
+                             "paths": "get_shortest_path per pair (BFS or Dijkstra, stopping at the target)"}}
 
     def load(self):
         started = time.perf_counter()
@@ -85,9 +87,21 @@ class IGraphEngine:
         return self.graph.distances(source=[self.index[workload.source]], mode="out")[0]
 
     def _paths(self, workload):
-        weights = self._weights() if workload.weighted else None
-        return [self.graph.distances(source=[self.index[a]], target=[self.index[b]], weights=weights,
-                                     mode="out")[0][0] for a, b in workload.pairs]
+        # get_shortest_path stops once it reaches the target and reads
+        # neighbours lazily; distances with a target also stops there, but
+        # first builds the whole graph's adjacency list on every call.
+        weights = self.graph.es["weight"] if workload.weighted else None
+        found = []
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # "Couldn't reach some vertices"
+            for a, b in workload.pairs:
+                edges = self.graph.get_shortest_path(self.index[a], to=self.index[b], weights=weights, mode="out",
+                                                     output="epath")
+                if not edges and a != b:
+                    found.append(None)
+                else:
+                    found.append(sum(weights[e] for e in edges) if weights else len(edges))
+        return found
 
     def _pagerank(self, workload):
         return self.graph.pagerank(directed=True, weights=self._weights(), implementation="prpack")
@@ -124,8 +138,7 @@ class IGraphEngine:
         if kind == "reach":
             return result
         if kind == "paths":
-            return {f"{a}->{b}": None if found == float("inf") else (found if workload.weighted else int(found))
-                    for (a, b), found in zip(workload.pairs, result)}
+            return {f"{a}->{b}": found for (a, b), found in zip(workload.pairs, result)}
         if kind == "depths":
             return {name: int(d) for name, d in zip(self.names, result) if d != float("inf")}
         named = dict(zip(self.names, result))
