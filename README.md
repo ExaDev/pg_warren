@@ -330,6 +330,9 @@ Signatures are in `\df warren.*` and in DESIGN.md (§6, §8, §9.3).
 - [docs/limits.md](docs/limits.md): settings, the limits an administrator
   sets for a shared instance, memory, measured performance, known
   limitations.
+- [docs/security.md](docs/security.md): for administrators and providers:
+  what it installs, privileges, failure model, resource limits, test
+  evidence and releases.
 - [DESIGN.md](DESIGN.md): the full design and the reasons for it.
 
 Every SQL example in the README and `docs/` runs in CI, in
