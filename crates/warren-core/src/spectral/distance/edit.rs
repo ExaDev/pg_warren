@@ -9,8 +9,12 @@
 //! are matched by name: sibling staged versions, and other graphs, may give
 //! one relation index to different relations.
 
+mod aligned;
+
+pub use aligned::aligned_edit_distance;
+
 use crate::graph::{GraphCsr, RelationDictionary};
-use crate::version::{relation_deltas, EdgeDelta};
+use crate::version::{relation_deltas, EdgeDelta, RelationDelta};
 
 /// How one edge set changed between two versions.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -51,7 +55,11 @@ pub fn edit_distance(
     before: (&RelationDictionary, &GraphCsr),
     after: (&RelationDictionary, &GraphCsr),
 ) -> EditDistance {
-    let deltas = relation_deltas(before, after);
+    summarised(relation_deltas(before, after))
+}
+
+/// The `edit` distance of each relation's edge delta and of their sum.
+fn summarised(deltas: Vec<RelationDelta>) -> EditDistance {
     let overall = deltas.iter().fold(EdgeDelta::default(), |sum, delta| EdgeDelta {
         before: sum.before + delta.edges.before,
         after: sum.after + delta.edges.after,

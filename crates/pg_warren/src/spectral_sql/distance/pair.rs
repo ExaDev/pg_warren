@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use warren_core::compute::AnyVector;
 use warren_core::spectral::{
-    align, align_graph, align_ids, edit_distance, EditDistance, IdAlignment, Resources,
+    align, align_ids, aligned_edit_distance, edit_distance, EditDistance, IdAlignment, Resources,
 };
 use warren_core::version;
 
@@ -73,20 +73,16 @@ impl<E: CachedIds> Pair<E> {
     }
 
     /// The `edit` distance between the versions, relations matched by name.
-    /// For versions of two graphs, `after`'s CSRs are rebuilt in the shared
-    /// dense ids first (charged to the budget).
+    /// For versions of two graphs, `after`'s edges are mapped into the
+    /// shared dense ids as they are read, so nothing is rebuilt.
     pub(super) fn edit_distance(&self) -> Result<EditDistance, SpectralSqlError> {
-        let before = (&self.before.loaded.relations, &self.before.loaded.graph);
         let Some(alignment) = &self.alignment else {
-            let after = &self.after.loaded;
+            let (before, after) = (&self.before.loaded, &self.after.loaded);
+            let before = (&before.relations, &before.graph);
             return Ok(edit_distance(before, (&after.relations, &after.graph)));
         };
-        let pool = workers()?;
-        let memory = &self.before.memory;
-        let mut resources =
-            Resources { workers: &pool, memory, interrupts: &mut PostgresInterrupts };
-        let aligned = align_graph(&mut resources, &self.after.loaded.version()?, alignment)?;
-        Ok(edit_distance(before, (&alignment.relations, &aligned.graph)))
+        let (this, other) = (self.before.loaded.version()?, self.after.loaded.version()?);
+        Ok(aligned_edit_distance(&mut PostgresInterrupts, &this, &other, alignment)?)
     }
 
     /// Vector `name` of `before`.
