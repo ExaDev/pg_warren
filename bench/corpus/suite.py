@@ -29,7 +29,7 @@ HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(HERE.parent), str(HERE.parent.parent / "test")]
 
 from corpus import checks, fetch, ids, keepset, manifest, oracle, performance, summary, tables  # noqa: E402
-from corpus.head_to_head import answers, report, timing, workloads  # noqa: E402
+from corpus.head_to_head import answers, pggraph_engine, report, timing, workloads  # noqa: E402
 from harness.cluster import Cluster  # noqa: E402
 from soak import SETTINGS, hardware, installed_library, provenance  # noqa: E402
 
@@ -137,11 +137,15 @@ def command_time(args, datasets):
     return 0
 
 
-def _engine(name, args, cluster, server, dataset, directory):
+def _engine(name, args, cluster, server, dataset, directory, reference):
     from corpus.head_to_head import cypher_engine, gds_engine, igraph_engine, warren_engine
     if name == "pg_warren":
         return warren_engine.WarrenEngine(cluster, dataset, directory, tables.create_graph_sql(dataset, "g"),
                                           args.threads, args.timeout)
+    if name == "pggraph":
+        return pggraph_engine.PgGraphEngine(cluster, dataset, directory, args.timeout,
+                                            pggraph_engine.library(installed_library(args.pg_config).parent),
+                                            pggraph_engine.pin(), reference.eccentricity)
     if name == "igraph":
         return igraph_engine.IGraphEngine(dataset, directory)
     if name == "neo4j-cypher":
@@ -163,8 +167,9 @@ def _neo4j(args, engines):
 def command_head_to_head(args, datasets):
     engines = args.engine or list(report.ENGINES)
     server = _neo4j(args, engines)
-    clustered = (Cluster(args.pg_config, args.runas, parent=args.parent, settings=SETTINGS) if "pg_warren" in engines
-                 else contextlib.nullcontext())
+    settings = pggraph_engine.cluster_settings(SETTINGS, engines)
+    clustered = (Cluster(args.pg_config, args.runas, parent=args.parent, settings=settings)
+                 if {"pg_warren", "pggraph"} & set(engines) else contextlib.nullcontext())
     with clustered as cluster, contextlib.closing(server) if server else contextlib.nullcontext():
         for dataset in datasets:
             directory = _fetched(args, dataset)
@@ -177,7 +182,7 @@ def command_head_to_head(args, datasets):
                       "repeat": args.repeat, "budget_seconds": args.budget, "timeout_seconds": args.timeout,
                       "workloads": [dataclasses.asdict(w) for w in planned], "engines": {}}
             for name in engines:
-                engine = _engine(name, args, cluster, server, dataset, directory)
+                engine = _engine(name, args, cluster, server, dataset, directory, reference)
                 try:
                     result["engines"][name] = timing.run(engine, planned, reference.check, args.repeat, args.budget)
                 finally:

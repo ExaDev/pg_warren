@@ -37,6 +37,10 @@ class Reference:
         kind = "community" if workload.kind in ("louvain", "leiden") else workload.kind
         return getattr(self, f"_{kind}")(workload, answer)
 
+    def eccentricity(self, start):
+        """The most hops from `start` to a node it reaches."""
+        return max(self.reference.bfs_depths(start).values())
+
     def _reach(self, workload, count):
         depths = self.reference.bfs_depths(workload.source)
         expected = sum(1 for depth in depths.values() if depth <= workload.depth)
