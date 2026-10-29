@@ -108,6 +108,14 @@
   0.07–0.11 ms against 0.04 ms for `SELECT 1`, on PG 16 and 18. Half of
   the server's share is the one catalog read that resolves the graph
   (DESIGN.md §13, "After 0.7.0"). Nothing in traversal changed.
+- **Persisted vector writes reuse saved plans.** The statements that lock
+  the graph and version and write a vector's row and chunks are planned
+  once per backend and kept, instead of parsed and planned on every call
+  (DESIGN.md §6.2). On a 77-node graph a persisted `vector_const` takes
+  0.22 ms instead of 0.28 ms and `pagerank` 0.43 ms instead of 0.53 ms
+  (pgbench, one connection, `synchronous_commit = off`, PG 18). They are
+  planned again after `DISCARD ALL` or a change to the catalog's tables,
+  and a standby still refuses the write with 25006.
 
 ### Documentation
 

@@ -1,15 +1,12 @@
 //! Graph definitions: the rows of `warren.graphs` (DESIGN.md §5.1).
 
-use std::cell::OnceCell;
-
 use pgrx::prelude::*;
-use pgrx::spi::{OwnedPreparedStatement, SpiTupleTable};
-use pgrx::PgOid;
+use pgrx::spi::SpiTupleTable;
 
 use super::version::VersionId;
 use super::CatalogError;
 use crate::access::{as_catalog_owner, require_owner};
-use crate::read_only::{in_parallel_mode, read_one, select, writing};
+use crate::read_only::{read_one, select_saved, writing};
 use crate::source::IdType;
 use warren_core::graph::NodeOrder;
 
@@ -52,11 +49,6 @@ const REREAD: &str = "SELECT g.current_version, v.version_id, g.node_order, g.ow
 pub(super) const NEW_OWNER: &str = "owner = $2::oid::regrole, readers = ARRAY(
          SELECT r.reader FROM pg_catalog.unnest(readers) WITH ORDINALITY AS r (reader, position)
          WHERE r.reader::oid <> $2 ORDER BY r.position)::regrole[]";
-
-thread_local! {
-    /// The saved plan of [`FIND`].
-    static FIND_PLAN: OnceCell<OwnedPreparedStatement> = const { OnceCell::new() };
-}
 
 /// Where a graph's versions come from (DESIGN.md §5.1, §6.6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,21 +163,9 @@ impl GraphDefinition {
     pub(crate) fn find(name: &str) -> Result<Self, CatalogError> {
         as_catalog_owner(|| {
             Spi::connect(|client| {
-                if in_parallel_mode() {
-                    return select(client, FIND, Some(1), &[name.into()], |rows| {
-                        Self::from_row(name, &rows.first())
-                    });
-                }
-                let row = FIND_PLAN.with(|plan| {
-                    if plan.get().is_none() {
-                        let prepared = client.prepare(FIND, &[PgOid::from(pg_sys::TEXTOID)])?;
-                        // Set only here, after the check above: cannot fail.
-                        let _ = plan.set(prepared.keep());
-                    }
-                    let plan = plan.get().ok_or(pgrx::spi::Error::InvalidPosition)?;
-                    Ok::<_, pgrx::spi::Error>(client.select(plan, Some(1), &[name.into()])?.first())
-                })?;
-                Self::from_row(name, &row)
+                select_saved(client, FIND, Some(1), &[name.into()], |rows| {
+                    Self::from_row(name, &rows.first())
+                })
             })
         })
     }
