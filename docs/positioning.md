@@ -55,7 +55,9 @@ its scope extends beyond individual path queries.
 
 The comparison below uses **pgGraph 1.2.1**, its latest published release
 checked on **29 October 2026**, and pg_warren's current documented API.
-It compares supported workflows, not measured speed.
+It compares supported workflows, not measured speed. The
+[feature matrix](../README.md#features) sets the same differences, both
+ways, beside igraph and Neo4j.
 [pgGraph release and overview](https://github.com/Evokoa/pgGraph/tree/v1.2.1),
 [SQL API](https://github.com/Evokoa/pgGraph/blob/v1.2.1/docs/user_guide/api-reference.mdx).
 
@@ -108,13 +110,35 @@ for backup permissions, upgrades, pooling and replicas.
 
 ### Query features and access
 
-pgGraph provides schema and relationship discovery, trigger-based sync,
-source-row hydration, query-time source RLS, and bounded GQL/openCypher
-profiles. Those are useful capabilities if your priority is an application
-querying a changing relational network. pg_warren uses explicit node and
-edge SQL, graph grants, and refreshes; it does not offer a Cypher or GQL
-query language. Review its [access model](semantics.md#access) before
-assuming the authorization behaviour is interchangeable.
+Both return results keyed by your own ids, so they join straight to your
+tables: pgGraph by source table and primary key, pg_warren through its id
+map. pgGraph also provides schema and relationship discovery from keys,
+trigger-based sync, and bounded GQL/openCypher profiles. Those are useful
+capabilities if your priority is an application querying a changing
+relational network. pg_warren uses explicit node and edge SQL, graph
+grants, and refreshes. It matches path patterns with
+[`warren.walk`](traversal.md#walk-typed-path-patterns): steps by relation,
+direction, node filter and hop range, evaluated inside the engine. It has no
+Cypher or GQL query language, so variables and joins across a pattern are
+written in SQL around the walks.
+
+Both apply source-table row-level security, at different times. pg_warren
+applies it once, when a graph is built, as the graph's owner, like a
+materialised view: readers with a grant on the graph see what the owner
+saw. To separate tenants, build a graph per tenant or role and grant each
+separately. pgGraph's documentation says it evaluates the caller's node and
+relationship policies for each query and excludes hidden rows before
+reachability, paths, components or aggregates are computed, so a hidden
+intermediate node blocks the nodes behind it.
+
+When several edge rows link the same two nodes in the same relation,
+pg_warren deduplicates them at build time, so a result cannot say which of
+those rows a path used. pgGraph keeps them apart, and a GQL relationship
+value carries the edge row's columns by its primary key.
+
+Review pg_warren's [access model](semantics.md#access) and pgGraph's
+[RLS boundary](https://github.com/Evokoa/pgGraph/blob/v1.2.1/docs/user_guide/supported_features.mdx#current-rls-boundary)
+before assuming the authorization behaviour is interchangeable.
 [pgGraph supported features](https://github.com/Evokoa/pgGraph/blob/v1.2.1/docs/user_guide/supported_features.mdx),
 [limits and fit](https://github.com/Evokoa/pgGraph/blob/v1.2.1/docs/user_guide/limitations-and-fit.mdx).
 

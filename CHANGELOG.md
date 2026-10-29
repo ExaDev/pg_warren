@@ -34,6 +34,14 @@
   what the two predefined roles also allow. `test/dump.py` now checks the
   whole round trip with no superuser, as on RDS, then `warren.drop_owned`
   and `DROP EXTENSION` by the same non-superuser.
+- The README's feature matrix (How it compares) puts pgGraph 1.2.1 first,
+  as the closest alternative inside PostgreSQL, with rows for the
+  differences both ways: where pgGraph has the tick (GQL/openCypher,
+  trigger sync, discovery from keys) and where pg_warren does (versions,
+  in-transaction builds, standbys, whole-graph algorithms, semirings).
+  pgGraph's cells are sourced from its v1.2.1 documentation, and
+  `docs/positioning.md` points to the matrix and spells out the nuanced
+  differences (row-level security, parallel edge rows).
 
 ## 0.8.0 — native PageRank and Leiden, leaner calls (2026-10-29)
 
