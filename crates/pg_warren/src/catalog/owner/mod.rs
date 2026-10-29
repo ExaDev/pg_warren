@@ -10,7 +10,7 @@ use pgrx::prelude::*;
 use super::create_graph::{writable_notice, writable_schemas};
 use super::{CatalogError, GraphDefinition, GraphSource};
 use crate::access::{
-    as_role, entry, require_adopter, require_can_become, require_owner, with_read_only,
+    as_graph_owner, entry, require_adopter, require_can_become, require_owner, with_read_only,
     with_search_path, AccessError,
 };
 use crate::source::{check_edge_columns, require_node_id_type, source_columns};
@@ -67,7 +67,7 @@ fn transfer(name: &str, owner: pg_sys::Oid) -> Result<(), CatalogError> {
 /// run them, and checks their columns: a role that cannot read them is
 /// refused with 42501, columns that no longer match with 42804.
 fn open_sources_as(graph: &GraphDefinition, owner: pg_sys::Oid) -> Result<(), CatalogError> {
-    let (nodes, edges) = as_role(owner, || {
+    let (nodes, edges) = as_graph_owner(owner, &graph.name, || {
         with_search_path(&graph.search_path, || {
             with_read_only(|| {
                 Ok::<_, CatalogError>((
@@ -191,6 +191,29 @@ mod tests {
         Spi::run("GRANT so_new TO so_mover")?;
         assert_eq!(as_role("so_mover", "warren.set_owner('so', 'so_new')")?, None);
         assert_eq!(owner()?.as_deref(), Some("so_new"));
+        Ok(())
+    }
+
+    /// Opening the sources as a superuser (planning may run their
+    /// functions) is a superuser's to do, as running them is (DESIGN.md §7,
+    /// §14 item 51): a member of a superuser role is not one.
+    #[pg_test]
+    fn only_a_superuser_may_make_a_superuser_the_owner() -> Result<(), Error> {
+        graph()?;
+        Spi::run(
+            "CREATE ROLE so_super SUPERUSER;
+             CREATE ROLE so_mover; GRANT so_owner, so_super TO so_mover",
+        )?;
+        assert_eq!(
+            as_role("so_mover", "warren.set_owner('so', 'so_super')")?.as_deref(),
+            Some(
+                "42501: only a superuser may run the source queries of graph \"so\" as \
+                 superuser \"so_super\""
+            )
+        );
+        assert_eq!(owner()?.as_deref(), Some("so_owner"));
+        assert_eq!(failure("warren.set_owner('so', 'so_super')")?, None);
+        assert_eq!(owner()?.as_deref(), Some("so_super"));
         Ok(())
     }
 

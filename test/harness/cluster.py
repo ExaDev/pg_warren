@@ -11,10 +11,17 @@ standby's `primary` may itself be a standby (cascading replication).
 initdb and postgres refuse to run as root; as root the cluster runs as
 `runas` (default `postgres`) through sudo, as in CONTRIBUTING.md. `parent`
 puts the cluster directory somewhere other than the system temporary
-directory, and `settings` adds postgresql.conf lines."""
+directory, and `settings` adds postgresql.conf lines.
+
+Given a cluster to `upgrade`, the cluster is a new cluster of its own
+binaries' major that `pg_upgrade` moves the old one's databases into, by
+`transfer`: "copy" copies the old cluster's files, "link" hard-links them
+(`--link`, as managed services upgrade a major). The old cluster then
+shares its files with the new one and refuses to start again."""
 
 import os
 import pwd
+import re
 import shutil
 import subprocess
 import sys
@@ -24,17 +31,25 @@ from pathlib import Path
 from .database import Database
 
 PORT = "5432"
+# pg_upgrade's options for each transfer mode: copy is its default.
+TRANSFERS = {"copy": (), "link": ("--link",)}
 SUPERUSER = "postgres"
 
 
 class Cluster:
-    def __init__(self, pg_config, runas="postgres", keep=False, parent=None, settings=(), primary=None):
+    def __init__(self, pg_config, runas="postgres", keep=False, parent=None, settings=(), primary=None,
+                 upgrade=None, transfer="copy", backup=None):
+        self.pg_config = pg_config
         self.bindir = Path(_pg_config(pg_config, "--bindir"))
         self.runas = runas if os.geteuid() == 0 else None
         self.keep = keep
         self.parent = parent
         self.settings = tuple(settings)
         self.primary = primary
+        self.upgrade = upgrade
+        self.transfer = transfer
+        self.backup = backup
+        self.linked = False
         self.directory = None
 
     def __enter__(self):
@@ -54,19 +69,77 @@ class Cluster:
             os.chown(self.directory, user.pw_uid, user.pw_gid)
         data = self.directory / "data"
         self._create(data)
-        with open(data / "postgresql.conf", "a") as conf:
-            conf.write(f"listen_addresses = ''\nunix_socket_directories = '{self.directory}'\nport = {PORT}\n"
-                       "fsync = off\nsynchronous_commit = off\nfull_page_writes = off\n")
-            conf.writelines(f"{line}\n" for line in self.settings)
+        self.configure(["listen_addresses = ''", f"unix_socket_directories = '{self.directory}'", f"port = {PORT}",
+                        "fsync = off", "synchronous_commit = off", "full_page_writes = off", *self.settings])
+        if self.upgrade is not None:
+            self._upgrade()
         self.start()
 
     def _create(self, data):
-        """Makes the data directory `data`: a new cluster, or a base backup of `primary`."""
-        if self.primary is None:
-            self._run("initdb", "-D", data, "-U", SUPERUSER, "-A", "trust", "-E", "UTF8", "--locale=C", "--no-sync")
+        """Makes the data directory `data`: a new cluster, a base backup of
+        `primary`, a new cluster for `upgrade`, or a copy of `backup`."""
+        if self.backup is not None:
+            self._restore(data)
+        elif self.primary is None:
+            self._run("initdb", "-D", data, "-U", SUPERUSER, "-A", "trust", "-E", "UTF8", "--locale=C", "--no-sync",
+                      *self._checksums())
         else:
             self._run("pg_basebackup", "-D", data, "-R", "-X", "stream", "-c", "fast", "--no-sync",
                       "-h", self.primary.directory, "-p", PORT, "-U", SUPERUSER)
+
+    def _checksums(self):
+        """initdb's checksum option for a cluster that upgrades `upgrade`:
+        the old cluster's (pg_upgrade refuses a difference; initdb enables
+        them by default from PG 18)."""
+        if self.upgrade is None:
+            return ()
+        if self.upgrade.checksums():
+            return ("--data-checksums",)
+        return ("--no-data-checksums",) if self.major() >= 18 else ()
+
+    def _upgrade(self):
+        """Stops `upgrade` and moves its databases into this cluster's
+        (stopped) data directory with pg_upgrade by `transfer`, after its
+        `--check`. Linked, the old cluster is marked so that it never starts
+        again: its files are the new cluster's. pg_upgrade renames its
+        `global/pg_control` once it links, which shows that it did."""
+        if self.upgrade.running():
+            self.upgrade.stop()
+        arguments = ("-b", self.upgrade.bindir, "-B", self.bindir, "-d", self.upgrade.directory / "data",
+                     "-D", self.directory / "data", "-s", self.directory, "-U", SUPERUSER, *TRANSFERS[self.transfer])
+        self._run("pg_upgrade", "--check", *arguments)
+        self.upgrade.linked = self.transfer == "link"
+        self._run("pg_upgrade", *arguments)
+        disabled = (self.upgrade.directory / "data" / "global" / "pg_control.old").exists()
+        if self.upgrade.linked and not disabled:
+            raise RuntimeError("pg_upgrade --link left the old cluster's pg_control: its files were not linked")
+
+    def _restore(self, data):
+        """Copies `backup` into `data`, owned by the cluster's user, to start
+        in targeted recovery."""
+        shutil.copytree(self.backup, data)
+        (data / "recovery.signal").touch()
+        data.chmod(0o700)
+        if self.runas:
+            user = pwd.getpwnam(self.runas)
+            for path in (data, *data.rglob("*")):
+                os.chown(path, user.pw_uid, user.pw_gid, follow_symlinks=False)
+
+    def base_backup(self, destination):
+        """Takes a base backup of the running cluster into `destination`
+        (inside its directory), with the WAL that makes it consistent."""
+        self._run("pg_basebackup", "-D", destination, "-X", "stream", "-c", "fast", "--no-sync",
+                  "-h", self.directory, "-p", PORT, "-U", SUPERUSER)
+
+    def checksums(self):
+        """Whether the cluster has data checksums (pg_controldata)."""
+        done = subprocess.run([str(self.bindir / "pg_controldata"), str(self.directory / "data")],
+                              capture_output=True, text=True, check=True)
+        return re.search(r"^Data page checksum version:\s+0$", done.stdout, re.MULTILINE) is None
+
+    def major(self):
+        """The Postgres major version of the cluster's binaries."""
+        return major(self.pg_config)
 
     @property
     def log(self):
@@ -74,11 +147,28 @@ class Cluster:
         return self.directory / "server.log"
 
     def start(self):
+        self._refuse_if_linked()
         self._run("pg_ctl", "-D", self.directory / "data", "-l", self.log, "-w", "start")
 
     def restart(self):
         """Restarts the server, for a setting that needs it or a clean shared memory."""
+        self._refuse_if_linked()
         self._run("pg_ctl", "-D", self.directory / "data", "-l", self.log, "-m", "fast", "-w", "restart")
+
+    def _refuse_if_linked(self):
+        """Raises if pg_upgrade --link has given the cluster's files to another cluster."""
+        if self.linked:
+            raise RuntimeError(f"cluster {self.directory} was linked into an upgraded cluster: it must not start")
+
+    def configure(self, settings):
+        """Appends `settings` to postgresql.conf, where they override the
+        earlier lines; a restart (or reload) applies them."""
+        with open(self.directory / "data" / "postgresql.conf", "a") as conf:
+            conf.writelines(f"{line}\n" for line in settings)
+
+    def stop(self):
+        """Stops the server cleanly (`pg_ctl stop -m fast`)."""
+        self._run("pg_ctl", "-D", self.directory / "data", "-m", "fast", "-w", "stop")
 
     def promote(self):
         """Ends a standby's recovery (`pg_ctl promote`) and waits until it accepts writes."""
@@ -102,7 +192,7 @@ class Cluster:
         nothing else ended the run, so it never hides that error."""
         try:
             if self.running():
-                self._run("pg_ctl", "-D", self.directory / "data", "-m", "fast", "-w", "stop")
+                self.stop()
         except RuntimeError as stop:
             if kind is None:
                 raise
@@ -139,6 +229,11 @@ class Cluster:
         done = subprocess.run(command, cwd=self.directory, capture_output=True, text=True)
         if done.returncode != 0:
             raise RuntimeError(f"{program} failed: {done.stdout}{done.stderr}")
+
+
+def major(pg_config):
+    """The Postgres major version of `pg_config`'s binaries."""
+    return int(re.match(r"\d+", _pg_config(pg_config, "--version").split()[1]).group())
 
 
 def _pg_config(pg_config, option):

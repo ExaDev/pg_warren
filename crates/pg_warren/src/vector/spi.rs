@@ -4,17 +4,44 @@
 
 use pgrx::prelude::*;
 use pgrx::spi::SpiHeapTupleData;
-use pgrx::PgOid;
 use warren_core::compute::Dtype;
 
 use super::{Binding, Checked, ChunkSource, VectorError, VectorId, VectorRecord, VectorStore};
 use crate::access::as_catalog_owner;
 use crate::catalog::VersionId;
-use crate::read_only::{read_one, select, writing};
+use crate::read_only::{read_one, select, update_saved, writing};
 use crate::segment::{each_chunk, EachChunk};
 
-/// `warren.vectors` and `warren.vector_chunks`.
+/// `warren.vectors` and `warren.vector_chunks`. Every statement that
+/// writes or locks their rows runs through a saved plan, planned once per
+/// backend (`read_only::saved`).
 pub(crate) struct SpiVectorStore;
+
+/// [`lock_version`]'s lock on the graph's row.
+const LOCK_GRAPH: &str = "SELECT FROM warren.graphs WHERE graph_id = $1 FOR KEY SHARE";
+
+/// [`lock_version`]'s lock on the version's row.
+const LOCK_VERSION: &str = "SELECT FROM warren.versions WHERE version_id = $1 FOR KEY SHARE";
+
+/// [`SpiVectorStore::insert`]'s row: its vector id, or none if a row of
+/// that name is there.
+const INSERT: &str = "INSERT INTO warren.vectors
+                          (graph_id, version_id, name, dtype, width, length, created_by)
+                      VALUES ($1, $2, $3, $4, $5, $6, $7)
+                      ON CONFLICT (graph_id, version_id, name) DO NOTHING
+                      RETURNING vector_id";
+
+/// [`SpiVectorStore::write_chunks`]'s chunk.
+const INSERT_CHUNK: &str = "INSERT INTO warren.vector_chunks (vector_id, chunk_no, data)
+                            VALUES ($1, $2, $3)";
+
+/// [`SpiVectorStore::lock`]'s lock: by id alone, and the creator as
+/// locked.
+const LOCK: &str = "SELECT created_by::oid FROM warren.vectors WHERE vector_id = $1 FOR UPDATE";
+
+/// [`SpiVectorStore::delete`]'s delete: by id and creator.
+const DELETE: &str = "DELETE FROM warren.vectors WHERE vector_id = $1 AND created_by::oid = $2
+                      RETURNING vector_id";
 
 /// A `vectors` row as (vector_id, name, dtype, width, length,
 /// created_by::oid).
@@ -43,19 +70,9 @@ fn record(row: &SpiHeapTupleData<'_>) -> Result<VectorRecord, VectorError> {
 fn lock_version(binding: &Binding<'_>) -> Result<(), VectorError> {
     let locked = as_catalog_owner(|| {
         writing(|client| {
-            client.update(
-                "SELECT FROM warren.graphs WHERE graph_id = $1 FOR KEY SHARE",
-                None,
-                &[binding.graph_id.into()],
-            )?;
+            update_saved(client, LOCK_GRAPH, None, &[binding.graph_id.into()])?;
             Ok::<_, VectorError>(
-                client
-                    .update(
-                        "SELECT FROM warren.versions WHERE version_id = $1 FOR KEY SHARE",
-                        None,
-                        &[binding.version.into()],
-                    )?
-                    .len(),
+                update_saved(client, LOCK_VERSION, None, &[binding.version.into()])?.len(),
             )
         })
     })?;
@@ -112,12 +129,9 @@ impl VectorStore for SpiVectorStore {
         // as a concurrent write rather than as a raw unique_violation.
         let id = as_catalog_owner(|| {
             writing(|client| {
-                let rows = client.update(
-                    "INSERT INTO warren.vectors
-                         (graph_id, version_id, name, dtype, width, length, created_by)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7)
-                     ON CONFLICT (graph_id, version_id, name) DO NOTHING
-                     RETURNING vector_id",
+                let rows = update_saved(
+                    client,
+                    INSERT,
                     None,
                     &[
                         binding.graph_id.into(),
@@ -149,18 +163,10 @@ impl VectorStore for SpiVectorStore {
     ) -> Result<(), VectorError> {
         as_catalog_owner(|| {
             writing(|client| {
-                let insert = client.prepare_mut(
-                    "INSERT INTO warren.vector_chunks (vector_id, chunk_no, data)
-                     VALUES ($1, $2, $3)",
-                    &[
-                        PgOid::from(pg_sys::INT8OID),
-                        PgOid::from(pg_sys::INT4OID),
-                        PgOid::from(pg_sys::BYTEAOID),
-                    ],
-                )?;
                 let mut chunk_no = 0i32;
                 source(&mut |data| {
-                    client.update(&insert, None, &[vector.into(), chunk_no.into(), data.into()])?;
+                    let args = [vector.into(), chunk_no.into(), data.into()];
+                    update_saved(client, INSERT_CHUNK, None, &args)?;
                     chunk_no = chunk_no
                         .checked_add(1)
                         .ok_or_else(|| VectorError::TooManyChunks(name.to_owned()))?;
@@ -191,12 +197,7 @@ impl VectorStore for SpiVectorStore {
                 // By id alone, and the creator as locked: a `reassign_owned`
                 // that held the row gave it to another role, and the row it
                 // committed is the one returned (EvalPlanQual).
-                let locked = client.update(
-                    "SELECT created_by::oid FROM warren.vectors WHERE vector_id = $1
-                     FOR UPDATE",
-                    None,
-                    &[vector.into()],
-                )?;
+                let locked = update_saved(client, LOCK, None, &[vector.into()])?;
                 Ok(match locked.is_empty() {
                     true => None,
                     false => locked.first().get::<pg_sys::Oid>(1)?,
@@ -211,9 +212,9 @@ impl VectorStore for SpiVectorStore {
                 // The creator too: a `reassign_owned` that held the row may
                 // have given it to another role, which the caller's check
                 // was not of (EvalPlanQual re-checks both on the new row).
-                let deleted = client.update(
-                    "DELETE FROM warren.vectors WHERE vector_id = $1 AND created_by::oid = $2
-                     RETURNING vector_id",
+                let deleted = update_saved(
+                    client,
+                    DELETE,
                     None,
                     &[checked.vector.into(), checked.created_by.into()],
                 )?;
@@ -316,6 +317,103 @@ mod tests {
             matches!(refused, Err(VectorError::VersionGone { version, .. }) if version == old),
             "refused as a version that no longer exists"
         );
+        Ok(())
+    }
+
+    /// How many saved plans this backend keeps of statements that start
+    /// with `prefix`: each is a `CachedPlanSource` memory context named by
+    /// its statement's text.
+    fn saved_plans(prefix: &str) -> Result<Option<i64>, Error> {
+        Spi::get_one::<i64>(&format!(
+            "SELECT count(*) FROM pg_catalog.pg_backend_memory_contexts
+             WHERE name = 'CachedPlanSource' AND starts_with(ident, '{prefix}')"
+        ))
+    }
+
+    /// The statements a persisted vector write runs: locking its graph and
+    /// version, deleting the row it replaces and inserting its row and
+    /// chunks.
+    const WRITES: [&str; 5] = [
+        "SELECT FROM warren.graphs WHERE graph_id = $1 FOR KEY SHARE",
+        "SELECT FROM warren.versions WHERE version_id = $1 FOR KEY SHARE",
+        "DELETE FROM warren.vectors WHERE vector_id = $1",
+        "INSERT INTO warren.vectors",
+        "INSERT INTO warren.vector_chunks",
+    ];
+
+    /// Each vector write is planned once per backend and the plan kept
+    /// (DESIGN.md §6.2): writing again reuses it.
+    #[pg_test]
+    fn a_vector_write_plans_its_statements_once_per_backend() -> Result<(), Error> {
+        ring("vp", 10, 2)?;
+        refresh("vp", true)?;
+        for value in 1..=3 {
+            Spi::run(&format!("SELECT warren.vector_const('vp', 'x', {value})"))?;
+        }
+        for statement in WRITES {
+            assert_eq!(saved_plans(statement)?, Some(1), "{statement}");
+        }
+        Ok(())
+    }
+
+    /// Graph `name`, made by [`ring`] and dropped since, created again
+    /// from the same tables and refreshed.
+    fn create_again(name: &str) -> Result<(), Error> {
+        Spi::run(&format!(
+            "SET ROLE {name}_owner;
+             SELECT warren.create_graph('{name}', 'SELECT id FROM {name}_nodes',
+                                        'SELECT src, dst FROM {name}_edges');
+             RESET ROLE"
+        ))?;
+        refresh(name, true).map(|_| ())
+    }
+
+    /// The sum of vector `x` of graph `name`, and how many vector rows and
+    /// chunk rows the catalog holds, as `sum vectors chunks`.
+    fn written(name: &str) -> Result<Option<String>, Error> {
+        Spi::get_one::<String>(&format!(
+            "SELECT warren.vector_reduce('{name}', 'x', 'sum') || ' '
+                    || (SELECT count(*) FROM warren.vectors) || ' '
+                    || (SELECT count(*) FROM warren.vector_chunks)"
+        ))
+    }
+
+    /// A graph dropped and created again gets new graph, version and
+    /// vector ids; the saved plans take them as arguments.
+    #[pg_test]
+    fn a_vector_write_after_its_graph_is_created_again_writes_its_rows() -> Result<(), Error> {
+        ring("vg", 10, 2)?;
+        refresh("vg", true)?;
+        Spi::run("SELECT warren.vector_const('vg', 'x', 1)")?;
+        Spi::run("SELECT warren.drop_graph('vg')")?;
+        create_again("vg")?;
+        Spi::run("SELECT warren.vector_const('vg', 'x', 2)")?;
+        assert_eq!(written("vg")?.as_deref(), Some("20 1 1"));
+        Ok(())
+    }
+
+    /// The saved plans are planned again when the tables they write are
+    /// replaced: by `DROP EXTENSION` and `CREATE EXTENSION` here, as by an
+    /// `ALTER EXTENSION ... UPDATE` that changes them. A write after it
+    /// lands in the new tables.
+    #[pg_test]
+    fn a_vector_write_after_the_extension_is_installed_again_writes_its_tables() -> Result<(), Error>
+    {
+        ring("vr", 10, 2)?;
+        refresh("vr", true)?;
+        Spi::run("SELECT warren.vector_const('vr', 'x', 1)")?;
+        // Other tests lock the catalog tables in this order; DROP
+        // EXTENSION would take them in its own and could deadlock with
+        // them (`extension::tests`).
+        Spi::run(
+            "LOCK TABLE warren.graphs, warren.versions, warren.segments, warren.vectors,
+                        warren.vector_chunks IN ACCESS EXCLUSIVE MODE;
+             DROP EXTENSION pg_warren CASCADE;
+             CREATE EXTENSION pg_warren",
+        )?;
+        create_again("vr")?;
+        Spi::run("SELECT warren.vector_const('vr', 'x', 2)")?;
+        assert_eq!(written("vr")?.as_deref(), Some("20 1 1"));
         Ok(())
     }
 

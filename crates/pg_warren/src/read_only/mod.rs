@@ -27,8 +27,8 @@
 //! (in recovery) refuses with an internal error ("cannot assign
 //! TransactionIds during recovery"), so `writing` first refuses in a
 //! read-only transaction, which every transaction on a standby is, with
-//! the read-only SQLSTATE (DESIGN.md §5.1, §7). Depends on no other
-//! feature.
+//! the read-only SQLSTATE (DESIGN.md §5.1, §7). Statements run often
+//! keep a saved plan ([`saved`]). Depends on no other feature.
 
 use std::ffi::{c_char, c_long, CStr, CString};
 use std::mem::ManuallyDrop;
@@ -39,6 +39,10 @@ use pgrx::pg_sys::panic::ErrorReport;
 use pgrx::prelude::*;
 use pgrx::spi::{SpiClient, SpiCursor, SpiError, SpiErrorCodes, SpiResult, SpiTupleTable};
 use pgrx::{FromDatum, IntoDatum, PgLogLevel, PgSqlErrorCode};
+
+mod saved;
+
+pub(crate) use saved::{select_saved, update_saved};
 
 /// The first column of the first row `query` returns, read-only.
 pub(crate) fn read_one<A: FromDatum + IntoDatum>(
@@ -268,6 +272,9 @@ mod tests {
         let writers = [
             "warren.refresh('ro')",
             "warren.vector_const('ro', 'd', 1)",
+            // Replacing c: every statement of a persisted write has a
+            // saved plan by now (`vector::spi`), and is still refused.
+            "warren.vector_const('ro', 'c', 2)",
             "warren.drop_vector('ro', 'c')",
             "warren.set_vector_quota('ro', 0)",
             "warren.create_graph('ro2', 'SELECT 1::bigint', 'SELECT 1::bigint, 1::bigint')",
