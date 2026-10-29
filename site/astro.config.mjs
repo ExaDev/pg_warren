@@ -42,6 +42,7 @@ export default defineConfig({
         { slug: 'docs/reference' },
         { slug: 'docs/limits' },
         { slug: 'docs/operations' },
+        { slug: 'docs/security' },
       ] },
       { label: 'Project', items: [
         { slug: 'docs/performance' },

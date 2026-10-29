@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.8.0 — in development
+## 0.9.0 — in development
+
+## 0.8.0 — native PageRank and Leiden, leaner calls (2026-10-29)
 
 ### Upgrading
 
