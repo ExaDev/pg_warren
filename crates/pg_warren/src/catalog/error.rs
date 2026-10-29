@@ -161,4 +161,11 @@ impl SqlError for CatalogError {
             Self::Spi(_) => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
         }
     }
+
+    fn hint(&self) -> Option<&'static str> {
+        match self {
+            Self::Access(error) => error.hint(),
+            _ => None,
+        }
+    }
 }

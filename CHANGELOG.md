@@ -2,6 +2,25 @@
 
 ## 0.9.0 — in development
 
+### Behaviour changes
+
+- **A graph owned by a superuser runs its source queries only for a
+  superuser** (DESIGN.md §7, §14 item 51, decided by the owner
+  2026-10-29). `warren.refresh` of such a graph, and `warren.set_owner`
+  to a superuser (which opens the source queries as the new owner), now
+  require the caller to be a superuser as both the current user and the
+  session user; otherwise they fail with `insufficient_privilege` (42501,
+  "only a superuser may run the source queries of graph … as superuser
+  …") and a hint, before any of the graph's SQL runs. Until now a
+  non-superuser member of the superuser owner role, or any session
+  through a superuser's `SECURITY DEFINER` function, could refresh it.
+  The reason is the restore route: `pg_write_all_data` (which RDS's master
+  user holds) can rewrite a graph's owner and source queries, and a
+  `refresh` would then have run that SQL as a superuser. Graphs owned by
+  non-superusers are unaffected. To let non-superusers refresh a
+  superuser's graph, give it to a non-superuser with `set_owner` or
+  `reassign_owned`. No SQL surface changes.
+
 ### Documentation
 
 - **Dumps and restores without a superuser** (DESIGN.md §14 item 51,

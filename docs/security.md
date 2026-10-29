@@ -29,7 +29,9 @@ something is planned rather than built, it says so.
   works there.
 - **Dumps without a superuser use Postgres's predefined roles**:
   `pg_read_all_data` to dump graphs, `pg_write_all_data` to restore them.
-  On Amazon RDS (PG 15 and later) the master user has both.
+  On Amazon RDS (PG 15 and later) the master user has both. A graph a
+  superuser owns runs its source queries only for a superuser, so the
+  catalog writes `pg_write_all_data` allows lead to no superuser's rights.
 - **Known gaps** are listed at the end: per-session resource settings that
   any role can raise, and supply-chain items
   (reproducible builds, an SBOM, dependency audits, a security policy).
@@ -158,7 +160,7 @@ pg_warren UPDATE`, and `DROP EXTENSION`, which drops every graph in the
 database. What it cannot do: read or write the catalog tables directly, read
 other roles' graphs, or change who owns them. Granting it access to the
 catalog was rejected because it could then rewrite a graph's source query,
-which `refresh` runs as that graph's owner, a superuser included.
+which `refresh` runs as that graph's owner.
 `test/sql/trusted_install.sql` checks these refusals, and CI runs the whole
 SQL suite and the upgrade test with pg_warren installed by a non-superuser
 (`test/run.py --trusted`, `test/upgrade.py --trusted`).
@@ -293,9 +295,22 @@ granting them:
   carries its owner's view of them, which the holder could not read from
   the tables themselves.
 - A holder of `pg_write_all_data` can change any graph's source queries and
-  owner, and so have SQL run as that graph's owner, a superuser included,
-  at the graph's next `refresh`. A restore needs exactly this power: the
-  restored rows decide every graph's owner and queries.
+  owner, and so have SQL run as that graph's owner at the graph's next
+  `refresh`. A restore needs exactly this power: the restored rows decide
+  every graph's owner and queries.
+- It cannot, through a graph, run SQL as a **superuser**: a graph owned by
+  a superuser runs its source queries only when a superuser calls
+  `refresh` (or `set_owner`, which opens them as the new owner) in its own
+  session. A role that is only a member of a superuser role (even after
+  `SET ROLE` to it), and a superuser's `SECURITY DEFINER` function called
+  from a non-superuser's session, are refused with 42501. So on RDS, where the
+  master user holds `pg_write_all_data` but only `rdsadmin` is a superuser,
+  pointing a graph at `rdsadmin` gains nothing (`test/dump.py` checks it).
+  A superuser's own `refresh` runs whatever the row holds: after a restore
+  from an untrusted source, or after granting `pg_write_all_data`, review
+  the source queries of superusers' graphs (in `warren.graphs`) before a
+  superuser refreshes them, or give those graphs to a non-superuser with
+  `warren.set_owner` or `warren.reassign_owned` (DESIGN.md §7, §14 item 51).
 
 Grant them for the dump or the restore and revoke them afterwards; on RDS,
 treat the master user's credentials accordingly. Restore only dumps you
@@ -469,7 +484,7 @@ How to run each locally is in [CONTRIBUTING.md](../CONTRIBUTING.md).
 | SQL-surface fuzzer (`test/sql_fuzz.py`) | every `warren.*` function with generated and hostile arguments, as four roles, under a hostile `search_path`, in parallel plans and rolled-back transactions; fails on crashes, internal errors, privilege leaks and leftover state | PG 16 |
 | Miri (`cargo miri test -p warren-core`) | undefined behaviour in the domain crate and its dependencies' unsafe code | nightly on `main`, and on release pull requests |
 | Upgrades (`test/upgrade.py`) | `ALTER EXTENSION … UPDATE` from every release gives the catalog of a fresh install, also by a non-superuser | PG 15–18 |
-| Dumps (`test/dump.py`) | plain and custom dumps restore with graphs, versions and vectors; a trusted installer's dump without catalog data; the same round trip with no superuser, as on RDS (`pg_read_all_data`, `pg_write_all_data`), a missing role, and the extension dropped by its non-superuser owner | PG 15–18 |
+| Dumps (`test/dump.py`) | plain and custom dumps restore with graphs, versions and vectors; a trusted installer's dump without catalog data; the same round trip with no superuser, as on RDS (`pg_read_all_data`, `pg_write_all_data`), a missing role, a graph rewritten to a superuser owner refused to the non-superuser's `refresh`, and the extension dropped by its non-superuser owner | PG 15–18 |
 | Crash recovery (`test/crash_recovery.py`) | refreshes stopped by termination, `SIGKILL` and immediate shutdown | PG 16 |
 | Replicas (`test/replicas.py`) | hot and cascading standbys read, refuse writes with 25006, and promote | PG 16 |
 | Concurrency (`test/concurrent_refresh.py`) | many backends reading, computing and refreshing one graph | PG 16 |
@@ -524,7 +539,10 @@ private channel for reporting vulnerabilities. This is a known gap.
   any role; instance-wide ceilings are planned for 0.9.0.
 - Dumping and restoring graphs without a superuser needs
   `pg_read_all_data` and `pg_write_all_data`, which reach every graph
-  directly; there is no narrower grant (§14 item 51). The RDS route is
+  directly; there is no narrower grant (§14 item 51). A holder of
+  `pg_write_all_data` can make any graph that a non-superuser owns run
+  SQL of its choosing as that owner at the next `refresh` (not a
+  superuser's: those run only for a superuser). The RDS route is
   emulated in CI, not yet run on RDS.
 - A role can learn that a graph name exists, and its owner's role name, by
   calling a function on it.

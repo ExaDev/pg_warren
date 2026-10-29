@@ -113,6 +113,18 @@ pub(crate) enum AccessError {
         /// What the caller tried to do.
         action: &'static str,
     },
+    /// A graph's source queries would run as a superuser, and the caller,
+    /// as the current or the session user, is not one (DESIGN.md §7, §14
+    /// item 51).
+    #[error(
+        "only a superuser may run the source queries of graph \"{graph}\" as superuser \"{owner}\""
+    )]
+    SuperuserSources {
+        /// The graph.
+        graph: String,
+        /// The superuser they would run as.
+        owner: String,
+    },
     /// No role has this oid.
     #[error("role with OID {0} does not exist")]
     RoleNotFound(u32),
@@ -138,12 +150,24 @@ impl SqlError for AccessError {
             | Self::NoPrivilegesOf { .. }
             | Self::CannotReceive { .. }
             | Self::NotOrphanDropper(_)
-            | Self::AdoptOrphan(_) => PgSqlErrorCode::ERRCODE_INSUFFICIENT_PRIVILEGE,
+            | Self::AdoptOrphan(_)
+            | Self::SuperuserSources { .. } => PgSqlErrorCode::ERRCODE_INSUFFICIENT_PRIVILEGE,
             Self::OwnerDropped(_) | Self::RoleNotFound(_) | Self::ExtensionMissing => {
                 PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT
             }
             Self::RequiredBySystem { .. } => PgSqlErrorCode::ERRCODE_DEPENDENT_OBJECTS_STILL_EXIST,
             Self::Spi(_) => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+        }
+    }
+
+    fn hint(&self) -> Option<&'static str> {
+        match self {
+            Self::SuperuserSources { .. } => Some(
+                "A superuser must do it in its own session (not through SET ROLE or a SECURITY \
+                 DEFINER function), or give the graph to a role that is not a superuser with \
+                 warren.set_owner or warren.reassign_owned.",
+            ),
+            _ => None,
         }
     }
 }

@@ -22,8 +22,10 @@ as RDS's rds_superuser does from PG 15. It installs pg_warren, seeds the
 graphs, dumps them (and so does a role granted only pg_read_all_data),
 restores both dumps into databases it creates, and gets the same answers.
 A restore into a cluster that lacks a role the catalog names fails, naming
-the role. Then the administrator drops a role's graphs and vectors with
-warren.drop_owned, and drops the extension."""
+the role. A graph whose row the administrator rewrites to a superuser owner
+(pg_write_all_data allows it) is refused to its refresh. Then the
+administrator drops a role's graphs and vectors with warren.drop_owned, and
+drops the extension."""
 
 import difflib
 import re
@@ -425,6 +427,21 @@ MANAGED_AFTER_LIFECYCLE = """
     SELECT (SELECT count(*) FROM pg_namespace WHERE nspname = 'warren'),
            (SELECT count(*) FROM pg_extension WHERE extname = 'pg_warren')"""
 
+# What pg_write_all_data allows (DESIGN.md §7, §14 item 51): the
+# administrator rewrites a graph's row to make the bootstrap superuser
+# (rdsadmin, on RDS) its owner, with a source query of its choosing. Its
+# refresh must be refused (42501) before the query runs as that superuser;
+# if it ran, the division by zero would fail the block instead.
+MANAGED_SUPERUSER_OWNER = """
+    UPDATE warren.graphs SET owner = 10::oid::regrole, node_query = 'SELECT 1 / 0'
+    WHERE name = 'g';
+    DO $$ BEGIN
+        PERFORM warren.refresh('g');
+        RAISE EXCEPTION 'the administrator refreshed a graph a superuser owns';
+    EXCEPTION WHEN insufficient_privilege THEN NULL;
+    END $$;
+"""
+
 
 def check_managed(cluster, directory):
     """Checks dump, restore and the extension's lifecycle with no superuser;
@@ -466,7 +483,16 @@ def check_managed(cluster, directory):
         error = _run(restored.command("-c", AFTER_RESTORE))
         if error:
             failures.append(f"managed {label}: a new build after the restore failed: {error}")
-    return failures + _missing_role(cluster, directory / "managed.custom") + _lifecycle(cluster)
+    return failures + _missing_role(cluster, directory / "managed.custom") + _superuser_owner(cluster) \
+        + _lifecycle(cluster)
+
+
+def _superuser_owner(cluster):
+    """The administrator, rewriting a graph's row to a superuser owner,
+    still cannot run SQL as that superuser through the graph."""
+    restored = cluster.database("dump_managed_plain", MANAGED_ADMIN)
+    error = _run(restored.command("-c", MANAGED_SUPERUSER_OWNER))
+    return [f"managed: a graph re-owned to a superuser: {error}"] if error else []
 
 
 def _missing_role(cluster, path):
