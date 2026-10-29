@@ -35,8 +35,8 @@ something is planned rather than built, it says so.
   On Amazon RDS (PG 15 and later) the master user has both. A graph a
   superuser owns runs its source queries only for a superuser, so the
   catalog writes `pg_write_all_data` allows lead to no superuser's rights.
-- **Known gaps** are listed at the end: chiefly supply-chain items
-  (reproducible builds, an SBOM, dependency audits, a security policy).
+- **Known gaps** are listed at the end: chiefly that the packages are
+  not yet reproducible on a later rebuild.
 
 ## What it installs
 
@@ -253,8 +253,10 @@ graphs under a path only their owner can write (README, "Install";
   table (below, "Dumps and restores").
 - **Graphs**: there is no function that lists graphs. A role that names a
   graph it may not read is refused, and the refusal (42501) says the graph
-  exists and names its owner role. Graph names share one namespace per
-  database.
+  exists and names its owner role. This is by design: it matches
+  Postgres's own "permission denied for table …", which also confirms
+  that a table exists. Graph names share one namespace per database, so
+  don't put secrets in them.
 - **Introspection**: `warren.shared_cache()` and `warren.cache()` list only
   versions and vectors of graphs the caller may read, plus cluster totals
   (sizes and counts). `warren.backends()` and `warren.progress()` follow
@@ -563,8 +565,9 @@ These are tracked in [#103](https://github.com/ExaDev/pg_warren/issues/103)
 
 ## Reporting a vulnerability
 
-pg_warren does not yet publish a security policy (`SECURITY.md`) or a
-private channel for reporting vulnerabilities. This is a known gap.
+Report a vulnerability privately, through GitHub's private vulnerability
+reporting; [SECURITY.md](https://github.com/ExaDev/pg_warren/blob/main/SECURITY.md)
+says how, what to include and what happens next.
 
 ## Known gaps, together
 
@@ -578,7 +581,7 @@ private channel for reporting vulnerabilities. This is a known gap.
   superuser's: those run only for a superuser). The RDS route is
   emulated in CI, not yet run on RDS.
 - A role can learn that a graph name exists, and its owner's role name, by
-  calling a function on it.
+  calling a function on it (by design, as above).
 - Small Rust allocations are not fallible; only graph-sized buffers are.
-- No security policy yet, and the packages are not yet reproducible on a
-  later rebuild (the library is, from the same toolchain and headers).
+- The packages are not yet reproducible on a later rebuild (the library
+  is, from the same toolchain and headers).

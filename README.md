@@ -393,6 +393,7 @@ Signatures are in `\df warren.*` and in DESIGN.md (§6, §8, §9.3).
 - [docs/security.md](docs/security.md): for administrators and providers:
   what it installs, privileges, failure model, resource limits, test
   evidence and releases.
+- [SECURITY.md](SECURITY.md): how to report a vulnerability privately.
 - [docs/beside-managed.md](docs/beside-managed.md): pg_warren on a server of
   your own beside a managed database (RDS and the like), fed by logical
   replication or `postgres_fdw`.
