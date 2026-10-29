@@ -67,7 +67,15 @@ after `refresh` appear after the next `refresh`
 
 ## How it compares
 
-pg_warren was timed against [igraph](https://igraph.org/) (python-igraph 1.0.0)
+The closest alternative inside PostgreSQL is
+[pgGraph](https://github.com/Evokoa/pgGraph) (Apache-2.0, Rust/pgrx), so it
+comes first below. Its column was checked against pgGraph 1.2.1, its latest
+release on 29 October 2026: its user guide and, for threading, its source.
+[Where pg_warren fits](docs/positioning.md#pggraph-and-pg_warren) compares the
+two in more depth. pgGraph has not been benchmarked against pg_warren, so it
+has no column under Performance.
+
+Outside PostgreSQL, pg_warren was timed against [igraph](https://igraph.org/) (python-igraph 1.0.0)
 and Neo4j 2026.10 Community. Neo4j ran both as plain Cypher and with the
 Graph Data Science library (GDS). All three ran on the same machine, over 12
 real graphs from the benchmark corpus, from 77 nodes up to 1.4M nodes and
@@ -75,26 +83,40 @@ real graphs from the benchmark corpus, from 77 nodes up to 1.4M nodes and
 
 ### Features
 
-| | pg_warren | igraph | Neo4j (Cypher) | Neo4j + GDS |
-|---|:---:|:---:|:---:|:---:|
-| **Where it lives** | | | | |
-| Runs inside PostgreSQL, over your existing tables | ✅ | ❌ | ❌ | ❌ |
-| No separate service to run | ✅ | ✅ (in-process library) | ❌ | ❌ |
-| Queried from SQL, joined with relational data | ✅ | ❌ | ❌ | ❌ |
-| **Consistency and freshness** | | | | |
-| Analytics see the live data with no rebuild | ❌ (reads a built version) | ❌ (load on each run) | ✅ | ❌ (projections) |
-| Graph built inside your transaction, rolled back with it | ✅ | ❌ | ✅ (the store is the graph) | ❌ |
-| Versioned graphs: stage, diff, promote | ✅ | ❌ | ❌ | ❌ |
-| Replicated to streaming standbys | ✅ | ❌ | Enterprise | Enterprise |
-| **Querying and algorithms** | | | | |
-| Graph query language, pattern matching | ❌ (SQL functions) | ❌ | ✅ | ✅ |
-| Traversals (BFS, reach, k-hop, paths) | ✅ | ✅ | ✅ | ✅ |
-| Centralities, components, community detection | ✅ (core set) | ✅ (very broad) | ❌ | ✅ (broad) |
-| Node embeddings, link prediction, ML pipelines | ❌ (building blocks only) | ❌ | ❌ | ✅ |
-| Semiring linear algebra, spectral analysis | ✅ | partial | ❌ | ❌ |
-| Multi-threaded | ✅ | ❌ | Enterprise | ✅ (4 threads in Community) |
-| **Maturity** | | | | |
-| Production track record, tooling, visualisation | ❌ (pre-1.0) | ✅ | ✅ | ✅ |
+| | pg_warren | pgGraph 1.2.1 | igraph | Neo4j (Cypher) | Neo4j + GDS |
+|---|:---:|:---:|:---:|:---:|:---:|
+| **Where it lives** | | | | | |
+| Runs inside PostgreSQL, over your existing tables | ✅ | ✅ | ❌ | ❌ | ❌ |
+| No separate service to run | ✅ | ✅ | ✅ (in-process library) | ❌ | ❌ |
+| Queried from SQL, joined with relational data | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Discovers the graph from primary and foreign keys | ❌ (you write node and edge queries) | ✅ | — | — | — |
+| **Consistency and freshness** | | | | | |
+| Analytics see the live data with no rebuild | ❌ (reads a built version) | ✅ (trigger sync, applied on read) | ❌ (load on each run) | ✅ | ❌ (projections) |
+| Graph built inside your transaction, rolled back with it | ✅ | ❌ (a build needs your changes committed) | ❌ | ✅ (the store is the graph) | ❌ |
+| Versioned graphs: stage, diff, promote | ✅ | ❌ (generations published under MVCC; no staging or diff) | ❌ | ❌ | ❌ |
+| Saved results bound to the graph version that made them | ✅ | ❌ (results are returned, not stored) | ❌ | ❌ | partial (mutate mode, in the in-memory projection) |
+| Graph stored in WAL-logged PostgreSQL tables | ✅ | ❌ (validated files under `$PGDATA`) | — | — | — |
+| Replicated to streaming standbys | ✅ | ❌ (documented: no standby support) | ❌ | Enterprise | Enterprise |
+| **Querying and algorithms** | | | | | |
+| Graph query language, pattern matching | ❌ (SQL functions) | ✅ (bounded GQL and openCypher subsets) | ❌ | ✅ | ✅ |
+| Traversals (BFS, reach, k-hop, paths) | ✅ | ✅ (BFS, DFS, weighted paths) | ✅ | ✅ | ✅ |
+| Connected components | ✅ | ✅ | ✅ | ❌ | ✅ |
+| PageRank and centralities | ✅ (core set) | ❌ | ✅ (very broad) | ❌ | ✅ (broad) |
+| Community detection (Louvain, Leiden) | ✅ | ❌ | ✅ | ❌ | ✅ |
+| Node embeddings, link prediction, ML pipelines | ❌ (building blocks only) | ❌ | ❌ | ❌ | ✅ |
+| Semiring linear algebra, spectral analysis | ✅ | ❌ | partial | ❌ | ❌ |
+| Multi-threaded | ✅ | ❌ (one thread per query; builds can run in a background worker) | ❌ | Enterprise | ✅ (4 threads in Community) |
+| **Maturity** | | | | | |
+| Production track record, tooling, visualisation | ❌ (pre-1.0) | partial (1.x since July 2026; SQL playground) | ✅ | ✅ | ✅ |
+
+— : the row is about PostgreSQL tables and does not apply to an engine
+outside PostgreSQL. pgGraph's cells are sourced from its
+[supported features](https://github.com/Evokoa/pgGraph/blob/v1.2.1/docs/user_guide/supported_features.mdx),
+[limits and fit](https://github.com/Evokoa/pgGraph/blob/v1.2.1/docs/user_guide/limitations-and-fit.mdx),
+[sync](https://github.com/Evokoa/pgGraph/blob/v1.2.1/docs/user_guide/sync-and-maintenance.mdx),
+[persistence](https://github.com/Evokoa/pgGraph/blob/v1.2.1/docs/user_guide/build-and-persistence.mdx)
+and [SQL API](https://github.com/Evokoa/pgGraph/blob/v1.2.1/docs/user_guide/api-reference.mdx)
+pages.
 
 ### Performance
 
