@@ -9,6 +9,7 @@ mod activity;
 mod build;
 mod cache;
 mod catalog;
+mod ceiling;
 mod community_sql;
 mod compute_sql;
 mod discard;
@@ -32,13 +33,15 @@ mod traversal_sql;
 mod vector;
 mod version_sql;
 
-/// Library initialisation: registers the GUCs, the hook that makes
+/// Library initialisation: registers the GUCs (the ceilings first, which
+/// the others' descriptions name), the hook that makes
 /// `DISCARD ALL` free pg_warren's session state and, when preloaded on
 /// PG 15 and 16, the hooks that place the shared cache's registry and the
 /// activity table.
 #[pgrx::pg_guard]
 pub extern "C-unwind" fn _PG_init() {
     activity::request_preload();
+    ceiling::define_ceilings();
     build::define_max_build_memory();
     cache::define_memory_settings();
     cache::define_shared_cache();
@@ -56,9 +59,16 @@ pub mod pg_test {
     /// (DESIGN.md §5.6); `warren.shared_cache_memory` is 0, so only the
     /// shared cache's own tests use it: they publish versions their
     /// transactions created, which a prune in another test's backend,
-    /// whose snapshot does not see them, would evict.
+    /// whose snapshot does not see them, would evict. The cap on compute
+    /// threads across backends is out of reach (DESIGN.md §14 item 52), so
+    /// that tests running at once each get the threads they ask for; its
+    /// own tests use counts of their own.
     #[must_use]
     pub fn postgresql_conf_options() -> Vec<&'static str> {
-        vec!["shared_preload_libraries = 'pg_warren'", "warren.shared_cache_memory = 0"]
+        vec![
+            "shared_preload_libraries = 'pg_warren'",
+            "warren.shared_cache_memory = 0",
+            "warren.cluster_threads_limit = 65536",
+        ]
     }
 }

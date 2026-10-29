@@ -308,7 +308,8 @@ fn cache() -> TableIterator<
         let clock = Clock::new();
         let entries = entries(&clock);
         let catalog = catalog(&entries)?;
-        let rows = rows(entries, &catalog, cached_bytes(), max_cache_memory(), clock.since_start);
+        let rows =
+            rows(entries, &catalog, cached_bytes(), max_cache_memory().value, clock.since_start);
         let rows = rows.into_iter().map(|row| {
             (
                 row.kind.to_owned(),

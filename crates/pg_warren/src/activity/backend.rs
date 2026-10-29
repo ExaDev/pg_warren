@@ -10,6 +10,7 @@
 //! claims no slot (§5.7: it reports nothing), but reads the table.
 
 use std::cell::{Cell, RefCell};
+use std::sync::atomic::AtomicU32;
 
 use pgrx::pg_sys;
 
@@ -91,6 +92,14 @@ pub(super) fn located() -> Result<Located, Option<Missing>> {
         Claimed::Missing(missing) => Err(Some(missing)),
         Claimed::Not => Err(None),
     }
+}
+
+/// The count of compute threads that every backend's calls hold, in the
+/// table's header, if this backend has the table (claiming its slot, the
+/// first time). On the main thread, inside a call.
+pub(crate) fn compute_threads() -> Option<&'static AtomicU32> {
+    claim();
+    located().ok().map(|table| table.compute_threads())
 }
 
 /// Claims this backend's slot in `table`, publishing what it has recorded

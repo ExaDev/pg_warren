@@ -3,9 +3,12 @@
 //! §9.3), and the compute pool whose jobs it polls for (`pool`); and of
 //! its `Progress` port, which writes what they report to the open
 //! operation's frame, or for a library function that reports as the
-//! PL/pgSQL library does, to the command frame (`activity`, §5.7). Builds, traversal and compute
-//! bindings use it; it depends only on `activity`.
+//! PL/pgSQL library does, to the command frame (`activity`, §5.7). The
+//! pool's threads are granted under the administrator's ceilings and the
+//! cluster's cap (`admission`, §14 item 52). Builds, traversal and compute
+//! bindings use it; it depends on `activity` and `ceiling`.
 
+mod admission;
 mod pool;
 
 pub(crate) use pool::{define_compute_settings, workers};

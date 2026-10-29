@@ -13,6 +13,10 @@
 //! it does (`command`); `warren.progress()` lists them
 //! (`progress`).
 //!
+//! The table's header also counts the compute threads every backend's
+//! calls hold (`compute_threads`), which `interrupts` caps (§14 item 52),
+//! and the waits on either show named wait events (`wait_event`).
+//!
 //! It depends on `access`, `shared_memory` and `catalog` (a report's
 //! graph). `cache` and `vector` record into it, and the calls that report
 //! progress, with `interrupts`, report to it.
@@ -29,10 +33,11 @@ mod progress;
 mod slot;
 mod table;
 mod visibility;
+mod wait_event;
 
-pub(crate) use backend::claim;
 #[cfg(test)]
 pub(crate) use backend::own;
+pub(crate) use backend::{claim, compute_threads};
 pub(crate) use command::{report, Report};
 pub(crate) use counters::{
     count_private_evictions, count_read, count_refusal, count_shared_evictions, count_wait,
@@ -41,3 +46,4 @@ pub(crate) use counters::{
 pub(crate) use operation::{detail, done, phase, version, Running, Units};
 pub(crate) use placement::request_preload;
 pub(crate) use slot::{Memory, Refused};
+pub(crate) use wait_event::wait_event;
