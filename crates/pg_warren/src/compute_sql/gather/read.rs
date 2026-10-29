@@ -81,8 +81,9 @@ pub(super) fn element<T: Element + FromDatum + IntoDatum>(
     Ok(())
 }
 
-/// The non-NULL `text` or `bytea` message of `row`, as the bytes of its
-/// detoasted varlena (text in the database encoding, never re-encoded).
+/// The non-NULL `text`, `varchar`, `char` or `bytea` message of `row`, as
+/// the bytes of its detoasted varlena (text in the database encoding,
+/// never re-encoded).
 pub(super) fn payload(
     messages: &mut Messages<Bytes>,
     node: DenseId,

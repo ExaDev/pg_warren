@@ -133,7 +133,10 @@ where Lanczos needs many more steps (DESIGN.md §6.5).
 
 The version was prewarmed before superstep 1. Superstep 1 misses its
 target: its `text` messages take the binary send/receive path (DESIGN.md
-§6.4), 2.5× the same messages as `bigint`. The three supersteps and
+§6.4), 2.5× the same messages as `bigint`. *0.8.0:* mostly not; the
+query-alone stage was a `count(*)` that planned the message functions
+away, and with each message made the query alone takes 19.5 s
+(DESIGN.md §13, "After 0.7.0", `text` messages in `gather`). The three supersteps and
 components take 46 s against the 2-minute target.
 
 Checks, 8 of 8: each superstep equals the SQL join + `array_agg` in

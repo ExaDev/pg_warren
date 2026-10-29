@@ -3,9 +3,10 @@
 //!
 //! `smallint`, `integer`, `bigint`, `real`, `double precision` and
 //! `boolean` messages take the fixed-width path (integers widened to
-//! `bigint`); `concat` reads `text` (also `varchar`, `char`) or `bytea`
-//! payloads; every other message type travels as its binary send form and
-//! is rebuilt with its receive function.
+//! `bigint`); `text`, `varchar`, `char` and `bytea` messages travel as
+//! their payloads, the bytes of their varlenas (`concat` reads the text
+//! types as `text`); every other message type travels as its binary send
+//! form and is rebuilt with its receive function.
 
 use pgrx::pg_sys::{
     self, BOOLOID, BPCHAROID, BYTEAOID, FLOAT4OID, FLOAT8OID, INT2OID, INT4OID, INT8OID, TEXTOID,
@@ -42,9 +43,10 @@ pub(super) enum Codec {
         /// The type they are read as.
         read: pg_sys::Oid,
     },
-    /// As the bytes of a `text` or `bytea` value (`sql`), for `concat`.
+    /// As the bytes of a value of `sql`, a varlena of its bytes alone:
+    /// `text`, `varchar`, `char` or `bytea`.
     Payload {
-        /// `text` or `bytea`.
+        /// The type the payloads are read and written as.
         sql: pg_sys::Oid,
     },
     /// As the binary send form of type `sql`.
@@ -87,9 +89,10 @@ impl Codec {
                 _ => return Err(refused),
             },
             (_, Some((dtype, read))) => Self::Element { dtype, sql: message, read },
-            (Combiner::Collect | Combiner::Count | Combiner::First, None) => {
-                Self::Binary { sql: message }
-            }
+            (Combiner::Collect | Combiner::Count | Combiner::First, None) => match message {
+                TEXTOID | VARCHAROID | BPCHAROID | BYTEAOID => Self::Payload { sql: message },
+                _ => Self::Binary { sql: message },
+            },
             (_, None) => return Err(refused),
         };
         combiner.check(codec.kind()).map_err(|_| refused)?;
@@ -169,10 +172,19 @@ mod tests {
     }
 
     #[test]
+    fn text_and_bytea_travel_as_their_payloads_for_every_combiner() {
+        for combiner in [Combiner::Collect, Combiner::First, Combiner::Count] {
+            for sql in [TEXTOID, VARCHAROID, BPCHAROID, BYTEAOID] {
+                assert_eq!(choose(sql, combiner), Some(Codec::Payload { sql }), "{combiner}");
+            }
+        }
+    }
+
+    #[test]
     fn other_types_travel_in_their_binary_form() {
         for combiner in [Combiner::Collect, Combiner::First, Combiner::Count] {
             assert_eq!(choose(JSONBOID, combiner), Some(Codec::Binary { sql: JSONBOID }));
-            assert_eq!(choose(TEXTOID, combiner), Some(Codec::Binary { sql: TEXTOID }));
+            assert_eq!(choose(NUMERICOID, combiner), Some(Codec::Binary { sql: NUMERICOID }));
         }
     }
 
@@ -213,6 +225,9 @@ mod tests {
         assert_eq!(flag.result(Combiner::BoolOr), ResultType::Of(BOOLOID));
         let text = Codec::choose(VARCHAROID, Combiner::Concat).unwrap();
         assert_eq!(text.result(Combiner::Concat), ResultType::Of(TEXTOID));
+        let padded = Codec::choose(BPCHAROID, Combiner::Collect).unwrap();
+        assert_eq!(padded.result(Combiner::Collect), ResultType::ArrayOf(BPCHAROID));
+        assert_eq!(padded.read_type(), BPCHAROID);
         let json = Codec::choose(JSONBOID, Combiner::First).unwrap();
         assert_eq!(json.result(Combiner::First), ResultType::Of(JSONBOID));
         assert_eq!(json.result(Combiner::Collect), ResultType::ArrayOf(JSONBOID));
