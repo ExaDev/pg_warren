@@ -215,7 +215,7 @@ cargo-pgrx at exactly the version the extension uses:
 ```sh
 git clone https://github.com/ExaDev/pg_warren.git
 cd pg_warren
-git checkout v0.7.0   # the latest release; main is the version in development
+git checkout v0.8.0   # the latest release; main is the version in development
 cargo install cargo-pgrx --version 0.19.3 --locked
 cargo pgrx init --pg16 "$(command -v pg_config)"
 cd crates/pg_warren
