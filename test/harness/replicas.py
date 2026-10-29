@@ -200,6 +200,7 @@ READS = {
         "SELECT * FROM warren.similarity('kg', $$SELECT 'n1', 'n2'$$, NULL::text)"],
     "steps, s and version": ["SELECT warren.steps('[]'), warren.s(NULL), warren.version()"],
     "orphans": ["SELECT * FROM warren.orphans()"],
+    "queries_from_keys": ["SELECT * FROM warren.queries_from_keys(ARRAY['pg_catalog.pg_namespace']::regclass[])"],
     "transient kernels": [
         "SELECT warren.core_number('kg', 'k_core', persist := false), "
         "warren.strong_components_vector('social', 'k_scc', persist := false), "
@@ -245,6 +246,7 @@ NOT_CALLED = ("current_version_is_kept", "current_version_is_the_graphs", "label
 # social's current version.
 WRITES = {
     "create_graph": "SELECT warren.create_graph('new', 'SELECT 1::bigint', 'SELECT 1::bigint, 1::bigint')",
+    "create_graph_from_keys": "SELECT warren.create_graph_from_keys('new', ARRAY['pg_catalog.pg_namespace']::regclass[])",
     "refresh": "SELECT warren.refresh('social')",
     "refresh, staged": "SELECT warren.refresh('kg', promote := false)",
     "promote": "SELECT warren.promote('social', {current})",
