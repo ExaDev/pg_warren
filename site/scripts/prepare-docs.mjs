@@ -15,6 +15,7 @@ export const generatedPages = [
   { slug: 'communities', source: 'docs/communities.md', title: 'Communities', description: 'Community detection, contraction, projection, and lifting between graph levels.' },
   { slug: 'change-detection', source: 'docs/change-detection.md', title: 'Change detection', description: 'Compare structural change inside a transaction or with a shadow graph.' },
   { slug: 'limits', source: 'docs/limits.md', title: 'Settings and limits', description: 'Configuration, memory, shared cache, sizing, and known limitations.' },
+  { slug: 'security', source: 'docs/security.md', title: 'Security and operations', description: 'What pg_warren installs, privileges, failure model, resource limits, test evidence, and releases.' },
   { slug: 'beside-managed', source: 'docs/beside-managed.md', title: 'Beside a managed database', description: 'Run pg_warren on a server of your own next to Amazon RDS or another managed database, fed by logical replication or postgres_fdw.' },
   { slug: 'installation', source: 'README.md', section: 'Install', title: 'Installation', description: 'Install pg_warren, configure PostgreSQL, and upgrade an existing installation.' },
   { slug: 'quickstart', source: 'README.md', section: 'A ten-line example', title: 'Your first graph', description: 'Create a graph from ordinary tables, traverse it, and compute PageRank.' },

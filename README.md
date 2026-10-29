@@ -331,6 +331,9 @@ Signatures are in `\df warren.*` and in DESIGN.md (§6, §8, §9.3).
   change before you commit it, in one transaction or with a shadow graph.
 - [docs/limits.md](docs/limits.md): settings, memory, measured performance,
   known limitations.
+- [docs/security.md](docs/security.md): for administrators and providers:
+  what it installs, privileges, failure model, resource limits, test
+  evidence and releases.
 - [docs/beside-managed.md](docs/beside-managed.md): pg_warren on a server of
   your own beside a managed database (RDS and the like), fed by logical
   replication or `postgres_fdw`.
