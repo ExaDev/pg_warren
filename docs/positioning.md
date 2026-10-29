@@ -1,23 +1,57 @@
 # Where pg_warren fits
 
-pg_warren is a **versioned graph compute engine beside your Postgres tables**.
-Use it when you need deep traversal, whole-graph algorithms, and the ability
-to build and compare a proposed graph before committing the data change.
+pg_warren helps you analyse the relationships in your Postgres data: how
+things connect, what matters most, and which groups form. Your data stays
+in your existing tables, and you work in SQL.
 
-pgGraph already accelerates traversal over ordinary PostgreSQL tables.
-pg_warren's reason to exist is the combination of **graph computation and
-explicit transactional versions**: run PageRank, Louvain, Leiden or a
-semiring program, save its results against a graph version, and compare
-versions inside your SQL workflow.
+<span id="pggraph-and-pg_warren"></span>
 
-## pgGraph and pg_warren
+## Isn’t this just pgGraph?
 
-There is real overlap. Both projects build compressed sparse row (CSR)
-adjacency structures from relational data and expose graph operations
-through SQL. Keeping your tables, using Rust, and avoiding a separate
-graph service are shared properties, not reasons to choose one over the
-other. pgGraph also supports connected components and aggregations; its
-scope extends beyond individual path queries.
+They overlap. Both read your existing tables and answer graph questions
+in SQL. **pgGraph focuses on path and relationship queries over changing
+data; pg_warren adds analysis of the whole network and “what if” scenarios.**
+
+**pgGraph may suit you better if** you mostly ask “How is A connected to B?”
+on data that changes frequently, want changes picked up through its sync
+features, or want its supported Cypher or GQL query syntax.
+
+**pg_warren may suit you better if** you want to rank important nodes,
+find communities, or try a change before committing it. You can build a
+graph from your proposed edits, compare it with the current graph, then
+keep the change or roll it back. Saved analysis results stay attached to
+the exact graph version that produced them.
+
+For example: “If this warehouse closes, which locations lose a route to
+supply?” Or: “Which accounts form unusually connected groups, and how has
+that changed since yesterday?”
+
+We haven’t benchmarked pg_warren against pgGraph, so we make no speed
+claim. pg_warren is also pre-1.0; check that it meets your operational needs.
+
+Try the complete [community detection](examples/communities.md),
+[exposure and path tracing](examples/taint.md), and
+[what-if scenario](examples/versions.md) examples.
+
+## Other options
+
+- **A few hops over a small part of your data:** ordinary SQL joins or a
+  recursive query are often enough.
+- **A property graph with Cypher inside Postgres:** [Apache AGE](https://age.apache.org/).
+- **Sparse matrix algebra through GraphBLAS:** [OneSparse](https://onesparse.com/).
+- **Routing on maps alongside PostGIS:** [pgRouting](https://pgrouting.org/).
+
+Choose using the questions you need to answer, how often your data changes,
+and your security and deployment requirements. For pg_warren, start with
+[the runnable examples](examples/index.md) or [installation](../README.md#install).
+
+## In detail
+
+Both projects build compressed sparse row (CSR) adjacency structures from
+relational data and expose graph operations through SQL. Keeping your
+tables, using Rust, and avoiding a separate graph service are shared
+properties. pgGraph also supports connected components and aggregations;
+its scope extends beyond individual path queries.
 
 The comparison below uses **pgGraph 1.2.1**, its latest published release
 checked on **29 October 2026**, and pg_warren's current documented API.
@@ -48,32 +82,31 @@ For pg_warren's corresponding contracts, see [versions and transactions](semanti
 [community detection](communities.md#finding-communities-louvain-and-leiden),
 and [replicas](https://exadev.github.io/pg_warren/docs/operations/).
 
-## Where pg_warren has an advantage
 
-**Analysis that goes beyond finding a path.** Run community detection,
-rank the entire graph, or express propagation with sparse matrix products.
-The same built adjacency supports traversal and computation. Named result
-vectors stay bound to the graph version that produced them and can be
-joined back to your business tables.
+### Graph computation and saved results
 
-**Reproducible scenarios.** Make a proposed change to your tables, build a
-staged version, compute against it, compare it with the current graph,
-then promote and commit or roll back. For example: "If this facility
-closes, which locations become unreachable, and how do the network's
-communities change?" An analysis must pass the candidate version id
-consistently; omitting it reads the current graph.
+pg_warren uses the same built adjacency for traversal and computation.
+Its library includes PageRank, Louvain, Leiden and centralities; semiring
+products let you write your own propagation algorithms. Named result
+vectors stay bound to the graph version that produced them and join back
+to your business tables. See the [semiring example](examples/min-plus.md).
 
-**A PostgreSQL storage lifecycle for the graph.** Graph versions and
-persisted vectors live in tables. They participate in transactions and
-physical replication. This also costs storage and WAL; retained versions
-and large analytical outputs need budgeting. See [operations](https://exadev.github.io/pg_warren/docs/operations/)
+### Comparing proposed changes
+
+Make a change to your tables in a transaction, build a staged version,
+compute against it, compare it with the current graph, then promote and
+commit or roll back. Pass the candidate version id consistently when
+analysing it; omitting the id reads the current graph.
+
+### Storage and operations
+
+Graph versions and persisted vectors live in PostgreSQL tables and
+participate in transactions and physical replication. This also costs
+storage and WAL; retained versions and large analytical outputs need
+budgeting. See [operations](https://exadev.github.io/pg_warren/docs/operations/)
 for backup permissions, upgrades, pooling and replicas.
 
-Try the complete [community detection](examples/communities.md),
-[semiring](examples/min-plus.md), [exposure and path tracing](examples/taint.md),
-and [staged-version](examples/versions.md) examples.
-
-## When pgGraph may fit better
+### Query features and access
 
 pgGraph provides schema and relationship discovery, trigger-based sync,
 source-row hydration, query-time source RLS, and bounded GQL/openCypher
@@ -85,24 +118,7 @@ assuming the authorization behaviour is interchangeable.
 [pgGraph supported features](https://github.com/Evokoa/pgGraph/blob/v1.2.1/docs/user_guide/supported_features.mdx),
 [limits and fit](https://github.com/Evokoa/pgGraph/blob/v1.2.1/docs/user_guide/limitations-and-fit.mdx).
 
-pg_warren is pre-1.0. A larger algorithm vocabulary alone does not establish
-production maturity or a faster implementation of a shared operation.
-The published [performance comparisons](../README.md#how-it-compares) cover
-igraph and Neo4j, **not pgGraph**. We do not claim a measured speed advantage
+
+The published [performance comparisons](../README.md#how-it-compares)
+cover igraph and Neo4j, not pgGraph. They do not establish a speed advantage
 over pgGraph.
-
-## The wider landscape
-
-| Your main need | A starting point |
-| --- | --- |
-| A few indexed hops with small frontiers | Ordinary joins or recursive SQL; avoid a graph build unless repeated work justifies it |
-| Bounded graph queries over a changing relational schema, with discovery and sync | [pgGraph](https://github.com/Evokoa/pgGraph/tree/v1.2.1) |
-| Reusable graph computation, named analytical results and transactional what-if versions over your tables | pg_warren |
-| A property-graph model and openCypher within PostgreSQL | [Apache AGE](https://age.apache.org/) |
-| Sparse matrix and vector algebra through GraphBLAS in PostgreSQL | [OneSparse](https://onesparse.com/) |
-| Geospatial routing and specialist network algorithms alongside PostGIS | [pgRouting](https://pgrouting.org/) |
-
-These projects overlap, but their interfaces and operating models differ.
-Choose using the query, freshness, security and deployment requirements
-of your workload. For pg_warren, start with [the runnable examples](examples/index.md)
-or [installation](../README.md#install).

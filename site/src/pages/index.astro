@@ -61,8 +61,8 @@ SELECT warren.refresh('social');`;
         <div class="hero-copy">
           <a class="eyebrow release-note" href={`${base}/docs/changelog/`}><span class="status-dot"></span> PRE-1.0 · IN DEVELOPMENT <span aria-hidden="true">↗</span></a>
           <h1 id="hero-title">Deep graph traversal<br />inside PostgreSQL.</h1>
-          <p class="hero-description">A graph index and compute engine beside your Postgres tables. Traverse relationships, run PageRank or Louvain, and build graph versions inside the transaction that changes your data. Query, compare, and join the results with SQL.</p>
-          <div class="hero-actions"><a class="button primary" href={`${base}/docs/installation/`}>Installation <span aria-hidden="true">↗</span></a><a class="button comparison-cta" href={`${base}/docs/positioning/`}>Isn’t this just pgGraph? <span aria-hidden="true">→</span></a></div>
+          <p class="hero-description">A graph engine inside Postgres. Find paths, rank what matters, spot communities, and test changes before you commit them. All in SQL, on the tables you already have.</p>
+          <div class="hero-actions"><a class="button primary" href={`${base}/docs/installation/`}>Installation <span aria-hidden="true">↗</span></a><a class="button comparison-cta" href={`${base}/docs/positioning/`}>How is this different from pgGraph? <span aria-hidden="true">→</span></a></div>
           <p class="hero-performance">In our benchmarks over 12 real graphs, pg_warren outperformed Neo4j + GDS on shortest-path and Louvain workloads, running entirely inside PostgreSQL. <a href={`${base}/docs/performance/`}>See results and methodology</a> for the warm medians, shared 4-vCPU setup, and workloads where other engines are faster.</p>
         </div>
         <div class="hero-art">

@@ -34,7 +34,7 @@ h1 { font-size:clamp(40px,4.4vw,62px); letter-spacing:-2.6px; line-height:1.12; 
 .button { padding:15px 22px; border-radius:5px; display:inline-flex; gap:31px; font-size:16px; font-weight:550; }
 .primary { background:var(--ink); color:var(--paper); transition:transform .2s; }
 .primary:hover { transform:translateY(-2px); }
-.comparison-cta { border:1px solid var(--green); color:var(--ink); background:var(--card); }
+.comparison-cta { max-width:100%; align-items:center; border:1px solid var(--green); color:var(--ink); background:var(--card); }
 .comparison-cta:hover { background:var(--surface); }
 .text-link { font-size:16px; font-weight:550; display:inline-flex; gap:18px; align-items:center; }
 .hero-art { align-self:stretch; display:flex; flex-direction:column; justify-content:center; min-width:0; }
