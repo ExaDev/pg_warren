@@ -9,6 +9,10 @@
 //! on the threads of every backend's calls together (`admission`), waiting
 //! on the process latch while none is. It holds them until its [`Granted`]
 //! pool drops; a call made inside it (a nested `workers()`) shares them.
+//! The count is kept with no cap set too, wherever the activity table
+//! exists, so that `warren.backends()` shows the threads in use on any
+//! instance and a cap set by a reload counts the calls already running;
+//! the backend's slot records the threads its call holds (DESIGN.md §5.7).
 //! The pool is kept and rebuilt when the grant changes. Its threads block
 //! every signal: Postgres's handlers must run on the main thread, which is
 //! the only one that may touch backend state.
@@ -130,6 +134,7 @@ fn release() {
             give_back(count, threads);
         }
         GRANT.set(Grant::NONE);
+        activity::record_compute_threads(0);
     } else {
         GRANT.set(Grant { holders, ..grant });
     }
@@ -142,15 +147,17 @@ pub(crate) fn workers() -> Result<Granted, ComputeError> {
     register_exit();
     let asked = Ceiling::Threads.bound(u64::try_from(THREADS.get()).unwrap_or(1)).value;
     let asked = u32::try_from(asked).unwrap_or(1).max(1);
-    let count = match ceiling::cluster_threads() {
-        Some(cap) => cluster_count().map(|count| (count, cap)),
-        None => None,
-    };
+    let cap = ceiling::cluster_threads();
+    let count = cluster_count(cap.is_some()).map(|count| (count, cap.unwrap_or(UNCAPPED)));
     workers_counted(asked, count, wait_for_threads)
 }
 
+/// The cap a call counts its threads under where none is set: one it
+/// never reaches, so it never waits.
+const UNCAPPED: u32 = u32::MAX;
+
 /// [`workers`], asking for `asked` threads, of `count` under its cap if
-/// the cap applies, calling `wait` while none is free.
+/// the count is kept, calling `wait` while none is free.
 fn workers_counted(
     asked: u32,
     count: Option<(&'static AtomicU32, u32)>,
@@ -171,6 +178,7 @@ fn workers_counted(
         None => (asked, None),
     };
     GRANT.set(Grant { holders: 1, counted });
+    activity::record_compute_threads(threads);
     match pool(threads as usize) {
         Ok(workers) => Ok(Granted(workers)),
         Err(error) => {
@@ -196,11 +204,11 @@ fn pool(threads: usize) -> Result<Rc<Workers>, ComputeError> {
 }
 
 /// The cluster's count of compute threads, if this backend has
-/// pg_warren's shared memory; otherwise the cap is not enforced, which the
-/// backend logs once.
-fn cluster_count() -> Option<&'static AtomicU32> {
+/// pg_warren's shared memory; otherwise a cap, if `capped`, is not
+/// enforced, which the backend logs once.
+fn cluster_count(capped: bool) -> Option<&'static AtomicU32> {
     let count = activity::compute_threads();
-    if count.is_none() && !UNCAPPED_LOGGED.replace(true) {
+    if capped && count.is_none() && !UNCAPPED_LOGGED.replace(true) {
         pgrx::ereport!(
             pgrx::PgLogLevel::LOG,
             pgrx::PgSqlErrorCode::ERRCODE_SUCCESSFUL_COMPLETION,
@@ -355,6 +363,51 @@ mod tests {
         let uncapped = workers_counted(4, None, wait).map_err(|_| Error::InvalidPosition)?;
         assert_eq!(uncapped.threads(), 4);
         assert_eq!(waits.get(), 0, "no call waited");
+        Ok(())
+    }
+
+    /// This backend's `compute_threads` in `warren.backends()`, and the
+    /// `cluster` row's.
+    fn threads_shown() -> Result<(Option<i64>, Option<i64>), Error> {
+        Spi::get_two::<i64, i64>(
+            "SELECT (SELECT compute_threads FROM warren.backends() WHERE pid = pg_backend_pid()),
+                    (SELECT compute_threads FROM warren.backends() WHERE kind = 'cluster')",
+        )
+    }
+
+    /// `warren.backends()` shows the compute threads a backend's call
+    /// holds, and the cluster's count, which is kept with no cap set too
+    /// (DESIGN.md §5.7, §14 item 52); none once the call's pool drops.
+    #[pg_test]
+    fn a_call_holding_threads_shows_them_in_backends() -> Result<(), Error> {
+        let (idle, _) = threads_shown()?;
+        assert_eq!(idle, Some(0), "an idle backend holds none");
+        Spi::run("SET LOCAL warren.threads = 3")?;
+        let pool = workers().map_err(|_| Error::InvalidPosition)?;
+        let (own, cluster) = threads_shown()?;
+        assert_eq!(own, Some(3), "the threads its call holds");
+        assert!(
+            cluster.is_some_and(|cluster| cluster >= 3),
+            "counted in the cluster's {cluster:?}"
+        );
+        drop(pool);
+        let (own, _) = threads_shown()?;
+        assert_eq!(own, Some(0), "given back");
+        Ok(())
+    }
+
+    /// Under the cap, a backend shows the threads it was granted, not those
+    /// it asked for.
+    #[pg_test]
+    fn a_capped_call_shows_the_threads_granted() -> Result<(), Error> {
+        let cluster = count(3);
+        let wait = || cluster.store(0, Ordering::Relaxed);
+        let pool =
+            workers_counted(4, Some((cluster, 5)), wait).map_err(|_| Error::InvalidPosition)?;
+        let (own, _) = threads_shown()?;
+        assert_eq!(own, Some(2), "two of five free");
+        drop(pool);
+        assert_eq!(threads_shown()?.0, Some(0));
         Ok(())
     }
 

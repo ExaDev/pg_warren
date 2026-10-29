@@ -7,6 +7,11 @@
 - The activity table's shared memory changes format
   (`pg_warren.activity.2`): on PostgreSQL 17 and 18 backends still running
   the old library keep using the old table until the server restarts.
+- **Run `ALTER EXTENSION pg_warren UPDATE;`** in every database that has
+  the extension, after installing the new build: it adds
+  `warren.backends()`'s `compute_threads` column (the function is dropped
+  and created again, keeping its privileges). Until then the old
+  definition runs, without the column.
 
 ### Added
 
@@ -33,6 +38,13 @@
   enforced and the server log says so.
 - docs/limits.md suggests `warren.shared_cache_memory` and the memory
   limits per instance size.
+- **`warren.backends()` shows the compute threads in use**, in a new last
+  column, `compute_threads`: on a backend's row the threads its running
+  call holds (0 between calls), on the `cluster` row the threads all
+  backends' calls hold, which `warren.cluster_threads_limit` bounds, so an
+  administrator without a shell sees the cap work. It is counted whether
+  or not a cap is set, and shown under the same privacy rule as the other
+  sizes (DESIGN.md §5.7, §14 item 52; docs/limits.md).
 
 ## 0.8.0 — native PageRank and Leiden, leaner calls (2026-10-29)
 

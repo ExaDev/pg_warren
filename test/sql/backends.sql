@@ -4,7 +4,10 @@
 -- statement and version. Other roles see a backend's pid, database, role
 -- and start, and its sizes and counters only with the privileges of its
 -- role or of pg_read_all_stats; the cluster row is everyone's. A backend's
--- role is its authenticated user; a parallel worker has no row. Without the
+-- role is its authenticated user; a parallel worker has no row. A backend
+-- shows the compute threads its running call holds (none between calls),
+-- and the cluster row the count every backend's calls hold, which
+-- warren.cluster_threads_limit bounds (§14 item 52). Without the
 -- table (PG 15 and 16 without the preload) only the caller's own row shows,
 -- with a NOTICE.
 \ir include/shared_cache.sql
@@ -41,6 +44,10 @@ SELECT assert.that((SELECT (mapped_bytes > 0) = :'shared' AND (private_bytes > 0
                    'a maps the shared version, or holds its own copy');
 SELECT assert.equal((SELECT count(*) FROM warren.backends() WHERE kind = 'cluster'), 1::bigint,
                     'one cluster row');
+SELECT assert.equal((SELECT compute_threads FROM warren.backends() WHERE pid = :a_pid), 0::bigint,
+                    'a holds no compute threads between calls');
+SELECT assert.that((SELECT compute_threads >= 0 FROM warren.backends() WHERE kind = 'cluster'),
+                   'the cluster row counts the compute threads held');
 
 -- Privacy across roles.
 SET ROLE watcher;
@@ -48,12 +55,14 @@ SELECT assert.equal(
     (SELECT format('%s %s %s %s', database IS NOT NULL, role, since IS NOT NULL, lookups)
      FROM warren.backends() WHERE pid = :a_pid),
     't postgres t ', 'another role sees who a is, not what it holds or counts');
-SELECT assert.that((SELECT lookups >= 2 AND refusals IS NOT NULL FROM warren.backends()
-                    WHERE kind = 'cluster'), 'the totals are everyone''s');
+SELECT assert.that((SELECT compute_threads IS NULL FROM warren.backends() WHERE pid = :a_pid),
+                   'nor its compute threads');
+SELECT assert.that((SELECT lookups >= 2 AND refusals IS NOT NULL AND compute_threads IS NOT NULL
+                    FROM warren.backends() WHERE kind = 'cluster'), 'the totals are everyone''s');
 RESET ROLE;
 SET ROLE monitor;
-SELECT assert.equal((SELECT lookups FROM warren.backends() WHERE pid = :a_pid), 2::bigint,
-                    'pg_read_all_stats sees everything');
+SELECT assert.equal((SELECT format('%s %s', lookups, compute_threads) FROM warren.backends()
+                     WHERE pid = :a_pid), '2 0', 'pg_read_all_stats sees everything');
 RESET ROLE;
 
 -- A backend's role is its authenticated user, as pg_stat_activity's
@@ -116,6 +125,8 @@ SELECT assert.that((SELECT lookups >= :before FROM warren.backends() WHERE kind 
 SELECT assert.equal(
     (SELECT string_agg(format('%s %s', kind, pid = pg_backend_pid()), ', ') FROM warren.backends()),
     'backend t', 'without the table, only this backend''s own row');
+SELECT assert.equal((SELECT compute_threads FROM warren.backends()), 0::bigint,
+                    'which holds no compute threads between calls');
 SELECT dblink_disconnect('a');
 \endif
 REVOKE USAGE ON SCHEMA assert FROM watcher, monitor;

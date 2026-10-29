@@ -15,7 +15,9 @@
 //!
 //! The table's header also counts the compute threads every backend's
 //! calls hold (`compute_threads`), which `interrupts` caps (§14 item 52),
-//! and the waits on either show named wait events (`wait_event`).
+//! and each slot the threads its backend's call holds
+//! (`record_compute_threads`), both shown by `warren.backends()`; the
+//! waits on either show named wait events (`wait_event`).
 //!
 //! It depends on `access`, `shared_memory` and `catalog` (a report's
 //! graph). `cache` and `vector` record into it, and the calls that report
@@ -37,7 +39,7 @@ mod wait_event;
 
 #[cfg(test)]
 pub(crate) use backend::own;
-pub(crate) use backend::{claim, compute_threads};
+pub(crate) use backend::{claim, compute_threads, record_compute_threads};
 pub(crate) use command::{report, Report};
 pub(crate) use counters::{
     count_private_evictions, count_read, count_refusal, count_shared_evictions, count_wait,

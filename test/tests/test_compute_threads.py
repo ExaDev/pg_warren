@@ -1,6 +1,6 @@
 """The compute threads check's measurement (harness/compute_threads.py)."""
 
-from harness.compute_threads import Window, compute_threads, compute_ticks, stat_ticks, within_cap
+from harness.compute_threads import Window, compute_threads, compute_ticks, held_problems, stat_ticks, within_cap
 
 # A /proc stat line whose command name holds a space and a parenthesis.
 LINE = "4242 (postgres: a) b) S 1 2 3 4 5 6 7 8 9 10 {utime} {stime} 0 0 20 0 5 0 99 0 0"
@@ -34,3 +34,14 @@ def test_a_window_is_within_the_cap_and_its_slack():
     assert within_cap(window(12.0), 1)
     assert not within_cap(window(13.0), 1)
     assert within_cap(window(20.0), 2, slack=0.0)
+
+
+def test_threads_shown_held_stay_within_the_cap_and_some_are_shown():
+    def window(held, by_one):
+        return Window(seconds=1.0, cpu_seconds=1.0, calls=1, failures=(), waits_seen=1,
+                      most_held=held, most_held_by_one=by_one)
+
+    assert held_problems(window(2, 1), 2) == []
+    assert len(held_problems(window(3, 1), 2)) == 1, "over the cap in the cluster"
+    assert len(held_problems(window(2, 3), 2)) == 1, "over the cap in one backend"
+    assert len(held_problems(window(0, 0), 2)) == 1, "none ever shown"

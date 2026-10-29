@@ -104,6 +104,23 @@ session can `SET` them (DESIGN.md §14 item 52).
 - **Waiting takes no turn:** a call that frees threads does not hand them
   to the backend that waited longest, so under a constant stream of calls
   one may wait long. `statement_timeout` bounds it.
+- **To see it work** without a shell (on a managed service),
+  `warren.backends()` has a `compute_threads` column: on each backend's
+  row the threads its running call holds (0 between calls; under the cap,
+  what it was granted, which may be fewer than its `warren.threads`), and
+  on the `cluster` row the threads all calls hold now, which the cap
+  bounds. The count is kept whether or not a cap is set, so it also shows
+  what a cap would have to allow. Another role's row shows it only to
+  roles with that role's privileges or `pg_read_all_stats`, as the
+  other sizes; the `cluster` row is everyone's. On PostgreSQL 15 and 16
+  without the preload there is no `cluster` row (and no cap).
+
+```sql
+SHOW warren.cluster_threads_limit;
+SELECT kind, pid, compute_threads FROM warren.backends();  -- held per backend, then the cluster's count
+SELECT pid, wait_event FROM pg_stat_activity
+WHERE wait_event IN ('WarrenComputeThreads', 'Extension');  -- calls waiting for threads
+```
 
 On a small instance, also size `warren.shared_cache_memory` (default `4GB`
 for the whole cluster) to the instance: Postgres does not know the
@@ -370,7 +387,8 @@ FROM warren.shared_cache();                -- a row per shared entry you may rea
   this backend holds privately, against `warren.max_cache_memory`.
   `warren.backends()` gives each backend's private and mapped bytes and
   its cache counters, which count once per statement and version, then the
-  cluster's totals:
+  cluster's totals (and, from 0.9.0, the compute threads held, under
+  [Limits for a shared instance](#limits-for-a-shared-instance)):
 
 ```sql
 SELECT pid, pg_size_pretty(private_bytes) AS private, pg_size_pretty(mapped_bytes) AS mapped,

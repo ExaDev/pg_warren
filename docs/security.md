@@ -406,6 +406,8 @@ Today's behaviour:
   `WarrenComputeThreads`). The cap needs the activity table in shared
   memory, so on PG 15 and 16 it is enforced only when pg_warren is
   preloaded; without it each backend logs once that the cap is off.
+  `warren.backends()`'s `compute_threads` shows the threads each backend's
+  call holds and, in the `cluster` row, all of them, which the cap bounds.
 - Postgres's own limits (`max_connections`, `statement_timeout`, the
   operating system's memory limits) still apply.
 - Per-database shares of the shared cache do not exist: one database's

@@ -1,8 +1,11 @@
 //! `warren.backends()` (DESIGN.md §5.7, §14 item 49): a row per backend that
 //! has used pg_warren, with what its private cache holds, the shared bytes
-//! it maps and its cache counters, then a `cluster` row of every backend's
-//! counters, those of backends that have exited included. There is no
-//! reset: monitoring takes differences, as with `pg_stat_*` counters.
+//! it maps, its cache counters and the compute threads its running call
+//! holds, then a `cluster` row of every backend's counters, those of
+//! backends that have exited included, and the compute threads every
+//! backend's calls hold, the count `warren.cluster_threads_limit` bounds
+//! (§14 item 52). There is no reset: monitoring takes differences, as with
+//! `pg_stat_*` counters.
 //!
 //! Privacy follows `pg_stat_activity` (`visibility`): a row's pid, database,
 //! role and start are everyone's, the rest only for callers with the
@@ -10,6 +13,8 @@
 //! sizes and counts are everyone's. On PG 15 and 16 without the preload
 //! there is no table: only the caller's own row, from its own copy, with a
 //! `NOTICE`.
+
+use std::sync::atomic::Ordering;
 
 use pgrx::pg_sys::Oid;
 use pgrx::prelude::*;
@@ -29,16 +34,31 @@ pub(crate) struct Row {
     /// The backend's, none on the `cluster` row.
     pub(crate) holder: Option<Holder>,
     /// What it holds and counts; none where the caller may not see them.
-    pub(crate) details: Option<(Memory, Counters)>,
+    pub(crate) details: Option<Details>,
     /// When the backend started; for the `cluster` row, when the table was
     /// created.
     pub(crate) since: i64,
 }
 
-/// The rows of `copied` (the table, created at `created`), showing details
-/// where `shown` says so for a backend's role: a row per backend, by pid,
-/// then the `cluster` row.
-pub(crate) fn rows(copied: &Copied, created: i64, shown: impl Fn(Oid) -> bool) -> Vec<Row> {
+/// What a row holds and counts.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Details {
+    pub(crate) memory: Memory,
+    pub(crate) counters: Counters,
+    /// The compute threads held: by the backend's running call, or, on the
+    /// `cluster` row, by every backend's calls.
+    pub(crate) compute_threads: u32,
+}
+
+/// The rows of `copied` (the table, created at `created`, whose header
+/// counts `compute_threads` held), showing details where `shown` says so
+/// for a backend's role: a row per backend, by pid, then the `cluster` row.
+pub(crate) fn rows(
+    copied: &Copied,
+    created: i64,
+    compute_threads: u32,
+    shown: impl Fn(Oid) -> bool,
+) -> Vec<Row> {
     let mut backends: Vec<&Values> = copied.backends.iter().map(|(_, values)| values).collect();
     backends.sort_by_key(|values| values.holder.pid);
     let mut rows: Vec<Row> = backends.iter().map(|values| backend_row(values, &shown)).collect();
@@ -52,7 +72,7 @@ pub(crate) fn rows(copied: &Copied, created: i64, shown: impl Fn(Oid) -> bool) -
     rows.push(Row {
         kind: "cluster",
         holder: None,
-        details: Some((memory, copied.totals())),
+        details: Some(Details { memory, counters: copied.totals(), compute_threads }),
         since: created,
     });
     rows
@@ -63,7 +83,11 @@ fn backend_row(values: &Values, shown: &impl Fn(Oid) -> bool) -> Row {
     Row {
         kind: "backend",
         holder: Some(values.holder),
-        details: shown(values.holder.role).then_some((values.memory, values.counters)),
+        details: shown(values.holder.role).then_some(Details {
+            memory: values.memory,
+            counters: values.counters,
+            compute_threads: values.compute_threads,
+        }),
         since: values.holder.started,
     }
 }
@@ -73,7 +97,9 @@ fn current_rows() -> Vec<Row> {
     claim();
     match located() {
         Ok(table) => {
-            rows(&table.table().copy(&mut between_tries()), table.created(), shown_to_caller)
+            let copied = table.table().copy(&mut between_tries());
+            let held = table.compute_threads().load(Ordering::Acquire);
+            rows(&copied, table.created(), held, shown_to_caller)
         }
         Err(_) => {
             notice_without_table();
@@ -139,7 +165,8 @@ CREATE FUNCTION warren."backends"() RETURNS TABLE (
 	"private_evictions" bigint,
 	"shared_evictions" bigint,
 	"refusals" jsonb,
-	"since" timestamptz
+	"since" timestamptz,
+	"compute_threads" bigint
 )
 VOLATILE PARALLEL SAFE
 LANGUAGE c AS 'MODULE_PATHNAME', 'backends_wrapper';
@@ -170,13 +197,14 @@ fn backends() -> TableIterator<
         name!(shared_evictions, Option<i64>),
         name!(refusals, Option<JsonB>),
         name!(since, Option<TimestampWithTimeZone>),
+        name!(compute_threads, Option<i64>),
     ),
 > {
     entry(|_| {
         let rows = current_rows().into_iter().map(|row| {
             let detail = row.details;
-            let memory = |f: fn(&Memory) -> u64| detail.map(|(memory, _)| count(f(&memory)));
-            let counter = |f: fn(&Counters) -> u64| detail.map(|(_, counters)| count(f(&counters)));
+            let memory = |f: fn(&Memory) -> u64| detail.map(|d| count(f(&d.memory)));
+            let counter = |f: fn(&Counters) -> u64| detail.map(|d| count(f(&d.counters)));
             (
                 row.kind.to_owned(),
                 row.holder.map(|holder| holder.pid),
@@ -192,11 +220,12 @@ fn backends() -> TableIterator<
                 counter(|c| c.private_loads),
                 counter(|c| c.shared_loads),
                 counter(|c| c.loaded_bytes),
-                detail.map(|(_, counters)| counters.load_microseconds as f64 / 1e6),
+                detail.map(|d| d.counters.load_microseconds as f64 / 1e6),
                 counter(|c| c.private_evictions),
                 counter(|c| c.shared_evictions),
-                detail.map(|(_, counters)| refusals(&counters)),
+                detail.map(|d| refusals(&d.counters)),
                 TimestampWithTimeZone::try_from(row.since).ok(),
+                detail.map(|d| i64::from(d.compute_threads)),
             )
         });
         Ok::<_, AccessError>(TableIterator::new(rows.collect::<Vec<_>>()))
@@ -214,7 +243,8 @@ mod listing {
         let holder = Holder { pid, database: Oid::from(5), role, started: 100 + i64::from(pid) };
         let counters = Counters { lookups, ..Counters::default() };
         let memory = Memory { versions, ..Memory::default() };
-        (pid as usize, Values { holder, memory, counters, ..Values::FREE })
+        let compute_threads = pid as u32 / 10;
+        (pid as usize, Values { holder, memory, compute_threads, counters, ..Values::FREE })
     }
 
     #[test]
@@ -222,18 +252,20 @@ mod listing {
         let exited = Counters { lookups: 7, ..Counters::default() };
         let copied =
             Copied { exited, backends: vec![backend(30, BOB, 2, 20), backend(10, ALICE, 1, 10)] };
-        let rows = rows(&copied, 42, |role| role == ALICE);
+        let rows = rows(&copied, 42, 5, |role| role == ALICE);
         let pids: Vec<_> = rows.iter().map(|row| row.holder.map(|holder| holder.pid)).collect();
         assert_eq!(pids, [Some(10), Some(30), None]);
-        assert_eq!(rows[0].details.map(|(_, counters)| counters.lookups), Some(1), "alice's");
+        assert_eq!(rows[0].details.map(|d| d.counters.lookups), Some(1), "alice's");
+        assert_eq!(rows[0].details.map(|d| d.compute_threads), Some(1), "the threads it holds");
         assert_eq!(rows[1].details, None, "bob's details are hidden from alice");
         assert_eq!(rows[1].holder.map(|holder| holder.role), Some(BOB), "but not who it is");
         assert_eq!(rows[1].since, 130);
         let cluster = &rows[2];
         assert_eq!(cluster.kind, "cluster");
-        let (memory, counters) = cluster.details.unwrap();
+        let Details { memory, counters, compute_threads } = cluster.details.unwrap();
         assert_eq!(counters.lookups, 10, "everyone's, the exited included");
         assert_eq!(memory.versions, 30, "the live backends' memory");
+        assert_eq!(compute_threads, 5, "the threads the table's header counts held");
         assert_eq!(cluster.since, 42, "since the table was created");
     }
 

@@ -9,7 +9,9 @@ time of --sessions backends running betweenness centrality with
 twice the cap; capped, no more than the cap (and a quarter). Then a wait
 for threads is cancelled and timed out, a backend holding the cap's thread
 is terminated mid-kernel and gives it back, and the per-call limits bound
-a call (harness/compute_threads.py). Where the cap cannot be enforced (PG
+a call (harness/compute_threads.py). Throughout, `warren.backends()` must
+show the threads held: within the cap, in each backend and the cluster,
+and past it uncapped. Where the cap cannot be enforced (PG
 15 and 16 without the preload) it checks that the server log says so.
 Holds /tmp/pgrx-test.lock for the whole run."""
 
@@ -68,7 +70,8 @@ def run_mode(args, mode):
         capped = compute_threads.measure(cluster, args.sessions, args.threads, args.seconds)
         print(f"uncapped: {uncapped.cores:.2f} cores over {uncapped.seconds:.1f} s, {uncapped.calls} calls; "
               f"cap {args.cap}: {capped.cores:.2f} cores, {capped.calls} calls, "
-              f"{capped.waits_seen} waits seen", flush=True)
+              f"{capped.waits_seen} waits seen; most threads held (warren.backends()): "
+              f"{uncapped.most_held} uncapped, {capped.most_held} capped", flush=True)
         failures += [f"uncapped: {failure}" for failure in uncapped.failures]
         failures += [f"capped: {failure}" for failure in capped.failures]
         if uncapped.cores <= 2 * args.cap:
@@ -80,6 +83,9 @@ def run_mode(args, mode):
                 failures.append(f"under a cap of {args.cap}, the compute threads used {capped.cores:.2f} cores")
             if capped.waits_seen == 0:
                 failures.append("no backend was seen waiting for threads")
+            failures += [f"capped: {problem}" for problem in compute_threads.held_problems(capped, args.cap)]
+            if uncapped.most_held <= args.cap:
+                failures.append(f"uncapped, warren.backends() showed at most {uncapped.most_held} threads held")
             failures += compute_threads.cancels_and_exits(cluster)
         elif compute_threads.NOT_ENFORCED not in log.read_text():
             failures.append("the cap is not enforced, and the server log does not say so")

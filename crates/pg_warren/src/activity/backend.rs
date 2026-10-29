@@ -102,6 +102,12 @@ pub(crate) fn compute_threads() -> Option<&'static AtomicU32> {
     located().ok().map(|table| table.compute_threads())
 }
 
+/// Records the compute threads this backend's running call holds, 0 once
+/// it gives them back. Pure Rust: legal as an ERROR unwinds the call.
+pub(crate) fn record_compute_threads(threads: u32) {
+    record(|values| values.compute_threads = threads);
+}
+
 /// Claims this backend's slot in `table`, publishing what it has recorded
 /// so far. The callback that gives it back is registered first, so a
 /// registration that fails leaves no slot claimed.

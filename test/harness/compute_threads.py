@@ -7,7 +7,9 @@ computes, the compute threads of all of them together may use at most
 `warren.cluster_threads_limit` cores, and without the cap they use more.
 Also: a backend waiting for threads shows the wait event, a cancel and
 `statement_timeout` end its wait, a backend terminated mid-kernel gives its
-threads back, and the per-call limits hold."""
+threads back, and the per-call limits hold. `warren.backends()` shows the
+threads each backend holds and the cluster's count (DESIGN.md §5.7), which
+the cap bounds."""
 
 import os
 import threading
@@ -83,6 +85,10 @@ class Window:
     calls: int
     failures: tuple
     waits_seen: int
+    # The most compute threads `warren.backends()` showed held: in the
+    # cluster row, and in one of the sessions' rows.
+    most_held: int = 0
+    most_held_by_one: int = 0
 
     @property
     def cores(self):
@@ -98,8 +104,9 @@ def within_cap(window, cap, slack=SLACK):
 def measure(cluster, sessions, threads, seconds, clock_ticks=None):
     """Runs `sessions` backends calling `CALL` over and over with
     `warren.threads = threads`, and measures, once each has finished a
-    first call, `seconds` of their compute threads' CPU time, and how often
-    one was seen waiting for threads."""
+    first call, `seconds` of their compute threads' CPU time, how often
+    one was seen waiting for threads, and the most threads
+    `warren.backends()` showed held."""
     ticks_per_second = clock_ticks or os.sysconf("SC_CLK_TCK")
     opened = [Session(cluster, DATABASE, settings=(f"warren.threads = {threads}",)) for _ in range(sessions)]
     warmed = threading.Barrier(sessions + 1)
@@ -123,11 +130,13 @@ def measure(cluster, sessions, threads, seconds, clock_ticks=None):
             worker.start()
         warmed.wait()
         pids = [session.pid for session in opened]
-        waits = 0
+        waits, most_held, most_held_by_one = 0, 0, 0
         with Session(cluster, DATABASE) as watcher:
             before, started = sum(compute_ticks(pid) for pid in pids), time.monotonic()
             while time.monotonic() - started < seconds:
                 waits += int(watcher.run(waiting_count(pids)).value())
+                held, by_one = held_threads(watcher, pids)
+                most_held, most_held_by_one = max(most_held, held), max(most_held_by_one, by_one)
                 time.sleep(0.05)
             after, ended = sum(compute_ticks(pid) for pid in pids), time.monotonic()
         stop.set()
@@ -137,7 +146,34 @@ def measure(cluster, sessions, threads, seconds, clock_ticks=None):
         stop.set()
         for session in opened:
             session.close()
-    return Window(ended - started, (after - before) / ticks_per_second, sum(calls), tuple(failures), waits)
+    return Window(ended - started, (after - before) / ticks_per_second, sum(calls), tuple(failures), waits,
+                  most_held, most_held_by_one)
+
+
+def held_threads(session, pids):
+    """The compute threads `warren.backends()` shows held now, in its
+    `cluster` row, and the most in one row of `pids`."""
+    done = session.run(
+        "SELECT coalesce(max(compute_threads) FILTER (WHERE kind = 'cluster'), 0), "
+        f"coalesce(max(compute_threads) FILTER (WHERE pid IN ({', '.join(map(str, pids))})), 0) "
+        "FROM warren.backends()")
+    check(done, "warren.backends()")
+    return int(done.rows[0][0]), int(done.rows[0][1])
+
+
+def held_problems(window, cap):
+    """What is wrong with the threads `warren.backends()` showed held over
+    a capped window: never more than the cap, in the cluster or in one
+    backend, and some."""
+    problems = []
+    if window.most_held > cap:
+        problems.append(f"warren.backends() showed {window.most_held} threads held in the cluster, over the cap")
+    if window.most_held_by_one > cap:
+        problems.append(f"warren.backends() showed a backend holding {window.most_held_by_one} threads, "
+                        "over the cap")
+    if window.most_held == 0:
+        problems.append("warren.backends() never showed a thread held")
+    return problems
 
 
 def waiting_count(pids):
@@ -227,6 +263,11 @@ def cancels_and_exits(cluster):
         if not wait_for(lambda: running(cluster, holder.pid)):
             return ["the long call never started"]
         time.sleep(0.5)
+        with Session(cluster, DATABASE) as watcher:
+            held = held_threads(watcher, [holder.pid])
+        if held != (1, 1):
+            failures.append(f"the holder of the cap's thread: warren.backends() showed {held} held "
+                            "(cluster, holder), not (1, 1)")
         waiter = Background(cluster, CALL)
         try:
             if not wait_for(lambda: waiting(cluster, waiter.pid)):
@@ -248,6 +289,9 @@ def cancels_and_exits(cluster):
         holder.finish(10)
     finally:
         holder.close()
+    if not wait_for(lambda: held_now(cluster) == 0, seconds=10):
+        failures.append(f"after the holder was terminated, warren.backends() showed {held_now(cluster)} "
+                        "threads held, not 0")
     after = Background(cluster, CALL, settings=("statement_timeout = '60s'", "warren.threads = 1"))
     try:
         done = after.finish(90)
@@ -257,6 +301,13 @@ def cancels_and_exits(cluster):
     finally:
         after.close()
     return failures
+
+
+def held_now(cluster):
+    """The compute threads the `cluster` row of `warren.backends()` shows
+    held now."""
+    return int(cluster.database(DATABASE).query(
+        "SELECT compute_threads FROM warren.backends() WHERE kind = 'cluster'")[0][0])
 
 
 def per_call_limits(cluster):
