@@ -1643,6 +1643,29 @@ STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'shortest_path_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
+-- crates/pg_warren/src/catalog/from_keys/sql.rs:16
+-- pg_warren::catalog::from_keys::sql::queries_from_keys
+
+CREATE FUNCTION warren."queries_from_keys"(tables regclass[])
+RETURNS TABLE (node_query text, edge_query text, has_relations boolean)
+STRICT STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'queries_from_keys_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/pg_warren/src/catalog/from_keys/sql.rs:50
+-- pg_warren::catalog::from_keys::sql::create_graph_from_keys
+
+CREATE FUNCTION warren."create_graph_from_keys"(name text, tables regclass[],
+                                                directed boolean DEFAULT true,
+                                                build_reverse boolean DEFAULT true,
+                                                retain_versions int DEFAULT 2,
+                                                store_merged boolean DEFAULT true,
+                                                node_order text DEFAULT 'id')
+RETURNS void STRICT VOLATILE PARALLEL UNSAFE LANGUAGE c
+AS 'MODULE_PATHNAME', 'create_graph_from_keys_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
 -- crates/pg_warren/src/catalog/create_graph.rs:42
 -- pg_warren::catalog::create_graph::create_graph
 CREATE  FUNCTION warren."create_graph"(

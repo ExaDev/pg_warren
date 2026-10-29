@@ -10,8 +10,8 @@ otherwise."""
 from .fixture import NODES, ROLES, STORED_COLUMNS, STORED_IDS, literal
 from .surface import Call
 from .values import (EXPRESSIONS, FREE_TEXT, GRAPH_ARGUMENTS, HOSTILE, HOSTILE_EXPRESSIONS, NUMBERS, ODD_WORDS,
-                     QUERIES, QUERY_ARGUMENTS, REALS, RELATION_ARRAYS, SMALL, VECTOR_ARGUMENTS, VERSION_ARGUMENTS,
-                     WORDS)
+                     QUERIES, QUERY_ARGUMENTS, REALS, RELATION_ARRAYS, SMALL, TABLE_LISTS, VECTOR_ARGUMENTS,
+                     VERSION_ARGUMENTS, WORDS)
 
 OPTIONAL_SHARE = 0.4
 NEW_GRAPHS = 12
@@ -20,7 +20,7 @@ NEW_GRAPHS = 12
 # compressed and out of line, and is read detoasted.
 STORED_SHARE = 0.2
 # The functions whose graph argument names a graph they make.
-MAKERS = frozenset({"create_graph", "contract"})
+MAKERS = frozenset({"create_graph", "create_graph_from_keys", "contract"})
 NEW_VECTORS = ("v0", "v1", "v2", "ones", "pr", "lbl")
 # Each id type's source tables and the edge columns they have beyond src, dst.
 SOURCES = {
@@ -68,6 +68,7 @@ class Arguments:
             "jsonb": lambda: self.rng.choice(("'[]'", "'[{\"rels\": [\"a\"], \"max_hops\": 2}]'",
                                               "'[{\"direction\": \"in\"}, {}]'")),
             "regrole": lambda: literal(self.rng.choice(ROLES)),
+            "regclass[]": lambda: self.rng.choice(TABLE_LISTS),
             "text[]": lambda: self.rng.choice(RELATION_ARRAYS),
             "boolean": lambda: self._flag(name),
             "integer": lambda: self._number(name),

@@ -7,11 +7,11 @@
 - The activity table's shared memory changes format
   (`pg_warren.activity.2`): on PostgreSQL 17 and 18 backends still running
   the old library keep using the old table until the server restarts.
-- **Run `ALTER EXTENSION pg_warren UPDATE;`** in every database that has
-  the extension, after installing the new build: it adds
-  `warren.backends()`'s `compute_threads` column (the function is dropped
-  and created again, keeping its privileges). Until then the old
-  definition runs, without the column.
+- **Run `ALTER EXTENSION pg_warren UPDATE;` in every database that has
+  the extension**, after installing the new build. The update adds the
+  two functions below and `warren.backends()`'s `compute_threads` column
+  (the function is dropped and created again, keeping its privileges); it
+  changes no table. Until then the old definitions run, without them.
 
 ### Behaviour changes
 
@@ -64,6 +64,18 @@
   administrator without a shell sees the cap work. It is counted whether
   or not a cap is set, and shown under the same privacy rule as the other
   sizes (DESIGN.md §5.7, §14 item 52; docs/limits.md).
+- **Graphs from keys.** `warren.queries_from_keys(tables regclass[])`
+  returns the `node_query`, `edge_query` and `has_relations` that the
+  listed tables' primary and foreign keys give, for `create_graph`, and
+  `warren.create_graph_from_keys(name, tables, ...)` creates the graph
+  from them in one call. Each listed table's rows are nodes, each foreign
+  key between listed tables a relation, and a junction table (its primary
+  key two foreign keys, and no other column) an edge per row. One table of
+  nodes keyed by an `integer`, `bigint`, `uuid` or `text` column keeps its
+  key as the id; otherwise ids are text, `schema.table:key`, with a
+  composite key as its row literal (`shop.shipments:(10,2)`). Only the
+  listed tables are read, and foreign keys to other tables are ignored
+  (docs/semantics.md, "Graphs from keys"; DESIGN.md §14 item 53).
 - **A guide to running pg_warren beside a managed database**
   (`docs/beside-managed.md`), for Amazon RDS, Aurora and other services
   that cannot install it: a server of your own with pg_warren, fed by
@@ -90,11 +102,19 @@
 - The README's feature matrix (How it compares) puts pgGraph 1.2.1 first,
   as the closest alternative inside PostgreSQL, with rows for the
   differences both ways: where pgGraph has the tick (GQL/openCypher,
-  trigger sync, discovery from keys) and where pg_warren does (versions,
+  trigger sync) and where pg_warren does (versions,
   in-transaction builds, standbys, whole-graph algorithms, semirings).
   pgGraph's cells are sourced from its v1.2.1 documentation, and
   `docs/positioning.md` points to the matrix and spells out the nuanced
   differences (row-level security, parallel edge rows).
+- The head-to-head benchmarks now include pgGraph 1.2.1, built in release
+  mode and run with its recommended configuration on BFS, shortest paths
+  and connected components. pg_warren 0.8.0 was faster on all three, on
+  all 12 graphs. igraph's shortest-path pairs now use `get_shortest_path`,
+  which stops at the target without rebuilding the adjacency list. The
+  README's Performance table has a pgGraph column, and
+  `docs/positioning.md` reports the results
+  (`bench/results/corpus/head_to_head/pggraph-1.2.1/`).
 
 ## 0.8.0 — native PageRank and Leiden, leaner calls (2026-10-29)
 

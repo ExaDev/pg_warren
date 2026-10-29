@@ -14,5 +14,19 @@
   "sha256": "1cdc037231a383f86e283e5652b22c55a1f0a67e6f918bba5538d6008228c133",
   "bytes": 69791957,
   "checksum": "of the first fetch, 2026-10-26: graphdatascience.ninja publishes none; versions.json pairs GDS 2026.10.1 with Neo4j 2026.10.1"
+ },
+ "pggraph": {
+  "version": "1.2.1",
+  "repository": "https://github.com/Evokoa/pgGraph",
+  "licence": "Apache-2.0",
+  "tag": "v1.2.1",
+  "tag_object": "502e50290793726d0b1e2df8d161d4ecb44f519b",
+  "commit": "1bbe30149100b49fc4a1494bd3afbeba82070092",
+  "latest": "the latest release tag on 2026-10-29",
+  "rust": "1.96.0, as graph/rust-toolchain.toml pins it",
+  "cargo_pgrx": "0.19.1, as graph/Cargo.toml pins pgrx; installed into its own CARGO_INSTALL_ROOT, with its own PGRX_HOME",
+  "profile": "release (graph/Cargo.toml: opt-level 3, fat LTO, one codegen unit), as its Makefile's install builds it",
+  "build": "cd graph && cargo pgrx package --no-default-features --features pg16 --pg-config /usr/lib/postgresql/16/bin/pg_config",
+  "install": "the package's usr/ copied into the private PostgreSQL 16 tree that holds pg_warren (CONTRIBUTING.md, as for the soak)"
  }
 }

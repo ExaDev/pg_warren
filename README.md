@@ -63,7 +63,10 @@ The graph's ids are `bigint`, so id arguments are cast (`1::bigint`), and
 functions with no id argument take a type witness (`NULL::bigint`) for their
 result type. A traversal reads the version, not the tables: rows inserted
 after `refresh` appear after the next `refresh`
-([docs/semantics.md](docs/semantics.md)).
+([docs/semantics.md](docs/semantics.md)). Tables linked by foreign keys
+need no queries: `warren.create_graph_from_keys('shop', ARRAY['customers',
+'orders']::regclass[])` makes their rows nodes and their foreign keys edges
+([graphs from keys](docs/semantics.md#graphs-from-keys)).
 
 ## How it compares
 
@@ -89,7 +92,7 @@ real graphs from the benchmark corpus, from 77 nodes up to 1.4M nodes and
 | Runs inside PostgreSQL, over your existing tables | ✅ | ✅ | ❌ | ❌ | ❌ |
 | No separate service to run | ✅ | ✅ | ✅ (in-process library) | ❌ | ❌ |
 | Queried from SQL, joined with relational data | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Discovers the graph from primary and foreign keys | ❌ (you write node and edge queries) | ✅ | — | — | — |
+| Builds the graph from primary and foreign keys | ✅ (`create_graph_from_keys`, over the tables you list) | ✅ | — | — | — |
 | **Consistency and freshness** | | | | | |
 | Analytics see the live data with no rebuild | ❌ (reads a built version) | ✅ (trigger sync, applied on read) | ❌ (load on each run) | ✅ | ❌ (projections) |
 | Graph built inside your transaction, rolled back with it | ✅ | ❌ (a build needs your changes committed) | ❌ | ✅ (the store is the graph) | ❌ |
@@ -121,33 +124,45 @@ pages.
 
 ### Performance
 
+Faster than pgGraph 1.2.1, the closest alternative inside PostgreSQL, on
+every workload both support (2.4–89× on shortest paths, 1.7–14× on
+connected components), with versions, standbys and whole-graph
+algorithms it doesn't have.
+
 Times are warm medians.
 
-| Workload | pg_warren | igraph | Neo4j + GDS | Verdict |
-|---|---:|---:|---:|---|
-| Shortest paths, 25 pairs (dblp) | **6 ms** | 1.04 s | 2.22 s | 🟢 Fastest on 11 of 12 graphs |
-| Louvain communities (dblp) | **1.16 s** | 5.49 s | 12.7 s | 🟢 Faster than GDS on every graph, than igraph on 7 of 12 |
-| Triangles (hetionet) | **0.12 s** | 0.49 s | 2.88 s | 🟢 Faster than igraph on 10 of 12 graphs |
-| Time to first query | **0.01–3.5 s** | about the same | 13–18 s | 🟢 No server to start or data to import |
-| PageRank, 20 iterations (roadNet-TX) | **0.22 s** | 0.81 s | 0.62 s | 🟢 Faster than igraph on 7 of 12 graphs; slower on 5, by 1.2–3× and on the tiny lesmis 100× (a call's fixed cost); faster than GDS on all 12 |
-| BFS and connected components | 🟡 | **fastest** | slower | 🟡 Ahead of GDS; igraph 1.2–60× faster |
-| Leiden communities (FB15k-237) | 0.21 s | **0.14 s** | 0.46 s | 🟡 Within 1.6× of igraph on medium graphs, faster on 4 of 12; faster than GDS on 7 of 11 |
+| Workload | pg_warren | pgGraph | igraph | Neo4j + GDS | Verdict |
+|---|---:|---:|---:|---:|---|
+| Shortest paths, 25 pairs (dblp) | **5.8 ms** | 73 ms | 0.26 s | 2.22 s | 🟢 Bidirectional BFS, all pairs in one call: faster than pgGraph on 12 of 12 graphs (2.4–89×), than igraph's early-exit `get_shortest_path` on 7 of 12 (2.7–44×; igraph up to 2.7× faster on tiny and road graphs), than Cypher's like-for-like `shortestPath` on 11 of 11 (2.6–23×) |
+| Louvain communities (dblp) | **1.16 s** | — | 5.49 s | 12.7 s | 🟢 Faster than GDS on every graph, than igraph on 7 of 12 |
+| Triangles (hetionet) | **0.12 s** | — | 0.49 s | 2.88 s | 🟢 Faster than igraph on 10 of 12 graphs |
+| Time to first query | **0.01–3.8 s** | 0.07–78 s | about the same | 13–18 s | 🟢 No server to start or data to import; pgGraph's build takes 5–21× longer |
+| PageRank, 20 iterations (roadNet-TX) | **0.22 s** | — | 0.81 s | 0.62 s | 🟢 Faster than igraph on 7 of 12 graphs; slower on 5, by 1.2–3× and on the tiny lesmis 100× (a call's fixed cost); faster than GDS on all 12 |
+| BFS and connected components | 🟡 | slowest | **fastest** | slower | 🟡 Ahead of GDS, and of pgGraph by 1.7–420×; igraph 1.2–66× faster on all but 3 of 36 cells |
+| Leiden communities (FB15k-237) | 0.21 s | — | **0.14 s** | 0.46 s | 🟡 Within 1.6× of igraph on medium graphs, faster on 4 of 12; faster than GDS on 7 of 11 |
 
 Plain Cypher is not in the table. It cannot express PageRank, components,
 Louvain, Leiden or betweenness. On the larger graphs, its traversal and
-triangle queries ran past a 300-second timeout.
+triangle queries ran past a 300-second timeout. pgGraph's SQL API has
+traversal, shortest paths and components, but no degree, PageRank,
+triangles or community detection (—).
 
-**Caveats.** Most rows are one run on a shared 4-vCPU VM. pg_warren and GDS used
-4 threads; igraph and Cypher are single-threaded. Every time includes the
-client round trip. A warm pg_warren traversal call costs 25–70 µs more than
-`SELECT 1`. A function that writes a vector costs about 1 ms more, to persist
-it and commit. These fixed costs dominate on tiny graphs; the table's
-0.2–2 ms rows were measured on 0.7.0. The Louvain and loading figures predate two later
-optimisations, so pg_warren's times there may now be lower. The triangles
-row was re-timed after them, and the PageRank and Leiden rows on 0.8.0's
-native `pagerank` and `leiden`, against igraph only (PageRank in three
-interleaved rounds on all 12 graphs). GDS was not re-run: every GDS figure
-is from the earlier run, against 0.7.0. Full tables, settings and caveats are in
+**Caveats.** Most rows are one run on a shared 4-vCPU VM. pg_warren and GDS
+used 4 threads; igraph, Cypher and pgGraph are single-threaded. Every time
+includes the client round trip. A warm pg_warren traversal call costs 25–70
+µs more than `SELECT 1`. A function that writes a vector costs about 1 ms
+more, to persist it and commit. These fixed costs dominate on tiny graphs.
+The Louvain figure predates two later optimisations, so pg_warren's time
+there may now be lower. The triangles row was re-timed after them, and the
+PageRank and Leiden rows on 0.8.0's native `pagerank` and `leiden`, against
+igraph only (PageRank in three interleaved rounds on all 12 graphs). The
+shortest-paths, time-to-first-query and BFS rows, and every pgGraph figure,
+are from a later run of 0.8.0 beside pgGraph 1.2.1 (its recommended
+configuration) and igraph, where igraph's pairs used `get_shortest_path`,
+which stops at the target without first rebuilding the adjacency list as
+`distances` does; the Cypher margins are from the earlier run, against
+0.7.0. GDS was not re-run: every GDS figure is from the earlier run, against
+0.7.0. Full tables, settings and caveats are in
 [bench/results/corpus/head_to_head](bench/results/corpus/head_to_head/README.md).
 
 ## The principle: meet Postgres users where they are
@@ -349,7 +364,7 @@ reads the graph, an optional `version` (default: the current version).
 
 | Area | Functions |
 |---|---|
-| Graphs and versions | `create_graph`, `refresh`, `promote`, `drop_version`, `compact`, `diff`, `info`, `drop_graph`, `grant`, `revoke`, `prewarm`, `evict` |
+| Graphs and versions | `create_graph`, `create_graph_from_keys`, `queries_from_keys`, `refresh`, `promote`, `drop_version`, `compact`, `diff`, `info`, `drop_graph`, `grant`, `revoke`, `prewarm`, `evict` |
 | Traversal | `bfs`, `neighbours`, `degree`, `has_edge`, `reachable`, `reachable_set`, `shortest_path`, `dijkstra`, `components`, `walk`, `last_stats` |
 | Walk steps | `s` and `steps` (jsonb), which build the composite type `warren.step`; the cast `jsonb::warren.step[]` |
 | Vectors | `vector_from_query`, `vector_const`, `vector_degree`, `vector_dense_id`, `vector_values`, `matrix_rows`, `vector_topk`, `vector_stats`, `id_map`, `drop_vector` |

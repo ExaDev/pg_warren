@@ -58,3 +58,19 @@ BEGIN
     WHERE ip.classoid OPERATOR(pg_catalog.=) 'pg_catalog.pg_proc'::pg_catalog.regclass::pg_catalog.oid
       AND ip.objoid OPERATOR(pg_catalog.=) 'warren.backends()'::pg_catalog.regprocedure::pg_catalog.oid;
 END $upgrade$;
+
+-- Graphs from keys (DESIGN.md §9.3, §14 item 53): the node and edge
+-- queries a list of tables' primary and foreign keys gives, and a graph
+-- created from them. Two new functions; no table changes.
+CREATE FUNCTION warren."queries_from_keys"(tables regclass[])
+RETURNS TABLE (node_query text, edge_query text, has_relations boolean)
+STRICT STABLE PARALLEL SAFE LANGUAGE c AS 'MODULE_PATHNAME', 'queries_from_keys_wrapper';
+
+CREATE FUNCTION warren."create_graph_from_keys"(name text, tables regclass[],
+                                                directed boolean DEFAULT true,
+                                                build_reverse boolean DEFAULT true,
+                                                retain_versions int DEFAULT 2,
+                                                store_merged boolean DEFAULT true,
+                                                node_order text DEFAULT 'id')
+RETURNS void STRICT VOLATILE PARALLEL UNSAFE LANGUAGE c
+AS 'MODULE_PATHNAME', 'create_graph_from_keys_wrapper';

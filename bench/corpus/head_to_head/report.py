@@ -5,7 +5,7 @@ answer agreed with the reference; otherwise it shows why not: the check's
 status (`mismatch`, `below bound`), `timeout`, `error`, or `—` when the
 engine cannot run the workload (the reasons are listed)."""
 
-ENGINES = ("pg_warren", "igraph", "neo4j-cypher", "neo4j-gds")
+ENGINES = ("pg_warren", "pggraph", "igraph", "neo4j-cypher", "neo4j-gds")
 
 
 def seconds(value):

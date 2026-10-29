@@ -51,7 +51,7 @@ fn or_raise<T, E: SqlError>(result: Result<T, E>) -> T {
 /// The `search_path` every `warren.*` function body runs under: the system
 /// catalogs, then (explicitly last, so it can never shadow them) the
 /// session's temporary schema.
-const TRUSTED_SEARCH_PATH: &str = "pg_catalog, pg_temp";
+pub(crate) const TRUSTED_SEARCH_PATH: &str = "pg_catalog, pg_temp";
 
 /// What a `warren.*` function knows of its caller's session.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -265,6 +265,10 @@ mod tests {
             "create_graph",
             "warren.create_graph('eves', 'SELECT 1::bigint', 'SELECT 1::bigint, 2::bigint')",
         ),
+        (
+            "create_graph_from_keys",
+            "warren.create_graph_from_keys('eves_k', ARRAY['pg_catalog.pg_namespace'::regclass])",
+        ),
         ("dag_longest_path", "warren.dag_longest_path('victim', 'lp', ARRAY['none'])"),
         ("degree", "warren.degree('victim', 1::bigint)"),
         ("degree_vector", "warren.degree_vector('victim', 'dv')"),
@@ -308,6 +312,10 @@ mod tests {
         ("progress", "warren.progress()"),
         ("project", "warren.project('victim', 'c', 'victim_q', 'p')"),
         ("promote", "warren.promote('victim', {v})"),
+        (
+            "queries_from_keys",
+            "warren.queries_from_keys(ARRAY['pg_catalog.pg_namespace'::regclass])",
+        ),
         ("reachable", "warren.reachable('victim', 1::bigint, 2::bigint)"),
         ("reachable_set", "warren.reachable_set('victim', ARRAY[1::bigint])"),
         ("reassign_owned", "warren.reassign_owned('eve_minion', 'eve')"),

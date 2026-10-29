@@ -16,7 +16,8 @@ extension's revision and profile as given to the script, the sha256 of the
   (DESIGN.md §5.7, §14 item 41).
 - `head_to_head/<dataset>.json`: `suite.py head-to-head`, pg_warren timed
   against igraph, Neo4j Cypher and Neo4j GDS on the medium tier and four
-  tiny graphs. `head_to_head/README.md` has its provenance, caveats,
+  tiny graphs; `head_to_head/pggraph-1.2.1/`, a later run of pg_warren
+  0.8.0 against pgGraph 1.2.1 and igraph on the same graphs. `head_to_head/README.md` has its provenance, caveats,
   findings and tables.
 
 ## Provenance
