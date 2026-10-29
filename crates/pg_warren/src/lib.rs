@@ -59,16 +59,9 @@ pub mod pg_test {
     /// (DESIGN.md §5.6); `warren.shared_cache_memory` is 0, so only the
     /// shared cache's own tests use it: they publish versions their
     /// transactions created, which a prune in another test's backend,
-    /// whose snapshot does not see them, would evict. The cap on compute
-    /// threads across backends is out of reach (DESIGN.md §14 item 52), so
-    /// that tests running at once each get the threads they ask for; its
-    /// own tests use counts of their own.
+    /// whose snapshot does not see them, would evict.
     #[must_use]
     pub fn postgresql_conf_options() -> Vec<&'static str> {
-        vec![
-            "shared_preload_libraries = 'pg_warren'",
-            "warren.shared_cache_memory = 0",
-            "warren.cluster_threads_limit = 65536",
-        ]
+        vec!["shared_preload_libraries = 'pg_warren'", "warren.shared_cache_memory = 0"]
     }
 }

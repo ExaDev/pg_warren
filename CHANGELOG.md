@@ -2,21 +2,11 @@
 
 ## 0.9.0 — in development
 
-### Behaviour changes
+### Upgrading
 
-- **Compute threads are capped across the cluster.** The calls of every
-  backend together run at most `warren.cluster_threads_limit` compute
-  threads, by default the cores the server sees. A call runs on as many
-  of the threads it asks for (`warren.threads`) as are free, and waits
-  only while none is, shown in `pg_stat_activity` as the wait event
-  `WarrenComputeThreads` (`Extension` on PostgreSQL 15 and 16); a cancel or
-  `statement_timeout` ends the wait. Results do not depend on the thread
-  count. On PostgreSQL 15 and 16 the cap needs `shared_preload_libraries =
-  'pg_warren'`; without it the cap is not enforced and the server log says
-  so. Set `warren.cluster_threads_limit = -1` to turn it off. The activity
-  table's shared memory changes format (`pg_warren.activity.2`): on
-  PostgreSQL 17 and 18 backends still running the old library keep using
-  the old table until the server restarts.
+- The activity table's shared memory changes format
+  (`pg_warren.activity.2`): on PostgreSQL 17 and 18 backends still running
+  the old library keep using the old table until the server restarts.
 
 ### Added
 
@@ -32,7 +22,15 @@
   service's parameter group), not per session. A call uses the lower of
   its session's setting and the limit; an error that names a setting
   names the limit where the limit was the lower. The defaults set no
-  limit, but for the cluster's threads.
+  limit.
+- **Under `warren.cluster_threads_limit`** a call runs on as many of the
+  threads it asks for (`warren.threads`) as are free, and waits only while
+  none is, shown in `pg_stat_activity` as the wait event
+  `WarrenComputeThreads` (`Extension` on PostgreSQL 15 and 16); a cancel
+  or `statement_timeout` ends the wait. Results do not depend on the
+  thread count. On PostgreSQL 15 and 16 the cap needs
+  `shared_preload_libraries = 'pg_warren'`; without it the cap is not
+  enforced and the server log says so.
 - docs/limits.md suggests `warren.shared_cache_memory` and the memory
   limits per instance size.
 

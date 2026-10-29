@@ -8,7 +8,6 @@
 //! Depends on no other feature.
 
 use std::ffi::CStr;
-use std::thread::available_parallelism;
 
 use pgrx::{GucContext, GucFlags, GucRegistry, GucSetting};
 
@@ -26,8 +25,6 @@ static COMPUTE_MEMORY: GucSetting<i32> = GucSetting::<i32>::new(NONE);
 static CACHE_MEMORY: GucSetting<i32> = GucSetting::<i32>::new(NONE);
 static BUILD_MEMORY: GucSetting<i32> = GucSetting::<i32>::new(NONE);
 static WALK_PATHS: GucSetting<i32> = GucSetting::<i32>::new(NONE);
-/// `warren.cluster_threads_limit`; its boot value is set from the core
-/// count at load.
 static CLUSTER_THREADS: GucSetting<i32> = GucSetting::<i32>::new(NONE);
 
 /// A session setting's ceiling.
@@ -172,27 +169,16 @@ pub(crate) fn cluster_threads() -> Option<u32> {
     limit(CLUSTER_THREADS.get(), 1).and_then(|threads| u32::try_from(threads).ok())
 }
 
-/// The cores the server sees (its CPU affinity and cgroup quota), at least
-/// one: the cluster's default cap.
-fn default_cluster_threads() -> i32 {
-    let cores = available_parallelism().map_or(1, usize::from);
-    i32::try_from(cores).unwrap_or(MAX_CLUSTER_THREADS).clamp(1, MAX_CLUSTER_THREADS)
-}
-
 /// Registers the ceilings and the cluster's cap. Called once, from
 /// `_PG_init`.
 pub(crate) fn define_ceilings() {
     for ceiling in Ceiling::ALL {
         ceiling.define();
     }
-    // SAFETY: `_PG_init` runs on the main thread before the GUC is
-    // registered, so nothing else reads or writes the setting; its value
-    // at registration becomes the boot value.
-    unsafe { *CLUSTER_THREADS.as_ptr() = default_cluster_threads() };
     GucRegistry::define_int_guc(
         c"warren.cluster_threads_limit",
         c"The most compute threads the calls of every backend may run at once.",
-        c"Defaults to the cores the server sees; -1 or 0 sets no limit. A call runs on the \
+        c"-1, the default, or 0 sets no limit. A call runs on the \
            threads free, up to what it asks, and waits while none is. Needs pg_warren's \
            shared memory: on PostgreSQL 15 and 16, shared_preload_libraries.",
         &CLUSTER_THREADS,
@@ -224,12 +210,6 @@ mod bounds {
         assert_eq!(lower(4, session, Some(4), ceiling), Bound { value: 4, setting: session });
         assert_eq!(lower(4, session, None, ceiling), Bound { value: 4, setting: session });
     }
-
-    #[test]
-    fn the_cluster_cap_defaults_to_the_cores() {
-        let cores = available_parallelism().map_or(1, usize::from);
-        assert_eq!(default_cluster_threads(), cores as i32);
-    }
 }
 
 #[cfg(any(test, feature = "pg_test"))]
@@ -242,7 +222,7 @@ mod tests {
     use super::{set_in_configuration, Ceiling};
 
     #[pg_test]
-    fn the_ceilings_are_set_only_in_the_configuration_and_default_to_none() -> Result<(), Error> {
+    fn the_limits_are_set_only_in_the_configuration_and_default_to_none() -> Result<(), Error> {
         for ceiling in Ceiling::ALL {
             let name = ceiling.name();
             let row = Spi::get_two::<String, String>(&format!(
@@ -250,11 +230,11 @@ mod tests {
             ))?;
             assert_eq!(row, (Some("-1".into()), Some("sighup".into())), "{name}");
         }
-        let context = Spi::get_one::<String>(
-            "SELECT context FROM pg_catalog.pg_settings \
+        let cap = Spi::get_two::<String, String>(
+            "SELECT boot_val, context FROM pg_catalog.pg_settings \
              WHERE name = 'warren.cluster_threads_limit'",
         )?;
-        assert_eq!(context.as_deref(), Some("sighup"));
+        assert_eq!(cap, (Some("-1".into()), Some("sighup".into())));
         Ok(())
     }
 

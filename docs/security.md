@@ -85,7 +85,7 @@ Twelve GUCs, registered when the library loads (`_PG_init` in
 | `warren.cache_memory_limit` | `sighup` | `-1` (none) | −1 up | the most `warren.max_cache_memory` a backend uses |
 | `warren.build_memory_limit` | `sighup` | `-1` (none) | −1 up | the most `warren.max_build_memory` a build uses |
 | `warren.walk_paths_limit` | `sighup` | `-1` (none) | −1 up | the most `warren.max_walk_paths` a walk uses |
-| `warren.cluster_threads_limit` | `sighup` | the server's cores | −1–65536 | compute threads of all backends together |
+| `warren.cluster_threads_limit` | `sighup` | `-1` (none) | −1–65536 | compute threads of all backends together |
 
 `sighup` settings are changed in the server's configuration and take effect
 on reload. `user` settings can be changed by any role, per session or
@@ -400,8 +400,8 @@ Today's behaviour:
   (`warren.threads_limit`, `warren.compute_memory_limit`, …): a call uses
   the lower of the session's setting and the limit, and an error names the
   limit when the limit was the lower. The limits default to none.
-- `warren.cluster_threads_limit` caps compute threads across all backends,
-  by default at the cores the server sees. A call runs with the threads that
+- `warren.cluster_threads_limit` caps compute threads across all backends
+  (no cap by default; the server's cores is a good value). A call runs with the threads that
   are free and waits, cancellably, while none is (wait event
   `WarrenComputeThreads`). The cap needs the activity table in shared
   memory, so on PG 15 and 16 it is enforced only when pg_warren is

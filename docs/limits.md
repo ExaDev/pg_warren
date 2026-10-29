@@ -70,7 +70,7 @@ session can `SET` them (DESIGN.md §14 item 52).
 | `warren.cache_memory_limit` | `-1` (none) | `-1` up (kB) | `warren.max_cache_memory` |
 | `warren.build_memory_limit` | `-1` (none) | `-1` up (kB) | `warren.max_build_memory` |
 | `warren.walk_paths_limit` | `-1` (none) | `-1` up | `warren.max_walk_paths` |
-| `warren.cluster_threads_limit` | the cores the server sees | `-1`, 1–65536 | compute threads of every backend's calls at once |
+| `warren.cluster_threads_limit` | `-1` (none) | `-1`, 1–65536 | compute threads of every backend's calls at once |
 
 `0` sets no limit, as `-1` does.
 
@@ -92,10 +92,11 @@ session can `SET` them (DESIGN.md §14 item 52).
   `pg_terminate_backend` ends the wait. A call holds its threads from its
   first kernel to its last, so between kernels (reading messages for
   `gather`, writing a result) they are held, not used. A backend that
-  exits gives its threads back. The default, the cores the server sees
-  (its CPU affinity and container quota), keeps compute from running more
-  threads than there are cores; two calls at the default `warren.threads`
-  (half the cores) run at full width together.
+  exits gives its threads back. It sets no cap by default. Set to the
+  server's cores, it keeps compute from running more threads than there
+  are cores, and two calls at the default `warren.threads` (half the
+  cores) still run at full width together. Calls that wait for threads
+  count the wait against `statement_timeout`, so allow for it there.
 - **It needs pg_warren's shared memory:** nothing on PostgreSQL 17 and 18;
   on 15 and 16, `shared_preload_libraries = 'pg_warren'`. Without it the
   cap is not enforced (each call still keeps within `warren.threads_limit`),
