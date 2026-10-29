@@ -327,8 +327,9 @@ Signatures are in `\df warren.*` and in DESIGN.md (§6, §8, §9.3).
   graphs, `project` and `lift`; Louvain, Leiden and modularity.
 - [docs/change-detection.md](docs/change-detection.md): measuring structural
   change before you commit it, in one transaction or with a shadow graph.
-- [docs/limits.md](docs/limits.md): settings, memory, measured performance,
-  known limitations.
+- [docs/limits.md](docs/limits.md): settings, the limits an administrator
+  sets for a shared instance, memory, measured performance, known
+  limitations.
 - [DESIGN.md](DESIGN.md): the full design and the reasons for it.
 
 Every SQL example in the README and `docs/` runs in CI, in

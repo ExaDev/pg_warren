@@ -4,14 +4,16 @@ Settings, memory, what has been measured, and what does not work yet.
 
 ## Settings
 
-All but `warren.shared_cache_memory` are ordinary GUCs, settable per
-session or per transaction (`SET warren.threads = 8`) by any user.
-`warren.shared_cache_memory` bounds memory the whole cluster shares, so it
-is set in the server's configuration and takes effect on reload.
+These are ordinary GUCs, settable per session or per transaction (`SET
+warren.threads = 8`) by any user, but for `warren.shared_cache_memory`,
+which bounds memory the whole cluster shares: it is set in the server's
+configuration and takes effect on reload. So are the
+[administrator's limits](#limits-for-a-shared-instance), which bound what
+any session may ask.
 
 | Setting | Default | Range | What it bounds | When exceeded |
 |---|---|---|---|---|
-| `warren.threads` | half the cores, at least 1 | 1–1024 | threads a compute kernel runs on (`spmv`, `spmm`, `vector_map`, reductions, `gather`, `eigen`, `distance`, `triangles`, the sort in `core_number`, the centralities' sources and the similarities), and the mapping of a `refresh`'s edge endpoints | — |
+| `warren.threads` | half the cores, at least 1 | 1–1024 | threads a compute kernel runs on (`spmv`, `spmm`, `vector_map`, reductions, `gather`, `eigen`, `distance`, `triangles`, the sort in `core_number`, the centralities' sources and the similarities), and the mapping of a `refresh`'s edge endpoints | a call runs on fewer, within `warren.threads_limit` and the threads free under `warren.cluster_threads_limit` ([limits for a shared instance](#limits-for-a-shared-instance)) |
 | `warren.max_compute_memory` | `4GB` | `64kB` up | memory one call holds: every vector it reads (once, cached or not), every vector and work buffer it allocates, and what its statement holds in the cache past `warren.max_cache_memory` | `configuration_limit_exceeded` (53400), before allocating or loading |
 | `warren.max_cache_memory` | `4GB` | `64kB` up | what this backend's cache holds *between* statements: cached versions, cached persisted vectors, and every role's transient vectors | versions and persisted vectors no running statement has read are evicted, least recently used first; a transient write that would go over is refused with 53400 |
 | `warren.shared_cache_memory` | `4GB` | `0` up; `0` turns it off | the cluster's shared versions and persisted vectors, of every database together; set in `postgresql.conf` (or `ALTER SYSTEM`) and reloaded, not per session ([the shared cache](#the-shared-cache)) | unpinned entries no backend maps are evicted, least recently used first; one that still does not fit is loaded into the reading backend's own cache, with a `NOTICE` |
@@ -50,6 +52,75 @@ Other built-in bounds:
 Every long call checks for interrupts (traversals every 65,536 units of work,
 compute kernels from the main thread every millisecond), so
 `statement_timeout` and `pg_cancel_backend` stop it with `query_canceled`.
+
+### Limits for a shared instance
+
+On a server that several roles share, an administrator bounds what each
+session may ask, and the compute threads of all sessions together, with
+settings that only the server's configuration sets: `postgresql.conf`,
+`ALTER SYSTEM`, or a managed service's parameter group (on Amazon RDS,
+the DB parameter group; the customer's administrator is not a superuser
+there and cannot `ALTER SYSTEM`). They take effect on reload, and no
+session can `SET` them (DESIGN.md §14 item 52).
+
+| Setting | Default | Range | What it bounds |
+|---|---|---|---|
+| `warren.threads_limit` | `-1` (none) | `-1`, 1–1024 | `warren.threads` |
+| `warren.compute_memory_limit` | `-1` (none) | `-1` up (kB) | `warren.max_compute_memory` |
+| `warren.cache_memory_limit` | `-1` (none) | `-1` up (kB) | `warren.max_cache_memory` |
+| `warren.build_memory_limit` | `-1` (none) | `-1` up (kB) | `warren.max_build_memory` |
+| `warren.walk_paths_limit` | `-1` (none) | `-1` up | `warren.max_walk_paths` |
+| `warren.cluster_threads_limit` | the cores the server sees | `-1`, 1–65536 | compute threads of every backend's calls at once |
+
+`0` sets no limit, as `-1` does.
+
+- **A session's setting above its limit is not refused:** a call uses the
+  lower of the two, as Postgres runs `max_parallel_workers_per_gather`
+  within `max_parallel_workers`. So a script that sets
+  `warren.max_compute_memory = '8GB'` runs on any server, and a call that
+  needs more than the limit fails as it would over the session's own
+  setting (53400, or 54000 for a walk's `max_results`). Where the limit is
+  the lower, a message that names a setting names the limit.
+- **Fewer threads never change a result** (DESIGN.md §6.5, §6.7); they only
+  take longer.
+- **`warren.cluster_threads_limit`** counts the threads each running call
+  holds, in pg_warren's shared memory. A call asks for the lower of
+  `warren.threads` and `warren.threads_limit` and runs on as many as are
+  free, up to that, waiting only while none is. A waiting backend shows
+  `wait_event` `WarrenComputeThreads` in `pg_stat_activity` (`Extension`
+  on PostgreSQL 15 and 16), and a cancel, `statement_timeout` or
+  `pg_terminate_backend` ends the wait. A call holds its threads from its
+  first kernel to its last, so between kernels (reading messages for
+  `gather`, writing a result) they are held, not used. A backend that
+  exits gives its threads back. The default, the cores the server sees
+  (its CPU affinity and container quota), keeps compute from running more
+  threads than there are cores; two calls at the default `warren.threads`
+  (half the cores) run at full width together.
+- **It needs pg_warren's shared memory:** nothing on PostgreSQL 17 and 18;
+  on 15 and 16, `shared_preload_libraries = 'pg_warren'`. Without it the
+  cap is not enforced (each call still keeps within `warren.threads_limit`),
+  and each backend says so once in the server log.
+- **Waiting takes no turn:** a call that frees threads does not hand them
+  to the backend that waited longest, so under a constant stream of calls
+  one may wait long. `statement_timeout` bounds it.
+
+On a small instance, also size `warren.shared_cache_memory` (default `4GB`
+for the whole cluster) to the instance: Postgres does not know the
+machine's memory, so the default does not follow it. About an eighth of
+the instance's memory is a starting point, beside `shared_buffers` (a
+quarter by convention) and each backend's own `warren.max_cache_memory`
+and `warren.max_compute_memory`; on Linux it must also fit `/dev/shm`
+([the shared cache](#the-shared-cache)).
+
+| Instance memory | `warren.shared_cache_memory` | `warren.max_cache_memory` and `warren.max_compute_memory` (limits) |
+|---|---|---|
+| 4 GB | `512MB` | `256MB` |
+| 16 GB | `2GB` | `1GB` |
+| 64 GB | `8GB` | `4GB` (the defaults) |
+| 256 GB | `32GB` | `16GB` |
+
+These are starting points, not measurements: what a graph needs is in
+[Sizing](#sizing).
 
 ## Memory model
 

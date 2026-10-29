@@ -39,7 +39,9 @@ before changing code. Commands, toolchain setup and environment gotchas are in
      `version/` (diff, compaction across versions).
    - `pg_warren/src/`: `extension` (schema + `warren.version()`, SQL
      errors), `access/` (identity switches, privilege checks), `source/`
-     (node/edge query columns and read-only cursors), `catalog/` (and
+     (node/edge query columns and read-only cursors), `ceiling` (the
+     administrator's limits on what a session may ask, and the cluster's
+     cap on compute threads), `catalog/` (and
      `quota`, the lock and decision shared by vector writes and ownership
      moves),
      `segment/` (chunked persistence), `shared_memory` (where shared
@@ -47,7 +49,9 @@ before changing code. Commands, toolchain setup and environment gotchas are in
      per-backend table in shared memory: cache counters, `warren.backends()`,
      progress frames, `warren.progress()` and `warren.report_progress()`),
      `cache/` (loader; `introspection`, `warren.cache()`; `shared`, the shared cache across backends, and `shared::introspection`, `warren.shared_cache()`), `build/`,
-     `version_sql/` (compact, diff), `interrupts` (the main-thread poll),
+     `version_sql/` (compact, diff), `interrupts` (the main-thread poll;
+     `admission`, the compute threads a call is granted under the
+     cluster's cap),
      `read_only` (single-row SPI reads that assign no transaction id, and
      `writing`, the one writable SPI connection),
      `parallel_worker` (what a parallel worker records and raises),
@@ -61,6 +65,7 @@ before changing code. Commands, toolchain setup and environment gotchas are in
      `segment` → `vector` → `cache` → `build` → `version_sql`; `access`,
      `shared_memory`, `catalog` → `activity` → `vector`, `cache`, `build`,
      `version_sql`, `interrupts`, `spectral_sql`, `community_sql`;
+     `ceiling` → `cache`, `build`, `traversal_sql`, `interrupts`;
      `shared_memory` → `cache`; `cache` →
      `external_ids`, `selection`; and `external_ids`, `selection`,
      `interrupts` → `traversal_sql`, `compute_sql` (siblings: neither depends
