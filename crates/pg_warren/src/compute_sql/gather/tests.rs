@@ -242,6 +242,22 @@ mod tests {
         Ok(())
     }
 
+    /// `text` messages keep the database encoding's bytes: they never pass
+    /// through the client encoding, which may not be able to hold them.
+    #[pg_test]
+    fn text_messages_do_not_depend_on_the_client_encoding() -> Result<(), Error> {
+        small("t")?;
+        Spi::run("SET LOCAL client_encoding = 'LATIN1'")?;
+        let euros = "SELECT id, '€' || id FROM t_nodes";
+        let collected = rows(&format!(
+            "SELECT node_id || ':' || value::text
+             FROM warren.gather('t', $m${euros}$m$, NULL::bigint, NULL::text[]) ORDER BY node_id"
+        ));
+        Spi::run("RESET client_encoding")?;
+        assert_eq!(collected?.as_deref(), Some("1:{€4} 2:{€1} 3:{€2} 4:{€1,€3} 5:{€5}"));
+        Ok(())
+    }
+
     #[pg_test]
     fn several_messages_per_sender_keep_their_order_and_nulls_are_skipped() -> Result<(), Error> {
         small("t")?;

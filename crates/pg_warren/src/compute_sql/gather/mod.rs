@@ -327,7 +327,7 @@ impl<E: CachedIds> Run<'_, E> {
         self.stream(messages, Box::new(|value: T, sql| value.datum(sql)))
     }
 
-    /// `query`'s `text` or `bytea` payloads, for `concat`.
+    /// `query`'s `text`, `varchar`, `char` or `bytea` payloads.
     fn payloads(&self, query: &str) -> Result<Rows, ComputeSqlError> {
         let mut messages = Messages::<Bytes>::new(&self.vectors.memory)?;
         read::from_query(self.vectors, self.caller, query, |node, row| {

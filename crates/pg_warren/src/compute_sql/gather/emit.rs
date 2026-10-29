@@ -98,8 +98,8 @@ pub(super) fn integer(value: i64, sql: pg_sys::Oid) -> Option<pg_sys::Datum> {
     }
 }
 
-/// `text` or `bytea` bytes (text in the database encoding, unchecked) as a
-/// datum: both are a varlena of the bytes.
+/// `text`, `varchar`, `char` or `bytea` bytes (text in the database
+/// encoding, unchecked) as a datum: each is a varlena of the bytes.
 pub(super) fn payload(bytes: &[u8]) -> Option<pg_sys::Datum> {
     let len = i32::try_from(bytes.len()).ok()?;
     // SAFETY: cstring_to_text_with_len copies `len` bytes into a new
