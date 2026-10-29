@@ -1,5 +1,7 @@
 # pg_warren
 
+[![GitHub](https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white)](https://github.com/ExaDev/pg_warren) [![Release](https://img.shields.io/github/v/release/ExaDev/pg_warren)](https://github.com/ExaDev/pg_warren/releases/latest) [![CI](https://img.shields.io/github/actions/workflow/status/ExaDev/pg_warren/ci.yml?branch=main)](https://github.com/ExaDev/pg_warren/actions)
+
 Deep traversal and whole-graph computation for PostgreSQL, over graphs whose
 nodes and edges live in your ordinary tables.
 
@@ -213,7 +215,7 @@ cargo-pgrx at exactly the version the extension uses:
 ```sh
 git clone https://github.com/ExaDev/pg_warren.git
 cd pg_warren
-git checkout v0.7.0   # the latest release; main is the version in development
+git checkout v0.8.0   # the latest release; main is the version in development
 cargo install cargo-pgrx --version 0.19.3 --locked
 cargo pgrx init --pg16 "$(command -v pg_config)"
 cd crates/pg_warren
