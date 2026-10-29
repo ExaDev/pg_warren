@@ -29,7 +29,7 @@ something is planned rather than built, it says so.
   works there.
 - **Known gaps** are listed at the end: per-session resource settings that
   any role can raise, `pg_dump` by a non-superuser, and supply-chain items
-  (reproducible builds, an SBOM, dependency audits, a security policy).
+  (reproducible builds, an SBOM, dependency audits).
 
 ## What it installs
 
@@ -235,8 +235,10 @@ graphs under a path only their owner can write (README, "Install";
   and every function's definition in `pg_proc`, as for any extension.
 - **Graphs**: there is no function that lists graphs. A role that names a
   graph it may not read is refused, and the refusal (42501) says the graph
-  exists and names its owner role. Graph names share one namespace per
-  database.
+  exists and names its owner role. This is by design: it matches
+  Postgres's own "permission denied for table …", which also confirms
+  that a table exists. Graph names share one namespace per database, so
+  don't put secrets in them.
 - **Introspection**: `warren.shared_cache()` and `warren.cache()` list only
   versions and vectors of graphs the caller may read, plus cluster totals
   (sizes and counts). `warren.backends()` and `warren.progress()` follow
@@ -468,8 +470,9 @@ These are tracked in [#103](https://github.com/ExaDev/pg_warren/issues/103)
 
 ## Reporting a vulnerability
 
-pg_warren does not yet publish a security policy (`SECURITY.md`) or a
-private channel for reporting vulnerabilities. This is a known gap.
+Report a vulnerability privately, through GitHub's private vulnerability
+reporting; [SECURITY.md](https://github.com/ExaDev/pg_warren/blob/main/SECURITY.md)
+says how, what to include and what happens next.
 
 ## Known gaps, together
 
@@ -477,7 +480,5 @@ private channel for reporting vulnerabilities. This is a known gap.
   any role; instance-wide ceilings are planned for 0.9.0.
 - A non-superuser's `pg_dump` fails while pg_warren is installed; the
   predefined-role route is checked only by hand (§14 item 51).
-- A role can learn that a graph name exists, and its owner's role name, by
-  calling a function on it.
 - Small Rust allocations are not fallible; only graph-sized buffers are.
-- No reproducible builds, SBOM, dependency audit or security policy yet.
+- No reproducible builds, SBOM or dependency audit yet.
