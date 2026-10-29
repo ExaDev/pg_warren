@@ -196,16 +196,28 @@ That moment is in the past. A version is behind the primary by the
 replication lag at its refresh, plus the time since. `info() ->>
 'staleness'` gives the time since the refresh. Its `built_lsn` is a
 position in the graph server's WAL, not the primary's, so do not compare
-it with the primary's. The lag is measured on the primary, as an amount of
-WAL not yet confirmed by the graph server:
+it with the primary's. The lag is measured on the primary, as the amount of
+WAL the primary has inserted that the graph server has not yet confirmed.
+The graph server confirms a position only once it has applied and
+committed every transaction before it:
 
 ```sql
 -- On the managed primary: how far behind the graph server is
-SELECT slot_name, pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn)) AS behind
+SELECT slot_name, pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_insert_lsn(), confirmed_flush_lsn)) AS behind
 FROM pg_replication_slots WHERE slot_name = 'graph_source';
 ```
 
-On RDS, CloudWatch shows the same as `OldestReplicationSlotLag`.
+On RDS, CloudWatch shows much the same as `OldestReplicationSlotLag`.
+
+To know that a change has reached the graph server, for example before a
+refresh that must include it: once it has committed, take
+`pg_current_wal_insert_lsn()` on the primary, and wait until the slot's
+`confirmed_flush_lsn` is at or past that position. A refresh that starts
+after that includes the change. Take the insert position, not
+`pg_current_wal_lsn()`: that is how far the WAL has been written, and a
+transaction committed with `synchronous_commit = off` returns before its
+WAL is written, so the write position can be behind its commit for a
+while (up to three times `wal_writer_delay`).
 
 ## Reading results on the primary
 

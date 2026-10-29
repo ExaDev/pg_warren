@@ -142,7 +142,7 @@ class Sidecar:
         return failures + lr.top_ranks_differences(top, ranks)
 
     def catch_up(self):
-        lsn = self.primary_db.query("SELECT pg_current_wal_lsn()")[0][0]
+        lsn = lr.committed(self.primary_db)
         lr.wait_until(lambda: lr.caught_up(self.primary_db, lsn), f"the graph server confirming {lsn}")
 
     def compare(self, when):

@@ -120,3 +120,24 @@ def test_any_error_or_warning_in_a_server_log_is_a_problem():
     line = "2026-10-29 10:00:00.001 UTC [7] 42501 ERROR:  permission denied"
     assert lr.log_problems(line) == [f"server log: {line}"]
     assert lr.log_problems("2026-10-29 10:00:00.001 UTC [7] 00000 LOG:  started") == []
+
+
+class Primary:
+    """A primary that has inserted the WAL of commits made with
+    `synchronous_commit = off` but not yet written it, as the harness's
+    clusters do: the write position is behind the insert position."""
+
+    POSITIONS = {"pg_current_wal_insert_lsn()": "0/1BFED98", "pg_current_wal_lsn()": "0/1BE6E58"}
+
+    def query(self, sql):
+        return [[next(lsn for function, lsn in self.POSITIONS.items() if function in sql)]]
+
+
+def test_the_wait_for_the_graph_server_targets_the_end_of_the_last_commit_not_the_written_wal():
+    assert lr.committed(Primary()) == "0/1BFED98"
+
+
+def test_the_guides_lag_counts_from_the_inserted_wal_not_the_written():
+    lag = next(block.sql for block in guide.blocks(GUIDE.read_text())
+               if block.key == "-- On the managed primary: how far behind the graph server is")
+    assert "pg_current_wal_insert_lsn()" in lag and "pg_current_wal_lsn()" not in lag

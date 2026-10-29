@@ -126,8 +126,19 @@ def wait_until(check, what, seconds=WAIT_SECONDS):
         time.sleep(0.1)
 
 
+def committed(primary_db):
+    """Where the primary's WAL ends, past every transaction committed so
+    far: its insert position. Not `pg_current_wal_lsn()`, the write
+    position: the scratch clusters commit with `synchronous_commit = off`,
+    so a commit returns before its WAL is written, and the write position
+    can stay behind it until the WAL writer's next round."""
+    return primary_db.query("SELECT pg_current_wal_insert_lsn()")[0][0]
+
+
 def caught_up(primary_db, lsn):
-    """Whether the graph server has confirmed the primary's WAL up to `lsn`."""
+    """Whether the graph server has confirmed the primary's WAL up to
+    `lsn`. The subscription confirms a position only once the
+    transactions before it are applied and committed on the graph server."""
     rows = primary_db.query(f"SELECT confirmed_flush_lsn >= '{lsn}'::pg_lsn FROM pg_replication_slots "
                             f"WHERE slot_name = '{SLOT}'")
     return rows == [["t"]]
