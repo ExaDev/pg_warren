@@ -22,9 +22,15 @@ CREATE ROLE alice LOGIN;
 CREATE ROLE reporter;
 GRANT USAGE ON SCHEMA assert TO watcher, monitor, alice, reporter;  -- test plumbing
 -- refresh_g(): a SECURITY DEFINER refresh of g, which alice may call but
--- whose graph she may not read.
+-- whose graph she may not read. Both belong to progress_owner, not a
+-- superuser: a superuser's graph is refreshed only in a superuser's own
+-- session (DESIGN.md §7).
+CREATE ROLE progress_owner;
+GRANT SELECT ON nodes, edges TO progress_owner;
+SELECT warren.set_owner('g', 'progress_owner');
 CREATE FUNCTION refresh_g() RETURNS bigint LANGUAGE sql SECURITY DEFINER
     SET search_path = pg_catalog AS $$ SELECT warren.refresh('g') $$;
+ALTER FUNCTION refresh_g() OWNER TO progress_owner;
 GRANT EXECUTE ON FUNCTION refresh_g() TO alice;
 
 SELECT dblink_connect('a', :'conninfo');
@@ -185,3 +191,5 @@ DROP ROLE watcher;
 DROP ROLE monitor;
 DROP ROLE alice;
 DROP ROLE reporter;
+REVOKE SELECT ON nodes, edges FROM progress_owner;
+DROP ROLE progress_owner;

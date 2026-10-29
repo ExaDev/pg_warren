@@ -26,10 +26,13 @@ recursive CTEs / NetworkX on generated fixtures, and the Appendix A use cases
   version was built from, every failure's SQLSTATE, what is left once
   they disconnect, and the server log (DESIGN.md §13, M11).
 - `crash_recovery.py` stops refreshes mid-way (waiting to read edges,
-  writing segments, before commit) by `pg_terminate_backend`, SIGKILL
-  and an immediate shutdown, and checks that each recovery leaves the
-  catalog and the graph's answers as before, the shared cache working
-  and a new refresh succeeding (DESIGN.md §13, M11).
+  writing segments, before commit), `pagerank` iterating and a read
+  loading a version into the shared cache, by `pg_terminate_backend`,
+  `pg_cancel_backend`, SIGKILL and an immediate shutdown, and checks
+  that each recovery leaves the catalog and the graph's answers as
+  before, a cancelled backend working, a reader that waited on a stopped
+  load reading, the shared cache working and a new refresh succeeding
+  (DESIGN.md §13, M11 and 0.9.0).
 - `logical_replication.py` runs the SQL of `docs/beside-managed.md` as
   written on two clusters, a primary without pg_warren and a graph server
   that subscribes to its node and edge tables, and checks that graphs
@@ -48,6 +51,18 @@ recursive CTEs / NetworkX on generated fixtures, and the Appendix A use cases
   cancelled by the recovery conflict (40001), with and without
   `hot_standby_feedback`; and that the standby, promoted, writes and its
   cascade follows it (DESIGN.md §5.1, §13, M11).
+- `preload.py`, `point_in_time.py` and `major_upgrade.py` do to a
+  cluster with graphs what a managed service does (DESIGN.md §13, 0.9.0
+  "Lifecycle"): add pg_warren to `shared_preload_libraries` and remove
+  it; restore a base backup (`pg_basebackup`) and recover it to each
+  restore point marked after it and to the end of the WAL archive; and
+  `pg_upgrade` it to a later major, copying its files and, as managed
+  services do, hard-linking them (`--link`, after which only the new
+  cluster is checked: the old one must not start again). Each builds
+  the replica check's graphs and checks, after the change, that every pg_warren catalog
+  table holds the rows and every read gives the answers they had then
+  (`harness/graph_state.py`), that the shared cache works, and that
+  refreshes and vector writes succeed.
 
 - `sql_fuzz.py` calls every `warren.*` function (read from `pg_proc`)
   with generated arguments, valid ones from the fixture's graphs,
