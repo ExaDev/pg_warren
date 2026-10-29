@@ -71,8 +71,9 @@ for pooling, backups, upgrades, replicas, and troubleshooting.
 
 ## Evaluate performance
 
-The [performance comparison](/pg_warren/docs/performance/) summarises measured
-results against igraph and Neo4j, with and without GDS. The
+The [performance comparison](/pg_warren/docs/performance/) sets pg_warren's
+features beside pgGraph, igraph and Neo4j, and summarises measured results
+against igraph and Neo4j, with and without GDS. The
 [benchmark methodology and full results](/pg_warren/docs/benchmarks/) describe
 the datasets, engine settings, correctness checks, and comparison limits.
 Performance depends on the workload; the results include both wins and losses.
