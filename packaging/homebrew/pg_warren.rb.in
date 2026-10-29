@@ -34,6 +34,8 @@ class PgWarren < Formula
              "--out-dir", staged
       pkglibdir = Utils.safe_popen_read(pg_config, "--pkglibdir").chomp
       sharedir = Utils.safe_popen_read(pg_config, "--sharedir").chomp
+      # The committed install script, not pgrx's, whose order varies by build.
+      cp "sql/pg_warren--#{version}.sql", "#{staged}#{sharedir}/extension/"
       (lib/postgresql.name).install Dir["#{staged}#{pkglibdir}/*"]
       (share/postgresql.name/"extension").install Dir["#{staged}#{sharedir}/extension/*"]
     end
