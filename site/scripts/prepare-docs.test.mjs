@@ -15,7 +15,7 @@ const sqlBlocks = (text) => [...text.matchAll(/^```sql\n[\s\S]*?^```/gm)].map(([
 test('covers all canonical guides, README sections, changelog, benchmarks, and contributing', () => {
   assert.deepEqual(generatedPages.map(({ slug }) => slug), [
     'semantics', 'traversal', 'compute', 'communities', 'change-detection', 'limits',
-    'installation', 'quickstart', 'performance', 'changelog', 'benchmarks', 'contributing',
+    'installation', 'quickstart', 'performance', 'positioning', 'changelog', 'benchmarks', 'contributing',
     ...examplePages.map(({ slug }) => slug),
   ]);
 });
@@ -36,6 +36,7 @@ test('resolves cross-page links, README section aliases, original anchors, and u
   assert.equal(routeForSource('README.md', 'install'), '/pg_warren/docs/installation/#install');
   assert.equal(routeForSource('README.md', 'how-it-compares'), '/pg_warren/docs/performance/#how-it-compares');
   assert.equal(routeForSource('README.md', 'documentation'), '/pg_warren/docs/');
+  assert.equal(routeForSource('docs/positioning.md', 'pggraph-and-pg_warren'), '/pg_warren/docs/positioning/#pggraph-and-pg_warren');
   assert.equal(routeForSource('README.md', 'the-sql-surface-at-a-glance'), 'https://github.com/ExaDev/pg_warren/blob/main/README.md#the-sql-surface-at-a-glance');
   const result = renderPage('# Traversal\n\n[Ids](semantics.md#id-types-and-type-witnesses) [Compute](./compute.md) [Design](../DESIGN.md#scope) [External](https://example.com/guide.md) [Here](#paths) [File](../test/sql/docs_examples.sql)\n', traversal);
   assert.ok(result.includes('[Ids](/pg_warren/docs/semantics/#id-types-and-type-witnesses)'));
