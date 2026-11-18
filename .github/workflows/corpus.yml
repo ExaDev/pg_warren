@@ -1,9 +1,9 @@
 name: Real graphs (nightly)
 
-# bench/corpus's tiny tier (DESIGN.md §12 "Real graphs", §13 M11): the nine
-# keepset datasets fetched by keepset's recipes and checked against
-# pins.json, loaded, built by a release build and checked against NetworkX
-# and igraph. It reads third-party hosts (SNAP, Newman's netdata, KONECT,
+# bench/corpus's tiny tier (DESIGN.md §12 "Real graphs", §13 M11): its
+# keepset datasets but two (below), fetched by keepset's recipes and checked
+# against pins.json, loaded, built by a release build and checked against
+# NetworkX and igraph. It reads third-party hosts (SNAP, Newman's netdata, KONECT,
 # Netzschleuder, the KGE mirror), so it runs nightly and on demand, never on
 # a pull request or a push: it does not gate merges. A failure fails this
 # run red, and the step summary says what did not match.
@@ -91,15 +91,18 @@ jobs:
         with:
           path: ~/.cache/warren-corpus/datasets
           key: corpus-tiny-${{ hashFiles('bench/corpus/pins.json', 'bench/corpus/manifest.json', 'bench/corpus/fetch.py', 'bench/corpus/graph_v1.py', 'bench/corpus/tables.py') }}
-      - name: The tiny tier's datasets, but transport-airline
+      - name: The tiny tier's datasets, but transport-airline and london_transport
         # raw.githubusercontent.com sends transport-airline's routes.dat
         # gzip-encoded to a GitHub runner even though keepset asks for no
         # encoding, and keepset keeps a response's bytes as sent, so it
         # reads gzip as text. It is checked where the fetch works (§12).
+        # london_transport: keepset reads its pinned Wayback snapshot first,
+        # which is not a valid zip, and does not fall back to the closest
+        # capture or the live URL (bench/corpus/README.md, "The nightly job").
         run: |
           {
             printf 'DATASETS='
-            python -c "import json; d = json.load(open('bench/corpus/manifest.json'))['datasets']; print(' '.join(n for n, s in d.items() if s['tier'] == 'tiny' and n != 'transport-airline'))"
+            python -c "import json; skip = {'transport-airline', 'london_transport'}; d = json.load(open('bench/corpus/manifest.json'))['datasets']; print(' '.join(n for n, s in d.items() if s['tier'] == 'tiny' and n not in skip))"
           } >>"$GITHUB_ENV"
       - name: Fetch them (keepset, checked against pins.json)
         run: |

@@ -497,7 +497,7 @@ How to run each locally is in [CONTRIBUTING.md](../CONTRIBUTING.md).
 | Parallel labels (`parallel_labels`, `every_function_has_its_declared_parallel_label`, `every_read_runs_in_parallel_mode`) | each function's label is the declared one, and every non-`UNSAFE` read runs in parallel mode and in a worker | in the pgrx suite |
 | SQL harness (`test/run.py`, `test/sql/`) | integration tests, races between sessions, the shared cache across backends, `DISCARD ALL`, the trusted install, documentation examples | PG 16 (x86_64) at the default, trusted and preloaded; the shared-cache tests in three modes on PG 15–18; arm64 and macOS |
 | Oracle tests (`test/sql/oracle_*.sql`) | results against NetworkX and recursive SQL | in the SQL harness |
-| Real graphs (`bench/corpus`) | 9 public datasets checked against NetworkX and igraph | nightly |
+| Real graphs (`bench/corpus`) | 7 public datasets (the tiny tier but transport-airline and london_transport) checked against NetworkX and igraph | nightly |
 | Segment decoder fuzzing (`fuzz/`, cargo-fuzz) | the decoders of stored graph segments (CSR, id maps, tombstones, relation dictionary, membership) on arbitrary bytes, 30 s per target | every CI run |
 | SQL-surface fuzzer (`test/sql_fuzz.py`) | every `warren.*` function with generated and hostile arguments, as four roles, under a hostile `search_path`, in parallel plans and rolled-back transactions; fails on crashes, internal errors, privilege leaks and leftover state | PG 16 |
 | Miri (`cargo miri test -p warren-core`) | undefined behaviour in the domain crate and its dependencies' unsafe code | nightly on `main`, and on release pull requests |
