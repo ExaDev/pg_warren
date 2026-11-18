@@ -131,6 +131,11 @@
   Lifecycle, pg_upgrade (16 to 17) and the beside-managed guide on PG 16
   only. Pushes to main, the nightly run, dispatches and release PRs run
   everything, as before.
+- The nightly real-graph check (`corpus.yml`) leaves out london_transport
+  until keepset can fetch it again: its pinned Wayback snapshot is not a
+  valid zip, and keepset does not fall back past it. The dataset stays in
+  the tiny tier, pinned, with its results (bench/corpus/README.md, "The
+  nightly job").
 - **Dumps and restores without a superuser** (DESIGN.md §14 item 51,
   [#103](https://github.com/ExaDev/pg_warren/issues/103)): a role granted
   `pg_read_all_data` dumps graphs, versions and vectors, and a role with

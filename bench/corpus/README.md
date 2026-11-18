@@ -36,7 +36,7 @@ fetch whose bytes differ fails (`PinMismatch`) and leaves nothing behind.
 
 | Tier | Datasets | Fetch | `check` | `time` |
 |---|---|---|---|---|
-| tiny (nightly in CI) | karate, lesmis, celegans, polblogs, london_transport, transport-airline, facebook, kg-codex-s, wn18rr | 25 s, 9 MB of tables | about 3 minutes | not run |
+| tiny (nightly in CI, but transport-airline and london_transport: below) | karate, lesmis, celegans, polblogs, london_transport, transport-airline, facebook, kg-codex-s, wn18rr | 25 s, 9 MB of tables | about 3 minutes | not run |
 | medium (about 1M edges) | cit-hepth, email-enron, fb15k-237, ss-gleich-usroads-48, dblp, yago3-10, hetionet, roadnet-tx | see results | see results | see results |
 | large | livejournal, ogbn-mag | needs about 75 and 45 GB of Node heap (below) | not run | not run |
 
@@ -176,6 +176,21 @@ uploaded as the `corpus-tiny` artifact. It is bounded at 60 minutes. Locally
 (4 shared vCPUs, release build) the fetch takes 25 s and the check 3 min,
 2.5 of them WN18RR's betweenness (pg_warren and igraph, about 3.8·10⁹ edge
 visits each).
+
+Two tiny datasets are left out of the nightly run (`corpus.yml` lists the
+tier's datasets but them), and stay in the tier, pinned, with their results:
+
+- **transport-airline**: raw.githubusercontent.com sends its `routes.dat`
+  gzip-encoded to a GitHub runner, and keepset keeps the bytes as sent.
+- **london_transport** (since 2026-11-18; the job failed every night from
+  28 Oct): keepset (0.57.0, and 0.126.0 too) reads the source's pinned
+  Wayback snapshot first, and that snapshot (20261022023301) is not a valid
+  zip; keepset does not fall back to the closest capture or the live URL
+  when a pinned snapshot does not extract. The live zip has also been
+  regenerated (sha256 `51daf469…`, against `37af686b…` in `pins.json`),
+  though the tables converted from it are byte for byte the ones recorded.
+  It comes back once keepset repins the snapshot or falls back past one that
+  does not extract, and its pin is updated to the regenerated zip.
 
 ## The large tier
 
