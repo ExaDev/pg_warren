@@ -4,7 +4,11 @@
 set -euo pipefail
 tag="$1"
 name="pg-warren-check-$$"
-trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
+# On failure, show the server's log first: a server that exits at start, as
+# one that cannot load the library does, otherwise leaves only "container
+# is not running".
+trap 'status=$?; if [ "$status" -ne 0 ]; then docker logs "$name" 2>&1 | tail -50 || true; fi
+      docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
 docker run -d --name "$name" --shm-size=256m -e POSTGRES_PASSWORD=postgres \
   -v "$(cd "$(dirname "$0")" && pwd)/smoke.sql:/smoke.sql:ro" "$tag" >/dev/null
 # The entrypoint's init server listens only on the Unix socket and then

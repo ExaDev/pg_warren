@@ -70,14 +70,14 @@ DISTRIBUTIONS = (
 
 # PGDG's official postgres images, the Docker image's base.
 POSTGRES_IMAGES = {
-    ("15", "bookworm"): "sha256:22c6356b2897cb0b4be6ad550b44ff97a0f29df7dbe327c01bc3c84bd457694d",
-    ("15", "trixie"): "sha256:baa22e6286bf832cb147b8bb5aa9d8bc999846d69c21d11bf63f58fbeed1fa48",
-    ("16", "bookworm"): "sha256:d81f7b51697014367236d07ec58b54153fc28f828b72bf247fe5c7487520bcb0",
-    ("16", "trixie"): "sha256:9e2cf6287f25c3151f4c9421ccce2b17f3e60061c111a29165e0d2cdd9ff0a97",
-    ("17", "bookworm"): "sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27",
-    ("17", "trixie"): "sha256:b8faeff7712663c2773a190181e1246e37e364b887611c04658c28b44e2408fe",
-    ("18", "bookworm"): "sha256:bbf83594798e144bff365a9c191c5d779f181fb3135902064ab8ff11918020fc",
-    ("18", "trixie"): "sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6",
+    ("15", "bookworm"): "sha256:72ccb1ad4dc9d5813ea40a8c1c87af746f16658fb029c17fe570ea9b881f68b3",
+    ("15", "trixie"): "sha256:2663a9f0fde52de94f5dad3603a1942359f49472f1017c1a6d64f66bfedacb40",
+    ("16", "bookworm"): "sha256:a49f7438ba03589f9b1ca062f2da82e899b48ea1dc50d2449fa09a70be83ebca",
+    ("16", "trixie"): "sha256:dd2bf3ce2dc83a81674cf7f217fcfd8a5009a4b325dda5b843bfee82a06cff6f",
+    ("17", "bookworm"): "sha256:40865bc877a289da75963d97d72b59633f639fc5af7a4e856bfa3714cae5b536",
+    ("17", "trixie"): "sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac",
+    ("18", "bookworm"): "sha256:ece55f7868da684e400f82f1030a050718adbdd65c23aa500c486f6e2950dc0f",
+    ("18", "trixie"): "sha256:2ea8630df176ad090ec92136dee850397c5af8781e4bcf2e4162593691c61bbc",
 }
 
 
