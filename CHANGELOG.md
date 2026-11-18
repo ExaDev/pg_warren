@@ -128,6 +128,7 @@
   current minors (15.20, 16.16, 17.12, 18.7), which the packages are built
   against; an image whose server is older than its library's headers cannot
   preload it. A failed image check now shows the server's log.
+
 ### Documentation
 
 - **CI runs in two tiers** (CONTRIBUTING.md, "What CI runs, and when").
