@@ -123,6 +123,11 @@
   fixed by updating `crossbeam-epoch` (in the library, through rayon) to
   0.9.21 and a test dependency's `ctutils` to 0.4.7.
 
+- **rustix 1.1.6** (through `tempfile`, in the test dependencies only), for
+  RUSTSEC-2026-0486. The Docker images' PGDG base images are pinned to the
+  current minors (15.20, 16.16, 17.12, 18.7), which the packages are built
+  against; an image whose server is older than its library's headers cannot
+  preload it. A failed image check now shows the server's log.
 ### Documentation
 
 - **CI runs in two tiers** (CONTRIBUTING.md, "What CI runs, and when").
