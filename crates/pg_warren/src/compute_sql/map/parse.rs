@@ -17,6 +17,7 @@
 use std::collections::HashSet;
 use std::ffi::{CStr, CString};
 
+use pgrx::pg_sys::PgNode;
 use pgrx::{pg_guard, pg_sys, PgList};
 use warren_core::compute::Dtype;
 
@@ -109,7 +110,7 @@ fn check_lone_expression(expr: &str) -> Result<HashSet<String>, ComputeSqlError>
     // SAFETY: a RawStmt from raw_parser; its stmt is a parse node.
     let node = unsafe { (*statement).stmt };
     // SAFETY: `node` is a valid parse node.
-    if !unsafe { pgrx::is_a(node, pg_sys::NodeTag::T_SelectStmt) } {
+    if !unsafe { pg_sys::Node::is_a_ptr(node, pg_sys::NodeTag::T_SelectStmt) } {
         return Err(not_one());
     }
     let select = node.cast::<pg_sys::SelectStmt>();
@@ -164,12 +165,12 @@ unsafe extern "C-unwind" fn column_names(
     // SAFETY: the walker is given valid raw parse nodes, and `context` is
     // the set `check_lone_expression` passed.
     unsafe {
-        if pgrx::is_a(node, pg_sys::NodeTag::T_ColumnRef) {
+        if pg_sys::Node::is_a_ptr(node, pg_sys::NodeTag::T_ColumnRef) {
             let names = &mut *context.cast::<HashSet<String>>();
             let fields =
                 PgList::<pg_sys::Node>::from_pg((*node.cast::<pg_sys::ColumnRef>()).fields);
             for field in fields.iter_ptr() {
-                if pgrx::is_a(field, pg_sys::NodeTag::T_String) {
+                if pg_sys::Node::is_a_ptr(field, pg_sys::NodeTag::T_String) {
                     let name = CStr::from_ptr((*field.cast::<pg_sys::String>()).sval);
                     names.insert(name.to_string_lossy().into_owned());
                 }

@@ -250,7 +250,7 @@ pub(crate) fn for_each_tuple<E: From<pgrx::spi::Error>>(
     let mut rows = PgMemoryContexts::new("warren rows");
     let context = rows.value();
     loop {
-        check_for_interrupts!();
+        check_for_interrupts();
         let mut batch = cursor.fetch(BATCH_ROWS)?;
         if batch.is_empty() {
             return Ok(());

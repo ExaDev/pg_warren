@@ -39,7 +39,7 @@ use placement::{Located, Shared, SLOTS};
 use segment::{Segment, SegmentRegion};
 
 pub(crate) use placement::request_preload;
-#[cfg(any(feature = "pg17", feature = "pg18", test))]
+#[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19", test))]
 pub(in crate::cache::shared) use placement::FORMAT;
 pub(in crate::cache::shared) use segment::PREFIX;
 
@@ -116,7 +116,7 @@ impl Dsm {
         BACKEND.with_borrow(Option::is_some).then_some(Self(()))
     }
 
-    /// The port, after finding (or on PG 17 and 18 creating) the registry
+    /// The port, after finding (or on PG 17 and later creating) the registry
     /// on this backend's first use and registering the callbacks that give
     /// back what it holds; why the shared cache is unavailable otherwise.
     pub(crate) fn open() -> Result<Self, Unavailable> {
@@ -469,7 +469,7 @@ impl SharedVersions for Dsm {
 }
 
 /// The wait event a backend waiting for another's load shows in
-/// `pg_stat_activity` (DESIGN.md §5.7): `WarrenSharedLoad` on PG 17 and 18,
+/// `pg_stat_activity` (DESIGN.md §5.7): `WarrenSharedLoad` on PG 17 and later,
 /// `Extension` on PG 15 and 16.
 fn wait_event() -> u32 {
     crate::activity::wait_event(c"WarrenSharedLoad")

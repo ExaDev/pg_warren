@@ -132,7 +132,7 @@ fn vector_degree(
             let mut degrees = Vector::filled(&vectors.memory, id_space, 1, 0i64)?;
             for (node, degree) in (0..).zip(degrees.values_mut()?) {
                 if node % POLL_NODES == 0 {
-                    check_for_interrupts!();
+                    check_for_interrupts();
                 }
                 let counted = if per_relation {
                     adjacency.degree_per_relation(node)

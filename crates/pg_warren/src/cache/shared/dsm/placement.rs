@@ -1,4 +1,4 @@
-//! Where the registry lives (DESIGN.md §5.6, §14 item 27): on PG 17 and 18
+//! Where the registry lives (DESIGN.md §5.6, §14 item 27): on PG 17 and later
 //! in a named DSM segment that the first backend to use it creates
 //! (`GetNamedDSMSegment`), so nothing needs configuring; on PG 15 and 16 in
 //! the main shared memory, placed by the `shmem_request_hook` and
@@ -25,14 +25,14 @@ pub(super) const SLOTS: usize = 128;
 /// different registries.
 pub(in crate::cache::shared) const FORMAT: u32 = 4;
 
-/// The name of the registry: its named DSM segment on PG 17 and 18, its
+/// The name of the registry: its named DSM segment on PG 17 and later, its
 /// `ShmemInitStruct` entry on PG 15 and 16. It ends with [`FORMAT`].
 pub(super) const NAME: &std::ffi::CStr = c"pg_warren.cache.4";
 
 /// The LWLock tranche's name, which each backend registers.
 const TRANCHE: &std::ffi::CStr = c"pg_warren";
 
-/// The registry in shared memory: its lock (PG 17 and 18; PG 15 and 16
+/// The registry in shared memory: its lock (PG 17 and later; PG 15 and 16
 /// take one from a named tranche), clocks, the clocks' drain count as an
 /// atomic, slots, pins and a condition variable per slot, broadcast when
 /// it leaves `loading`.
@@ -81,7 +81,7 @@ unsafe fn initialize(shared: *mut Shared, tranche: i32) {
 
 /// Whether a registry of format `found` is this build's; one of another
 /// format (a build that a restart has not yet replaced) cannot be read.
-#[cfg(any(feature = "pg17", feature = "pg18", test))]
+#[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19", test))]
 fn checked(found: u32) -> Result<(), Unavailable> {
     if found == FORMAT {
         Ok(())
@@ -91,7 +91,7 @@ fn checked(found: u32) -> Result<(), Unavailable> {
 }
 
 /// The room `GetNamedDSMSegment` may take to create the registry.
-#[cfg(any(feature = "pg17", feature = "pg18", test))]
+#[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19", test))]
 const REGISTRY_ROOM: u64 = crate::shared_memory::named_segment_room(std::mem::size_of::<Shared>());
 
 /// Whether the registry may be created where the store (`store`) has
@@ -101,7 +101,7 @@ const REGISTRY_ROOM: u64 = crate::shared_memory::named_segment_room(std::mem::si
 /// room counts the reserve that versions leave free: a cache filled to it
 /// must still let new backends find the registry and attach to what it
 /// holds, and the registry is created once per cluster.
-#[cfg(any(feature = "pg17", feature = "pg18", test))]
+#[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19", test))]
 fn room_for_registry(space: Option<(u64, u64)>, store: &'static str) -> Result<(), Unavailable> {
     let available = space.map_or(0, |(available, _)| available);
     if available >= REGISTRY_ROOM {
@@ -111,9 +111,9 @@ fn room_for_registry(space: Option<(u64, u64)>, store: &'static str) -> Result<(
     }
 }
 
-/// The registry, found or created on first use (PG 17 and 18), unless it
+/// The registry, found or created on first use (PG 17 and later), unless it
 /// has another format or the store has no room to create it.
-#[cfg(any(feature = "pg17", feature = "pg18"))]
+#[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19"))]
 pub(super) fn locate() -> Result<Located, Unavailable> {
     room_for_registry(crate::shared_memory::store_space(), crate::shared_memory::store_name())?;
     let mut found = false;
@@ -125,7 +125,17 @@ pub(super) fn locate() -> Result<Located, Unavailable> {
     // usual (DESIGN.md §5.6, Fallback).
     let shared = unsafe {
         let size = std::mem::size_of::<Shared>();
-        pg_sys::GetNamedDSMSegment(NAME.as_ptr(), size, Some(create), &mut found)
+        pg_sys::GetNamedDSMSegment(
+            NAME.as_ptr(),
+            size,
+            #[cfg(not(feature = "pg19"))]
+            Some(create),
+            #[cfg(feature = "pg19")]
+            Some(create_with_arg),
+            &mut found,
+            #[cfg(feature = "pg19")]
+            std::ptr::null_mut(),
+        )
     };
     // `GetNamedDSMSegment` raises an ERROR rather than return NULL.
     let shared = NonNull::new(shared.cast::<Shared>())
@@ -133,29 +143,51 @@ pub(super) fn locate() -> Result<Located, Unavailable> {
     // SAFETY: the segment holds an initialized registry (`create`), mapped
     // for the rest of the session; its format and tranche are written once
     // (and the format first, at the same offset in every format).
-    let (format, tranche) = unsafe { ((*shared.as_ptr()).format, (*shared.as_ptr()).tranche) };
+    let format = unsafe { (*shared.as_ptr()).format };
     checked(format)?;
     // SAFETY: registers this registry's tranche under a static name in this
     // backend, as each backend must before it takes the lock.
-    unsafe { pg_sys::LWLockRegisterTranche(tranche, TRANCHE.as_ptr()) };
+    #[cfg(not(feature = "pg19"))]
+    unsafe {
+        pg_sys::LWLockRegisterTranche((*shared.as_ptr()).tranche, TRANCHE.as_ptr())
+    };
     // SAFETY: `shared` is valid; the lock is its field.
     let lock = unsafe { NonNull::new_unchecked(addr_of_mut!((*shared.as_ptr()).lock)) };
     Ok(Located { shared, lock })
 }
 
 /// Sets up a new registry segment (`GetNamedDSMSegment`'s init callback).
-#[cfg(any(feature = "pg17", feature = "pg18"))]
+#[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19"))]
 #[pgrx::pg_guard]
 unsafe extern "C-unwind" fn create(segment: *mut std::ffi::c_void) {
     // SAFETY: a new tranche id, from the main thread.
-    let tranche = unsafe { pg_sys::LWLockNewTrancheId() };
+    let tranche = unsafe {
+        #[cfg(feature = "pg19")]
+        {
+            pg_sys::LWLockNewTrancheId(TRANCHE.as_ptr())
+        }
+        #[cfg(not(feature = "pg19"))]
+        {
+            pg_sys::LWLockNewTrancheId()
+        }
+    };
     // SAFETY: `GetNamedDSMSegment` passes a new segment of
     // `size_of::<Shared>()` bytes and holds its own lock while this runs.
     unsafe { initialize(segment.cast(), tranche) };
 }
 
-/// Nothing to request: on PG 17 and 18 the registry is a named DSM segment.
-#[cfg(any(feature = "pg17", feature = "pg18"))]
+// PostgreSQL 19 passes the caller's optional argument to the initializer.
+#[cfg(feature = "pg19")]
+unsafe extern "C-unwind" fn create_with_arg(
+    segment: *mut std::ffi::c_void,
+    _: *mut std::ffi::c_void,
+) {
+    // SAFETY: GetNamedDSMSegment supplies the same fresh segment as on earlier majors.
+    unsafe { create(segment) };
+}
+
+/// Nothing to request: on PG 17 and later the registry is a named DSM segment.
+#[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19"))]
 pub(crate) fn request_preload() {}
 
 #[cfg(any(feature = "pg15", feature = "pg16"))]

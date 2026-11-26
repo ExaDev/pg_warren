@@ -1,5 +1,5 @@
 //! The wait events pg_warren's waits show in `pg_stat_activity` (DESIGN.md
-//! §5.7): named, of type `Extension`, on PG 17 and 18, each registered once
+//! §5.7): named, of type `Extension`, on PG 17 and later, each registered once
 //! per backend (`WaitEventExtensionNew` needs no preload); `Extension` on
 //! PG 15 and 16.
 
@@ -8,7 +8,7 @@ use std::ffi::CStr;
 use pgrx::pg_sys;
 
 /// The wait event named `name`. On the main thread.
-#[cfg(any(feature = "pg17", feature = "pg18"))]
+#[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19"))]
 pub(crate) fn wait_event(name: &'static CStr) -> u32 {
     use std::cell::RefCell;
 

@@ -14,7 +14,7 @@ use pgrx::{ereport, PgSqlErrorCode};
 use super::setting;
 use crate::parallel_worker::cache_notice_raised;
 
-#[cfg(any(feature = "pg17", feature = "pg18", test))]
+#[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19", test))]
 use super::dsm::FORMAT;
 
 /// Why the shared cache is unavailable to this backend.
@@ -27,15 +27,15 @@ pub(crate) enum Unavailable {
     /// A big-endian target: a shared version's arrays are in native
     /// layout, and the segments' encoding is little-endian.
     BigEndian,
-    /// PG 17 or 18, where the registry was created by a build of pg_warren
+    /// PG 17 and later, where the registry was created by a build of pg_warren
     /// with another format (`found`), which this build cannot read: until
     /// a restart drops it, backends of this build load privately.
-    #[cfg(any(feature = "pg17", feature = "pg18", test))]
+    #[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19", test))]
     OtherFormat { found: u32 },
-    /// PG 17 or 18, where `store` (`/dev/shm`, or `pg_dynshmem`) has too
+    /// PG 17 and later, where `store` (`/dev/shm`, or `pg_dynshmem`) has too
     /// little room beside its reserve for `GetNamedDSMSegment` to create
     /// the registry; it is checked again at the next read.
-    #[cfg(any(feature = "pg17", feature = "pg18", test))]
+    #[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19", test))]
     NoRegistryRoom { store: &'static str },
 }
 
@@ -58,7 +58,7 @@ impl Unavailable {
     /// which a restart after an upgrade resolves.
     fn noticed(self, at_default: bool) -> bool {
         match self {
-            #[cfg(any(feature = "pg17", feature = "pg18", test))]
+            #[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19", test))]
             Self::OtherFormat { .. } => true,
             _ => !at_default,
         }
@@ -77,13 +77,13 @@ impl Unavailable {
                 "warren.shared_cache_memory is set, but the shared cache works only on \
                  little-endian targets: {private}"
             ),
-            #[cfg(any(feature = "pg17", feature = "pg18", test))]
+            #[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19", test))]
             Self::OtherFormat { found } => format!(
                 "warren.shared_cache_memory is set, but the shared cache was created by a \
                  build of pg_warren with registry format {found}, not {FORMAT}; restart \
                  PostgreSQL to share graph versions again: {private}"
             ),
-            #[cfg(any(feature = "pg17", feature = "pg18", test))]
+            #[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19", test))]
             Self::NoRegistryRoom { store } => format!(
                 "warren.shared_cache_memory is set, but {store} has no room for the shared \
                  cache's registry; free it, or raise the container's --shm-size: {private}"

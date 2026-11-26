@@ -3,6 +3,7 @@
 
 use std::ptr;
 
+use pgrx::pg_sys::PgNode;
 use pgrx::prelude::*;
 use pgrx::PgList;
 
@@ -39,14 +40,14 @@ fn named_roles(fcinfo: pg_sys::FunctionCallInfo) -> Result<Vec<pg_sys::Oid>, Cat
     let context = unsafe { fcinfo.as_ref() }.map_or(ptr::null_mut(), |info| info.context);
     // SAFETY: `context` is NULL or a node, whose tag `is_a` reads; Postgres
     // does not stop a direct call, which has no event trigger data.
-    if context.is_null() || !unsafe { pgrx::is_a(context, pg_sys::NodeTag::T_EventTriggerData) } {
+    if !unsafe { pg_sys::Node::is_a_ptr(context, pg_sys::NodeTag::T_EventTriggerData) } {
         return Err(CatalogError::NotEventTrigger);
     }
     // SAFETY: an `EventTriggerData` (checked above), whose parse tree is the
     // running command's node.
     let tree = unsafe { (*context.cast::<pg_sys::EventTriggerData>()).parsetree };
     // SAFETY: as above, for the parse tree.
-    if tree.is_null() || !unsafe { pgrx::is_a(tree, pg_sys::NodeTag::T_DropOwnedStmt) } {
+    if !unsafe { pg_sys::Node::is_a_ptr(tree, pg_sys::NodeTag::T_DropOwnedStmt) } {
         return Ok(Vec::new());
     }
     // SAFETY: a `DropOwnedStmt` (checked above): its roles are a `List` of

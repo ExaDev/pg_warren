@@ -9,16 +9,16 @@ pg_warren is a Rust workspace with two crates (DESIGN.md §11):
 
 ## Prerequisites
 
-- Rust 1.97.0, pinned exactly in `rust-toolchain.toml`. Run `rustup toolchain install`
+- Rust 1.99.1, pinned exactly in `rust-toolchain.toml`. Run `rustup toolchain install`
   in the repo to get it. For Miri you also need the dated nightly that CI pins
   (`MIRI_NIGHTLY` in `.github/workflows/ci.yml`):
   `rustup toolchain install nightly-2026-10-15 --component miri,rust-src`.
-- PostgreSQL 15–18 with server dev headers (`postgresql-server-dev-NN` on
+- PostgreSQL 15–19 with server dev headers (`postgresql-server-dev-NN` on
   Debian/Ubuntu), plus `clang` / `libclang-dev` for pgrx's bindgen.
 - cargo-pgrx, at exactly the version the extension uses:
 
   ```sh
-  cargo install cargo-pgrx --version 0.19.3 --locked
+  cargo install cargo-pgrx --version 0.20.1 --locked
   cargo pgrx init --pg16 "$(command -v pg_config)"   # or /usr/lib/postgresql/16/bin/pg_config
   ```
 
@@ -787,7 +787,7 @@ PRs the advisories check reports without blocking):
 - **advisories**: a RustSec vulnerability, or an unmaintained, unsound or
   yanked crate, fails. An exemption is by advisory id, with the reason and
   what would end it (today one: `serde_cbor`, unmaintained, which pgrx
-  0.19.3 depends on). Fix by updating within the locked requirements
+  0.20.1 depends on). Fix by updating within the locked requirements
   (`cargo update -p CRATE`) where a fixed version exists.
 - **licenses**: an allow-list of the licences the tree uses (Apache-2.0,
   MIT, BSD-3-Clause, ISC, Unicode-3.0, Zlib). A crate offering a choice
@@ -806,15 +806,15 @@ cargo deny --locked check
 
 Inputs, all pinned by the release's source:
 
-- **Rust**, the exact toolchain in `rust-toolchain.toml` (1.97.0); rustup
+- **Rust**, the exact toolchain in `rust-toolchain.toml` (1.99.1); rustup
   installs it from that file.
-- **The crates** in `Cargo.lock` (pgrx `=0.19.3`), all from crates.io; the
+- **The crates** in `Cargo.lock` (pgrx `=0.20.1`), all from crates.io; the
   vendored source tarball carries them.
 - **PostgreSQL's server headers and `pg_config`** for the major
   (`postgresql-server-dev-NN`), **clang and libclang** (pgrx's bindgen
   generates the bindings from those headers at build time), and a C
   toolchain and linker (`cc`, binutils).
-- **cargo-pgrx 0.19.3**, only for `cargo pgrx package`/`install` (README,
+- **cargo-pgrx 0.20.1**, only for `cargo pgrx package`/`install` (README,
   "From source"; the release's packages use it). The offline build below
   does without it: each release commit carries its generated install
   script, `sql/pg_warren--X.Y.Z.sql` (CI checks it is what pgrx generates),
@@ -844,7 +844,7 @@ install -m 0644 sql/pg_warren--X.Y.Z.sql sql/pg_warren--*--*.sql "$ext/"
 change `Cargo.lock`, and checks every vendored file against its crate's
 `.cargo-checksum.json`, whose package checksum is `Cargo.lock`'s. The
 `cargo rustc` line is the build `cargo pgrx package` runs on Linux
-(cargo-pgrx 0.19.3 links with `--no-gc-sections`). For another major,
+(cargo-pgrx 0.20.1 links with `--no-gc-sections`). For another major,
 change `pg16` and the `pg_config`. `packaging/reproducibly.sh` only sets
 `RUSTFLAGS` and `CFLAGS` to make the build reproducible (below); the build
 works without it. The files installed are the packages' (the install

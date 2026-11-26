@@ -256,7 +256,7 @@ pub(crate) const NAMED_BYTES: usize = 256;
 
 /// The most bytes a `text` holds: Postgres's `MaxAllocSize` (1 GB less one
 /// byte), less the varlena header.
-const MAX_TEXT_BYTES: usize = 0x3fff_ffff - pg_sys::VARHDRSZ;
+const MAX_TEXT_BYTES: usize = 0x3fff_ffff - pg_sys::VARHDRSZ as usize;
 
 impl IdDatum for TextKeys {
     const ID_TYPE: IdType = IdType::Text;
