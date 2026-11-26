@@ -14,6 +14,7 @@
 
 use std::ffi::CStr;
 
+use pgrx::pg_sys::PgNode;
 use pgrx::{pg_sys, PgList};
 use warren_core::compute::{
     AnyExpr, Arithmetic, BoolOp, Comparands, Comparison, Expr, F32Op, F64Op, Function, I64Op,
@@ -357,7 +358,7 @@ fn numeric_cast(function: &pg_sys::FuncExpr) -> Result<Option<Typed>, Reason> {
         return Ok(None);
     };
     // SAFETY: `arg` is a valid node.
-    if !unsafe { pgrx::is_a(*arg, pg_sys::NodeTag::T_Const) } {
+    if !unsafe { pg_sys::Node::is_a_ptr(*arg, pg_sys::NodeTag::T_Const) } {
         return Ok(None);
     }
     // SAFETY: checked to be a Const above.

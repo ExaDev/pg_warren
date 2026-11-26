@@ -231,7 +231,7 @@ fn wait_for_threads() {
         pg_sys::WaitLatch(pg_sys::MyLatch, events as i32, WAIT_MS, event);
         pg_sys::ResetLatch(pg_sys::MyLatch);
     }
-    pgrx::check_for_interrupts!();
+    pgrx::check_for_interrupts();
 }
 
 /// Registers the exit callback, once per backend.

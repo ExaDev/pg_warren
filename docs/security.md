@@ -492,7 +492,7 @@ How to run each locally is in [CONTRIBUTING.md](../CONTRIBUTING.md).
 | Evidence | What it checks | Where it runs |
 |---|---|---|
 | `warren-core` unit and property tests | kernels and data structures against reference implementations | every CI run |
-| `#[pg_test]` suite (`cargo pgrx test`) | the SQL surface, SPI adapters, transactions, roles | PG 15, 16, 17, 18 on x86_64; PG 16 and 18 on arm64; PG 18 on macOS arm64 (reported, not yet gating) |
+| `#[pg_test]` suite (`cargo pgrx test`) | the SQL surface, SPI adapters, transactions, roles | PG 15, 16, 17, 18 on x86_64; PG 16, 18 and 19 on arm64; PG 18 on macOS arm64 (reported, not yet gating) |
 | Hostile `search_path` (`access::guard`, `every_warren_function_ignores_the_callers_search_path`) | every `warren.*` function, called with an attacker's operators ahead of `pg_catalog`, never runs them and its access checks hold; fails if a new function is not in the list | in the pgrx suite |
 | Parallel labels (`parallel_labels`, `every_function_has_its_declared_parallel_label`, `every_read_runs_in_parallel_mode`) | each function's label is the declared one, and every non-`UNSAFE` read runs in parallel mode and in a worker | in the pgrx suite |
 | SQL harness (`test/run.py`, `test/sql/`) | integration tests, races between sessions, the shared cache across backends, `DISCARD ALL`, the trusted install, documentation examples | PG 16 (x86_64) at the default, trusted and preloaded; the shared-cache tests in three modes on PG 15–18; arm64 and macOS |
@@ -512,7 +512,7 @@ How to run each locally is in [CONTRIBUTING.md](../CONTRIBUTING.md).
 ## Supply chain and releases
 
 - **Toolchain pins.** The Rust toolchain is pinned exactly in
-  `rust-toolchain.toml`; `pgrx` and `cargo-pgrx` are pinned to `=0.19.3` and
+  `rust-toolchain.toml`; `pgrx` and `cargo-pgrx` are pinned to `=0.20.1` and
   upgraded together in their own change; `Cargo.lock` is committed; CI's
   third-party actions are pinned by commit hash, and the Miri and fuzzing
   nightly by date.

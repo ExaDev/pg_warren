@@ -32,7 +32,7 @@ pub(super) fn from_vector<E: CachedIds, T: Element>(
     let tombstones = vectors.tombstones();
     for (node, &value) in (0..).zip(values) {
         if node % (1 << 16) == 0 {
-            check_for_interrupts!();
+            check_for_interrupts();
         }
         if !tombstones.contains(node) {
             messages.push(node, value)?;

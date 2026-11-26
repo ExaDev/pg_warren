@@ -198,7 +198,7 @@ impl Evaluation<'_> {
         };
         let outcome = (|| {
             for start in (0..len).step_by(BATCH) {
-                check_for_interrupts!();
+                check_for_interrupts();
                 // SAFETY: the per-tuple context holds only the previous batch's
                 // results, which have been copied out.
                 unsafe { pg_sys::MemoryContextReset((*econtext).ecxt_per_tuple_memory) };

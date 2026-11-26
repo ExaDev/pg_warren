@@ -147,7 +147,7 @@ pub(super) fn between_tries() -> impl FnMut() {
     move || {
         tries = tries.wrapping_add(1);
         if tries.is_multiple_of(TRIES_PER_PAUSE) {
-            pgrx::check_for_interrupts!();
+            pgrx::check_for_interrupts();
             // SAFETY: sleeps this process; interruptible by signals.
             unsafe { pg_sys::pg_usleep(1000) };
         } else {
@@ -177,10 +177,10 @@ pub(super) fn holder() -> Holder {
 }
 
 /// This backend's index among `MaxBackends`: `MyProcNumber` on PG 17 and
-/// 18, `MyBackendId` − 1 on PG 15 and 16.
+/// later, `MyBackendId` − 1 on PG 15 and 16.
 fn proc_number() -> Option<usize> {
     // SAFETY: set as the process starts, read on the main thread.
-    #[cfg(any(feature = "pg17", feature = "pg18"))]
+    #[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19"))]
     let index = unsafe { pg_sys::MyProcNumber };
     // SAFETY: as above.
     #[cfg(any(feature = "pg15", feature = "pg16"))]

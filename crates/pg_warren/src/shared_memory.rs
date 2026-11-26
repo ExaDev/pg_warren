@@ -15,13 +15,13 @@ use pgrx::pg_sys;
 /// The size of the first segment of a DSA area: Postgres's DSM registry
 /// keeps its index of named segments in one (`dsa_create`), created with
 /// the cluster's first named segment.
-#[cfg(any(feature = "pg17", feature = "pg18", test))]
+#[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19", test))]
 const DSA_INITIAL_SEGMENT: u64 = 1024 * 1024;
 
 /// The room `GetNamedDSMSegment` may take to create a named segment of
 /// `size` bytes: the segment, the DSM registry's area if no one created it
 /// first, and as much again to spare.
-#[cfg(any(feature = "pg17", feature = "pg18", test))]
+#[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19", test))]
 pub(crate) const fn named_segment_room(size: usize) -> u64 {
     size as u64 + 2 * DSA_INITIAL_SEGMENT
 }

@@ -15,10 +15,10 @@ yanked = "deny"
 unmaintained = "all"
 unsound = "all"
 ignore = [
-    # serde_cbor is unmaintained (no vulnerability): pgrx 0.19.3 depends on
+    # serde_cbor is unmaintained (no vulnerability): pgrx 0.20.1 depends on
     # it directly, for its SQL entity metadata, and no pgrx release we can
-    # pin (pgrx =0.19.3, CLAUDE.md) drops it. Remove when a pgrx upgrade does.
-    { id = "RUSTSEC-2021-0127", reason = "unmaintained, not vulnerable; pgrx 0.19.3's own dependency" },
+    # pin (pgrx =0.20.1, CLAUDE.md) drops it. Remove when a pgrx upgrade does.
+    { id = "RUSTSEC-2021-0127", reason = "unmaintained, not vulnerable; pgrx 0.20.1's own dependency" },
 ]
 
 [licenses]

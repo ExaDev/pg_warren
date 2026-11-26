@@ -4,7 +4,7 @@ description: >
   plus libclang for pgrx's bindgen, and export PG_CONFIG / PGRX_PG_CONFIG_PATH.
 inputs:
   pg-major:
-    description: PostgreSQL major version (15, 16, 17, 18)
+    description: PostgreSQL major version (15, 16, 17, 18, 19)
     required: true
 runs:
   using: composite

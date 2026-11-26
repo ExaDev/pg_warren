@@ -34,7 +34,7 @@ env:
   CARGO_INCREMENTAL: "0"
   RUSTFLAGS: -D warnings
   RUSTDOCFLAGS: -D warnings
-  PGRX_VERSION: 0.19.3
+  PGRX_VERSION: 0.20.1
   # Dated nightly for Miri. Bump deliberately, after checking it locally.
   MIRI_NIGHTLY: nightly-2026-10-15
 
@@ -273,8 +273,8 @@ jobs:
 
   arm64:
     # Most hosted Postgres runs on arm64 (DESIGN.md §13, M11 Distribution).
-    # The build and the in-database tests on two majors, 16 (the
-    # development baseline, private versions without the preload) and 18
+    # The build and the in-database tests on three majors, 16 (the
+    # development baseline, private versions without the preload), 18 and 19
     # (shared by default, so the shared cache's atomics run on arm64's
     # weaker memory ordering), and the SQL harness at the default and
     # preloaded. Not on arm64: Miri and the fuzzers (warren-core is
@@ -287,7 +287,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg: ["16", "18"]
+        pg: ["16", "18", "19"]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install pinned Rust toolchain (rust-toolchain.toml)
@@ -821,7 +821,7 @@ jobs:
           ls -l "$assets"
           echo "VERSION=$version" >>"$GITHUB_ENV"
       # `cargo rustc --lib ... -- -C link-arg=-Wl,--no-gc-sections` is the
-      # build `cargo pgrx package` runs on Linux (cargo-pgrx 0.19.3).
+      # build `cargo pgrx package` runs on Linux (cargo-pgrx 0.20.1).
       - name: pg_warren.so from this checkout, with crates from crates.io
         run: |
           set -euo pipefail

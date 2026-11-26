@@ -138,7 +138,7 @@ const ARRAY_HEADER: usize = (size_of::<pg_sys::ArrayType>() + 2 * size_of::<i32>
 /// 4-byte varlena header and the bytes, int-aligned (`text`, `varchar`,
 /// `char` and `bytea` all align so).
 fn element_size(len: usize) -> Option<usize> {
-    Some(len.checked_add(pg_sys::VARHDRSZ + 3)? & !3)
+    Some(len.checked_add(pg_sys::VARHDRSZ as usize + 3)? & !3)
 }
 
 /// The bytes of the array of `count` payloads of `lengths`, or `None` past
@@ -193,7 +193,7 @@ fn payload_array(messages: Collected<'_, Bytes>, element: pg_sys::Oid) -> Option
     // varlena's length fits an i32, as the array's does.
     unsafe {
         let array = pg_sys::palloc0(size).cast::<u8>();
-        pgrx::varlena::set_varsize_4b(array.cast(), varsize);
+        pg_sys::SET_VARSIZE_4B!(array.cast::<pg_sys::varlena>(), varsize).get();
         let header = array.cast::<pg_sys::ArrayType>();
         (*header).ndim = 1;
         (*header).dataoffset = 0;
@@ -203,9 +203,14 @@ fn payload_array(messages: Collected<'_, Bytes>, element: pg_sys::Oid) -> Option
         bounds.add(1).write(1);
         let mut at = array.add(ARRAY_HEADER);
         for bytes in messages.iter() {
-            let len = pg_sys::VARHDRSZ + bytes.len();
-            pgrx::varlena::set_varsize_4b(at.cast(), i32::try_from(len).ok()?);
-            ptr::copy_nonoverlapping(bytes.as_ptr(), at.add(pg_sys::VARHDRSZ), bytes.len());
+            let len = pg_sys::VARHDRSZ as usize + bytes.len();
+            let element_len = i32::try_from(len).ok()?;
+            pg_sys::SET_VARSIZE_4B!(at.cast::<pg_sys::varlena>(), element_len).get();
+            ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                at.add(pg_sys::VARHDRSZ as usize),
+                bytes.len(),
+            );
             at = at.add(element_size(bytes.len())?);
         }
         Some(pg_sys::Datum::from(array))

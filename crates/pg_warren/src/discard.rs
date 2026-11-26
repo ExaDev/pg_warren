@@ -12,6 +12,7 @@
 use std::ffi::c_char;
 
 use pgrx::pg_sys;
+use pgrx::pg_sys::PgNode;
 
 use crate::cache::trim;
 use crate::traversal_sql::forget_last_stats;
@@ -50,7 +51,7 @@ unsafe extern "C-unwind" fn process_utility(
     // nothing with a destructor is live while the previous hook runs.
     unsafe {
         let utility = (*statement).utilityStmt;
-        let discards_all = pgrx::is_a(utility, pg_sys::NodeTag::T_DiscardStmt)
+        let discards_all = pg_sys::Node::is_a_ptr(utility, pg_sys::NodeTag::T_DiscardStmt)
             && (*utility.cast::<pg_sys::DiscardStmt>()).target == pg_sys::DiscardMode::DISCARD_ALL;
         match PREVIOUS {
             // A hook's ERROR (pg_stat_statements re-throws the statement's)

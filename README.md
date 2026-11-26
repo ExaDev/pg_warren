@@ -180,7 +180,7 @@ backends) is **planned** as the power-user path; it is not there yet.
 
 ## Install
 
-pg_warren supports PostgreSQL 15, 16, 17 and 18 (16 is the development
+pg_warren builds from source on PostgreSQL 15–19 (16 is the development
 baseline). `CREATE EXTENSION pg_warren` does not need a superuser (below).
 Packages are published from 0.7.0 on; for an earlier release, build from
 source.
@@ -268,7 +268,7 @@ cargo-pgrx at exactly the version the extension uses:
 git clone https://github.com/ExaDev/pg_warren.git
 cd pg_warren
 git checkout v0.8.0   # the latest release; main is the version in development
-cargo install cargo-pgrx --version 0.19.3 --locked
+cargo install cargo-pgrx --version 0.20.1 --locked
 cargo pgrx init --pg16 "$(command -v pg_config)"
 cd crates/pg_warren
 cargo pgrx install --release --pg-config "$(command -v pg_config)"
@@ -461,7 +461,7 @@ Every SQL example in the README and `docs/` runs in CI, in
   persisted vector, is kept once per cluster in dynamic shared memory and
   mapped by every backend that reads it (`warren.shared_cache_memory`,
   default `4GB`; `warren.shared_cache()` shows what it holds; DESIGN.md
-  §5.6). It needs no configuration on PostgreSQL 17 and 18, and
+  §5.6). It needs no configuration on PostgreSQL 17 and later, and
   `shared_preload_libraries = 'pg_warren'` on 15 and 16, which otherwise
   keep 0.4.0's copy per backend. The graph reads that use no vector are
   `PARALLEL SAFE`. `gather` gains the `mode` combiner and `include_self`.

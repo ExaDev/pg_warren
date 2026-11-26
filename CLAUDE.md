@@ -174,7 +174,7 @@ before changing code. Commands, toolchain setup and environment gotchas are in
   (`access::with_search_path`: the caller's, or a graph's stored one).
   `access::guard`'s test calls every `warren.*` function with a hostile
   `search_path`; add each new function to its `CALLS` list.
-- Use pgrx `=0.19.3` (pinned). Upgrade pgrx and cargo-pgrx together, in their
+- Use pgrx `=0.20.1` (pinned). Upgrade pgrx and cargo-pgrx together, in their
   own change.
 
 ## Git

@@ -26,7 +26,7 @@ pub(crate) struct PostgresInterrupts;
 
 impl Interrupts for PostgresInterrupts {
     fn check(&mut self) -> Result<(), Cancelled> {
-        pgrx::check_for_interrupts!();
+        pgrx::check_for_interrupts();
         Ok(())
     }
 

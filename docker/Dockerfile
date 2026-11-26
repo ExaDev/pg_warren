@@ -5,10 +5,10 @@
 #   docker run --rm --shm-size=1g -e POSTGRES_PASSWORD=postgres -p 5432:5432 pg_warren:pg17
 #   psql ... -c 'CREATE EXTENSION pg_warren; SELECT warren.version();'
 #
-# Supported majors: 15, 16, 17, 18 (DESIGN.md §11).
+# Supported majors: 15, 16, 17, 18, 19 (DESIGN.md §11).
 
 ARG PG_MAJOR=16
-ARG PGRX_VERSION=0.19.3
+ARG PGRX_VERSION=0.20.1
 
 FROM postgres:${PG_MAJOR}-bookworm AS build
 ARG PG_MAJOR

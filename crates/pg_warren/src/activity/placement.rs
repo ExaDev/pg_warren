@@ -1,5 +1,5 @@
 //! Where the activity table lives (DESIGN.md §5.7, §14 item 48), located
-//! as the shared cache's registry is (§14 item 27): on PG 17 and 18 a named
+//! as the shared cache's registry is (§14 item 27): on PG 17 and later a named
 //! DSM segment that the first backend to use pg_warren creates, so nothing
 //! needs configuring; on PG 15 and 16 the main shared memory, placed by the
 //! hooks `_PG_init` installs only while `shared_preload_libraries` loads
@@ -8,7 +8,7 @@
 //!
 //! | Part | Contents |
 //! |---|---|
-//! | header | format, slot count, creation time, the counters of exited backends, the compute threads held (since format 2); on PG 17 and 18 the LWLock and its tranche (on 15 and 16 the lock is the preload's named tranche's) |
+//! | header | format, slot count, creation time, the counters of exited backends, the compute threads held (since format 2); on PG 17 and later the LWLock and its tranche (on 15 and 16 the lock is the preload's named tranche's) |
 //! | slots | one per backend, `MaxBackends` of them |
 
 use std::mem::{align_of, size_of};
@@ -25,7 +25,7 @@ use super::table::{Lock, Table};
 /// different formats use different tables.
 const FORMAT: u32 = 2;
 
-/// The table's name: its named DSM segment on PG 17 and 18, its
+/// The table's name: its named DSM segment on PG 17 and later, its
 /// `ShmemInitStruct` entry on PG 15 and 16. It ends with [`FORMAT`].
 const NAME: &std::ffi::CStr = c"pg_warren.activity.2";
 
@@ -36,12 +36,12 @@ const TRANCHE: &std::ffi::CStr = c"pg_warren.activity";
 #[repr(C)]
 struct Header {
     format: u32,
-    #[cfg(any(feature = "pg17", feature = "pg18"))]
+    #[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19"))]
     tranche: i32,
     slots: u64,
     /// When the table was created, as a `timestamptz`.
     created: i64,
-    #[cfg(any(feature = "pg17", feature = "pg18"))]
+    #[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19"))]
     lock: pg_sys::LWLock,
     exited: Counted<COUNTER_WORDS>,
     /// The compute threads every backend's calls hold (DESIGN.md §14 item
@@ -148,14 +148,14 @@ pub(crate) enum Missing {
     /// PG 15 or 16 without `shared_preload_libraries = 'pg_warren'`.
     #[cfg(any(feature = "pg15", feature = "pg16"))]
     NotPreloaded,
-    /// PG 17 or 18, where the store had too little room to create it in
+    /// PG 17 and later, where the store had too little room to create it in
     /// the statement that started at `statement`; it is looked for again
     /// in the next statement that uses pg_warren.
-    #[cfg(any(feature = "pg17", feature = "pg18"))]
+    #[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19"))]
     NoRoom { statement: i64 },
     /// A table of another format: a build that a restart has not yet
     /// replaced created it.
-    #[cfg(any(feature = "pg17", feature = "pg18"))]
+    #[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19"))]
     OtherFormat,
     /// This process has no index among `MaxBackends` (Postgres gives every
     /// backend and worker one, so this is a belt).
@@ -169,7 +169,7 @@ impl Missing {
     /// for the table again: only where it had no room, which may have been
     /// made since, and at most once a statement, since looking reads the
     /// store's free space and takes the DSM registry's lock.
-    #[cfg(any(feature = "pg17", feature = "pg18"))]
+    #[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19"))]
     pub(super) fn looked_for_again(self, statement: i64) -> bool {
         matches!(self, Self::NoRoom { statement: looked } if looked != statement)
     }
@@ -187,9 +187,9 @@ pub(super) fn statement_start() -> i64 {
     unsafe { pg_sys::GetCurrentStatementStartTimestamp() }
 }
 
-/// The table, found or created on first use (PG 17 and 18), unless the
+/// The table, found or created on first use (PG 17 and later), unless the
 /// store has no room to create it or it has another format.
-#[cfg(any(feature = "pg17", feature = "pg18"))]
+#[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19"))]
 pub(super) fn locate() -> Result<Located, Missing> {
     let bytes = table_bytes(max_backends());
     let room = crate::shared_memory::named_segment_room(bytes);
@@ -202,31 +202,54 @@ pub(super) fn locate() -> Result<Located, Missing> {
     // static C string; `create` sets up a new segment of the size asked
     // before any backend can find it (`GetNamedDSMSegment` holds its lock
     // while it runs). The room was checked above.
-    let header =
-        unsafe { pg_sys::GetNamedDSMSegment(NAME.as_ptr(), bytes, Some(create), &mut found) };
+    let header = unsafe {
+        pg_sys::GetNamedDSMSegment(
+            NAME.as_ptr(),
+            bytes,
+            #[cfg(not(feature = "pg19"))]
+            Some(create),
+            #[cfg(feature = "pg19")]
+            Some(create_with_arg),
+            &mut found,
+            #[cfg(feature = "pg19")]
+            std::ptr::null_mut(),
+        )
+    };
     let Some(header) = NonNull::new(header.cast::<Header>()) else {
         return Err(Missing::NoRoom { statement: statement_start() });
     };
     // SAFETY: the segment holds an initialized table, mapped for the rest
     // of the session; its format and tranche are written once.
-    let (format, tranche) = unsafe { ((*header.as_ptr()).format, (*header.as_ptr()).tranche) };
+    let format = unsafe { (*header.as_ptr()).format };
     if format != FORMAT {
         return Err(Missing::OtherFormat);
     }
     // SAFETY: registers the table's tranche under a static name in this
     // backend, as each backend must before it takes the lock.
-    unsafe { pg_sys::LWLockRegisterTranche(tranche, TRANCHE.as_ptr()) };
+    #[cfg(not(feature = "pg19"))]
+    unsafe {
+        pg_sys::LWLockRegisterTranche((*header.as_ptr()).tranche, TRANCHE.as_ptr())
+    };
     // SAFETY: `header` is valid; the lock is its field.
     let lock = unsafe { NonNull::new_unchecked(addr_of_mut!((*header.as_ptr()).lock)) };
     Ok(Located { header, lock })
 }
 
 /// Sets up a new table segment (`GetNamedDSMSegment`'s init callback).
-#[cfg(any(feature = "pg17", feature = "pg18"))]
+#[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19"))]
 #[pgrx::pg_guard]
 unsafe extern "C-unwind" fn create(segment: *mut std::ffi::c_void) {
     // SAFETY: a new tranche id, from the main thread.
-    let tranche = unsafe { pg_sys::LWLockNewTrancheId() };
+    let tranche = unsafe {
+        #[cfg(feature = "pg19")]
+        {
+            pg_sys::LWLockNewTrancheId(TRANCHE.as_ptr())
+        }
+        #[cfg(not(feature = "pg19"))]
+        {
+            pg_sys::LWLockNewTrancheId()
+        }
+    };
     let header = segment.cast::<Header>();
     // SAFETY: `GetNamedDSMSegment` passes a new, page-aligned segment of
     // `table_bytes(max_backends())` bytes and holds its own lock while this
@@ -239,8 +262,18 @@ unsafe extern "C-unwind" fn create(segment: *mut std::ffi::c_void) {
     }
 }
 
-/// Nothing to request: on PG 17 and 18 the table is a named DSM segment.
-#[cfg(any(feature = "pg17", feature = "pg18"))]
+// PostgreSQL 19 passes the caller's optional argument to the initializer.
+#[cfg(feature = "pg19")]
+unsafe extern "C-unwind" fn create_with_arg(
+    segment: *mut std::ffi::c_void,
+    _: *mut std::ffi::c_void,
+) {
+    // SAFETY: GetNamedDSMSegment supplies the same fresh segment as on earlier majors.
+    unsafe { create(segment) };
+}
+
+/// Nothing to request: on PG 17 and later the table is a named DSM segment.
+#[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19"))]
 pub(crate) fn request_preload() {}
 
 #[cfg(any(feature = "pg15", feature = "pg16"))]
@@ -346,7 +379,7 @@ mod preloaded {
 mod tests {
     use super::*;
 
-    #[cfg(any(feature = "pg17", feature = "pg18"))]
+    #[cfg(any(feature = "pg17", feature = "pg18", feature = "pg19"))]
     #[test]
     fn a_table_without_room_is_looked_for_again_once_per_statement() {
         let missing = Missing::NoRoom { statement: 100 };
